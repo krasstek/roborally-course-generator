@@ -1,0 +1,375 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>RoboRally Test Renderer</title>
+  <style>
+    :root {
+      --bg-top: #20252a;
+      --bg-bottom: #111419;
+      --panel: rgba(217, 221, 224, 0.96);
+      --panel-strong: #f1f3f4;
+      --panel-dark: #1c2228;
+      --steel: #6f7b86;
+      --steel-dark: #39444e;
+      --ink: #12171b;
+      --muted: #58636c;
+      --line: rgba(25, 33, 40, 0.16);
+      --accent: #e46724;
+      --accent-dark: #9a3c0f;
+      --warn: #ffb322;
+      --hazard: #f2c230;
+      --hazard-dark: #1a1e22;
+      --shadow: 0 24px 54px rgba(0, 0, 0, 0.32);
+      --inset: inset 0 1px 0 rgba(255, 255, 255, 0.16);
+    }
+
+    body {
+      font-family: "Trebuchet MS", Verdana, sans-serif;
+      margin: 0;
+      padding: 24px;
+      background:
+        linear-gradient(135deg, rgba(255, 255, 255, 0.03) 0 12%, transparent 12% 100%),
+        linear-gradient(45deg, rgba(255, 255, 255, 0.02) 0 12%, transparent 12% 100%),
+        radial-gradient(circle at 16% 0%, rgba(242, 194, 48, 0.12), transparent 18%),
+        radial-gradient(circle at 84% 12%, rgba(228, 103, 36, 0.12), transparent 20%),
+        linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bottom) 100%);
+      background-size: 18px 18px, 18px 18px, auto, auto, auto;
+      color: #e9edf0;
+    }
+
+    h1 {
+      margin-top: 0;
+      margin-bottom: 8px;
+      font-size: 38px;
+      line-height: 1;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #f4f7f8;
+      text-shadow: 0 2px 0 rgba(0, 0, 0, 0.28);
+    }
+
+    .subtitle {
+      margin: 0 0 20px;
+      color: rgba(225, 232, 236, 0.78);
+      font-size: 14px;
+      max-width: 70ch;
+      line-height: 1.4;
+    }
+
+    .rules-note {
+      margin: 12px 0 0;
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: linear-gradient(180deg, rgba(242, 194, 48, 0.96) 0%, rgba(223, 170, 27, 0.96) 100%);
+      border: 1px solid rgba(138, 98, 0, 0.32);
+      color: #3a2b08;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
+      font-size: 12px;
+      line-height: 1.45;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .app-shell {
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.9fr);
+      gap: 18px;
+      align-items: start;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid rgba(138, 149, 159, 0.18);
+      border-radius: 16px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(7px);
+      color: var(--ink);
+    }
+
+    .board-panel {
+      padding: 18px;
+      position: relative;
+      overflow: hidden;
+      background:
+        linear-gradient(180deg, rgba(245, 247, 248, 0.98) 0%, rgba(221, 227, 231, 0.95) 100%);
+    }
+
+    .sidebar {
+      padding: 18px;
+      background:
+        linear-gradient(180deg, rgba(235, 239, 241, 0.97) 0%, rgba(212, 219, 224, 0.95) 100%);
+    }
+
+    .controls {
+      display: flex;
+      gap: 12px;
+      align-items: end;
+      flex-wrap: wrap;
+      margin-bottom: 16px;
+      padding: 14px;
+      border-bottom: 1px solid rgba(24, 30, 36, 0.16);
+      border-radius: 12px;
+      background:
+        linear-gradient(135deg, rgba(28, 34, 40, 0.98) 0%, rgba(47, 58, 67, 0.96) 100%);
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+      position: relative;
+    }
+
+    .controls::before {
+      content: "";
+      position: absolute;
+      inset: 0 0 auto 0;
+      height: 9px;
+      border-radius: 12px 12px 0 0;
+      background:
+        repeating-linear-gradient(
+          -45deg,
+          var(--hazard-dark) 0 14px,
+          var(--hazard) 14px 28px
+        );
+    }
+
+    label {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      font-size: 12px;
+      color: rgba(227, 233, 237, 0.84);
+      min-width: 108px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .toggle-label {
+      min-width: auto;
+      flex-direction: row;
+      align-items: center;
+      gap: 8px;
+      padding-bottom: 8px;
+    }
+
+    .toggle-label input {
+      width: 16px;
+      height: 16px;
+      accent-color: var(--accent);
+    }
+
+    button,
+    select {
+      font: 600 14px/1.2 "Trebuchet MS", Verdana, sans-serif;
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid rgba(76, 91, 102, 0.34);
+      background: rgba(236, 240, 242, 0.98);
+      color: #171d22;
+      min-height: 40px;
+      box-shadow: var(--inset);
+    }
+
+    button {
+      background: linear-gradient(180deg, #ee762d 0%, #c94d12 100%);
+      color: white;
+      border-color: rgba(74, 32, 10, 0.42);
+      cursor: pointer;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22), 0 12px 22px rgba(0, 0, 0, 0.2);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    button:hover {
+      background: linear-gradient(180deg, #ea7d3d 0%, #c75422 100%);
+    }
+
+    canvas {
+      border: 2px solid rgba(43, 52, 60, 0.36);
+      border-radius: 10px;
+      background: #fff;
+      display: block;
+      width: 100%;
+      height: auto;
+      box-shadow:
+        inset 0 0 0 6px rgba(255, 255, 255, 0.5),
+        0 16px 30px rgba(12, 16, 20, 0.18);
+    }
+
+    .meta-strip {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 12px;
+    }
+
+    .pill {
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(245, 247, 248, 0.96);
+      border: 1px solid rgba(74, 89, 99, 0.14);
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .overlay {
+      position: absolute;
+      inset: 0;
+      display: none;
+      place-items: center;
+      background: rgba(17, 21, 26, 0.62);
+      backdrop-filter: blur(5px);
+      border-radius: 12px;
+    }
+
+    .overlay.visible {
+      display: grid;
+    }
+
+    .overlay-card {
+      min-width: 260px;
+      max-width: 360px;
+      padding: 18px 20px;
+      border-radius: 12px;
+      background: linear-gradient(180deg, rgba(236, 240, 242, 0.99) 0%, rgba(210, 218, 223, 0.98) 100%);
+      border: 1px solid rgba(54, 67, 77, 0.24);
+      box-shadow: 0 18px 38px rgba(0, 0, 0, 0.24);
+    }
+
+    .overlay-title {
+      font-size: 18px;
+      margin: 0 0 6px;
+      color: #2a333a;
+    }
+
+    .overlay-text {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.45;
+      font-size: 14px;
+    }
+
+    .overlay-bar {
+      height: 8px;
+      border-radius: 999px;
+      background: rgba(45, 55, 63, 0.14);
+      overflow: hidden;
+      margin-top: 12px;
+    }
+
+    .overlay-fill {
+      width: 35%;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #f2c230 0%, #da5d1d 100%);
+      animation: pulse-slide 1.1s infinite ease-in-out;
+      transform-origin: left center;
+    }
+
+    @keyframes pulse-slide {
+      0% { transform: translateX(-10%) scaleX(0.9); opacity: 0.75; }
+      50% { transform: translateX(80%) scaleX(1.15); opacity: 1; }
+      100% { transform: translateX(210%) scaleX(0.9); opacity: 0.75; }
+    }
+
+    pre {
+      margin: 0;
+      background:
+        linear-gradient(180deg, rgba(245, 247, 248, 0.98) 0%, rgba(228, 234, 238, 0.98) 100%);
+      border: 1px solid rgba(66, 79, 89, 0.16);
+      border-radius: 10px;
+      padding: 14px;
+      overflow: auto;
+      white-space: pre-wrap;
+      line-height: 1.45;
+      font-size: 13px;
+      max-height: 72vh;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.42);
+    }
+
+    .report-title {
+      margin: 0 0 12px;
+      font-size: 18px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--accent-dark);
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    @media (max-width: 980px) {
+      .app-shell {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <h1>RoboRally Course Generator</h1>
+  <p class="subtitle">Developer control console for probing randomized RoboRally courses. The final app can hide the debug traces, but this view keeps route and fairness diagnostics visible while the generator is being tuned.</p>
+  <div class="app-shell">
+    <section class="panel board-panel">
+      <div class="controls">
+        <label>
+          Players
+          <select id="player-count">
+            <option value="2">2</option>
+            <option value="3">3</option>
+            <option value="4" selected>4</option>
+            <option value="5">5</option>
+            <option value="6">6</option>
+            <option value="7">7</option>
+            <option value="8">8</option>
+          </select>
+        </label>
+        <label>
+          Difficulty
+          <select id="difficulty">
+            <option value="easy">Easy</option>
+            <option value="moderate" selected>Moderate</option>
+            <option value="hard">Hard</option>
+          </select>
+        </label>
+        <label>
+          Length
+          <select id="length">
+            <option value="short">Short</option>
+            <option value="moderate" selected>Moderate</option>
+            <option value="long">Long</option>
+          </select>
+        </label>
+        <label id="trace-leg-label">
+          Trace leg
+          <select id="leg-select">
+            <option value="none">None</option>
+          </select>
+        </label>
+        <label class="toggle-label">
+          <input id="dev-view" type="checkbox" checked />
+          Dev View
+        </label>
+        <button id="reroll" type="button">Find Setup</button>
+      </div>
+      <canvas id="canvas"></canvas>
+      <div class="meta-strip">
+        <span class="pill">Orange square: prohibited starting space</span>
+        <span class="pill">Gold flag: checkpoint</span>
+      </div>
+      <p class="rules-note">Reminder: lasers and walls on a checkpoint stay active; other board elements on that space do not. This course display uses Dynamic Archiving.</p>
+      <div id="generating-overlay" class="overlay visible" aria-live="polite" aria-busy="true">
+        <div class="overlay-card">
+          <h2 class="overlay-title">Generating Course</h2>
+          <p id="overlay-text" class="overlay-text">Trying random setups and checking length, difficulty, and usable start positions.</p>
+          <div class="overlay-bar"><div class="overlay-fill"></div></div>
+        </div>
+      </div>
+    </section>
+    <aside id="report-panel" class="panel sidebar">
+      <h2 class="report-title">Course Evaluation</h2>
+      <pre id="report"></pre>
+    </aside>
+  </div>
+  <script type="module" src="./main.js"></script>
+</body>
+</html>

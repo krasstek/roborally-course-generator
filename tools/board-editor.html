@@ -1,0 +1,1037 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>RoboRally Board Editor</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      --bg: #f5f5f5;
+      --panel: #ffffff;
+      --border: #cfcfcf;
+      --text: #1f1f1f;
+      --muted: #666;
+      --accent: #2563eb;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: system-ui, sans-serif;
+      color: var(--text);
+      background: var(--bg);
+    }
+
+    .app {
+      display: grid;
+      grid-template-columns: 340px 1fr;
+      min-height: 100vh;
+    }
+
+    .sidebar {
+      background: var(--panel);
+      border-right: 1px solid var(--border);
+      padding: 16px;
+      overflow-y: auto;
+    }
+
+    .main {
+      padding: 16px;
+      overflow: auto;
+    }
+
+    h1, h2, h3 {
+      margin: 0 0 12px;
+    }
+
+    h1 {
+      font-size: 1.35rem;
+    }
+
+    .section {
+      margin-bottom: 20px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid #e7e7e7;
+    }
+
+    .field {
+      margin-bottom: 10px;
+    }
+
+    .field label {
+      display: block;
+      font-size: 0.92rem;
+      margin-bottom: 4px;
+      font-weight: 600;
+    }
+
+    .field input[type="text"],
+    .field input[type="number"],
+    .field select,
+    .field textarea,
+    .field button,
+    .field input[type="file"] {
+      width: 100%;
+      font: inherit;
+    }
+
+    input[type="text"],
+    input[type="number"],
+    select,
+    textarea {
+      padding: 8px 10px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    button {
+      padding: 9px 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #fff;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: #f1f1f1;
+    }
+
+    button.primary {
+      background: var(--accent);
+      color: white;
+      border-color: var(--accent);
+    }
+
+    button.primary:hover {
+      filter: brightness(0.95);
+    }
+
+    .button-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .tool-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .tool-grid button.active {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+
+    .inline-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .small-note {
+      color: var(--muted);
+      font-size: 0.85rem;
+      line-height: 1.35;
+    }
+
+    .canvas-wrap {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px;
+      display: inline-block;
+    }
+
+    canvas {
+      display: block;
+      max-width: 100%;
+      border: 1px solid #999;
+      background: #fff;
+    }
+
+    .legend {
+      margin-top: 12px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 8px;
+      font-size: 0.9rem;
+    }
+
+    .legend div {
+      background: #fff;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px;
+    }
+
+    textarea {
+      min-height: 280px;
+      resize: vertical;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.9rem;
+    }
+
+    .status {
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    .feature-list {
+      max-height: 180px;
+      overflow: auto;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #fff;
+      padding: 8px;
+      font-size: 0.9rem;
+    }
+
+    .feature-list ul {
+      margin: 0;
+      padding-left: 18px;
+    }
+
+    .pill {
+      display: inline-block;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: #eef2ff;
+      border: 1px solid #c7d2fe;
+      font-size: 0.8rem;
+      margin-right: 6px;
+      margin-bottom: 6px;
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <h1>RoboRally Board Editor</h1>
+      <p class="small-note">
+        Dev-only tool for encoding board data. Load an image, set the grid size,
+        click tiles to add features, then export JSON.
+      </p>
+
+      <div class="section">
+        <h2>Board</h2>
+
+        <div class="field">
+          <label for="pieceId">Piece ID</label>
+          <input id="pieceId" type="text" value="keep" />
+        </div>
+
+        <div class="field">
+          <label for="pieceName">Piece name</label>
+          <input id="pieceName" type="text" value="The Keep" />
+        </div>
+
+        <div class="field">
+          <label for="pieceKind">Kind</label>
+          <select id="pieceKind">
+            <option value="base">base</option>
+            <option value="small">small</option>
+            <option value="dock">dock</option>
+            <option value="overlay">overlay</option>
+          </select>
+        </div>
+
+        <div class="inline-row">
+          <div class="field">
+            <label for="gridWidth">Grid width</label>
+            <input id="gridWidth" type="number" min="1" value="12" />
+          </div>
+
+          <div class="field">
+            <label for="gridHeight">Grid height</label>
+            <input id="gridHeight" type="number" min="1" value="12" />
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="imageInput">Board image</label>
+          <input id="imageInput" type="file" accept="image/*" />
+        </div>
+
+        <div class="field">
+          <button id="resizeGridBtn">Apply grid size</button>
+        </div>
+      </div>
+
+      <div class="section">
+        <h2>Editing mode</h2>
+
+        <div class="tool-grid">
+          <button data-tool="pit">Pit</button>
+          <button data-tool="belt">Conveyor</button>
+          <button data-tool="gear">Gear</button>
+          <button data-tool="laser">Laser</button>
+          <button data-tool="wall">Wall</button>
+          <button data-tool="push">Push panel</button>
+          <button data-tool="checkpoint">Checkpoint</button>
+          <button data-tool="battery">Battery</button>
+          <button data-tool="start">Start</button>
+          <button data-tool="eraseFeature">Erase feature</button>
+          <button data-tool="eraseTile">Erase tile</button>
+        </div>
+
+        <div class="field" style="margin-top: 10px;">
+          <label for="direction">Direction / side</label>
+          <select id="direction">
+            <option value="N">N</option>
+            <option value="NE">NE</option>
+            <option value="E">E</option>
+            <option value="SE">SE</option>
+            <option value="S">S</option>
+            <option value="SW">SW</option>
+            <option value="W">W</option>
+            <option value="NW">NW</option>
+          </select>
+        </div>
+
+        <div class="inline-row">
+          <div class="field">
+            <label for="beltSpeed">Belt speed</label>
+            <select id="beltSpeed">
+              <option value="1">1</option>
+              <option value="2">2</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="gearRotation">Gear rotation</label>
+            <select id="gearRotation">
+              <option value="cw">cw</option>
+              <option value="ccw">ccw</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="inline-row">
+          <div class="field">
+            <label for="laserDamage">Laser damage</label>
+            <select id="laserDamage">
+              <option value="1">1</option>
+              <option value="2">2</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="checkpointId">Checkpoint ID</label>
+            <input id="checkpointId" type="number" min="1" value="1" />
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="pushTiming">Push timing</label>
+          <input id="pushTiming" type="text" value="2,4" />
+        </div>
+
+        <div class="field">
+          <label for="startFacing">Start facing</label>
+          <select id="startFacing">
+            <option value="N">N</option>
+            <option value="E" selected>E</option>
+            <option value="S">S</option>
+            <option value="W">W</option>
+          </select>
+        </div>
+
+        <p class="small-note">
+          Click a tile to add the selected feature. Click again with the same settings
+          to avoid duplicates. Use “Erase feature” to remove only the selected type,
+          or “Erase tile” to wipe the tile entirely.
+        </p>
+      </div>
+
+      <div class="section">
+        <h2>Tile inspector</h2>
+        <div class="field">
+          <label>Selected tile</label>
+          <div id="selectedTileLabel" class="small-note">No tile selected</div>
+        </div>
+        <div class="feature-list" id="selectedTileFeatures">
+          <em>No tile selected</em>
+        </div>
+      </div>
+
+      <div class="section">
+        <h2>Export</h2>
+        <div class="button-row">
+          <button id="exportTilesBtn" class="primary">Export piece JSON</button>
+          <button id="exportTilesOnlyBtn">Export tiles only</button>
+        </div>
+        <div class="field" style="margin-top: 10px;">
+          <button id="copyOutputBtn">Copy output</button>
+        </div>
+        <div class="field">
+          <textarea id="output"></textarea>
+        </div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="canvas-wrap">
+        <canvas id="canvas" width="960" height="960"></canvas>
+      </div>
+
+      <div class="status" id="status">
+        Load an image to begin.
+      </div>
+
+      <div class="legend">
+        <div><strong>Red fill</strong><br />Tile contains one or more features</div>
+        <div><strong>Blue border</strong><br />Currently selected tile</div>
+        <div><strong>B</strong><br />Conveyor</div>
+        <div><strong>L</strong><br />Laser</div>
+        <div><strong>G</strong><br />Gear</div>
+        <div><strong>P</strong><br />Pit / Push panel (see inspector)</div>
+        <div><strong>W edge lines</strong><br />Walls on tile sides</div>
+        <div><strong>Cn</strong><br />Checkpoint number</div>
+        <div><strong>S</strong><br />Start tile</div>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+
+    const imageInput = document.getElementById("imageInput");
+    const gridWidthInput = document.getElementById("gridWidth");
+    const gridHeightInput = document.getElementById("gridHeight");
+    const resizeGridBtn = document.getElementById("resizeGridBtn");
+
+    const pieceIdInput = document.getElementById("pieceId");
+    const pieceNameInput = document.getElementById("pieceName");
+    const pieceKindInput = document.getElementById("pieceKind");
+
+    const directionInput = document.getElementById("direction");
+    const beltSpeedInput = document.getElementById("beltSpeed");
+    const gearRotationInput = document.getElementById("gearRotation");
+    const laserDamageInput = document.getElementById("laserDamage");
+    const checkpointIdInput = document.getElementById("checkpointId");
+    const pushTimingInput = document.getElementById("pushTiming");
+    const startFacingInput = document.getElementById("startFacing");
+
+    const output = document.getElementById("output");
+    const statusEl = document.getElementById("status");
+    const selectedTileLabel = document.getElementById("selectedTileLabel");
+    const selectedTileFeatures = document.getElementById("selectedTileFeatures");
+
+    const exportTilesBtn = document.getElementById("exportTilesBtn");
+    const exportTilesOnlyBtn = document.getElementById("exportTilesOnlyBtn");
+    const copyOutputBtn = document.getElementById("copyOutputBtn");
+
+    const toolButtons = [...document.querySelectorAll("[data-tool]")];
+
+    const img = new Image();
+    let imageLoaded = false;
+
+    let gridWidth = Number(gridWidthInput.value);
+    let gridHeight = Number(gridHeightInput.value);
+
+    let tileWidth = canvas.width / gridWidth;
+    let tileHeight = canvas.height / gridHeight;
+
+    let currentTool = "pit";
+    let selectedTile = null;
+
+    // Sparse storage:
+    // tiles["x,y"] = { x, y, features: [...] }
+    const tiles = {};
+    const starts = [];
+
+    function tileKey(x, y) {
+      return `${x},${y}`;
+    }
+
+    function getTile(x, y, createIfMissing = false) {
+      const key = tileKey(x, y);
+      if (!tiles[key] && createIfMissing) {
+        tiles[key] = { x, y, features: [] };
+      }
+      return tiles[key] || null;
+    }
+
+    function parseTiming(text) {
+      const values = text
+        .split(",")
+        .map(s => s.trim())
+        .filter(Boolean)
+        .map(Number)
+        .filter(n => Number.isFinite(n));
+      return values;
+    }
+
+    function sameArray(a, b) {
+      if (a.length !== b.length) return false;
+      const aSorted = [...a].sort();
+      const bSorted = [...b].sort();
+      return aSorted.every((v, i) => v === bSorted[i]);
+    }
+
+    function sameFeature(a, b) {
+      if (a.type !== b.type) return false;
+
+      switch (a.type) {
+        case "pit":
+        case "battery":
+          return true;
+        case "belt":
+          return a.dir === b.dir && a.speed === b.speed;
+        case "gear":
+          return a.rotation === b.rotation;
+        case "laser":
+          return a.dir === b.dir && a.damage === b.damage;
+        case "wall":
+          return sameArray(a.sides || [], b.sides || []);
+        case "push":
+          return a.dir === b.dir && sameArray(a.timing || [], b.timing || []);
+        case "checkpoint":
+          return a.id === b.id;
+        default:
+          return JSON.stringify(a) === JSON.stringify(b);
+      }
+    }
+
+    function addFeatureToTile(x, y, feature) {
+      const tile = getTile(x, y, true);
+
+      if (feature.type === "wall") {
+        const existing = tile.features.find(f => f.type === "wall");
+        if (existing) {
+          for (const side of feature.sides) {
+            if (!existing.sides.includes(side)) {
+              existing.sides.push(side);
+            }
+          }
+          existing.sides.sort();
+          return;
+        }
+      }
+
+      const exists = tile.features.some(f => sameFeature(f, feature));
+      if (!exists) {
+        tile.features.push(feature);
+      }
+    }
+
+    function eraseFeatureFromTile(x, y, selectedType) {
+      const tile = getTile(x, y, false);
+      if (!tile) return;
+
+      if (selectedType === "wall") {
+        const existing = tile.features.find(f => f.type === "wall");
+        if (!existing) return;
+
+        const side = directionInput.value;
+        existing.sides = existing.sides.filter(s => s !== side);
+
+        if (existing.sides.length === 0) {
+          tile.features = tile.features.filter(f => f !== existing);
+        }
+      } else if (selectedType === "start") {
+        removeStartAt(x, y);
+      } else {
+        const idx = tile.features.findIndex(f => f.type === selectedType);
+        if (idx >= 0) {
+          tile.features.splice(idx, 1);
+        }
+      }
+
+      cleanupTileIfEmpty(x, y);
+    }
+
+    function eraseTile(x, y) {
+      delete tiles[tileKey(x, y)];
+      removeStartAt(x, y);
+    }
+
+    function cleanupTileIfEmpty(x, y) {
+      const key = tileKey(x, y);
+      if (tiles[key] && tiles[key].features.length === 0) {
+        delete tiles[key];
+      }
+    }
+
+    function addOrUpdateStart(x, y, facing) {
+      const existing = starts.find(s => s.x === x && s.y === y);
+      if (existing) {
+        existing.facing = facing;
+      } else {
+        starts.push({ x, y, facing });
+      }
+    }
+
+    function removeStartAt(x, y) {
+      const idx = starts.findIndex(s => s.x === x && s.y === y);
+      if (idx >= 0) starts.splice(idx, 1);
+    }
+
+    function hasStartAt(x, y) {
+      return starts.some(s => s.x === x && s.y === y);
+    }
+
+    function buildFeatureFromControls() {
+      const dir = directionInput.value;
+      const beltSpeed = Number(beltSpeedInput.value);
+      const gearRotation = gearRotationInput.value;
+      const laserDamage = Number(laserDamageInput.value);
+      const checkpointId = Number(checkpointIdInput.value);
+      const pushTiming = parseTiming(pushTimingInput.value);
+
+      switch (currentTool) {
+        case "pit":
+          return { type: "pit" };
+        case "belt":
+          return { type: "belt", dir, speed: beltSpeed };
+        case "gear":
+          return { type: "gear", rotation: gearRotation };
+        case "laser":
+          return { type: "laser", dir, damage: laserDamage };
+        case "wall":
+          return { type: "wall", sides: [dir] };
+        case "push":
+          return { type: "push", dir, timing: pushTiming };
+        case "checkpoint":
+          return { type: "checkpoint", id: checkpointId };
+        case "battery":
+          return { type: "battery" };
+        default:
+          return null;
+      }
+    }
+
+    function setActiveTool(tool) {
+      currentTool = tool;
+      toolButtons.forEach(btn => {
+        btn.classList.toggle("active", btn.dataset.tool === tool);
+      });
+      updateStatus(`Tool: ${tool}`);
+    }
+
+    function updateStatus(text) {
+      statusEl.textContent = text;
+    }
+
+    function loadImageFromFile(file) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        img.onload = () => {
+          imageLoaded = true;
+          canvas.width = img.width;
+          canvas.height = img.height;
+          recomputeTileSize();
+          draw();
+          updateStatus(`Loaded image: ${file.name} (${img.width}×${img.height})`);
+        };
+        img.src = reader.result;
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function recomputeTileSize() {
+      gridWidth = Number(gridWidthInput.value);
+      gridHeight = Number(gridHeightInput.value);
+      tileWidth = canvas.width / gridWidth;
+      tileHeight = canvas.height / gridHeight;
+    }
+
+    function gridCoordsFromMouse(evt) {
+      const rect = canvas.getBoundingClientRect();
+      const x = Math.floor((evt.clientX - rect.left) * (canvas.width / rect.width) / tileWidth);
+      const y = Math.floor((evt.clientY - rect.top) * (canvas.height / rect.height) / tileHeight);
+      return {
+        x: Math.max(0, Math.min(gridWidth - 1, x)),
+        y: Math.max(0, Math.min(gridHeight - 1, y))
+      };
+    }
+
+    function drawArrowInTile(x, y, dir, label) {
+      const left = x * tileWidth;
+      const top = y * tileHeight;
+      const cx = left + tileWidth / 2;
+      const cy = top + tileHeight / 2;
+      const len = Math.min(tileWidth, tileHeight) * 0.28;
+
+      const vectors = {
+        N: [0, -1],
+        NE: [0.7, -0.7],
+        E: [1, 0],
+        SE: [0.7, 0.7],
+        S: [0, 1],
+        SW: [-0.7, 0.7],
+        W: [-1, 0],
+        NW: [-0.7, -0.7]
+      };
+
+      const [vx, vy] = vectors[dir] || [0, -1];
+      const ex = cx + vx * len;
+      const ey = cy + vy * len;
+
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(ex, ey);
+      ctx.stroke();
+
+      const head = 7;
+      const angle = Math.atan2(ey - cy, ex - cx);
+
+      ctx.beginPath();
+      ctx.moveTo(ex, ey);
+      ctx.lineTo(ex - head * Math.cos(angle - Math.PI / 6), ey - head * Math.sin(angle - Math.PI / 6));
+      ctx.lineTo(ex - head * Math.cos(angle + Math.PI / 6), ey - head * Math.sin(angle + Math.PI / 6));
+      ctx.closePath();
+      ctx.fill();
+
+      if (label) {
+        ctx.fillText(label, left + 4, top + tileHeight - 6);
+      }
+    }
+
+    function drawWalls(x, y, sides) {
+      const left = x * tileWidth;
+      const top = y * tileHeight;
+      const right = left + tileWidth;
+      const bottom = top + tileHeight;
+
+      ctx.save();
+      ctx.strokeStyle = "#111";
+      ctx.lineWidth = 3;
+
+      for (const side of sides) {
+        ctx.beginPath();
+        if (side === "N") {
+          ctx.moveTo(left, top);
+          ctx.lineTo(right, top);
+        } else if (side === "E") {
+          ctx.moveTo(right, top);
+          ctx.lineTo(right, bottom);
+        } else if (side === "S") {
+          ctx.moveTo(left, bottom);
+          ctx.lineTo(right, bottom);
+        } else if (side === "W") {
+          ctx.moveTo(left, top);
+          ctx.lineTo(left, bottom);
+        }
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    function drawTileFeatures(tile) {
+      const { x, y, features } = tile;
+      const left = x * tileWidth;
+      const top = y * tileHeight;
+
+      ctx.save();
+
+      ctx.fillStyle = "rgba(255, 0, 0, 0.16)";
+      ctx.fillRect(left, top, tileWidth, tileHeight);
+
+      let textY = top + 13;
+      const maxTextLines = 4;
+
+      const wallFeature = features.find(f => f.type === "wall");
+      if (wallFeature) {
+        drawWalls(x, y, wallFeature.sides || []);
+      }
+
+      ctx.font = "12px sans-serif";
+      ctx.fillStyle = "#111";
+      ctx.strokeStyle = "#111";
+
+      for (let i = 0; i < features.length; i++) {
+        const f = features[i];
+
+        if (f.type === "belt") {
+          drawArrowInTile(x, y, f.dir, `B${f.speed}`);
+        } else if (f.type === "laser") {
+          drawArrowInTile(x, y, f.dir || "N", `L${f.damage ?? 1}`);
+        } else if (f.type === "gear") {
+          ctx.fillText(f.rotation === "cw" ? "G↻" : "G↺", left + 4, textY);
+          textY += 12;
+        } else if (f.type === "pit") {
+          ctx.fillText("Pit", left + 4, textY);
+          textY += 12;
+        } else if (f.type === "push") {
+          ctx.fillText(`P ${f.dir}`, left + 4, textY);
+          textY += 12;
+        } else if (f.type === "checkpoint") {
+          ctx.fillText(`C${f.id}`, left + 4, textY);
+          textY += 12;
+        } else if (f.type === "battery") {
+          ctx.fillText("Bat", left + 4, textY);
+          textY += 12;
+        } else if (f.type === "wall") {
+          // drawn separately
+        } else {
+          if (i < maxTextLines) {
+            ctx.fillText(f.type, left + 4, textY);
+            textY += 12;
+          }
+        }
+      }
+
+      if (hasStartAt(x, y)) {
+        const start = starts.find(s => s.x === x && s.y === y);
+        ctx.fillText(`S ${start.facing}`, left + 4, top + tileHeight / 2);
+      }
+
+      ctx.restore();
+    }
+
+    function drawGrid() {
+      ctx.save();
+      ctx.strokeStyle = "rgba(0,0,0,0.28)";
+      ctx.lineWidth = 1;
+
+      for (let x = 0; x <= gridWidth; x++) {
+        const px = x * tileWidth;
+        ctx.beginPath();
+        ctx.moveTo(px, 0);
+        ctx.lineTo(px, canvas.height);
+        ctx.stroke();
+      }
+
+      for (let y = 0; y <= gridHeight; y++) {
+        const py = y * tileHeight;
+        ctx.beginPath();
+        ctx.moveTo(0, py);
+        ctx.lineTo(canvas.width, py);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    function drawSelection() {
+      if (!selectedTile) return;
+      const { x, y } = selectedTile;
+      ctx.save();
+      ctx.strokeStyle = "#2563eb";
+      ctx.lineWidth = 3;
+      ctx.strokeRect(
+        x * tileWidth + 1.5,
+        y * tileHeight + 1.5,
+        tileWidth - 3,
+        tileHeight - 3
+      );
+      ctx.restore();
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      if (imageLoaded) {
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      } else {
+        ctx.fillStyle = "#fafafa";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      }
+
+      drawGrid();
+
+      Object.values(tiles).forEach(drawTileFeatures);
+
+      drawSelection();
+      updateInspector();
+    }
+
+    function featureSummary(feature) {
+      switch (feature.type) {
+        case "pit":
+          return "pit";
+        case "belt":
+          return `belt dir=${feature.dir} speed=${feature.speed}`;
+        case "gear":
+          return `gear rotation=${feature.rotation}`;
+        case "laser":
+          return `laser dir=${feature.dir ?? "?"} damage=${feature.damage ?? 1}`;
+        case "wall":
+          return `wall sides=${(feature.sides || []).join(",")}`;
+        case "push":
+          return `push dir=${feature.dir} timing=${(feature.timing || []).join(",")}`;
+        case "checkpoint":
+          return `checkpoint id=${feature.id}`;
+        case "battery":
+          return "battery";
+        default:
+          return JSON.stringify(feature);
+      }
+    }
+
+    function updateInspector() {
+      if (!selectedTile) {
+        selectedTileLabel.textContent = "No tile selected";
+        selectedTileFeatures.innerHTML = "<em>No tile selected</em>";
+        return;
+      }
+
+      const { x, y } = selectedTile;
+      selectedTileLabel.textContent = `Tile (${x}, ${y})`;
+
+      const tile = getTile(x, y, false);
+      const tileStarts = starts.filter(s => s.x === x && s.y === y);
+
+      const items = [];
+
+      if (tile && tile.features.length) {
+        for (const f of tile.features) {
+          items.push(`<li>${escapeHtml(featureSummary(f))}</li>`);
+        }
+      }
+
+      for (const s of tileStarts) {
+        items.push(`<li>start facing=${escapeHtml(s.facing)}</li>`);
+      }
+
+      if (items.length === 0) {
+        selectedTileFeatures.innerHTML = "<em>No features on this tile</em>";
+      } else {
+        selectedTileFeatures.innerHTML = `<ul>${items.join("")}</ul>`;
+      }
+    }
+
+    function escapeHtml(text) {
+      return String(text)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
+    }
+
+    function sortTileFeatures(features) {
+      const order = {
+        pit: 1,
+        belt: 2,
+        gear: 3,
+        laser: 4,
+        wall: 5,
+        push: 6,
+        checkpoint: 7,
+        battery: 8
+      };
+
+      return [...features].sort((a, b) => {
+        return (order[a.type] || 99) - (order[b.type] || 99);
+      });
+    }
+
+    function exportTilesOnly() {
+      const exportedTiles = Object.values(tiles)
+        .map(tile => ({
+          x: tile.x,
+          y: tile.y,
+          features: sortTileFeatures(tile.features)
+        }))
+        .sort((a, b) => (a.y - b.y) || (a.x - b.x));
+
+      output.value = JSON.stringify(exportedTiles, null, 2);
+      updateStatus("Exported tiles JSON.");
+    }
+
+    function exportPieceJson() {
+      const exportedTiles = Object.values(tiles)
+        .map(tile => ({
+          x: tile.x,
+          y: tile.y,
+          features: sortTileFeatures(tile.features)
+        }))
+        .sort((a, b) => (a.y - b.y) || (a.x - b.x));
+
+      const piece = {
+        id: pieceIdInput.value.trim(),
+        name: pieceNameInput.value.trim(),
+        kind: pieceKindInput.value,
+        width: Number(gridWidthInput.value),
+        height: Number(gridHeightInput.value),
+        mergeMode: pieceKindInput.value === "overlay" ? "overlay" : "base",
+        starts: [...starts].sort((a, b) => (a.y - b.y) || (a.x - b.x)),
+        tiles: exportedTiles
+      };
+
+      output.value = JSON.stringify(piece, null, 2);
+      updateStatus("Exported piece JSON.");
+    }
+
+    function copyOutput() {
+      output.select();
+      output.setSelectionRange(0, output.value.length);
+      navigator.clipboard.writeText(output.value)
+        .then(() => updateStatus("Copied output to clipboard."))
+        .catch(() => updateStatus("Could not copy automatically. Use Ctrl/Cmd+C."));
+    }
+
+    canvas.addEventListener("click", (evt) => {
+      const { x, y } = gridCoordsFromMouse(evt);
+      selectedTile = { x, y };
+
+      if (currentTool === "eraseTile") {
+        eraseTile(x, y);
+        draw();
+        return;
+      }
+
+      if (currentTool === "eraseFeature") {
+        // Uses current direction for wall erase, or selected tool type inferred from dropdown?
+        // Since currentTool is eraseFeature, we remove based on the most recently chosen type is not available,
+        // so for simplicity remove the first matching feature category selected in the directionless panel is not possible.
+        // We'll instead remove by prompting through the current direction-independent choice using a modifier key.
+        // Better approach: remove last feature if no better signal.
+        const tile = getTile(x, y, false);
+        if (tile && tile.features.length) {
+          tile.features.pop();
+          cleanupTileIfEmpty(x, y);
+        } else if (hasStartAt(x, y)) {
+          removeStartAt(x, y);
+        }
+        draw();
+        updateStatus(`Erased last feature from tile (${x}, ${y}).`);
+        return;
+      }
+
+      if (currentTool === "start") {
+        addOrUpdateStart(x, y, startFacingInput.value);
+        draw();
+        updateStatus(`Placed/updated start at (${x}, ${y}).`);
+        return;
+      }
+
+      const feature = buildFeatureFromControls();
+      if (feature) {
+        addFeatureToTile(x, y, feature);
+        draw();
+        updateStatus(`Added ${feature.type} to tile (${x}, ${y}).`);
+      }
+    });
+
+    resizeGridBtn.addEventListener("click", () => {
+      recomputeTileSize();
+      draw();
+      updateStatus(`Grid set to ${gridWidth}×${gridHeight}.`);
+    });
+
+    imageInput.addEventListener("change", (evt) => {
+      const file = evt.target.files[0];
+      if (file) loadImageFromFile(file);
+    });
+
+    exportTilesBtn.addEventListener("click", exportPieceJson);
+    exportTilesOnlyBtn.addEventListener("click", exportTilesOnly);
+    copyOutputBtn.addEventListener("click", copyOutput);
+
+    toolButtons.forEach(btn => {
+      btn.addEventListener("click", () => setActiveTool(btn.dataset.tool));
+    });
+
+    setActiveTool("pit");
+    draw();
+  </script>
+</body>
+</html>

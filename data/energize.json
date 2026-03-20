@@ -1,0 +1,827 @@
+{
+  "id": "energize",
+  "name": "Energize",
+  "expansionId": "roborally",
+  "physicalBoardId": "energize-misdirection",
+  "image": "./assets/boards/energize.jpeg",
+  "kind": "base",
+  "width": 12,
+  "height": 12,
+  "mergeMode": "base",
+  "starts": [],
+  "tiles": [
+    {
+      "x": 2,
+      "y": 0,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "E",
+          "damage": 1
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 0,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "E",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 0,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "E",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 0,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "E",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 0,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "E",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 0,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "E",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 0,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "E",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 0,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "E",
+          "damage": 1
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "E"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 1,
+      "features": [
+        {
+          "type": "battery"
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 1,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 1,
+      "features": [
+        {
+          "type": "battery"
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 2,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "E",
+          "damage": 1
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "S",
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 2,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "E",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 2,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "ccw"
+        },
+        {
+          "type": "laser",
+          "dir": "E",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 2,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "cw"
+        },
+        {
+          "type": "laser",
+          "dir": "E",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 2,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "E",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 2,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "E",
+          "damage": 1
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "E",
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 3,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 3,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "ccw"
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "S",
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 3,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 3,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "cw"
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "E",
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 3,
+      "features": [
+        {
+          "type": "battery"
+        }
+      ]
+    },
+    {
+      "x": 11,
+      "y": 3,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 4,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "ccw"
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "E",
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 4,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "N",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 4,
+      "features": [
+        {
+          "type": "battery"
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 4,
+      "features": [
+        {
+          "type": "pit"
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 4,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "S",
+          "damage": 1
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "N",
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 5,
+      "features": [
+        {
+          "type": "pit"
+        },
+        {
+          "type": "laser",
+          "dir": "N",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 5,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "ccw"
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 5,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "S",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 5,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 6,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 6,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "cw"
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "E",
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 6,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "N",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 6,
+      "features": [
+        {
+          "type": "pit"
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 6,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "S",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 7,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "N",
+          "damage": 1
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 7,
+      "features": [
+        {
+          "type": "pit"
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 7,
+      "features": [
+        {
+          "type": "battery"
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 7,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "S",
+          "damage": 1
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "S",
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 8,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 8,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "ccw"
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 8,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "S",
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 8,
+      "features": [
+        {
+          "type": "battery"
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 8,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "E",
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 8,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "S",
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 8,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 11,
+      "y": 8,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 9,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "cw"
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 9,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "N",
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 9,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "ccw"
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 9,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "cw"
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 9,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "E",
+            "N"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 10,
+      "features": [
+        {
+          "type": "battery"
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 10,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "W",
+          "damage": 1
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 10,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "W",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 10,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "W",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 10,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "W",
+          "damage": 1
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "E"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 10,
+      "features": [
+        {
+          "type": "battery"
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 11,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "E",
+          "damage": 1
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 11,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "E",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 11,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "E",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 11,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "E",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 11,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "W"
+          ]
+        }
+      ]
+    }
+  ]
+}
