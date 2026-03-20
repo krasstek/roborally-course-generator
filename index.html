@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>RoboRally Test Renderer</title>
+  <title>RoboRally Course Generator</title>
   <style>
     :root {
       --bg-top: #20252a;
@@ -181,6 +181,17 @@
       background: linear-gradient(180deg, #ea7d3d 0%, #c75422 100%);
     }
 
+    button:active {
+      transform: translateY(1px) scale(0.99);
+      box-shadow: inset 0 2px 0 rgba(0, 0, 0, 0.12), 0 6px 12px rgba(0, 0, 0, 0.16);
+      filter: brightness(0.96);
+    }
+
+    button:focus-visible {
+      outline: 2px solid rgba(242, 194, 48, 0.95);
+      outline-offset: 2px;
+    }
+
     canvas {
       border: 2px solid rgba(43, 52, 60, 0.36);
       border-radius: 10px;
@@ -307,7 +318,7 @@
 </head>
 <body>
   <h1>RoboRally Course Generator</h1>
-  <p class="subtitle">Developer control console for probing randomized RoboRally courses. The final app can hide the debug traces, but this view keeps route and fairness diagnostics visible while the generator is being tuned.</p>
+  <p class="subtitle">Generate randomized RoboRally courses from official board layouts, tuned for player count, difficulty, and game length.</p>
   <div class="app-shell">
     <section class="panel board-panel">
       <div class="controls">
@@ -339,17 +350,17 @@
             <option value="long">Long</option>
           </select>
         </label>
-        <label id="trace-leg-label">
+        <label id="trace-leg-label" class="hidden">
           Trace leg
           <select id="leg-select">
             <option value="none">None</option>
           </select>
         </label>
         <label class="toggle-label">
-          <input id="dev-view" type="checkbox" checked />
+          <input id="dev-view" type="checkbox" />
           Dev View
         </label>
-        <button id="reroll" type="button">Find Setup</button>
+        <button id="reroll" type="button">Generate Course</button>
       </div>
       <canvas id="canvas"></canvas>
       <div class="meta-strip">
@@ -365,7 +376,7 @@
         </div>
       </div>
     </section>
-    <aside id="report-panel" class="panel sidebar">
+    <aside id="report-panel" class="panel sidebar hidden">
       <h2 class="report-title">Course Evaluation</h2>
       <pre id="report"></pre>
     </aside>

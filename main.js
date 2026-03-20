@@ -20,6 +20,7 @@ const MAX_ATTEMPTS = 120;
 const MIN_LENGTH_RAW = 28;
 const MIN_SHARED_EDGE = 5;
 const OVERLAY_UPDATE_INTERVAL = 4;
+const SAVED_SCENARIO_KEY = "roborally-course-generator:last-scenario";
 
 let currentScenario = null;
 let cachedAssets = null;
@@ -109,6 +110,24 @@ function sampleMany(items, count) {
 
 function nextFrame() {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+}
+
+function getPreferencesFromControls() {
+  return {
+    playerCount: Number(document.getElementById("player-count").value),
+    difficulty: document.getElementById("difficulty").value,
+    length: document.getElementById("length").value
+  };
+}
+
+function applyPreferencesToControls(preferences) {
+  if (!preferences) {
+    return;
+  }
+
+  document.getElementById("player-count").value = String(preferences.playerCount ?? 4);
+  document.getElementById("difficulty").value = preferences.difficulty ?? "moderate";
+  document.getElementById("length").value = preferences.length ?? "moderate";
 }
 
 function clamp(value, min, max) {
@@ -583,6 +602,38 @@ function createDockPlacement(structuralPlacements, pieceMap, dockFlipped) {
   return null;
 }
 
+function getDockBoundaryRun(structuralPlacements, dockPlacement, pieceMap) {
+  const dock = pieceMap[dockPlacement.pieceId];
+  const footprintTiles = buildMainFootprintTiles(structuralPlacements, pieceMap);
+  const boundaryRuns = groupBoundaryRuns(getBoundaryEdges(footprintTiles));
+  const validRuns = getValidDockRuns(boundaryRuns, dock);
+  const expectedSide = {
+    E: "W",
+    S: "N",
+    W: "E",
+    N: "S"
+  }[dockPlacement.startFacingOverride] ?? null;
+
+  return validRuns.find((run) => {
+    if (expectedSide && run.side !== expectedSide) {
+      return false;
+    }
+
+    const projected = projectDockPlacement(run, 0, dock, dockPlacement.rotation === (({
+      W: 180,
+      N: 270,
+      E: 0,
+      S: 90
+    })[run.side] ?? 0));
+
+    if (run.side === "W" || run.side === "E") {
+      return projected.x === dockPlacement.x && dockPlacement.y >= projected.y && dockPlacement.y + dock.height <= projected.y + run.length;
+    }
+
+    return projected.y === dockPlacement.y && dockPlacement.x >= projected.x && dockPlacement.x + dock.width <= projected.x + run.length;
+  }) ?? null;
+}
+
 function analyzeFlagSequence(tileMap, starts, flags, playerCount) {
   const firstLeg = analyzeCourse(tileMap, starts, flags[0], {
     maxRoutes: 4,
@@ -1018,15 +1069,87 @@ function createRandomCandidate(assets, preferences, attempt = 1) {
   };
 }
 
+function serializeScenario(scenario) {
+  return {
+    preferences: scenario.preferences,
+    placements: scenario.placements,
+    checkpoints: scenario.checkpoints,
+    attempts: scenario.attempts ?? 0
+  };
+}
+
+function saveScenarioSnapshot(scenario) {
+  try {
+    localStorage.setItem(SAVED_SCENARIO_KEY, JSON.stringify(serializeScenario(scenario)));
+  } catch {
+    // ignore storage failures
+  }
+}
+
+function loadScenarioSnapshot() {
+  try {
+    const raw = localStorage.getItem(SAVED_SCENARIO_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function hydrateScenarioFromSnapshot(assets, snapshot) {
+  if (!snapshot?.placements?.length || !snapshot?.checkpoints?.length || !snapshot?.preferences) {
+    return null;
+  }
+
+  const { pieceMap, imageMap } = assets;
+  const placements = snapshot.placements;
+  const checkpoints = snapshot.checkpoints;
+  const boardPlacements = placements.filter((placement) => placement.pieceId !== "docking-bay-a");
+  const dockPlacement = placements.find((placement) => placement.pieceId === "docking-bay-a");
+
+  if (!dockPlacement || !boardPlacements.length) {
+    return null;
+  }
+
+  const { tileMap, starts } = buildResolvedMap(placements, pieceMap);
+  const goalTileMap = applyFlagOverrides(tileMap, checkpoints);
+  const sequence = analyzeFlagSequence(goalTileMap, starts, checkpoints, snapshot.preferences.playerCount);
+  const metrics = classifyCandidate(sequence, {
+    ...snapshot.preferences,
+    flagCount: checkpoints.length
+  }, {
+    boardPlacements,
+    pieceMap,
+    checkpoints
+  });
+
+  return {
+    pieceMap,
+    imageMap,
+    placements,
+    checkpoints,
+    goalTileMap,
+    playerCount: snapshot.preferences.playerCount,
+    mainBoardIds: boardPlacements.map((placement) => placement.pieceId),
+    mainRotations: boardPlacements.map((placement) => placement.rotation),
+    boardCount: boardPlacements.length,
+    guidanceLevel: 0,
+    dockFlipped: Boolean(dockPlacement.rotation % 180),
+    dockBoundaryRun: getDockBoundaryRun(boardPlacements, dockPlacement, pieceMap),
+    sequence,
+    metrics,
+    preferences: {
+      ...snapshot.preferences,
+      flagCount: checkpoints.length
+    },
+    attempts: snapshot.attempts ?? 0
+  };
+}
+
 async function start() {
   setGeneratingOverlay(true, "Trying random setups and checking difficulty, length, and usable starts.");
   await nextFrame();
   const assets = await loadAssets();
-  const preferences = {
-    playerCount: Number(document.getElementById("player-count").value),
-    difficulty: document.getElementById("difficulty").value,
-    length: document.getElementById("length").value
-  };
+  const preferences = getPreferencesFromControls();
 
   let bestScenario = null;
 
@@ -1041,6 +1164,7 @@ async function start() {
     if (scenario.metrics.acceptable) {
       currentScenario = scenario;
       renderScenario(currentScenario);
+      saveScenarioSnapshot(currentScenario);
       setGeneratingOverlay(false);
       return;
     }
@@ -1053,6 +1177,7 @@ async function start() {
 
   currentScenario = bestScenario;
   renderScenario(currentScenario);
+  saveScenarioSnapshot(currentScenario);
   setGeneratingOverlay(false);
 }
 
@@ -1073,4 +1198,22 @@ document.getElementById("dev-view").addEventListener("change", () => {
   }
 });
 
-start().catch(console.error);
+async function init() {
+  const assets = await loadAssets();
+  const snapshot = loadScenarioSnapshot();
+
+  if (snapshot) {
+    applyPreferencesToControls(snapshot.preferences);
+    const restoredScenario = hydrateScenarioFromSnapshot(assets, snapshot);
+    if (restoredScenario) {
+      currentScenario = restoredScenario;
+      renderScenario(currentScenario);
+      setGeneratingOverlay(false);
+      return;
+    }
+  }
+
+  await start();
+}
+
+init().catch(console.error);
