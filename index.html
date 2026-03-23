@@ -149,6 +149,73 @@
       padding-bottom: 8px;
     }
 
+    .variant-field {
+      min-width: 168px;
+    }
+
+    .variant-picker {
+      display: block;
+      position: relative;
+      width: 100%;
+    }
+
+    .variant-picker summary {
+      list-style: none;
+      cursor: pointer;
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid rgba(76, 91, 102, 0.34);
+      background: rgba(236, 240, 242, 0.98);
+      color: #171d22;
+      font: 600 14px/1.2 "Trebuchet MS", Verdana, sans-serif;
+      text-transform: none;
+      letter-spacing: 0;
+      min-height: 40px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      box-sizing: border-box;
+      box-shadow: var(--inset);
+    }
+
+    .variant-picker summary::after {
+      content: "▾";
+      color: #39444e;
+      font-size: 13px;
+    }
+
+    .variant-picker summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .variant-menu {
+      position: absolute;
+      top: calc(100% + 6px);
+      left: 0;
+      right: 0;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid rgba(76, 91, 102, 0.24);
+      background: rgba(236, 240, 242, 0.98);
+      color: #171d22;
+      box-shadow: var(--inset);
+      display: grid;
+      gap: 8px;
+      z-index: 20;
+    }
+
+    .variant-option {
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      gap: 8px;
+      min-width: auto;
+      color: #171d22;
+      text-transform: none;
+      letter-spacing: 0;
+      font-size: 13px;
+    }
+
     .toggle-label input {
       width: 16px;
       height: 16px;
@@ -209,6 +276,44 @@
       gap: 10px;
       flex-wrap: wrap;
       margin-top: 12px;
+    }
+
+    .setup-summary {
+      display: grid;
+      gap: 10px;
+      margin: 0 0 14px;
+      padding: 12px 14px;
+      border-radius: 12px;
+      background: linear-gradient(180deg, rgba(32, 39, 45, 0.96) 0%, rgba(54, 64, 73, 0.94) 100%);
+      border: 1px solid rgba(61, 74, 85, 0.36);
+      color: #eef2f4;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    }
+
+    .setup-summary.hidden {
+      display: none !important;
+    }
+
+    .setup-row {
+      display: grid;
+      grid-template-columns: 86px 1fr;
+      gap: 10px;
+      align-items: start;
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    .setup-label {
+      color: rgba(232, 237, 240, 0.72);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-size: 11px;
+      padding-top: 2px;
+    }
+
+    .setup-value {
+      color: #f4f7f8;
+      font-weight: 600;
     }
 
     .pill {
@@ -350,6 +455,18 @@
             <option value="long">Long</option>
           </select>
         </label>
+        <label class="variant-field">
+          Allowed variants
+          <details class="variant-picker">
+            <summary id="variant-summary">Dynamic Archiving</summary>
+            <div class="variant-menu">
+              <label class="variant-option">
+                <input id="variant-dynamic-archiving" type="checkbox" checked />
+                Dynamic Archiving
+              </label>
+            </div>
+          </details>
+        </label>
         <label id="trace-leg-label" class="hidden">
           Trace leg
           <select id="leg-select">
@@ -362,12 +479,23 @@
         </label>
         <button id="reroll" type="button">Generate Course</button>
       </div>
+      <div id="setup-summary" class="setup-summary hidden">
+        <div class="setup-row">
+          <div class="setup-label">Boards</div>
+          <div id="setup-boards" class="setup-value"></div>
+        </div>
+        <div class="setup-row">
+          <div class="setup-label">Flags</div>
+          <div id="setup-flags" class="setup-value"></div>
+        </div>
+      </div>
       <canvas id="canvas"></canvas>
       <div class="meta-strip">
         <span class="pill">Orange square: prohibited starting space</span>
         <span class="pill">Gold flag: checkpoint</span>
+        <span id="legend-reboot-token" class="pill hidden">Green marker: reboot token</span>
       </div>
-      <p class="rules-note">Reminder: lasers and walls on a checkpoint stay active; other board elements on that space do not. This course display uses Dynamic Archiving.</p>
+      <p id="rules-note" class="rules-note hidden">Ruleset: RoboRally 2023. Reminder: on checkpoint spaces, only walls and lasers stay active; other board elements on that space do not (Game Guide p. 15).</p>
       <div id="generating-overlay" class="overlay visible" aria-live="polite" aria-busy="true">
         <div class="overlay-card">
           <h2 class="overlay-title">Generating Course</h2>

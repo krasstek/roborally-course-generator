@@ -593,6 +593,14 @@
           "type": "belt",
           "dir": "S",
           "speed": 1
+        },
+        {
+          "type": "push",
+          "dir": "E",
+          "timing": [
+            2,
+            4
+          ]
         }
       ]
     },
@@ -1006,7 +1014,7 @@
       "features": [
         {
           "type": "belt",
-          "dir": "E",
+          "dir": "W",
           "speed": 2
         }
       ]
@@ -1098,7 +1106,7 @@
       "features": [
         {
           "type": "belt",
-          "dir": "E",
+          "dir": "W",
           "speed": 2
         }
       ]
@@ -1203,7 +1211,7 @@
       "features": [
         {
           "type": "belt",
-          "dir": "W",
+          "dir": "E",
           "speed": 2
         }
       ]

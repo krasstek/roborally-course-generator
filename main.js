@@ -112,11 +112,150 @@ function nextFrame() {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));
 }
 
+function titleCaseWords(value) {
+  return String(value)
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function formatExpansionName(expansionId) {
+  const labels = {
+    roborally: "RoboRally Base Game (2023)"
+  };
+
+  return labels[expansionId] ?? titleCaseWords(expansionId);
+}
+
+function getReverseSideName(pieceId, pieceMap) {
+  const piece = pieceMap[pieceId];
+  if (!piece?.physicalBoardId) {
+    return null;
+  }
+
+  const reverseSide = Object.values(pieceMap).find((candidate) => (
+    candidate.id !== pieceId &&
+    candidate.physicalBoardId === piece.physicalBoardId
+  ));
+
+  return reverseSide?.name ?? null;
+}
+
+function formatBoardLabel(pieceId, pieceMap) {
+  const piece = pieceMap[pieceId];
+  const name = piece?.name ?? titleCaseWords(pieceId);
+  const expansion = formatExpansionName(piece?.expansionId ?? "unknown");
+  const reverseSide = getReverseSideName(pieceId, pieceMap);
+
+  return reverseSide
+    ? `${name} (${expansion}; reverse side: ${reverseSide})`
+    : `${name} (${expansion})`;
+}
+
+function updateSetupSummary(scenario) {
+  const summary = document.getElementById("setup-summary");
+  const boardsEl = document.getElementById("setup-boards");
+  const flagsEl = document.getElementById("setup-flags");
+
+  if (!scenario) {
+    summary.classList.add("hidden");
+    boardsEl.textContent = "";
+    flagsEl.textContent = "";
+    return;
+  }
+
+  const boardLabels = scenario.mainBoardIds.map((pieceId) => (
+    formatBoardLabel(pieceId, scenario.pieceMap)
+  ));
+
+  boardsEl.textContent = boardLabels.join(", ");
+  flagsEl.textContent = `${scenario.checkpoints.length} checkpoint${scenario.checkpoints.length === 1 ? "" : "s"}`;
+  summary.classList.remove("hidden");
+}
+
+function updateVariantSummary() {
+  const summaryEl = document.getElementById("variant-summary");
+  const enabled = [];
+
+  if (document.getElementById("variant-dynamic-archiving").checked) {
+    enabled.push("Dynamic Archiving");
+  }
+
+  summaryEl.textContent = enabled.length ? enabled.join(", ") : "None";
+}
+
+function closeVariantPicker() {
+  document.querySelector(".variant-picker")?.removeAttribute("open");
+}
+
+function hasSuppressedCheckpointFeatures(scenario) {
+  if (!scenario?.placements?.length || !scenario?.checkpoints?.length) {
+    return false;
+  }
+
+  const { tileMap } = buildResolvedMap(scenario.placements, scenario.pieceMap);
+
+  return scenario.checkpoints.some((checkpoint) => {
+    const tile = tileMap.get(`${checkpoint.x},${checkpoint.y}`);
+    return (tile?.features || []).some((feature) => (
+      feature.type !== "wall" &&
+      feature.type !== "laser" &&
+      feature.type !== "checkpoint"
+    ));
+  });
+}
+
+function updateRulesNote(scenario) {
+  const noteEl = document.getElementById("rules-note");
+  const notes = [];
+
+  if (!scenario) {
+    noteEl.textContent = "";
+    noteEl.classList.add("hidden");
+    return;
+  }
+
+  if (hasSuppressedCheckpointFeatures(scenario)) {
+    notes.push("Checkpoint spaces suppress non-wall, non-laser board elements (Game Guide p. 15).");
+  }
+
+  if (scenario.recoveryRule === "dynamic_archiving") {
+    notes.push("This course uses Dynamic Archiving (Game Guide p. 32).");
+  }
+
+  if (!notes.length) {
+    noteEl.textContent = "";
+    noteEl.classList.add("hidden");
+    return;
+  }
+
+  noteEl.textContent = notes.join(" ");
+  noteEl.classList.remove("hidden");
+}
+
+function updateLegend(scenario) {
+  const rebootTokenEl = document.getElementById("legend-reboot-token");
+  rebootTokenEl?.classList.toggle("hidden", scenario?.recoveryRule !== "reboot_tokens");
+}
+
+function chooseRecoveryRule(preferences) {
+  const dynamicArchivingAllowed = preferences.allowedVariantRules?.dynamicArchiving ?? true;
+  if (dynamicArchivingAllowed && Math.random() < 0.5) {
+    return "dynamic_archiving";
+  }
+
+  return "reboot_tokens";
+}
+
 function getPreferencesFromControls() {
   return {
     playerCount: Number(document.getElementById("player-count").value),
     difficulty: document.getElementById("difficulty").value,
-    length: document.getElementById("length").value
+    length: document.getElementById("length").value,
+    allowedVariantRules: {
+      dynamicArchiving: document.getElementById("variant-dynamic-archiving").checked
+    }
   };
 }
 
@@ -128,6 +267,8 @@ function applyPreferencesToControls(preferences) {
   document.getElementById("player-count").value = String(preferences.playerCount ?? 4);
   document.getElementById("difficulty").value = preferences.difficulty ?? "moderate";
   document.getElementById("length").value = preferences.length ?? "moderate";
+  document.getElementById("variant-dynamic-archiving").checked = preferences.allowedVariantRules?.dynamicArchiving ?? true;
+  updateVariantSummary();
 }
 
 function clamp(value, min, max) {
@@ -313,6 +454,178 @@ function cloneTileMap(tileMap) {
   return copy;
 }
 
+function buildBoardRects(boardPlacements, pieceMap) {
+  return boardPlacements.map((placement, index) => {
+    const piece = pieceMap[placement.pieceId];
+    const dims = rotatedDimensions(piece, placement.rotation ?? 0);
+
+    return {
+      index,
+      pieceId: placement.pieceId,
+      x: placement.x,
+      y: placement.y,
+      width: dims.width,
+      height: dims.height
+    };
+  });
+}
+
+function pointOnRect(point, rect) {
+  return (
+    point.x >= rect.x &&
+    point.x < rect.x + rect.width &&
+    point.y >= rect.y &&
+    point.y < rect.y + rect.height
+  );
+}
+
+function getWallsAtTile(tile) {
+  const walls = new Set();
+
+  for (const feature of tile?.features || []) {
+    if (feature.type !== "wall") continue;
+    for (const side of feature.sides || []) {
+      walls.add(side);
+    }
+  }
+
+  return walls;
+}
+
+function canStepForReboot(tileMap, boardRect, from, dir) {
+  const delta = {
+    N: { dx: 0, dy: -1 },
+    E: { dx: 1, dy: 0 },
+    S: { dx: 0, dy: 1 },
+    W: { dx: -1, dy: 0 }
+  }[dir];
+  const opposite = {
+    N: "S",
+    E: "W",
+    S: "N",
+    W: "E"
+  }[dir];
+  const to = {
+    x: from.x + delta.dx,
+    y: from.y + delta.dy
+  };
+
+  if (!pointOnRect(to, boardRect)) {
+    return false;
+  }
+
+  const fromTile = tileMap.get(`${from.x},${from.y}`);
+  const toTile = tileMap.get(`${to.x},${to.y}`);
+  if (!toTile) {
+    return false;
+  }
+
+  const fromWalls = getWallsAtTile(fromTile);
+  const toWalls = getWallsAtTile(toTile);
+  if (fromWalls.has(dir) || toWalls.has(opposite)) {
+    return false;
+  }
+
+  return !(toTile.features || []).some((feature) => feature.type === "pit");
+}
+
+function scoreRebootDirection(tileMap, boardRect, point, dir, minRunway) {
+  let runway = 0;
+  let current = point;
+
+  while (runway < 3 && canStepForReboot(tileMap, boardRect, current, dir)) {
+    const delta = {
+      N: { dx: 0, dy: -1 },
+      E: { dx: 1, dy: 0 },
+      S: { dx: 0, dy: 1 },
+      W: { dx: -1, dy: 0 }
+    }[dir];
+    current = {
+      x: current.x + delta.dx,
+      y: current.y + delta.dy
+    };
+    runway += 1;
+  }
+
+  if (runway < minRunway) {
+    return null;
+  }
+
+  return runway * 4;
+}
+
+function placeRebootTokens(boardRects, pieceMap, tileMap, checkpoints, playerCount) {
+  const minRunway = playerCount >= 5 ? 2 : 1;
+  const dirs = ["N", "E", "S", "W"];
+  const tokens = [];
+
+  for (const boardRect of boardRects) {
+    const center = {
+      x: boardRect.x + (boardRect.width - 1) / 2,
+      y: boardRect.y + (boardRect.height - 1) / 2
+    };
+    let best = null;
+
+    for (let y = boardRect.y; y < boardRect.y + boardRect.height; y += 1) {
+      for (let x = boardRect.x; x < boardRect.x + boardRect.width; x += 1) {
+        const point = { x, y };
+        const tile = tileMap.get(`${x},${y}`) ?? { features: [] };
+        const features = tile.features || [];
+
+        if (checkpoints.some((checkpoint) => checkpoint.x === x && checkpoint.y === y)) {
+          continue;
+        }
+
+        if (features.some((feature) => feature.type === "pit")) {
+          continue;
+        }
+
+        const nonPassivePenalty = features.reduce((sum, feature) => {
+          if (feature.type === "wall" || feature.type === "laser" || feature.type === "checkpoint") {
+            return sum;
+          }
+          return sum + 5;
+        }, 0);
+        const nearestCheckpoint = checkpoints.length
+          ? Math.min(...checkpoints.map((checkpoint) => manhattanDistance(point, checkpoint)))
+          : 99;
+        const centerDistance = Math.abs(point.x - center.x) + Math.abs(point.y - center.y);
+
+        for (const dir of dirs) {
+          const directionScore = scoreRebootDirection(tileMap, boardRect, point, dir, minRunway);
+          if (directionScore === null) {
+            continue;
+          }
+
+          const score = (
+            nearestCheckpoint * 4 +
+            directionScore * 3 -
+            centerDistance * 2 -
+            nonPassivePenalty
+          );
+
+          if (!best || score > best.score) {
+            best = {
+              boardIndex: boardRect.index,
+              pieceId: boardRect.pieceId,
+              x,
+              y,
+              dir,
+              score
+            };
+          }
+        }
+      }
+    }
+
+    if (best) {
+      tokens.push(best);
+    }
+  }
+
+  return tokens;
+}
+
 function getFlagCandidates(placements, pieceMap) {
   const candidates = [];
 
@@ -371,6 +684,24 @@ function manhattanDistance(a, b) {
   return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
 }
 
+function getConsecutiveFlagDistanceThreshold(preferences = {}, guidanceLevel = 0) {
+  const byDifficulty = {
+    easy: 7,
+    moderate: 6,
+    hard: 5
+  };
+  const byLengthOffset = {
+    short: -1,
+    moderate: 0,
+    long: 1
+  };
+
+  const base = byDifficulty[preferences.difficulty] ?? byDifficulty.moderate;
+  const lengthOffset = byLengthOffset[preferences.length] ?? 0;
+
+  return Math.max(4, base + lengthOffset + Math.min(guidanceLevel, 1));
+}
+
 function getFirstFlagDistanceThresholds(lengthPreference, guidanceLevel) {
   const base = {
     short: { nearest: 5, average: 8 },
@@ -396,9 +727,11 @@ function isFirstFlagFarEnough(flag, starts, thresholds) {
   return nearest >= thresholds.nearest && averageDistance >= thresholds.average;
 }
 
-function isValidFlagSequence(flags) {
+function isValidFlagSequence(flags, preferences = {}, guidanceLevel = 0) {
+  const minDistance = getConsecutiveFlagDistanceThreshold(preferences, guidanceLevel);
+
   for (let index = 1; index < flags.length; index += 1) {
-    if (areFlagsTooClose(flags[index - 1], flags[index])) {
+    if (areFlagsTooClose(flags[index - 1], flags[index], minDistance)) {
       return false;
     }
   }
@@ -423,7 +756,7 @@ function pickFlags(flagCandidates, flagCount, boardPlacements, dockPlacement, pi
       continue;
     }
 
-    if (!isValidFlagSequence(sampled)) {
+    if (!isValidFlagSequence(sampled, preferences, guidanceLevel)) {
       continue;
     }
 
@@ -634,11 +967,14 @@ function getDockBoundaryRun(structuralPlacements, dockPlacement, pieceMap) {
   }) ?? null;
 }
 
-function analyzeFlagSequence(tileMap, starts, flags, playerCount) {
+function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) {
   const firstLeg = analyzeCourse(tileMap, starts, flags[0], {
     maxRoutes: 4,
     flags,
-    playerCount
+    playerCount,
+    recoveryRule: options.recoveryRule,
+    rebootTokens: options.rebootTokens,
+    boardRects: options.boardRects
   });
 
   const legs = [
@@ -659,7 +995,10 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount) {
       routesPerFacing: 3,
       maxDistinctRoutes: 4,
       previousLegRoutes,
-      maxExpansions: 18000
+      maxExpansions: 18000,
+      recoveryRule: options.recoveryRule,
+      rebootTokens: options.rebootTokens,
+      boardRects: options.boardRects
     });
 
     legs.push({
@@ -864,10 +1203,15 @@ function buildScenarioReport(scenario, selectedLegIndex) {
 
   const lines = [
     `Requested: ${scenario.preferences.playerCount} players, ${scenario.preferences.difficulty} difficulty, ${scenario.preferences.length} length`,
+    `Allowed variants: ${scenario.preferences.allowedVariantRules?.dynamicArchiving ? "Dynamic Archiving" : "none"}`,
+    `Recovery used: ${scenario.recoveryRule}`,
     `Accepted after ${scenario.attempts} attempt(s)`,
     `Board count: ${scenario.boardCount}`,
     `Boards: ${scenario.mainBoardIds.map((pieceId, index) => `${pieceId}@${scenario.mainRotations[index]}`).join(", ")}`,
     `Flags: ${scenario.checkpoints.map((flag, index) => `#${index + 1}(${flag.x},${flag.y})`).join(", ")}`,
+    scenario.rebootTokens?.length
+      ? `Reboot tokens: ${scenario.rebootTokens.map((token) => `${token.pieceId}(${token.x},${token.y},${token.dir})`).join(", ")}`
+      : "Reboot tokens: none",
     `Dock side: ${scenario.dockBoundaryRun?.side ?? "n/a"}`,
     `Dock flipped: ${scenario.dockFlipped ? "yes" : "no"}`,
     `Showing leg: ${legOptions[selectedLegIndex]}`,
@@ -941,6 +1285,9 @@ function updateDevView() {
 
 function renderScenario(scenario) {
   updateDevView();
+  updateSetupSummary(scenario);
+  updateRulesNote(scenario);
+  updateLegend(scenario);
   const legSelect = document.getElementById("leg-select");
   const devViewEnabled = isDevViewEnabled();
   const legOptions = scenario.sequence.legs.map((leg, index) => ({
@@ -989,6 +1336,7 @@ function renderScenario(scenario) {
     goal,
     analysis: renderAnalysis,
     goals: scenario.checkpoints,
+    rebootTokens: scenario.rebootTokens,
     tileMap: scenario.goalTileMap,
     unusableStartIndices,
     showBoardLabels: devViewEnabled && selectedLegIndex !== null,
@@ -1003,6 +1351,7 @@ function renderScenario(scenario) {
 
 function createRandomCandidate(assets, preferences, attempt = 1) {
   const { pieceMap } = assets;
+  const recoveryRule = chooseRecoveryRule(preferences);
   const dockFlipped = Math.random() < 0.5;
   const guidanceLevel = guidanceLevelForAttempt(attempt);
   const boardLayout = createBoardPlacements(pieceMap, preferences.length, preferences, guidanceLevel);
@@ -1019,6 +1368,7 @@ function createRandomCandidate(assets, preferences, attempt = 1) {
     ...boardLayout.placements,
     dockLayout.dockPlacement
   ];
+  const boardRects = buildBoardRects(boardLayout.placements, pieceMap);
 
   const { tileMap, starts } = buildResolvedMap(placements, pieceMap);
   const flagCandidates = getFlagCandidates(placements, pieceMap);
@@ -1036,8 +1386,15 @@ function createRandomCandidate(assets, preferences, attempt = 1) {
   if (!checkpoints) {
     throw new Error("Unable to choose a valid flag sequence");
   }
+  const rebootTokens = recoveryRule === "reboot_tokens"
+    ? placeRebootTokens(boardRects, pieceMap, tileMap, checkpoints, preferences.playerCount)
+    : [];
   const goalTileMap = applyFlagOverrides(tileMap, checkpoints);
-  const sequence = analyzeFlagSequence(goalTileMap, starts, checkpoints, preferences.playerCount);
+  const sequence = analyzeFlagSequence(goalTileMap, starts, checkpoints, preferences.playerCount, {
+    recoveryRule,
+    rebootTokens,
+    boardRects
+  });
   const metrics = classifyCandidate(sequence, {
     ...preferences,
     flagCount
@@ -1052,11 +1409,14 @@ function createRandomCandidate(assets, preferences, attempt = 1) {
     imageMap: assets.imageMap,
     placements,
     checkpoints,
+    rebootTokens,
     goalTileMap,
     playerCount: preferences.playerCount,
+    recoveryRule,
     mainBoardIds: boardLayout.boardIds,
     mainRotations: boardLayout.placements.map((placement) => placement.rotation),
     boardCount: boardLayout.boardCount,
+    boardRects,
     guidanceLevel,
     dockFlipped,
     dockBoundaryRun: dockLayout.boundaryRun,
@@ -1072,8 +1432,10 @@ function createRandomCandidate(assets, preferences, attempt = 1) {
 function serializeScenario(scenario) {
   return {
     preferences: scenario.preferences,
+    recoveryRule: scenario.recoveryRule,
     placements: scenario.placements,
     checkpoints: scenario.checkpoints,
+    rebootTokens: scenario.rebootTokens,
     attempts: scenario.attempts ?? 0
   };
 }
@@ -1101,10 +1463,13 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
   }
 
   const { pieceMap, imageMap } = assets;
+  const recoveryRule = snapshot.recoveryRule ?? "reboot_tokens";
   const placements = snapshot.placements;
   const checkpoints = snapshot.checkpoints;
+  const rebootTokens = snapshot.rebootTokens || [];
   const boardPlacements = placements.filter((placement) => placement.pieceId !== "docking-bay-a");
   const dockPlacement = placements.find((placement) => placement.pieceId === "docking-bay-a");
+  const boardRects = buildBoardRects(boardPlacements, pieceMap);
 
   if (!dockPlacement || !boardPlacements.length) {
     return null;
@@ -1112,9 +1477,14 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
 
   const { tileMap, starts } = buildResolvedMap(placements, pieceMap);
   const goalTileMap = applyFlagOverrides(tileMap, checkpoints);
-  const sequence = analyzeFlagSequence(goalTileMap, starts, checkpoints, snapshot.preferences.playerCount);
+  const sequence = analyzeFlagSequence(goalTileMap, starts, checkpoints, snapshot.preferences.playerCount, {
+    recoveryRule,
+    rebootTokens,
+    boardRects
+  });
   const metrics = classifyCandidate(sequence, {
     ...snapshot.preferences,
+    recoveryRule,
     flagCount: checkpoints.length
   }, {
     boardPlacements,
@@ -1127,11 +1497,14 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     imageMap,
     placements,
     checkpoints,
+    rebootTokens,
     goalTileMap,
     playerCount: snapshot.preferences.playerCount,
+    recoveryRule,
     mainBoardIds: boardPlacements.map((placement) => placement.pieceId),
     mainRotations: boardPlacements.map((placement) => placement.rotation),
     boardCount: boardPlacements.length,
+    boardRects,
     guidanceLevel: 0,
     dockFlipped: Boolean(dockPlacement.rotation % 180),
     dockBoundaryRun: getDockBoundaryRun(boardPlacements, dockPlacement, pieceMap),
@@ -1139,6 +1512,7 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     metrics,
     preferences: {
       ...snapshot.preferences,
+      recoveryRule,
       flagCount: checkpoints.length
     },
     attempts: snapshot.attempts ?? 0
@@ -1198,8 +1572,33 @@ document.getElementById("dev-view").addEventListener("change", () => {
   }
 });
 
+document.getElementById("variant-dynamic-archiving").addEventListener("change", () => {
+  updateVariantSummary();
+});
+
+document.addEventListener("click", (event) => {
+  const picker = document.querySelector(".variant-picker");
+  if (picker && !picker.contains(event.target)) {
+    picker.removeAttribute("open");
+  }
+});
+
+document.addEventListener("focusin", (event) => {
+  const picker = document.querySelector(".variant-picker");
+  if (picker && !picker.contains(event.target)) {
+    picker.removeAttribute("open");
+  }
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    closeVariantPicker();
+  }
+});
+
 async function init() {
   const assets = await loadAssets();
+  updateVariantSummary();
   const snapshot = loadScenarioSnapshot();
 
   if (snapshot) {
