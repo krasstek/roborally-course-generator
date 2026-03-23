@@ -173,6 +173,48 @@ function drawGoals(ctx, goals, bounds, tileSize, margin) {
   }
 }
 
+function drawRebootTokens(ctx, rebootTokens, bounds, tileSize, margin) {
+  for (const token of rebootTokens || []) {
+    const left = margin + (token.x - bounds.minX) * tileSize;
+    const top = margin + (token.y - bounds.minY) * tileSize;
+    const size = tileSize * 0.72;
+    const inset = (tileSize - size) / 2;
+    const cx = left + tileSize / 2;
+    const cy = top + tileSize / 2;
+
+    ctx.save();
+    ctx.fillStyle = "#73c53d";
+    ctx.strokeStyle = "#2f7e1c";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.roundRect(left + inset, top + inset, size, size, 10);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.translate(cx, cy);
+    const rotation = {
+      N: 0,
+      E: Math.PI / 2,
+      S: Math.PI,
+      W: -Math.PI / 2
+    }[token.dir] ?? 0;
+    ctx.rotate(rotation);
+
+    ctx.fillStyle = "rgba(255,255,255,0.96)";
+    ctx.beginPath();
+    ctx.moveTo(0, -tileSize * 0.23);
+    ctx.lineTo(tileSize * 0.14, -tileSize * 0.02);
+    ctx.lineTo(tileSize * 0.06, -tileSize * 0.02);
+    ctx.lineTo(tileSize * 0.06, tileSize * 0.2);
+    ctx.lineTo(-tileSize * 0.06, tileSize * 0.2);
+    ctx.lineTo(-tileSize * 0.06, -tileSize * 0.02);
+    ctx.lineTo(-tileSize * 0.14, -tileSize * 0.02);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
 function drawRoutes(ctx, analysis, bounds, tileSize, margin) {
   if (!analysis) return;
 
@@ -203,7 +245,7 @@ function drawRoutes(ctx, analysis, bounds, tileSize, margin) {
       const px = margin + (point.x - bounds.minX) * tileSize + tileSize / 2;
       const py = margin + (point.y - bounds.minY) * tileSize + tileSize / 2;
 
-      if (index === 0) {
+      if (index === 0 || point.jump) {
         ctx.moveTo(px, py);
       } else {
         ctx.lineTo(px, py);
@@ -298,6 +340,7 @@ export function render(canvas, pieces, imageMap = {}, options = {}) {
   drawGrid(ctx, bounds, tileSize, margin);
   drawFeatures(ctx, tileMap, bounds, tileSize, margin, showBoardLabels, showWalls);
   drawStarts(ctx, starts, bounds, tileSize, margin, unusableStartIndices, showStartFacing);
+  drawRebootTokens(ctx, options.rebootTokens || [], bounds, tileSize, margin);
   drawRoutes(ctx, options.analysis, bounds, tileSize, margin);
   drawGoals(ctx, options.goals || (options.goal ? [options.goal] : []), bounds, tileSize, margin);
 }

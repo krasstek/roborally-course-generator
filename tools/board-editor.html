@@ -258,6 +258,11 @@
         </div>
 
         <div class="field">
+          <label for="jsonInput">Board JSON</label>
+          <input id="jsonInput" type="file" accept=".json,application/json" />
+        </div>
+
+        <div class="field">
           <button id="resizeGridBtn">Apply grid size</button>
         </div>
       </div>
@@ -272,6 +277,14 @@
           <button data-tool="laser">Laser</button>
           <button data-tool="wall">Wall</button>
           <button data-tool="push">Push panel</button>
+          <button data-tool="flamethrower">Flamethrower</button>
+          <button data-tool="crusher">Crusher</button>
+          <button data-tool="portal">Portal</button>
+          <button data-tool="teleporter">Teleporter</button>
+          <button data-tool="randomizer">Randomizer</button>
+          <button data-tool="ledge">Ledge</button>
+          <button data-tool="ramp">Ramp</button>
+          <button data-tool="water">Water</button>
           <button data-tool="checkpoint">Checkpoint</button>
           <button data-tool="battery">Battery</button>
           <button data-tool="start">Start</button>
@@ -331,6 +344,18 @@
           <input id="pushTiming" type="text" value="2,4" />
         </div>
 
+        <div class="inline-row">
+          <div class="field">
+            <label for="featureId">Feature ID</label>
+            <input id="featureId" type="text" value="1" />
+          </div>
+
+          <div class="field">
+            <label for="teleporterPower">Teleporter power</label>
+            <input id="teleporterPower" type="number" min="1" value="2" />
+          </div>
+        </div>
+
         <div class="field">
           <label for="startFacing">Start facing</label>
           <select id="startFacing">
@@ -357,6 +382,16 @@
         <div class="feature-list" id="selectedTileFeatures">
           <em>No tile selected</em>
         </div>
+      </div>
+
+      <div class="section">
+        <h2>Import</h2>
+        <div class="field">
+          <button id="importOutputBtn">Import JSON from output</button>
+        </div>
+        <p class="small-note">
+          Accepts either a full piece JSON object or a tiles-only JSON array.
+        </p>
       </div>
 
       <div class="section">
@@ -402,6 +437,7 @@
     const ctx = canvas.getContext("2d");
 
     const imageInput = document.getElementById("imageInput");
+    const jsonInput = document.getElementById("jsonInput");
     const gridWidthInput = document.getElementById("gridWidth");
     const gridHeightInput = document.getElementById("gridHeight");
     const resizeGridBtn = document.getElementById("resizeGridBtn");
@@ -416,6 +452,8 @@
     const laserDamageInput = document.getElementById("laserDamage");
     const checkpointIdInput = document.getElementById("checkpointId");
     const pushTimingInput = document.getElementById("pushTiming");
+    const featureIdInput = document.getElementById("featureId");
+    const teleporterPowerInput = document.getElementById("teleporterPower");
     const startFacingInput = document.getElementById("startFacing");
 
     const output = document.getElementById("output");
@@ -425,6 +463,7 @@
 
     const exportTilesBtn = document.getElementById("exportTilesBtn");
     const exportTilesOnlyBtn = document.getElementById("exportTilesOnlyBtn");
+    const importOutputBtn = document.getElementById("importOutputBtn");
     const copyOutputBtn = document.getElementById("copyOutputBtn");
 
     const toolButtons = [...document.querySelectorAll("[data-tool]")];
@@ -468,6 +507,26 @@
       return values;
     }
 
+    function cloneFeature(feature) {
+      return JSON.parse(JSON.stringify(feature));
+    }
+
+    function clearBoardData() {
+      Object.keys(tiles).forEach(key => delete tiles[key]);
+      starts.splice(0, starts.length);
+      selectedTile = null;
+    }
+
+    function normalizeImportedTiles(rawTiles) {
+      return (rawTiles || [])
+        .filter(tile => Number.isFinite(tile?.x) && Number.isFinite(tile?.y))
+        .map(tile => ({
+          x: Number(tile.x),
+          y: Number(tile.y),
+          features: Array.isArray(tile.features) ? tile.features.map(cloneFeature) : []
+        }));
+    }
+
     function sameArray(a, b) {
       if (a.length !== b.length) return false;
       const aSorted = [...a].sort();
@@ -481,6 +540,8 @@
       switch (a.type) {
         case "pit":
         case "battery":
+        case "randomizer":
+        case "water":
           return true;
         case "belt":
           return a.dir === b.dir && a.speed === b.speed;
@@ -491,9 +552,19 @@
         case "wall":
           return sameArray(a.sides || [], b.sides || []);
         case "push":
+        case "flamethrower":
+          return a.dir === b.dir && sameArray(a.timing || [], b.timing || []);
+        case "crusher":
           return a.dir === b.dir && sameArray(a.timing || [], b.timing || []);
         case "checkpoint":
+        case "portal":
           return a.id === b.id;
+        case "teleporter":
+          return a.power === b.power;
+        case "ledge":
+          return sameArray(a.sides || [], b.sides || []);
+        case "ramp":
+          return a.dir === b.dir;
         default:
           return JSON.stringify(a) === JSON.stringify(b);
       }
@@ -502,8 +573,8 @@
     function addFeatureToTile(x, y, feature) {
       const tile = getTile(x, y, true);
 
-      if (feature.type === "wall") {
-        const existing = tile.features.find(f => f.type === "wall");
+      if (feature.type === "wall" || feature.type === "ledge") {
+        const existing = tile.features.find(f => f.type === feature.type);
         if (existing) {
           for (const side of feature.sides) {
             if (!existing.sides.includes(side)) {
@@ -584,6 +655,8 @@
       const laserDamage = Number(laserDamageInput.value);
       const checkpointId = Number(checkpointIdInput.value);
       const pushTiming = parseTiming(pushTimingInput.value);
+      const featureId = featureIdInput.value.trim();
+      const teleporterPower = Number(teleporterPowerInput.value);
 
       switch (currentTool) {
         case "pit":
@@ -598,6 +671,22 @@
           return { type: "wall", sides: [dir] };
         case "push":
           return { type: "push", dir, timing: pushTiming };
+        case "flamethrower":
+          return { type: "flamethrower", dir, timing: pushTiming };
+        case "crusher":
+          return { type: "crusher", dir, timing: pushTiming };
+        case "portal":
+          return { type: "portal", id: featureId || "1" };
+        case "teleporter":
+          return { type: "teleporter", power: Number.isFinite(teleporterPower) && teleporterPower > 0 ? teleporterPower : 2 };
+        case "randomizer":
+          return { type: "randomizer" };
+        case "ledge":
+          return { type: "ledge", sides: [dir] };
+        case "ramp":
+          return { type: "ramp", dir };
+        case "water":
+          return { type: "water" };
         case "checkpoint":
           return { type: "checkpoint", id: checkpointId };
         case "battery":
@@ -633,6 +722,57 @@
         img.src = reader.result;
       };
       reader.readAsDataURL(file);
+    }
+
+    function loadJsonFile(file) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          importBoardJson(reader.result);
+          updateStatus(`Imported JSON: ${file.name}`);
+        } catch (error) {
+          updateStatus(`Import failed: ${error.message}`);
+        }
+      };
+      reader.readAsText(file);
+    }
+
+    function importBoardJson(rawText) {
+      const parsed = JSON.parse(rawText);
+      const isTilesOnly = Array.isArray(parsed);
+      const piece = isTilesOnly ? null : parsed;
+      const importedTiles = normalizeImportedTiles(isTilesOnly ? parsed : piece.tiles);
+      const importedStarts = Array.isArray(piece?.starts)
+        ? piece.starts
+          .filter(start => Number.isFinite(start?.x) && Number.isFinite(start?.y))
+          .map(start => ({
+            x: Number(start.x),
+            y: Number(start.y),
+            facing: start.facing || "E"
+          }))
+        : [];
+
+      clearBoardData();
+
+      if (piece) {
+        pieceIdInput.value = piece.id || "";
+        pieceNameInput.value = piece.name || "";
+        pieceKindInput.value = piece.kind || "base";
+        gridWidthInput.value = Number.isFinite(piece.width) ? Number(piece.width) : gridWidthInput.value;
+        gridHeightInput.value = Number.isFinite(piece.height) ? Number(piece.height) : gridHeightInput.value;
+      }
+
+      importedTiles.forEach(tile => {
+        tiles[tileKey(tile.x, tile.y)] = {
+          x: tile.x,
+          y: tile.y,
+          features: sortTileFeatures(tile.features)
+        };
+      });
+      starts.push(...importedStarts);
+
+      recomputeTileSize();
+      draw();
     }
 
     function recomputeTileSize() {
@@ -762,6 +902,30 @@
         } else if (f.type === "push") {
           ctx.fillText(`P ${f.dir}`, left + 4, textY);
           textY += 12;
+        } else if (f.type === "flamethrower") {
+          ctx.fillText(`F ${f.dir}`, left + 4, textY);
+          textY += 12;
+        } else if (f.type === "crusher") {
+          ctx.fillText(`Cr ${f.dir}`, left + 4, textY);
+          textY += 12;
+        } else if (f.type === "portal") {
+          ctx.fillText(`Po${f.id}`, left + 4, textY);
+          textY += 12;
+        } else if (f.type === "teleporter") {
+          ctx.fillText(`Tp${f.power ?? 2}`, left + 4, textY);
+          textY += 12;
+        } else if (f.type === "randomizer") {
+          ctx.fillText("Rnd", left + 4, textY);
+          textY += 12;
+        } else if (f.type === "ledge") {
+          ctx.fillText(`Ld ${(f.sides || []).join("")}`, left + 4, textY);
+          textY += 12;
+        } else if (f.type === "ramp") {
+          ctx.fillText(`Ra ${f.dir}`, left + 4, textY);
+          textY += 12;
+        } else if (f.type === "water") {
+          ctx.fillText("Water", left + 4, textY);
+          textY += 12;
         } else if (f.type === "checkpoint") {
           ctx.fillText(`C${f.id}`, left + 4, textY);
           textY += 12;
@@ -856,6 +1020,22 @@
           return `wall sides=${(feature.sides || []).join(",")}`;
         case "push":
           return `push dir=${feature.dir} timing=${(feature.timing || []).join(",")}`;
+        case "flamethrower":
+          return `flamethrower dir=${feature.dir} timing=${(feature.timing || []).join(",")}`;
+        case "crusher":
+          return `crusher dir=${feature.dir} timing=${(feature.timing || []).join(",")}`;
+        case "portal":
+          return `portal id=${feature.id}`;
+        case "teleporter":
+          return `teleporter power=${feature.power ?? 2}`;
+        case "randomizer":
+          return "randomizer";
+        case "ledge":
+          return `ledge sides=${(feature.sides || []).join(",")}`;
+        case "ramp":
+          return `ramp dir=${feature.dir}`;
+        case "water":
+          return "water";
         case "checkpoint":
           return `checkpoint id=${feature.id}`;
         case "battery":
@@ -914,8 +1094,16 @@
         laser: 4,
         wall: 5,
         push: 6,
-        checkpoint: 7,
-        battery: 8
+        flamethrower: 7,
+        crusher: 8,
+        portal: 9,
+        teleporter: 10,
+        randomizer: 11,
+        ledge: 12,
+        ramp: 13,
+        water: 14,
+        checkpoint: 15,
+        battery: 16
       };
 
       return [...features].sort((a, b) => {
@@ -1022,8 +1210,21 @@
       if (file) loadImageFromFile(file);
     });
 
+    jsonInput.addEventListener("change", (evt) => {
+      const file = evt.target.files[0];
+      if (file) loadJsonFile(file);
+    });
+
     exportTilesBtn.addEventListener("click", exportPieceJson);
     exportTilesOnlyBtn.addEventListener("click", exportTilesOnly);
+    importOutputBtn.addEventListener("click", () => {
+      try {
+        importBoardJson(output.value);
+        updateStatus("Imported JSON from output.");
+      } catch (error) {
+        updateStatus(`Import failed: ${error.message}`);
+      }
+    });
     copyOutputBtn.addEventListener("click", copyOutput);
 
     toolButtons.forEach(btn => {
