@@ -1,0 +1,13 @@
+{
+  "id": "blueprint",
+  "name": "Blueprint",
+  "expansionId": "master-builder",
+  "physicalBoardId": "whirlpool-blueprint",
+  "image": "./assets/boards/blueprint.jpeg",
+  "kind": "small",
+  "width": 6,
+  "height": 6,
+  "mergeMode": "base",
+  "starts": [],
+  "tiles": []
+}
