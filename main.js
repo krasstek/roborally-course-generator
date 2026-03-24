@@ -250,11 +250,15 @@ function formatBoardLabel(pieceId, pieceMap) {
 function updateSetupSummary(scenario) {
   const summary = document.getElementById("setup-summary");
   const boardsEl = document.getElementById("setup-boards");
+  const overlaysRowEl = document.getElementById("setup-overlays-row");
+  const overlaysEl = document.getElementById("setup-overlays");
   const flagsEl = document.getElementById("setup-flags");
 
   if (!scenario) {
     summary.classList.add("hidden");
     boardsEl.textContent = "";
+    overlaysRowEl.classList.add("hidden");
+    overlaysEl.textContent = "";
     flagsEl.textContent = "";
     return;
   }
@@ -262,8 +266,18 @@ function updateSetupSummary(scenario) {
   const boardLabels = scenario.mainBoardIds.map((pieceId) => (
     formatBoardLabel(pieceId, scenario.pieceMap)
   ));
+  const overlayLabels = (scenario.overlayPlacements || []).map((placement) => (
+    formatBoardLabel(placement.pieceId, scenario.pieceMap)
+  ));
 
   boardsEl.textContent = boardLabels.join(", ");
+  if (overlayLabels.length) {
+    overlaysEl.textContent = overlayLabels.join(", ");
+    overlaysRowEl.classList.remove("hidden");
+  } else {
+    overlaysRowEl.classList.add("hidden");
+    overlaysEl.textContent = "";
+  }
   flagsEl.textContent = `${scenario.checkpoints.length} checkpoint${scenario.checkpoints.length === 1 ? "" : "s"}`;
   summary.classList.remove("hidden");
 }
