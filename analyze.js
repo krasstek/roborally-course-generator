@@ -906,6 +906,14 @@ function computeTrafficPairScale(playerCount, routeCapableStarts) {
   return Number(clamp((playerCount - 1) / (routeCapableStarts - 1), 0, 1).toFixed(3));
 }
 
+function computeLegTrafficScale(playerCount) {
+  if (playerCount <= 1) {
+    return 0;
+  }
+
+  return Number(clamp((playerCount - 1) / 7, 0, 1).toFixed(3));
+}
+
 function stdDev(values) {
   if (values.length <= 1) return 0;
   const mean = average(values);
@@ -1520,6 +1528,7 @@ export function analyzeFlagLeg(tileMap, from, goal, options = {}) {
   const routesPerFacing = options.routesPerFacing ?? 3;
   const maxDistinctRoutes = options.maxDistinctRoutes ?? 4;
   const previousLegRoutes = options.previousLegRoutes ?? [];
+  const trafficScale = computeLegTrafficScale(options.playerCount ?? 4);
   const allRoutes = [];
 
   facings.forEach((facing) => {
@@ -1555,10 +1564,23 @@ export function analyzeFlagLeg(tileMap, from, goal, options = {}) {
   const crossLegThreat = averageCrossLegThreat(tileMap, distinctRoutes, previousLegRoutes);
   const routeSpread = routeScores.length > 1 ? Math.max(...routeScores) - Math.min(...routeScores) : 0;
   const diversityScore = Number(
-    Math.max(0, distinctRoutes.length * 18 - intraLegOverlap * 35 - crossLegOverlap * 20 - intraLegThreat * 0.8 - crossLegThreat * 0.7).toFixed(2)
+    Math.max(
+      0,
+      distinctRoutes.length * 18 -
+      intraLegOverlap * (18 + 17 * trafficScale) -
+      crossLegOverlap * (10 + 10 * trafficScale) -
+      intraLegThreat * (0.35 + 0.45 * trafficScale) -
+      crossLegThreat * (0.3 + 0.4 * trafficScale)
+    ).toFixed(2)
   );
   const congestionScore = Number(
-    (intraLegOverlap * 40 + crossLegOverlap * 30 + intraLegThreat * 2.2 + crossLegThreat * 1.8 + Math.max(0, 3 - distinctRoutes.length) * 10).toFixed(2)
+    (
+      intraLegOverlap * (14 + 26 * trafficScale) +
+      crossLegOverlap * (10 + 20 * trafficScale) +
+      intraLegThreat * (0.8 + 1.4 * trafficScale) +
+      crossLegThreat * (0.6 + 1.2 * trafficScale) +
+      Math.max(0, 3 - distinctRoutes.length) * 10
+    ).toFixed(2)
   );
 
   return {

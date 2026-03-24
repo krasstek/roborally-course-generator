@@ -1625,6 +1625,7 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
       routesPerFacing: 3,
       maxDistinctRoutes: 4,
       previousLegRoutes,
+      playerCount,
       maxExpansions: 18000,
       recoveryRule: options.recoveryRule,
       rebootTokens: options.rebootTokens,
@@ -1734,11 +1735,11 @@ function computeDifficultyRaw(sequence) {
   const avgBacktrack = later.length ? later.reduce((sum, leg) => sum + leg.analysis.summary.crossLegOverlap, 0) / later.length : 0;
 
   return Number((
-    first.difficultyScore * 0.45 +
-    first.averageTrafficPenalty * 1.2 +
-    first.flagAreaScore * 0.8 +
-    avgLegScore * 0.35 +
-    avgCongestion * 0.8 +
+    first.difficultyScore * 0.42 +
+    first.averageTrafficPenalty * 0.9 +
+    first.flagAreaScore * 1.15 +
+    avgLegScore * 0.32 +
+    avgCongestion * 0.65 +
     avgBacktrack * 20 -
     avgDiversity * 0.45
   ).toFixed(2));
@@ -1782,9 +1783,9 @@ function classifyCandidate(sequence, preferences, context = {}) {
     hard: [105, Infinity]
   };
   const lengthThresholds = {
-    short: [MIN_LENGTH_RAW, 52],
-    moderate: [52, 78],
-    long: [78, Infinity]
+    short: [MIN_LENGTH_RAW, 58],
+    moderate: [58, 86],
+    long: [86, Infinity]
   };
 
   const hardFailures = [];
