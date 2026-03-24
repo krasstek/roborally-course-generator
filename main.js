@@ -1061,6 +1061,34 @@ function getConsecutiveFlagDistanceThreshold(preferences = {}, guidanceLevel = 0
   return Math.max(3, base + lengthOffset);
 }
 
+function getSequentialFlagDistanceThreshold(preferences = {}, pairIndex = 0, totalFlags = 0, guidanceLevel = 0) {
+  const base = getConsecutiveFlagDistanceThreshold(preferences, guidanceLevel);
+  const lengthPreference = preferences.length ?? "moderate";
+
+  if (totalFlags < 2) {
+    return base;
+  }
+
+  let lateBonus = 0;
+  if (pairIndex === totalFlags - 2) {
+    if (lengthPreference === "moderate") {
+      lateBonus = 2;
+    } else if (lengthPreference === "long") {
+      lateBonus = 3;
+    } else if ((preferences.difficulty ?? "moderate") !== "hard") {
+      lateBonus = 1;
+    }
+  } else if (pairIndex === totalFlags - 3) {
+    if (lengthPreference === "moderate") {
+      lateBonus = 1;
+    } else if (lengthPreference === "long") {
+      lateBonus = 2;
+    }
+  }
+
+  return base + lateBonus;
+}
+
 function getFirstFlagDistanceThresholds(lengthPreference, guidanceLevel) {
   const base = {
     short: { nearest: 4, average: 6 },
@@ -1087,9 +1115,8 @@ function isFirstFlagFarEnough(flag, starts, thresholds) {
 }
 
 function isValidFlagSequence(flags, preferences = {}, guidanceLevel = 0) {
-  const minDistance = getConsecutiveFlagDistanceThreshold(preferences, guidanceLevel);
-
   for (let index = 1; index < flags.length; index += 1) {
+    const minDistance = getSequentialFlagDistanceThreshold(preferences, index - 1, flags.length, guidanceLevel);
     if (areFlagsTooClose(flags[index - 1], flags[index], minDistance)) {
       return false;
     }
@@ -1181,8 +1208,16 @@ function sampleFlagSequence(flagCandidates, flagCount, tileMap, starts, preferen
 
   while (pool.length && picked.length < flagCount) {
     const sequenceIndex = picked.length;
+    const previousFlag = picked[sequenceIndex - 1] ?? null;
     const eligible = pool
-      .filter((candidate) => picked.every((flag) => !areFlagsTooClose(flag, candidate, getConsecutiveFlagDistanceThreshold(preferences, guidanceLevel))))
+      .filter((candidate) => (
+        picked.every((flag, index) => {
+          const minDistance = index === sequenceIndex - 1
+            ? getSequentialFlagDistanceThreshold(preferences, index, flagCount, guidanceLevel)
+            : getConsecutiveFlagDistanceThreshold(preferences, guidanceLevel);
+          return !areFlagsTooClose(flag, candidate, minDistance);
+        })
+      ))
       .map((candidate) => ({
         ...candidate,
         weight: weighted
@@ -1194,7 +1229,7 @@ function sampleFlagSequence(flagCandidates, flagCount, tileMap, starts, preferen
             sequenceIndex,
             guidanceLevel,
             thresholds,
-            picked[sequenceIndex - 1] ?? null
+            previousFlag
           )
           : (candidate.weight ?? 1)
       }));
