@@ -58,10 +58,13 @@ async function loadAssets() {
   const dock = await loadJSON("./data/docking-bay-a.json");
   const dockB = await loadJSON("./data/docking-bay-b.json");
   const blueprint = await loadJSON("./data/blueprint.json");
+  const blackGold = await loadJSON("./data/black-gold.json");
   const doubles = await loadJSON("./data/doubles.json");
   const theH = await loadJSON("./data/the-h.json");
   const whirlpool = await loadJSON("./data/whirlpool.json");
+  const theORing = await loadJSON("./data/the-o-ring.json");
   const pieceMap = {
+    "black-gold": blackGold,
     blueprint,
     cactus,
     doubles,
@@ -73,6 +76,7 @@ async function loadAssets() {
     tempest,
     sidewinder,
     "the-h": theH,
+    "the-o-ring": theORing,
     whirlpool,
     "docking-bay-a": dock,
     "docking-bay-b": dockB
@@ -216,7 +220,9 @@ function getSelectedExpansionIds(preferences = {}) {
 
 function formatExpansionName(expansionId) {
   const labels = {
-    roborally: "RoboRally Base Game (2023)"
+    roborally: "RoboRally Base Game (2023)",
+    "thrills-and-spills": "Thrills & Spills",
+    "master-builder": "Master Builder"
   };
 
   return labels[expansionId] ?? titleCaseWords(expansionId);
@@ -303,6 +309,9 @@ function updateExpansionSummary() {
   if (document.getElementById("expansion-master-builder").checked) {
     enabled.push(formatExpansionName("master-builder"));
   }
+  if (document.getElementById("expansion-thrills-and-spills").checked) {
+    enabled.push(formatExpansionName("thrills-and-spills"));
+  }
 
   summaryEl.textContent = enabled.length ? enabled.join(", ") : "None";
 }
@@ -379,7 +388,8 @@ function getPreferencesFromControls() {
     length: document.getElementById("length").value,
     selectedExpansions: {
       roborally: document.getElementById("expansion-roborally").checked,
-      "master-builder": document.getElementById("expansion-master-builder").checked
+      "master-builder": document.getElementById("expansion-master-builder").checked,
+      "thrills-and-spills": document.getElementById("expansion-thrills-and-spills").checked
     },
     allowedVariantRules: {
       dynamicArchiving: document.getElementById("variant-dynamic-archiving").checked
@@ -397,6 +407,7 @@ function applyPreferencesToControls(preferences) {
   document.getElementById("length").value = preferences.length ?? "moderate";
   document.getElementById("expansion-roborally").checked = preferences.selectedExpansions?.roborally ?? true;
   document.getElementById("expansion-master-builder").checked = preferences.selectedExpansions?.["master-builder"] ?? false;
+  document.getElementById("expansion-thrills-and-spills").checked = preferences.selectedExpansions?.["thrills-and-spills"] ?? false;
   document.getElementById("variant-dynamic-archiving").checked = preferences.allowedVariantRules?.dynamicArchiving ?? true;
   updateExpansionSummary();
   updateVariantSummary();
@@ -431,6 +442,8 @@ function deriveBoardBias(piece) {
         hazardWeight += 3;
       } else if (feature.type === "laser") {
         hazardWeight += 2 + (feature.damage || 1) * 0.35;
+      } else if (feature.type === "flamethrower") {
+        hazardWeight += 2.6;
       } else if (feature.type === "push") {
         hazardWeight += 1;
         complexityWeight += 1.2;
@@ -438,6 +451,11 @@ function deriveBoardBias(piece) {
         complexityWeight += feature.speed === 2 ? 2 : 1.2;
       } else if (feature.type === "gear") {
         complexityWeight += 1.4;
+      } else if (feature.type === "portal") {
+        complexityWeight += 1.3;
+      } else if (feature.type === "oil") {
+        hazardWeight += 1.2;
+        complexityWeight += 1.8;
       } else if (feature.type === "wall") {
         congestionWeight += Math.max(1, (feature.sides || []).length) * 1.25;
       } else if (feature.type === "battery") {
@@ -1027,12 +1045,12 @@ function manhattanDistance(a, b) {
 
 function getConsecutiveFlagDistanceThreshold(preferences = {}, guidanceLevel = 0) {
   const byDifficulty = {
-    easy: 7,
-    moderate: 6,
+    easy: 6,
+    moderate: 5,
     hard: 5
   };
   const byLengthOffset = {
-    short: -1,
+    short: -2,
     moderate: 0,
     long: 1
   };
@@ -1040,19 +1058,19 @@ function getConsecutiveFlagDistanceThreshold(preferences = {}, guidanceLevel = 0
   const base = byDifficulty[preferences.difficulty] ?? byDifficulty.moderate;
   const lengthOffset = byLengthOffset[preferences.length] ?? 0;
 
-  return Math.max(4, base + lengthOffset + Math.min(guidanceLevel, 1));
+  return Math.max(3, base + lengthOffset);
 }
 
 function getFirstFlagDistanceThresholds(lengthPreference, guidanceLevel) {
   const base = {
-    short: { nearest: 5, average: 8 },
-    moderate: { nearest: 6, average: 9 },
-    long: { nearest: 7, average: 10 }
+    short: { nearest: 4, average: 6 },
+    moderate: { nearest: 5, average: 8 },
+    long: { nearest: 6, average: 9 }
   };
   const selected = base[lengthPreference] || base.moderate;
   return {
-    nearest: selected.nearest + guidanceLevel,
-    average: selected.average + guidanceLevel
+    nearest: selected.nearest + Math.min(guidanceLevel, 1),
+    average: selected.average + Math.min(guidanceLevel, 1)
   };
 }
 
@@ -1114,10 +1132,11 @@ function getFlagCandidateApproachStats(tileMap, point) {
   };
 }
 
-function getFlagCandidateWeight(candidate, tileMap, starts, preferences, sequenceIndex, guidanceLevel, thresholds) {
+function getFlagCandidateWeight(candidate, tileMap, starts, preferences, sequenceIndex, guidanceLevel, thresholds, previousFlag = null) {
   let weight = candidate.weight ?? 1;
   const approachStats = getFlagCandidateApproachStats(tileMap, candidate);
   const difficulty = preferences.difficulty ?? "moderate";
+  const lengthPreference = preferences.length ?? "moderate";
 
   weight += approachStats.openCount * (difficulty === "easy" ? 1.5 : 1.1);
   weight -= approachStats.pitCount * (difficulty === "easy" ? 1.3 : 0.9);
@@ -1134,7 +1153,23 @@ function getFlagCandidateWeight(candidate, tileMap, starts, preferences, sequenc
     }
   }
 
+  if (previousFlag) {
+    const legDistance = manhattanDistance(previousFlag, candidate);
+    if (lengthPreference === "short") {
+      weight += legDistance <= 7 ? 2.2 : legDistance <= 10 ? 0.9 : -1.8;
+    } else if (lengthPreference === "moderate") {
+      weight += legDistance >= 5 && legDistance <= 10 ? 1.2 : 0;
+    } else if (legDistance >= 8) {
+      weight += 1.4;
+    }
+  }
+
   weight += Math.min(2, guidanceLevel * 0.35);
+  if (difficulty === "easy" && lengthPreference === "short") {
+    weight += 1.4;
+  } else if (difficulty !== "hard" && lengthPreference !== "long") {
+    weight += 0.6;
+  }
   return Math.max(0.05, Number(weight.toFixed(2)));
 }
 
@@ -1151,7 +1186,16 @@ function sampleFlagSequence(flagCandidates, flagCount, tileMap, starts, preferen
       .map((candidate) => ({
         ...candidate,
         weight: weighted
-          ? getFlagCandidateWeight(candidate, tileMap, starts, preferences, sequenceIndex, guidanceLevel, thresholds)
+          ? getFlagCandidateWeight(
+            candidate,
+            tileMap,
+            starts,
+            preferences,
+            sequenceIndex,
+            guidanceLevel,
+            thresholds,
+            picked[sequenceIndex - 1] ?? null
+          )
           : (candidate.weight ?? 1)
       }));
 
@@ -1709,7 +1753,7 @@ function computeLengthRaw(sequence, flagCount, playerCount, boardCount) {
   const checkpointLoad = flagCount * 2.2;
   const playerLoad = (playerCount || 4) * 1.6;
   const routeLoad = totalActionLoad * 2.8 + totalRouteDistance * 0.75;
-  const frictionLoad = totalCongestion * 0.18 + first.flagAreaScore * 0.14 + sequence.summary.totalDifficulty * 0.08;
+  const frictionLoad = totalCongestion * 0.12 + first.flagAreaScore * 0.08 + sequence.summary.totalDifficulty * 0.03;
 
   return Number((checkpointLoad + playerLoad + routeLoad + frictionLoad).toFixed(2));
 }
@@ -2157,9 +2201,20 @@ async function start() {
   }
 
   let bestScenario = null;
+  let crashedAttempts = 0;
+  let lastAttemptError = null;
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
-    const scenario = createRandomCandidate(assets, preferences, attempt);
+    let scenario;
+    try {
+      scenario = createRandomCandidate(assets, preferences, attempt);
+    } catch (error) {
+      crashedAttempts += 1;
+      lastAttemptError = error;
+      console.warn(`Attempt ${attempt} failed during generation`, error);
+      continue;
+    }
+
     scenario.attempts = attempt;
 
     if (!bestScenario || scenario.metrics.fitScore < bestScenario.metrics.fitScore) {
@@ -2178,6 +2233,16 @@ async function start() {
       setGeneratingOverlay(true, `Attempt ${attempt} of ${MAX_ATTEMPTS}: still looking for a ${formatLengthLabel(preferences.length)} ${formatDifficultyLabel(preferences.difficulty)} setup with ${preferences.playerCount} usable starts.`);
       await nextFrame();
     }
+  }
+
+  if (!bestScenario) {
+    setGeneratingOverlay(false);
+    window.alert(
+      crashedAttempts > 0 && lastAttemptError
+        ? `Course generation failed after ${MAX_ATTEMPTS} attempts. Last error: ${lastAttemptError.message}`
+        : `Course generation failed after ${MAX_ATTEMPTS} attempts.`
+    );
+    return;
   }
 
   currentScenario = bestScenario;
@@ -2212,6 +2277,10 @@ document.getElementById("expansion-roborally").addEventListener("change", () => 
 });
 
 document.getElementById("expansion-master-builder").addEventListener("change", () => {
+  updateExpansionSummary();
+});
+
+document.getElementById("expansion-thrills-and-spills").addEventListener("change", () => {
   updateExpansionSummary();
 });
 

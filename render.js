@@ -132,12 +132,18 @@ function drawFeatures(ctx, tileMap, bounds, tileSize, margin, showLabels = true,
         label = `belt ${feature.dir ?? ""}${feature.speed ?? ""}`.trim();
       } else if (feature.type === "laser") {
         label = `laser${feature.dir ? " " + feature.dir : ""}`;
+      } else if (feature.type === "flamethrower") {
+        label = `flame${feature.dir ? " " + feature.dir : ""}`;
       } else if (feature.type === "gear") {
         label = `gear ${feature.rotation}`;
       } else if (feature.type === "checkpoint") {
         label = `cp ${feature.id}`;
       } else if (feature.type === "push") {
         label = `push ${feature.dir ?? ""}`;
+      } else if (feature.type === "portal") {
+        label = `portal ${feature.id ?? ""}`.trim();
+      } else if (feature.type === "oil") {
+        label = "oil";
       }
 
       ctx.fillStyle = "#111";

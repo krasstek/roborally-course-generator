@@ -272,6 +272,7 @@
 
         <div class="tool-grid">
           <button data-tool="pit">Pit</button>
+          <button data-tool="oil">Oil slick</button>
           <button data-tool="belt">Conveyor</button>
           <button data-tool="gear">Gear</button>
           <button data-tool="laser">Laser</button>
@@ -424,6 +425,7 @@
         <div><strong>B</strong><br />Conveyor</div>
         <div><strong>L</strong><br />Laser</div>
         <div><strong>G</strong><br />Gear</div>
+        <div><strong>Oil</strong><br />Oil slick</div>
         <div><strong>P</strong><br />Pit / Push panel (see inspector)</div>
         <div><strong>W edge lines</strong><br />Walls on tile sides</div>
         <div><strong>Cn</strong><br />Checkpoint number</div>
@@ -539,6 +541,7 @@
 
       switch (a.type) {
         case "pit":
+        case "oil":
         case "battery":
         case "randomizer":
         case "water":
@@ -661,6 +664,8 @@
       switch (currentTool) {
         case "pit":
           return { type: "pit" };
+        case "oil":
+          return { type: "oil" };
         case "belt":
           return { type: "belt", dir, speed: beltSpeed };
         case "gear":
@@ -899,6 +904,9 @@
         } else if (f.type === "pit") {
           ctx.fillText("Pit", left + 4, textY);
           textY += 12;
+        } else if (f.type === "oil") {
+          ctx.fillText("Oil", left + 4, textY);
+          textY += 12;
         } else if (f.type === "push") {
           ctx.fillText(`P ${f.dir}`, left + 4, textY);
           textY += 12;
@@ -1010,6 +1018,8 @@
       switch (feature.type) {
         case "pit":
           return "pit";
+        case "oil":
+          return "oil";
         case "belt":
           return `belt dir=${feature.dir} speed=${feature.speed}`;
         case "gear":
@@ -1089,21 +1099,22 @@
     function sortTileFeatures(features) {
       const order = {
         pit: 1,
-        belt: 2,
-        gear: 3,
-        laser: 4,
-        wall: 5,
-        push: 6,
-        flamethrower: 7,
-        crusher: 8,
-        portal: 9,
-        teleporter: 10,
-        randomizer: 11,
-        ledge: 12,
-        ramp: 13,
-        water: 14,
-        checkpoint: 15,
-        battery: 16
+        oil: 2,
+        belt: 3,
+        gear: 4,
+        laser: 5,
+        wall: 6,
+        push: 7,
+        flamethrower: 8,
+        crusher: 9,
+        portal: 10,
+        teleporter: 11,
+        randomizer: 12,
+        ledge: 13,
+        ramp: 14,
+        water: 15,
+        checkpoint: 16,
+        battery: 17
       };
 
       return [...features].sort((a, b) => {

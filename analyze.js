@@ -71,8 +71,35 @@ function getGear(tile) {
   return (tile?.features || []).find((feature) => feature.type === "gear") ?? null;
 }
 
+function getPortal(tile) {
+  return (tile?.features || []).find((feature) => feature.type === "portal") ?? null;
+}
+
+function isOil(tile) {
+  return (tile?.features || []).some((feature) => feature.type === "oil");
+}
+
 function isPit(tile) {
   return (tile?.features || []).some((feature) => feature.type === "pit");
+}
+
+function buildPortalMap(tileMap) {
+  const portalMap = new Map();
+
+  for (const tile of tileMap.values()) {
+    const portal = getPortal(tile);
+    if (!portal?.id) {
+      continue;
+    }
+
+    if (!portalMap.has(portal.id)) {
+      portalMap.set(portal.id, []);
+    }
+
+    portalMap.get(portal.id).push({ x: tile.x, y: tile.y });
+  }
+
+  return portalMap;
 }
 
 function getBoardRectForPoint(point, boardRects = []) {
@@ -99,10 +126,16 @@ function getTilePenalty(tile) {
   for (const feature of tile?.features || []) {
     if (feature.type === "laser") {
       penalty += 3 + (feature.damage || 1);
+    } else if (feature.type === "flamethrower") {
+      penalty += 4;
     } else if (feature.type === "push") {
       penalty += 2;
     } else if (feature.type === "gear") {
       penalty += 1.5;
+    } else if (feature.type === "portal") {
+      penalty += 0.4;
+    } else if (feature.type === "oil") {
+      penalty += 2.8;
     } else if (feature.type === "battery") {
       penalty -= 2;
     }
@@ -183,6 +216,92 @@ function canMoveBetween(tileMap, from, to, dir) {
   }
 
   return { ok: true, crash: false, offBoard: false };
+}
+
+function resolvePortalDestination(tileMap, point, portalMap) {
+  const tile = tileMap.get(tileKey(point.x, point.y));
+  const portal = getPortal(tile);
+  if (!portal?.id) {
+    return null;
+  }
+
+  const siblings = portalMap.get(portal.id) || [];
+  const destination = siblings.find((candidate) => (
+    candidate.x !== point.x || candidate.y !== point.y
+  ));
+
+  return destination ?? null;
+}
+
+function slideOnOil(tileMap, state, dir, options = {}) {
+  const traversed = [];
+  let hazard = 0;
+  let rebootPenalty = 0;
+  let distance = 0;
+  let forcedDistance = 0;
+  const workingState = cloneState(state);
+
+  while (isOil(tileMap.get(tileKey(workingState.x, workingState.y)))) {
+    const step = moveOneStep(tileMap, workingState, dir, "oil", options);
+    traversed.push(...step.traversed);
+    hazard += step.hazard;
+    rebootPenalty += step.rebootPenalty || 0;
+    distance += step.distance;
+    forcedDistance += step.forcedDistance;
+
+    if (step.crashed || step.blocked || step.rebooted) {
+      return {
+        state: step.state,
+        rebootChoices: step.rebootChoices,
+        traversed,
+        conveyorSteps: [],
+        hazard,
+        rebootPenalty,
+        distance,
+        forcedDistance,
+        crashed: step.crashed,
+        blocked: step.blocked,
+        rebooted: step.rebooted
+      };
+    }
+
+    workingState.x = step.state.x;
+    workingState.y = step.state.y;
+    workingState.facing = step.state.facing;
+
+    if (!isOil(tileMap.get(tileKey(workingState.x, workingState.y)))) {
+      break;
+    }
+  }
+
+  return {
+    state: workingState,
+    traversed,
+    conveyorSteps: [],
+    hazard,
+    rebootPenalty,
+    distance,
+    forcedDistance,
+    crashed: false,
+    blocked: false,
+    rebooted: false
+  };
+}
+
+function mergeStepOutcome(base, extra) {
+  return {
+    state: extra.state,
+    rebootChoices: extra.rebootChoices ?? base.rebootChoices,
+    blocked: extra.blocked,
+    crashed: extra.crashed,
+    rebooted: extra.rebooted,
+    traversed: [...base.traversed, ...extra.traversed],
+    conveyorSteps: [...(base.conveyorSteps || []), ...(extra.conveyorSteps || [])],
+    hazard: base.hazard + extra.hazard,
+    rebootPenalty: (base.rebootPenalty || 0) + (extra.rebootPenalty || 0),
+    distance: base.distance + extra.distance,
+    forcedDistance: base.forcedDistance + extra.forcedDistance
+  };
 }
 
 function heuristic(a, b) {
@@ -307,6 +426,7 @@ function moveOneStep(tileMap, state, dir, mode, options = {}) {
   const nextTile = tileMap.get(tileKey(next.x, next.y));
   const belt = getBelt(nextTile);
   const currentBelt = mode === "belt" ? getBelt(currentTile) : null;
+  const portalMap = options.portalMap ?? new Map();
   let nextFacing = state.facing;
   let turned = false;
 
@@ -316,16 +436,29 @@ function moveOneStep(tileMap, state, dir, mode, options = {}) {
     turned = Boolean(quarterTurn);
   }
 
-  return {
-    state: {
-      x: next.x,
-      y: next.y,
-      facing: nextFacing ?? state.facing
-    },
+  const resolvedState = {
+    x: next.x,
+    y: next.y,
+    facing: nextFacing ?? state.facing
+  };
+  const portalDestination = resolvePortalDestination(tileMap, resolvedState, portalMap);
+
+  if (portalDestination) {
+    resolvedState.x = portalDestination.x;
+    resolvedState.y = portalDestination.y;
+  }
+
+  const traversed = [{ x: next.x, y: next.y }];
+  if (portalDestination) {
+    traversed.push({ x: portalDestination.x, y: portalDestination.y, jump: true });
+  }
+
+  const outcome = {
+    state: resolvedState,
     blocked: false,
     crashed: false,
     rebooted: false,
-    traversed: [{ x: next.x, y: next.y }],
+    traversed,
     conveyorSteps: mode === "belt" ? [{
       from: { x: state.x, y: state.y },
       to: { x: next.x, y: next.y },
@@ -333,11 +466,17 @@ function moveOneStep(tileMap, state, dir, mode, options = {}) {
       speed: currentBelt?.speed ?? belt?.speed ?? 1,
       turned
     }] : [],
-    hazard: getTilePenalty(nextTile) + getPitPressurePenalty(tileMap, next),
+    hazard: getTilePenalty(nextTile) + getPitPressurePenalty(tileMap, resolvedState),
     rebootPenalty: 0,
     distance: 1,
-    forcedDistance: mode === "belt" ? 1 : 0
+    forcedDistance: mode === "belt" || mode === "oil" ? 1 : 0
   };
+
+  if (mode !== "oil" && isOil(tileMap.get(tileKey(resolvedState.x, resolvedState.y)))) {
+    return mergeStepOutcome(outcome, slideOnOil(tileMap, resolvedState, dir, options));
+  }
+
+  return outcome;
 }
 
 function resolveConveyorPhase(tileMap, state, eligibleSpeed, options = {}) {
@@ -417,7 +556,12 @@ function simulateAction(tileMap, startState, action, options = {}) {
   if (action.type === "turn") {
     state.facing = rotateFacing(state.facing, action.rotation);
   } else if (action.type === "move") {
-    const steps = action.steps ?? 1;
+    const startTile = tileMap.get(tileKey(state.x, state.y));
+    const onOil = isOil(startTile);
+    const reducedSteps = onOil && action.relative === "forward"
+      ? Math.max(0, (action.steps ?? 1) - 1)
+      : action.steps ?? 1;
+    const steps = reducedSteps;
 
     for (let index = 0; index < steps; index += 1) {
       const step = moveOneStep(tileMap, state, movementDir(state.facing, action.relative), "manual", options);
@@ -627,6 +771,7 @@ function enumerateRoutes(tileMap, start, goal, options = {}) {
     y: start.y,
     facing: start.facing ?? "E"
   };
+  const portalMap = buildPortalMap(tileMap);
 
   const queue = [
     createQueueEntry({
@@ -675,7 +820,10 @@ function enumerateRoutes(tileMap, start, goal, options = {}) {
     expansions += 1;
 
     for (const action of ACTIONS) {
-      const transition = simulateAction(tileMap, current.finalState, action, options);
+      const transition = simulateAction(tileMap, current.finalState, action, {
+        ...options,
+        portalMap
+      });
       if (transition.crashed || transition.blocked) {
         continue;
       }
@@ -1098,12 +1246,18 @@ function scoreFlagArea(tileMap, goal, options = {}) {
           score += 4 * proximityWeight;
         } else if (feature.type === "laser") {
           score += (2 + (feature.damage || 1)) * proximityWeight;
+        } else if (feature.type === "flamethrower") {
+          score += 4 * proximityWeight;
         } else if (feature.type === "push") {
           score += 2.5 * proximityWeight;
         } else if (feature.type === "belt") {
           score += (feature.speed === 2 ? 2 : 1.25) * proximityWeight;
         } else if (feature.type === "gear") {
           score += 1.5 * proximityWeight;
+        } else if (feature.type === "portal") {
+          score += 0.75 * proximityWeight;
+        } else if (feature.type === "oil") {
+          score += 2.2 * proximityWeight;
         } else if (feature.type === "battery") {
           score -= 2 * proximityWeight;
         }
