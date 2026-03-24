@@ -1,7 +1,9 @@
 {
   "id": "docking-bay-b",
   "name": "Docking Bay B",
-  "image": "./assets/boards/docking-bay-a.jpeg",
+  "expansionId": "roborally",
+  "physicalBoardId": "roborally-docking-bay",
+  "image": "./assets/boards/docking-bay-b.jpg",
   "kind": "dock",
   "width": 3,
   "height": 12,

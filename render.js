@@ -30,6 +30,9 @@ function drawGrid(ctx, bounds, tileSize, margin) {
 function drawFootprints(ctx, footprints, bounds, tileSize, margin) {
   ctx.save();
   for (const fp of footprints) {
+    if (fp.kind === "overlay") {
+      continue;
+    }
     const x = margin + (fp.x - bounds.minX) * tileSize;
     const y = margin + (fp.y - bounds.minY) * tileSize;
     const w = fp.width * tileSize;
@@ -45,6 +48,28 @@ function drawFootprints(ctx, footprints, bounds, tileSize, margin) {
     ctx.fillStyle = "#222";
     ctx.font = "12px sans-serif";
     ctx.fillText(fp.id, x + 4, y + 14);
+  }
+  ctx.restore();
+}
+
+function drawOverlayGlows(ctx, overlayPlacements, pieces, bounds, tileSize, margin, boardCount) {
+  ctx.save();
+  const glowScale = 1 + Math.max(0, boardCount - 2) * 0.14;
+  for (const placement of overlayPlacements || []) {
+    const piece = pieces[placement.pieceId];
+    if (!piece) {
+      continue;
+    }
+    const drawX = margin + (placement.x - bounds.minX) * tileSize;
+    const drawY = margin + (placement.y - bounds.minY) * tileSize;
+    const drawW = piece.width * tileSize;
+    const drawH = piece.height * tileSize;
+
+    ctx.shadowColor = "rgba(88, 190, 255, 0.6)";
+    ctx.shadowBlur = 14 * glowScale;
+    ctx.strokeStyle = "rgba(88, 190, 255, 0.82)";
+    ctx.lineWidth = 2.75 * glowScale;
+    ctx.strokeRect(drawX + 1, drawY + 1, drawW - 2, drawH - 2);
   }
   ctx.restore();
 }
@@ -315,6 +340,11 @@ export function render(canvas, pieces, imageMap = {}, options = {}) {
   const tileMap = options.tileMap ?? resolved.tileMap;
   const starts = resolved.starts;
   const footprints = resolved.footprints;
+  const overlayPlacements = placements.filter((placement) => placement.overlay);
+  const boardCount = placements.filter((placement) => {
+    const piece = pieces[placement.pieceId];
+    return piece?.kind !== "dock" && !placement.overlay;
+  }).length;
   const bounds = getBounds(footprints, starts, options.goals || (options.goal ? [options.goal] : []));
   const unusableStartIndices = new Set(options.unusableStartIndices || []);
   const showBoardLabels = options.showBoardLabels ?? true;
@@ -336,6 +366,7 @@ export function render(canvas, pieces, imageMap = {}, options = {}) {
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
   drawPieceImages(ctx, placements, pieces, imageMap, bounds, tileSize, margin);
+  drawOverlayGlows(ctx, overlayPlacements, pieces, bounds, tileSize, margin, boardCount);
   drawFootprints(ctx, footprints, bounds, tileSize, margin);
   drawGrid(ctx, bounds, tileSize, margin);
   drawFeatures(ctx, tileMap, bounds, tileSize, margin, showBoardLabels, showWalls);

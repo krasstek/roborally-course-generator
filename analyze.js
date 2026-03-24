@@ -111,6 +111,37 @@ function getTilePenalty(tile) {
   return penalty;
 }
 
+function isExposedToPitOrEdge(tileMap, point, dir) {
+  const fromTile = tileMap.get(tileKey(point.x, point.y));
+  const next = {
+    x: point.x + DIRS[dir].dx,
+    y: point.y + DIRS[dir].dy
+  };
+  const toTile = tileMap.get(tileKey(next.x, next.y));
+  const fromWalls = getWalls(fromTile);
+  const toWalls = getWalls(toTile);
+
+  if (fromWalls.has(dir) || toWalls.has(OPPOSITE[dir])) {
+    return false;
+  }
+
+  return !toTile || isPit(toTile);
+}
+
+function getPitPressurePenalty(tileMap, point) {
+  let penalty = 0;
+
+  for (const dir of ROTATION_ORDER) {
+    if (!isExposedToPitOrEdge(tileMap, point, dir)) {
+      continue;
+    }
+
+    penalty += 0.5;
+  }
+
+  return Number(penalty.toFixed(2));
+}
+
 function directionBetween(a, b) {
   const dx = b.x - a.x;
   const dy = b.y - a.y;
@@ -302,7 +333,7 @@ function moveOneStep(tileMap, state, dir, mode, options = {}) {
       speed: currentBelt?.speed ?? belt?.speed ?? 1,
       turned
     }] : [],
-    hazard: getTilePenalty(nextTile),
+    hazard: getTilePenalty(nextTile) + getPitPressurePenalty(tileMap, next),
     rebootPenalty: 0,
     distance: 1,
     forcedDistance: mode === "belt" ? 1 : 0
@@ -699,6 +730,20 @@ function enumerateRoutes(tileMap, start, goal, options = {}) {
 function average(values) {
   if (!values.length) return 0;
   return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function sameSet(a, b) {
+  if (a.size !== b.size) {
+    return false;
+  }
+
+  for (const value of a) {
+    if (!b.has(value)) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 function clamp(value, min, max) {
@@ -1186,17 +1231,82 @@ export function analyzeCourse(tileMap, starts, goal, options = {}) {
   });
 
   const reachable = startAnalyses.filter((item) => item.reachable && item.selectedRoute);
-  const adjustedScores = reachable.map((item) => item.adjustedScore);
-  const distances = reachable.map((item) => item.bestDistance);
-  const actions = reachable.map((item) => item.bestActions);
-  const overlapValues = reachable.map((item) => item.trafficPenalty);
-  const threatValues = reachable.map((item) => item.lateralThreat);
-  const scoreMean = average(adjustedScores);
-  const scoreStdDev = stdDev(adjustedScores);
+  let activeIndices = new Set(reachable.map((item) => item.index));
+  let outlierSet = new Set();
+  let activeReachable = reachable;
+  let scoreMean = average(activeReachable.map((item) => item.adjustedScore));
+  let scoreStdDev = stdDev(activeReachable.map((item) => item.adjustedScore));
+  let actionMean = average(activeReachable.map((item) => item.bestActions));
+  let actionStdDev = stdDev(activeReachable.map((item) => item.bestActions));
+
+  for (let pass = 0; pass < 4; pass += 1) {
+    startAnalyses.forEach((analysis) => {
+      if (!analysis.selectedRoute) {
+        analysis.overlapPenalty = Infinity;
+        analysis.lateralThreat = Infinity;
+        analysis.trafficPenalty = Infinity;
+        analysis.adjustedScore = Infinity;
+        return;
+      }
+
+      let overlap = 0;
+      let threat = 0;
+
+      for (const other of startAnalyses) {
+        if (other.index === analysis.index || !other.selectedRoute || !activeIndices.has(other.index)) {
+          continue;
+        }
+
+        overlap += overlapPenalty(analysis.selectedRoute, other.selectedRoute, goal) * trafficScale;
+        threat += lateralThreatPenalty(tileMap, analysis.selectedRoute, other.selectedRoute) * trafficScale;
+      }
+
+      analysis.overlapPenalty = Number(overlap.toFixed(2));
+      analysis.lateralThreat = Number(threat.toFixed(2));
+      analysis.trafficPenalty = Number((Math.sqrt(analysis.overlapPenalty) + analysis.lateralThreat * 0.16).toFixed(2));
+      analysis.adjustedScore = Number((analysis.bestScore + analysis.trafficPenalty).toFixed(2));
+    });
+
+    activeReachable = reachable.filter((item) => activeIndices.has(item.index));
+    const adjustedScores = activeReachable.map((item) => item.adjustedScore);
+    const actions = activeReachable.map((item) => item.bestActions);
+    scoreMean = average(adjustedScores);
+    scoreStdDev = stdDev(adjustedScores);
+    actionMean = average(actions);
+    actionStdDev = stdDev(actions);
+    const minActions = actions.length ? Math.min(...actions) : 0;
+
+    const nextOutlierSet = new Set(activeReachable
+      .filter((item) => {
+        const scoreOutlier = Math.abs(item.adjustedScore - scoreMean) > Math.max(5, scoreStdDev * 1.25);
+        const actionOutlier = item.bestActions - actionMean > Math.max(2, actionStdDev * 1.1);
+        const severeActionGap = item.bestActions - minActions >= 4;
+
+        return scoreOutlier || (actionOutlier && severeActionGap);
+      })
+      .map((item) => item.index));
+
+    if (sameSet(nextOutlierSet, outlierSet)) {
+      outlierSet = nextOutlierSet;
+      break;
+    }
+
+    outlierSet = nextOutlierSet;
+    activeIndices = new Set(reachable
+      .map((item) => item.index)
+      .filter((index) => !outlierSet.has(index)));
+  }
+
+  activeReachable = reachable.filter((item) => activeIndices.has(item.index));
+  const adjustedScores = activeReachable.map((item) => item.adjustedScore);
+  const distances = activeReachable.map((item) => item.bestDistance);
+  const actions = activeReachable.map((item) => item.bestActions);
+  const overlapValues = activeReachable.map((item) => item.trafficPenalty);
+  const threatValues = activeReachable.map((item) => item.lateralThreat);
+  scoreMean = average(adjustedScores);
+  scoreStdDev = stdDev(adjustedScores);
   const distanceMean = average(distances);
-  const actionMean = average(actions);
-  const actionStdDev = stdDev(actions);
-  const minActions = actions.length ? Math.min(...actions) : 0;
+  actionMean = average(actions);
   const overlapMean = average(overlapValues);
   const threatMean = average(threatValues);
   const flagAreaScore = scoreFlagArea(tileMap, goal, {
@@ -1204,13 +1314,7 @@ export function analyzeCourse(tileMap, starts, goal, options = {}) {
   });
 
   const outliers = reachable
-    .filter((item) => {
-      const scoreOutlier = Math.abs(item.adjustedScore - scoreMean) > Math.max(5, scoreStdDev * 1.25);
-      const actionOutlier = item.bestActions - actionMean > Math.max(2, actionStdDev * 1.1);
-      const severeActionGap = item.bestActions - minActions >= 4;
-
-      return scoreOutlier || (actionOutlier && severeActionGap);
-    })
+    .filter((item) => outlierSet.has(item.index))
     .map((item) => ({
       index: item.index,
       score: item.adjustedScore,

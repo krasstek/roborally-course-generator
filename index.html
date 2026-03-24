@@ -442,18 +442,34 @@
         <label>
           Difficulty
           <select id="difficulty">
-            <option value="easy">Easy</option>
-            <option value="moderate" selected>Moderate</option>
-            <option value="hard">Hard</option>
+            <option value="easy">Beginner</option>
+            <option value="moderate" selected>Intermediate</option>
+            <option value="hard">Advanced</option>
           </select>
         </label>
         <label>
           Length
           <select id="length">
             <option value="short">Short</option>
-            <option value="moderate" selected>Moderate</option>
+            <option value="moderate" selected>Medium</option>
             <option value="long">Long</option>
           </select>
+        </label>
+        <label class="variant-field">
+          Sets
+          <details class="variant-picker">
+            <summary id="expansion-summary">RoboRally Base Game (2023)</summary>
+            <div class="variant-menu">
+              <label class="variant-option">
+                <input id="expansion-roborally" type="checkbox" checked />
+                RoboRally Base Game (2023)
+              </label>
+              <label class="variant-option">
+                <input id="expansion-master-builder" type="checkbox" />
+                Master Builder
+              </label>
+            </div>
+          </details>
         </label>
         <label class="variant-field">
           Allowed variants

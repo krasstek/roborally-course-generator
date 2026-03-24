@@ -498,13 +498,21 @@ export function buildResolvedMap(placements, pieces) {
       x: placed.x,
       y: placed.y,
       width: placed.width,
-      height: placed.height
+      height: placed.height,
+      kind: placement.overlay ? "overlay" : piece.kind
     });
 
     for (let dy = 0; dy < placed.height; dy += 1) {
       for (let dx = 0; dx < placed.width; dx += 1) {
         const key = `${placed.x + dx},${placed.y + dy}`;
         if (!tileMap.has(key)) {
+          tileMap.set(key, {
+            x: placed.x + dx,
+            y: placed.y + dy,
+            features: []
+          });
+        }
+        if (placement.overlay) {
           tileMap.set(key, {
             x: placed.x + dx,
             y: placed.y + dy,

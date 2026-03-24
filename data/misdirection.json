@@ -1,10 +1,10 @@
 {
   "id": "misdirection",
   "name": "Misdirection",
+  "kind": "base",
   "expansionId": "roborally",
   "physicalBoardId": "energize-misdirection",
   "image": "./assets/boards/misdirection.jpeg",
-  "kind": "base",
   "width": 12,
   "height": 12,
   "mergeMode": "base",
@@ -258,6 +258,15 @@
         {
           "type": "gear",
           "rotation": "ccw"
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 2,
+      "features": [
+        {
+          "type": "pit"
         }
       ]
     },

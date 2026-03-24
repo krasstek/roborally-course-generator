@@ -19,6 +19,8 @@ const DOCK_SIDES = ["left", "top", "right", "bottom"];
 const MAX_ATTEMPTS = 120;
 const MIN_LENGTH_RAW = 28;
 const MIN_SHARED_EDGE = 5;
+const DOCK_BRIDGE_GAP = 3;
+const DOCK_BRIDGE_PROBABILITY = 0.12;
 const OVERLAY_UPDATE_INTERVAL = 4;
 const SAVED_SCENARIO_KEY = "roborally-course-generator:last-scenario";
 
@@ -54,8 +56,15 @@ async function loadAssets() {
   const tempest = await loadJSON("./data/tempest.json");
   const sidewinder = await loadJSON("./data/sidewinder.json");
   const dock = await loadJSON("./data/docking-bay-a.json");
+  const dockB = await loadJSON("./data/docking-bay-b.json");
+  const blueprint = await loadJSON("./data/blueprint.json");
+  const doubles = await loadJSON("./data/doubles.json");
+  const theH = await loadJSON("./data/the-h.json");
+  const whirlpool = await loadJSON("./data/whirlpool.json");
   const pieceMap = {
+    blueprint,
     cactus,
+    doubles,
     energize,
     misdirection,
     steps,
@@ -63,8 +72,15 @@ async function loadAssets() {
     "the-keep": theKeep,
     tempest,
     sidewinder,
-    "docking-bay-a": dock
+    "the-h": theH,
+    whirlpool,
+    "docking-bay-a": dock,
+    "docking-bay-b": dockB
   };
+
+  for (const piece of Object.values(pieceMap)) {
+    piece.overlayCapable = piece.expansionId === "master-builder" && piece.width === 6 && piece.height === 6;
+  }
 
   for (const piece of Object.values(pieceMap)) {
     piece.derivedBias = deriveBoardBias(piece);
@@ -108,6 +124,63 @@ function sampleMany(items, count) {
   return out;
 }
 
+function sampleManyWeighted(items, count) {
+  const pool = [...items];
+  const out = [];
+
+  while (pool.length && out.length < count) {
+    const totalWeight = pool.reduce((sum, item) => sum + Math.max(0, item.weight ?? 1), 0);
+    if (totalWeight <= 0) {
+      break;
+    }
+
+    let roll = Math.random() * totalWeight;
+    let index = 0;
+
+    for (; index < pool.length; index += 1) {
+      roll -= Math.max(0, pool[index].weight ?? 1);
+      if (roll <= 0) {
+        break;
+      }
+    }
+
+    out.push(pool.splice(Math.min(index, pool.length - 1), 1)[0]);
+  }
+
+  return out;
+}
+
+function countConnectedComponents(graph) {
+  if (!graph?.nodes?.length) {
+    return 0;
+  }
+
+  const seen = new Set();
+  let components = 0;
+
+  for (const node of graph.nodes) {
+    if (seen.has(node.index)) {
+      continue;
+    }
+
+    components += 1;
+    const queue = [node.index];
+    seen.add(node.index);
+
+    while (queue.length) {
+      const current = queue.shift();
+      for (const next of graph.adjacency.get(current) || []) {
+        if (!seen.has(next)) {
+          seen.add(next);
+          queue.push(next);
+        }
+      }
+    }
+  }
+
+  return components;
+}
+
 function nextFrame() {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));
 }
@@ -118,6 +191,27 @@ function titleCaseWords(value) {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function formatLengthLabel(lengthPreference) {
+  return lengthPreference === "moderate" ? "medium" : String(lengthPreference ?? "medium");
+}
+
+function formatDifficultyLabel(difficultyPreference) {
+  const labels = {
+    easy: "beginner",
+    moderate: "intermediate",
+    hard: "advanced"
+  };
+
+  return labels[difficultyPreference] ?? String(difficultyPreference ?? "intermediate");
+}
+
+function getSelectedExpansionIds(preferences = {}) {
+  const selected = preferences.selectedExpansions ?? { roborally: true };
+  return new Set(Object.entries(selected)
+    .filter(([, enabled]) => Boolean(enabled))
+    .map(([expansionId]) => expansionId));
 }
 
 function formatExpansionName(expansionId) {
@@ -185,8 +279,24 @@ function updateVariantSummary() {
   summaryEl.textContent = enabled.length ? enabled.join(", ") : "None";
 }
 
+function updateExpansionSummary() {
+  const summaryEl = document.getElementById("expansion-summary");
+  const enabled = [];
+
+  if (document.getElementById("expansion-roborally").checked) {
+    enabled.push(formatExpansionName("roborally"));
+  }
+  if (document.getElementById("expansion-master-builder").checked) {
+    enabled.push(formatExpansionName("master-builder"));
+  }
+
+  summaryEl.textContent = enabled.length ? enabled.join(", ") : "None";
+}
+
 function closeVariantPicker() {
-  document.querySelector(".variant-picker")?.removeAttribute("open");
+  document.querySelectorAll(".variant-picker").forEach((picker) => {
+    picker.removeAttribute("open");
+  });
 }
 
 function hasSuppressedCheckpointFeatures(scenario) {
@@ -253,6 +363,10 @@ function getPreferencesFromControls() {
     playerCount: Number(document.getElementById("player-count").value),
     difficulty: document.getElementById("difficulty").value,
     length: document.getElementById("length").value,
+    selectedExpansions: {
+      roborally: document.getElementById("expansion-roborally").checked,
+      "master-builder": document.getElementById("expansion-master-builder").checked
+    },
     allowedVariantRules: {
       dynamicArchiving: document.getElementById("variant-dynamic-archiving").checked
     }
@@ -267,7 +381,10 @@ function applyPreferencesToControls(preferences) {
   document.getElementById("player-count").value = String(preferences.playerCount ?? 4);
   document.getElementById("difficulty").value = preferences.difficulty ?? "moderate";
   document.getElementById("length").value = preferences.length ?? "moderate";
+  document.getElementById("expansion-roborally").checked = preferences.selectedExpansions?.roborally ?? true;
+  document.getElementById("expansion-master-builder").checked = preferences.selectedExpansions?.["master-builder"] ?? false;
   document.getElementById("variant-dynamic-archiving").checked = preferences.allowedVariantRules?.dynamicArchiving ?? true;
+  updateExpansionSummary();
   updateVariantSummary();
 }
 
@@ -280,7 +397,7 @@ function normalizeBias(raw) {
 }
 
 function deriveBoardBias(piece) {
-  if (piece.kind !== "base") {
+  if (piece.kind !== "base" && piece.kind !== "small") {
     return {
       hazard: 1,
       congestion: 1,
@@ -352,7 +469,21 @@ function weightedBoardCount(lengthPreference, maxBoards) {
 
 function getAvailableMainBoardIds(pieceMap, expansionIds = null) {
   return Object.values(pieceMap)
-    .filter((piece) => piece.kind === "base")
+    .filter((piece) => piece.kind === "base" || piece.kind === "small")
+    .filter((piece) => !expansionIds || expansionIds.has(piece.expansionId))
+    .map((piece) => piece.id);
+}
+
+function getAvailableDockIds(pieceMap, expansionIds = null) {
+  return Object.values(pieceMap)
+    .filter((piece) => piece.kind === "dock")
+    .filter((piece) => !expansionIds || expansionIds.has(piece.expansionId))
+    .map((piece) => piece.id);
+}
+
+function getAvailableOverlayIds(pieceMap, expansionIds = null) {
+  return Object.values(pieceMap)
+    .filter((piece) => piece.overlayCapable)
     .filter((piece) => !expansionIds || expansionIds.has(piece.expansionId))
     .map((piece) => piece.id);
 }
@@ -387,6 +518,170 @@ function countPhysicalBoards(boardIds, pieceMap) {
   return new Set(boardIds.map((boardId) => getPhysicalBoardId(pieceMap[boardId]))).size;
 }
 
+function boardIdsCanSupportDock(boardIds, pieceMap, dockPieceId) {
+  const dockPiece = pieceMap[dockPieceId];
+  if (!dockPiece) {
+    return false;
+  }
+
+  const totalSpanCapacity = boardIds.reduce((sum, boardId) => {
+    const piece = pieceMap[boardId];
+    return sum + Math.max(piece?.width ?? 0, piece?.height ?? 0);
+  }, 0);
+
+  return totalSpanCapacity >= dockPiece.height;
+}
+
+function getDockTileKeys(dockPlacement, pieceMap) {
+  const dockPiece = pieceMap[dockPlacement.pieceId];
+  const dims = rotatedDimensions(dockPiece, dockPlacement.rotation ?? 0);
+  const keys = new Set();
+
+  for (let y = dockPlacement.y; y < dockPlacement.y + dims.height; y += 1) {
+    for (let x = dockPlacement.x; x < dockPlacement.x + dims.width; x += 1) {
+      keys.add(`${x},${y}`);
+    }
+  }
+
+  return keys;
+}
+
+function getOverlayCount(preferences, largeBoardCount, maxAvailable) {
+  if (preferences.difficulty === "easy") {
+    return 0;
+  }
+
+  const maxByDifficulty = preferences.difficulty === "moderate"
+    ? Math.max(0, largeBoardCount - 1)
+    : largeBoardCount;
+  const maxCount = Math.min(maxAvailable, maxByDifficulty);
+  if (maxCount <= 0) {
+    return 0;
+  }
+
+  const choices = [];
+  for (let count = 0; count <= maxCount; count += 1) {
+    const copies = count === 0
+      ? (preferences.difficulty === "moderate" ? 3 : 2)
+      : 1;
+    for (let copy = 0; copy < copies; copy += 1) {
+      choices.push(count);
+    }
+  }
+
+  return sample(choices);
+}
+
+function getLegalOverlayPlacements(overlayPiece, structuralPlacements, dockPlacement, pieceMap) {
+  const supportTiles = buildMainFootprintTiles(structuralPlacements, pieceMap);
+  const dockTiles = getDockTileKeys(dockPlacement, pieceMap);
+  const bounds = Array.from(supportTiles).map((key) => key.split(",").map(Number));
+  if (!bounds.length) {
+    return [];
+  }
+
+  const xs = bounds.map(([x]) => x);
+  const ys = bounds.map(([, y]) => y);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  const placements = [];
+
+  for (const rotation of ROTATIONS) {
+    const dims = rotatedDimensions(overlayPiece, rotation);
+    for (let y = minY; y <= maxY - dims.height + 1; y += 1) {
+      for (let x = minX; x <= maxX - dims.width + 1; x += 1) {
+        let valid = true;
+        for (let dy = 0; dy < dims.height && valid; dy += 1) {
+          for (let dx = 0; dx < dims.width; dx += 1) {
+            const key = `${x + dx},${y + dy}`;
+            if (!supportTiles.has(key) || dockTiles.has(key)) {
+              valid = false;
+              break;
+            }
+          }
+        }
+
+        if (valid) {
+          placements.push({
+            pieceId: overlayPiece.id,
+            x,
+            y,
+            rotation,
+            overlay: true
+          });
+        }
+      }
+    }
+  }
+
+  return placements;
+}
+
+function chooseOverlayPlacements(structuralPlacements, dockPlacement, pieceMap, preferences, expansionIds) {
+  const usedStructuralBoards = new Set(
+    structuralPlacements.map((placement) => getPhysicalBoardId(pieceMap[placement.pieceId]))
+  );
+  const overlayIds = getAvailableOverlayIds(pieceMap, expansionIds)
+    .filter((overlayId) => !usedStructuralBoards.has(getPhysicalBoardId(pieceMap[overlayId])));
+  if (!overlayIds.length) {
+    return [];
+  }
+
+  const largeBoardCount = structuralPlacements.filter((placement) => {
+    const piece = pieceMap[placement.pieceId];
+    return Math.max(piece?.width ?? 0, piece?.height ?? 0) >= 12;
+  }).length;
+  const grouped = new Map();
+  for (const overlayId of overlayIds) {
+    const physicalBoardId = getPhysicalBoardId(pieceMap[overlayId]);
+    if (!grouped.has(physicalBoardId)) {
+      grouped.set(physicalBoardId, []);
+    }
+    grouped.get(physicalBoardId).push(overlayId);
+  }
+
+  const targetCount = getOverlayCount(preferences, largeBoardCount, grouped.size);
+  if (targetCount <= 0) {
+    return [];
+  }
+
+  const chosenGroups = shuffle([...grouped.values()]).slice(0, targetCount);
+  const placements = [];
+  const occupiedOverlayTiles = new Set();
+
+  for (const groupOverlayIds of chosenGroups) {
+    const chosenOverlayId = sample(groupOverlayIds);
+    const overlayPiece = pieceMap[chosenOverlayId];
+    const legalPlacements = getLegalOverlayPlacements(overlayPiece, structuralPlacements, dockPlacement, pieceMap)
+      .filter((placement) => {
+        const dims = rotatedDimensions(overlayPiece, placement.rotation);
+        for (let dy = 0; dy < dims.height; dy += 1) {
+          for (let dx = 0; dx < dims.width; dx += 1) {
+            if (occupiedOverlayTiles.has(`${placement.x + dx},${placement.y + dy}`)) {
+              return false;
+            }
+          }
+        }
+        return true;
+      });
+    if (!legalPlacements.length) {
+      continue;
+    }
+    const chosenPlacement = sample(legalPlacements);
+    const dims = rotatedDimensions(overlayPiece, chosenPlacement.rotation);
+    for (let dy = 0; dy < dims.height; dy += 1) {
+      for (let dx = 0; dx < dims.width; dx += 1) {
+        occupiedOverlayTiles.add(`${chosenPlacement.x + dx},${chosenPlacement.y + dy}`);
+      }
+    }
+    placements.push(chosenPlacement);
+  }
+
+  return placements;
+}
+
 function sampleDistinctBoardFaces(boardIds, count, pieceMap) {
   const pool = shuffle(boardIds);
   const selected = [];
@@ -407,6 +702,17 @@ function sampleDistinctBoardFaces(boardIds, count, pieceMap) {
   }
 
   return selected;
+}
+
+function smallBoardCompositionPenalty(boardIds, pieceMap) {
+  const smallCount = boardIds.filter((boardId) => pieceMap[boardId]?.kind === "small").length;
+  if (smallCount === 1) {
+    return 1.8;
+  }
+  if (smallCount >= 2) {
+    return 0.4;
+  }
+  return 0;
 }
 
 function selectBoardIdsForCourse(boardIds, count, pieceMap, preferences, guidanceLevel) {
@@ -434,10 +740,30 @@ function selectBoardIdsForCourse(boardIds, count, pieceMap, preferences, guidanc
     }
   }
 
-  return scoredGroups
-    .sort((a, b) => a.score - b.score)
+  const ranked = scoredGroups.sort((a, b) => a.score - b.score);
+  let bestSelection = ranked.slice(0, count).map((entry) => entry.boardId);
+  let bestScore = ranked
     .slice(0, count)
-    .map((entry) => entry.boardId);
+    .reduce((sum, entry) => sum + entry.score, 0) + smallBoardCompositionPenalty(bestSelection, pieceMap);
+
+  const attemptCount = Math.min(24, Math.max(6, ranked.length * 2));
+  for (let attempt = 0; attempt < attemptCount; attempt += 1) {
+    const selection = sampleDistinctBoardFaces(boardIds, count, pieceMap);
+    if (selection.length !== count) {
+      continue;
+    }
+
+    const selectionScore = selection.reduce((sum, boardId) => (
+      sum + boardPreferencePenalty(pieceMap[boardId], preferences, guidanceLevel)
+    ), 0) + smallBoardCompositionPenalty(selection, pieceMap);
+
+    if (selectionScore < bestScore) {
+      bestSelection = selection;
+      bestScore = selectionScore;
+    }
+  }
+
+  return bestSelection;
 }
 
 function cloneTileMap(tileMap) {
@@ -598,9 +924,9 @@ function placeRebootTokens(boardRects, pieceMap, tileMap, checkpoints, playerCou
           }
 
           const score = (
-            nearestCheckpoint * 4 +
+            nearestCheckpoint * 2.5 +
             directionScore * 3 -
-            centerDistance * 2 -
+            centerDistance * 3 -
             nonPassivePenalty
           );
 
@@ -631,7 +957,7 @@ function getFlagCandidates(placements, pieceMap) {
 
   for (const [placementIndex, placement] of placements.entries()) {
     const piece = pieceMap[placement.pieceId];
-    if (!piece || piece.kind === "dock") continue;
+    if (!piece) continue;
 
     const placed = placePiece(piece, placement);
     for (let dy = 0; dy < placed.height; dy += 1) {
@@ -640,7 +966,8 @@ function getFlagCandidates(placements, pieceMap) {
           x: placed.x + dx,
           y: placed.y + dy,
           pieceId: placement.pieceId,
-          placementIndex
+          placementIndex,
+          weight: piece.kind === "dock" ? 0.45 : 1
         });
       }
     }
@@ -739,14 +1066,121 @@ function isValidFlagSequence(flags, preferences = {}, guidanceLevel = 0) {
   return true;
 }
 
+function getFlagCandidateApproachStats(tileMap, point) {
+  const directions = [
+    { dx: 0, dy: -1 },
+    { dx: 1, dy: 0 },
+    { dx: 0, dy: 1 },
+    { dx: -1, dy: 0 }
+  ];
+  let openCount = 0;
+  let pitCount = 0;
+  let voidCount = 0;
+
+  for (const { dx, dy } of directions) {
+    const tile = tileMap.get(`${point.x + dx},${point.y + dy}`);
+    if (!tile) {
+      voidCount += 1;
+      continue;
+    }
+
+    const features = tile.features || [];
+    if (features.some((feature) => feature.type === "pit")) {
+      pitCount += 1;
+      continue;
+    }
+
+    openCount += 1;
+  }
+
+  return {
+    openCount,
+    pitCount,
+    voidCount
+  };
+}
+
+function getFlagCandidateWeight(candidate, tileMap, starts, preferences, sequenceIndex, guidanceLevel, thresholds) {
+  let weight = candidate.weight ?? 1;
+  const approachStats = getFlagCandidateApproachStats(tileMap, candidate);
+  const difficulty = preferences.difficulty ?? "moderate";
+
+  weight += approachStats.openCount * (difficulty === "easy" ? 1.5 : 1.1);
+  weight -= approachStats.pitCount * (difficulty === "easy" ? 1.3 : 0.9);
+  weight -= approachStats.voidCount * (difficulty === "easy" ? 1 : 0.7);
+
+  if (sequenceIndex === 0 && starts.length) {
+    const distances = starts.map((start) => manhattanDistance(candidate, start));
+    const nearest = Math.min(...distances);
+    const averageDistance = distances.reduce((sum, value) => sum + value, 0) / distances.length;
+    if (nearest >= thresholds.nearest && averageDistance >= thresholds.average) {
+      weight += difficulty === "easy" ? 3.5 : 2;
+    } else {
+      weight -= difficulty === "easy" ? 2.5 : 1.4;
+    }
+  }
+
+  weight += Math.min(2, guidanceLevel * 0.35);
+  return Math.max(0.05, Number(weight.toFixed(2)));
+}
+
+function sampleFlagSequence(flagCandidates, flagCount, tileMap, starts, preferences, guidanceLevel, thresholds) {
+  const difficulty = preferences.difficulty ?? "moderate";
+  const weighted = difficulty === "easy" || difficulty === "moderate";
+  const pool = [...flagCandidates];
+  const picked = [];
+
+  while (pool.length && picked.length < flagCount) {
+    const sequenceIndex = picked.length;
+    const eligible = pool
+      .filter((candidate) => picked.every((flag) => !areFlagsTooClose(flag, candidate, getConsecutiveFlagDistanceThreshold(preferences, guidanceLevel))))
+      .map((candidate) => ({
+        ...candidate,
+        weight: weighted
+          ? getFlagCandidateWeight(candidate, tileMap, starts, preferences, sequenceIndex, guidanceLevel, thresholds)
+          : (candidate.weight ?? 1)
+      }));
+
+    if (!eligible.length) {
+      break;
+    }
+
+    const [chosen] = sampleManyWeighted(eligible, 1);
+    if (!chosen) {
+      break;
+    }
+
+    picked.push(chosen);
+    const chosenIndex = pool.findIndex((candidate) => (
+      candidate.x === chosen.x &&
+      candidate.y === chosen.y &&
+      candidate.pieceId === chosen.pieceId
+    ));
+    if (chosenIndex >= 0) {
+      pool.splice(chosenIndex, 1);
+    }
+  }
+
+  return picked;
+}
+
 function pickFlags(flagCandidates, flagCount, boardPlacements, dockPlacement, pieceMap, starts = [], preferences = {}, guidanceLevel = 0) {
   const farthestBoardIndex = getMostDistantBoardIndex(boardPlacements, dockPlacement, pieceMap);
   const farthestBoardPieceId = boardPlacements[farthestBoardIndex]?.pieceId;
   const mustUseFarthestBoard = boardPlacements.length > 1 && farthestBoardPieceId;
   const firstFlagThresholds = getFirstFlagDistanceThresholds(preferences.length, guidanceLevel);
+  const { tileMap } = buildResolvedMap([...boardPlacements, dockPlacement], pieceMap);
 
   for (let attempt = 0; attempt < 250; attempt += 1) {
-    const sampled = sampleMany(flagCandidates, flagCount);
+    const sampled = sampleFlagSequence(
+      flagCandidates,
+      flagCount,
+      tileMap,
+      starts,
+      preferences,
+      guidanceLevel,
+      firstFlagThresholds
+    );
 
     if (sampled.length !== flagCount) {
       continue;
@@ -834,8 +1268,84 @@ function createAttachedBoardPlacement(anchorPlacement, anchorPiece, pieceId, pie
   return { pieceId, x: offset, y: anchorPlacement.y + anchorDims.height, rotation };
 }
 
-function tryExtendBoardLayout(existingPlacements, nextBoardId, pieceMap) {
+function createBridgeBoardPlacement(anchorPlacement, anchorPiece, pieceId, piece, side, rotation, dockPiece) {
+  const dims = rotatedDimensions(piece, rotation);
+  const anchorDims = rotatedDimensions(anchorPiece, anchorPlacement.rotation ?? 0);
+  const range = getAttachmentRange(anchorPlacement, anchorPiece, piece, rotation, side, Math.max(dockPiece.width, dockPiece.height));
+
+  if (range.max < range.min) {
+    return null;
+  }
+
+  const offset = range.min + Math.floor(Math.random() * (range.max - range.min + 1));
+
+  if (side === "left") {
+    return { pieceId, x: anchorPlacement.x - dims.width - DOCK_BRIDGE_GAP, y: offset, rotation };
+  }
+
+  if (side === "right") {
+    return { pieceId, x: anchorPlacement.x + anchorDims.width + DOCK_BRIDGE_GAP, y: offset, rotation };
+  }
+
+  if (side === "top") {
+    return { pieceId, x: offset, y: anchorPlacement.y - dims.height - DOCK_BRIDGE_GAP, rotation };
+  }
+
+  return { pieceId, x: offset, y: anchorPlacement.y + anchorDims.height + DOCK_BRIDGE_GAP, rotation };
+}
+
+function findBridgeDockPlacement(structuralPlacements, pieceMap, dockPieceId, dockFlipped) {
+  const dock = pieceMap[dockPieceId];
+  const footprintTiles = buildMainFootprintTiles(structuralPlacements, pieceMap);
+  const boundaryRuns = getValidDockRuns(groupBoundaryRuns(getBoundaryEdges(footprintTiles)), dock);
+  const candidates = [];
+
+  for (const run of boundaryRuns) {
+    const oppositeSide = { E: "W", W: "E", N: "S", S: "N" }[run.side];
+
+    for (const other of boundaryRuns) {
+      if (other === run || other.side !== oppositeSide || other.orientation !== run.orientation) {
+        continue;
+      }
+
+      if (Math.abs(other.line - run.line) !== DOCK_BRIDGE_GAP) {
+        continue;
+      }
+
+      const overlapStart = Math.max(run.start, other.start);
+      const overlapEnd = Math.min(run.end, other.end);
+      if (overlapEnd - overlapStart < dock.height) {
+        continue;
+      }
+
+      const preferredRun = run.side === "E" || run.side === "S" ? run : other;
+      const offset = overlapStart - preferredRun.start;
+      const dockPlacement = projectDockPlacement(preferredRun, offset, dock, dockFlipped);
+      const dockValidation = validateDockPlacement(dockPlacement, structuralPlacements, pieceMap, footprintTiles);
+
+      if (dockValidation.valid) {
+        candidates.push({
+          dockPlacement,
+          dockValidation,
+          boundaryRun: preferredRun
+        });
+      }
+    }
+  }
+
+  return candidates.length ? sample(candidates) : null;
+}
+
+function canBridgeDisconnectedLayout(structuralPlacements, pieceMap, dockPieceId) {
+  return Boolean(
+    findBridgeDockPlacement(structuralPlacements, pieceMap, dockPieceId, false) ||
+    findBridgeDockPlacement(structuralPlacements, pieceMap, dockPieceId, true)
+  );
+}
+
+function tryExtendBoardLayout(existingPlacements, nextBoardId, pieceMap, dockPieceId, allowDockBridge = false) {
   const nextBoard = pieceMap[nextBoardId];
+  const dock = pieceMap[dockPieceId];
   const anchorIndices = shuffle(existingPlacements.map((_, index) => index));
 
   for (const anchorIndex of anchorIndices) {
@@ -860,6 +1370,42 @@ function tryExtendBoardLayout(existingPlacements, nextBoardId, pieceMap) {
             layoutValidation: validation
           };
         }
+
+        if (allowDockBridge && validation.errors.length === 1 && validation.errors[0] === "disconnected-layout") {
+          if (countConnectedComponents(validation.graph) === 2 && canBridgeDisconnectedLayout(candidatePlacements, pieceMap, dockPieceId)) {
+            return {
+              placements: candidatePlacements,
+              layoutValidation: validation
+            };
+          }
+        }
+      }
+    }
+
+    if (!allowDockBridge) {
+      continue;
+    }
+
+    for (const side of shuffle(DOCK_SIDES)) {
+      for (const rotation of shuffle(ROTATIONS)) {
+        const nextPlacement = createBridgeBoardPlacement(anchorPlacement, anchorPiece, nextBoardId, nextBoard, side, rotation, dock);
+        if (!nextPlacement) {
+          continue;
+        }
+
+        const candidatePlacements = [...existingPlacements, nextPlacement];
+        const validation = validateMainBoardLayout(candidatePlacements, pieceMap, {
+          minSharedEdge: MIN_SHARED_EDGE
+        });
+
+        if (validation.errors.length === 1 && validation.errors[0] === "disconnected-layout") {
+          if (countConnectedComponents(validation.graph) === 2 && canBridgeDisconnectedLayout(candidatePlacements, pieceMap, dockPieceId)) {
+            return {
+              placements: candidatePlacements,
+              layoutValidation: validation
+            };
+          }
+        }
       }
     }
   }
@@ -867,11 +1413,24 @@ function tryExtendBoardLayout(existingPlacements, nextBoardId, pieceMap) {
   return null;
 }
 
-function createBoardPlacements(pieceMap, lengthPreference, preferences, guidanceLevel, expansionIds = null) {
+function createBoardPlacements(pieceMap, lengthPreference, preferences, guidanceLevel, expansionIds = null, dockPieceId = "docking-bay-a") {
   const mainBoardIds = getAvailableMainBoardIds(pieceMap, expansionIds);
   const maxBoards = Math.min(4, countPhysicalBoards(mainBoardIds, pieceMap));
   const boardCount = weightedBoardCount(lengthPreference, maxBoards);
-  const boardIds = selectBoardIdsForCourse(mainBoardIds, boardCount, pieceMap, preferences, guidanceLevel);
+  let boardIds = [];
+
+  for (let attempt = 0; attempt < 24; attempt += 1) {
+    const candidateBoardIds = selectBoardIdsForCourse(mainBoardIds, boardCount, pieceMap, preferences, guidanceLevel);
+    if (candidateBoardIds.length !== boardCount) {
+      continue;
+    }
+    if (!boardIdsCanSupportDock(candidateBoardIds, pieceMap, dockPieceId)) {
+      continue;
+    }
+    boardIds = candidateBoardIds;
+    break;
+  }
+
   if (boardIds.length !== boardCount) {
     return null;
   }
@@ -887,8 +1446,9 @@ function createBoardPlacements(pieceMap, lengthPreference, preferences, guidance
     minSharedEdge: MIN_SHARED_EDGE
   });
 
-  for (const nextBoardId of boardIds.slice(1)) {
-    const extension = tryExtendBoardLayout(placements, nextBoardId, pieceMap);
+  for (const [index, nextBoardId] of boardIds.slice(1).entries()) {
+    const allowDockBridge = index === boardIds.length - 2 && Math.random() < DOCK_BRIDGE_PROBABILITY;
+    const extension = tryExtendBoardLayout(placements, nextBoardId, pieceMap, dockPieceId, allowDockBridge);
     if (!extension) {
       return null;
     }
@@ -905,8 +1465,15 @@ function createBoardPlacements(pieceMap, lengthPreference, preferences, guidance
   };
 }
 
-function createDockPlacement(structuralPlacements, pieceMap, dockFlipped) {
-  const dock = pieceMap["docking-bay-a"];
+function createDockPlacement(structuralPlacements, pieceMap, dockPieceId, dockFlipped) {
+  const layoutValidation = validateMainBoardLayout(structuralPlacements, pieceMap, {
+    minSharedEdge: MIN_SHARED_EDGE
+  });
+  if (!layoutValidation.valid && layoutValidation.errors.length === 1 && layoutValidation.errors[0] === "disconnected-layout") {
+    return findBridgeDockPlacement(structuralPlacements, pieceMap, dockPieceId, dockFlipped);
+  }
+
+  const dock = pieceMap[dockPieceId];
   const footprintTiles = buildMainFootprintTiles(structuralPlacements, pieceMap);
   const boundaryRuns = groupBoundaryRuns(getBoundaryEdges(footprintTiles));
   const validRuns = getValidDockRuns(boundaryRuns, dock);
@@ -990,8 +1557,13 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
     .filter(Boolean);
 
   for (let index = 1; index < flags.length; index += 1) {
+    const allowedFacings = [...new Set(
+      previousLegRoutes
+        .map((route) => route?.finalState?.facing)
+        .filter((facing) => FACINGS.includes(facing))
+    )];
     const analysis = analyzeFlagLeg(tileMap, flags[index - 1], flags[index], {
-      facings: FACINGS,
+      facings: allowedFacings.length ? allowedFacings : FACINGS,
       routesPerFacing: 3,
       maxDistinctRoutes: 4,
       previousLegRoutes,
@@ -1114,12 +1686,18 @@ function computeDifficultyRaw(sequence) {
   ).toFixed(2));
 }
 
-function computeLengthRaw(sequence, flagCount) {
+function computeLengthRaw(sequence, flagCount, playerCount, boardCount) {
   const first = sequence.firstLeg.summary;
   const later = sequence.legs.slice(1);
-  const laterAverageLength = later.reduce((sum, leg) => sum + (leg.analysis.summary.averageRouteDistance || 0), 0);
+  const totalRouteDistance = first.lengthScore + later.reduce((sum, leg) => sum + (leg.analysis.summary.averageRouteDistance || 0), 0);
+  const totalActionLoad = first.actionScore + later.reduce((sum, leg) => sum + (leg.analysis.summary.averageRouteActions || 0), 0);
+  const totalCongestion = first.averageTrafficPenalty + later.reduce((sum, leg) => sum + (leg.analysis.summary.congestionScore || 0), 0);
+  const checkpointLoad = flagCount * 2.2;
+  const playerLoad = (playerCount || 4) * 1.6;
+  const routeLoad = totalActionLoad * 2.8 + totalRouteDistance * 0.75;
+  const frictionLoad = totalCongestion * 0.18 + first.flagAreaScore * 0.14 + sequence.summary.totalDifficulty * 0.08;
 
-  return Number((first.lengthScore * 1.2 + laterAverageLength + flagCount * 4).toFixed(2));
+  return Number((checkpointLoad + playerLoad + routeLoad + frictionLoad).toFixed(2));
 }
 
 function bandDistance(value, band, thresholds) {
@@ -1132,7 +1710,12 @@ function bandDistance(value, band, thresholds) {
 function classifyCandidate(sequence, preferences, context = {}) {
   const usableStarts = computeUsableStarts(sequence.firstLeg);
   const difficultyRaw = computeDifficultyRaw(sequence);
-  const lengthRaw = computeLengthRaw(sequence, preferences.flagCount);
+  const lengthRaw = computeLengthRaw(
+    sequence,
+    preferences.flagCount,
+    preferences.playerCount,
+    context.boardPlacements?.length ?? 1
+  );
   const fairnessStdDev = sequence.firstLeg.summary.scoreStdDev;
 
   const difficultyThresholds = {
@@ -1141,9 +1724,9 @@ function classifyCandidate(sequence, preferences, context = {}) {
     hard: [105, Infinity]
   };
   const lengthThresholds = {
-    short: [MIN_LENGTH_RAW, 40],
-    moderate: [40, 58],
-    long: [58, Infinity]
+    short: [MIN_LENGTH_RAW, 52],
+    moderate: [52, 78],
+    long: [78, Infinity]
   };
 
   const hardFailures = [];
@@ -1202,7 +1785,8 @@ function buildScenarioReport(scenario, selectedLegIndex) {
   const goal = scenario.checkpoints[selectedLegIndex === 0 ? 0 : selectedLegIndex];
 
   const lines = [
-    `Requested: ${scenario.preferences.playerCount} players, ${scenario.preferences.difficulty} difficulty, ${scenario.preferences.length} length`,
+    `Requested: ${scenario.preferences.playerCount} players, ${formatDifficultyLabel(scenario.preferences.difficulty)} difficulty, ${formatLengthLabel(scenario.preferences.length)} length`,
+    `Sets: ${[...getSelectedExpansionIds(scenario.preferences)].map((id) => formatExpansionName(id)).join(", ") || "none"}`,
     `Allowed variants: ${scenario.preferences.allowedVariantRules?.dynamicArchiving ? "Dynamic Archiving" : "none"}`,
     `Recovery used: ${scenario.recoveryRule}`,
     `Accepted after ${scenario.attempts} attempt(s)`,
@@ -1349,24 +1933,44 @@ function renderScenario(scenario) {
   }
 }
 
+function validateSelectedInventory(assets, preferences) {
+  const expansionIds = getSelectedExpansionIds(preferences);
+  const availableDockIds = getAvailableDockIds(assets.pieceMap, expansionIds);
+  if (!availableDockIds.length) {
+    return "The selected sets contain no docking bay. Enable a set with a docking bay to generate a course.";
+  }
+
+  const availableMainBoardIds = getAvailableMainBoardIds(assets.pieceMap, expansionIds);
+  if (!availableMainBoardIds.length) {
+    return "The selected sets contain no supported main boards for course generation yet.";
+  }
+
+  return null;
+}
+
 function createRandomCandidate(assets, preferences, attempt = 1) {
   const { pieceMap } = assets;
+  const expansionIds = getSelectedExpansionIds(preferences);
+  const availableDockIds = getAvailableDockIds(pieceMap, expansionIds);
+  const dockPieceId = sample(availableDockIds);
   const recoveryRule = chooseRecoveryRule(preferences);
   const dockFlipped = Math.random() < 0.5;
   const guidanceLevel = guidanceLevelForAttempt(attempt);
-  const boardLayout = createBoardPlacements(pieceMap, preferences.length, preferences, guidanceLevel);
+  const boardLayout = createBoardPlacements(pieceMap, preferences.length, preferences, guidanceLevel, expansionIds, dockPieceId);
   if (!boardLayout) {
     throw new Error("Unable to create a valid board layout");
   }
 
-  const dockLayout = createDockPlacement(boardLayout.placements, pieceMap, dockFlipped);
+  const dockLayout = createDockPlacement(boardLayout.placements, pieceMap, dockPieceId, dockFlipped);
   if (!dockLayout) {
     throw new Error("Unable to place dock on assembled perimeter");
   }
+  const overlayPlacements = chooseOverlayPlacements(boardLayout.placements, dockLayout.dockPlacement, pieceMap, preferences, expansionIds);
 
   const placements = [
     ...boardLayout.placements,
-    dockLayout.dockPlacement
+    dockLayout.dockPlacement,
+    ...overlayPlacements
   ];
   const boardRects = buildBoardRects(boardLayout.placements, pieceMap);
 
@@ -1408,7 +2012,9 @@ function createRandomCandidate(assets, preferences, attempt = 1) {
     pieceMap: assets.pieceMap,
     imageMap: assets.imageMap,
     placements,
+    overlayPlacements,
     checkpoints,
+    overlayPlacements,
     rebootTokens,
     goalTileMap,
     playerCount: preferences.playerCount,
@@ -1467,8 +2073,12 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
   const placements = snapshot.placements;
   const checkpoints = snapshot.checkpoints;
   const rebootTokens = snapshot.rebootTokens || [];
-  const boardPlacements = placements.filter((placement) => placement.pieceId !== "docking-bay-a");
-  const dockPlacement = placements.find((placement) => placement.pieceId === "docking-bay-a");
+  const boardPlacements = placements.filter((placement) => {
+    const kind = assets.pieceMap[placement.pieceId]?.kind;
+    return kind !== "dock" && !placement.overlay;
+  });
+  const overlayPlacements = placements.filter((placement) => placement.overlay);
+  const dockPlacement = placements.find((placement) => assets.pieceMap[placement.pieceId]?.kind === "dock");
   const boardRects = buildBoardRects(boardPlacements, pieceMap);
 
   if (!dockPlacement || !boardPlacements.length) {
@@ -1496,6 +2106,7 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     pieceMap,
     imageMap,
     placements,
+    overlayPlacements,
     checkpoints,
     rebootTokens,
     goalTileMap,
@@ -1524,6 +2135,12 @@ async function start() {
   await nextFrame();
   const assets = await loadAssets();
   const preferences = getPreferencesFromControls();
+  const inventoryError = validateSelectedInventory(assets, preferences);
+  if (inventoryError) {
+    setGeneratingOverlay(false);
+    window.alert(inventoryError);
+    return;
+  }
 
   let bestScenario = null;
 
@@ -1544,7 +2161,7 @@ async function start() {
     }
 
     if (attempt % OVERLAY_UPDATE_INTERVAL === 0) {
-      setGeneratingOverlay(true, `Attempt ${attempt} of ${MAX_ATTEMPTS}: still looking for a ${preferences.length} ${preferences.difficulty} setup with ${preferences.playerCount} usable starts.`);
+      setGeneratingOverlay(true, `Attempt ${attempt} of ${MAX_ATTEMPTS}: still looking for a ${formatLengthLabel(preferences.length)} ${formatDifficultyLabel(preferences.difficulty)} setup with ${preferences.playerCount} usable starts.`);
       await nextFrame();
     }
   }
@@ -1576,6 +2193,14 @@ document.getElementById("variant-dynamic-archiving").addEventListener("change", 
   updateVariantSummary();
 });
 
+document.getElementById("expansion-roborally").addEventListener("change", () => {
+  updateExpansionSummary();
+});
+
+document.getElementById("expansion-master-builder").addEventListener("change", () => {
+  updateExpansionSummary();
+});
+
 document.addEventListener("click", (event) => {
   const picker = document.querySelector(".variant-picker");
   if (picker && !picker.contains(event.target)) {
@@ -1598,6 +2223,7 @@ document.addEventListener("keydown", (event) => {
 
 async function init() {
   const assets = await loadAssets();
+  updateExpansionSummary();
   updateVariantSummary();
   const snapshot = loadScenarioSnapshot();
 
