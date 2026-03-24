@@ -17,7 +17,7 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 1
+          "speed": 2
         }
       ]
     },
@@ -28,7 +28,7 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 1
+          "speed": 2
         }
       ]
     },
@@ -39,7 +39,7 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 1
+          "speed": 2
         }
       ]
     },
@@ -50,7 +50,7 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 1
+          "speed": 2
         }
       ]
     },
@@ -88,7 +88,7 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 1
+          "speed": 2
         }
       ]
     },
@@ -99,7 +99,7 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 1
+          "speed": 2
         }
       ]
     },
@@ -236,7 +236,7 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 1
+          "speed": 2
         }
       ]
     },
@@ -247,7 +247,7 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 1
+          "speed": 2
         }
       ]
     },
@@ -285,7 +285,7 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 1
+          "speed": 2
         }
       ]
     },
@@ -296,7 +296,7 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 1
+          "speed": 2
         }
       ]
     },
@@ -307,7 +307,7 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 1
+          "speed": 2
         }
       ]
     },
@@ -318,7 +318,7 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 1
+          "speed": 2
         }
       ]
     }
