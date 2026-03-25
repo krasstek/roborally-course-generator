@@ -65,6 +65,7 @@ const PIECE_DATA_FILES = [
   "docking-bay-b",
   "doubles",
   "energize",
+  "flood-zone",
   "in-and-out",
   "misdirection",
   "sidewinder",

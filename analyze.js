@@ -109,6 +109,10 @@ function isOil(tile) {
   return (tile?.features || []).some((feature) => feature.type === "oil");
 }
 
+function isWater(tile) {
+  return (tile?.features || []).some((feature) => feature.type === "water");
+}
+
 function isPit(tile) {
   return (tile?.features || []).some((feature) => feature.type === "pit");
 }
@@ -783,9 +787,11 @@ function simulateAction(tileMap, startState, action, options = {}) {
   } else if (action.type === "move") {
     const startTile = tileMap.get(tileKey(state.x, state.y));
     const onOil = isOil(startTile);
-    const reducedSteps = onOil && action.relative === "forward"
-      ? Math.max(0, (action.steps ?? 1) - 1)
-      : action.steps ?? 1;
+    const onWater = isWater(startTile);
+    const movementPenalty = action.relative === "forward"
+      ? (onOil ? 1 : 0) + (onWater ? 1 : 0)
+      : 0;
+    const reducedSteps = Math.max(0, (action.steps ?? 1) - movementPenalty);
     const steps = reducedSteps;
 
     for (let index = 0; index < steps; index += 1) {
