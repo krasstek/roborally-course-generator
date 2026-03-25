@@ -1,9 +1,9 @@
 {
-  "id": "black-gold",
-  "name": "Black Gold",
-  "expansionId": "thrills-and-spills",
-  "physicalBoardId": "black-gold-fireball-factory",
-  "image": "./assets/boards/black-gold.jpg",
+  "id": "trench-run",
+  "name": "Trench Run",
+  "expansionId": "wet-and-wild",
+  "physicalBoardId": "flood-zone-trench-run",
+  "image": "./assets/boards/trench-run.jpg",
   "kind": "base",
   "width": 12,
   "height": 12,
@@ -11,7 +11,7 @@
   "starts": [],
   "tiles": [
     {
-      "x": 3,
+      "x": 1,
       "y": 0,
       "features": [
         {
@@ -21,14 +21,96 @@
       ]
     },
     {
+      "x": 2,
+      "y": 0,
+      "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "E",
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 0,
+      "features": [
+        {
+          "type": "ramp",
+          "dir": "N"
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 0,
+      "features": [
+        {
+          "type": "ramp",
+          "dir": "N"
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 0,
+      "features": [
+        {
+          "type": "ramp",
+          "dir": "N"
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 0,
+      "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 0,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
       "x": 8,
       "y": 0,
       "features": [
         {
-          "type": "wall",
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        },
+        {
+          "type": "ledge",
           "sides": [
-            "W"
+            "E"
           ]
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 0,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "N",
+          "damage": 1
         }
       ]
     },
@@ -37,7 +119,10 @@
       "y": 1,
       "features": [
         {
-          "type": "oil"
+          "type": "ledge",
+          "sides": [
+            "E"
+          ]
         }
       ]
     },
@@ -46,11 +131,20 @@
       "y": 1,
       "features": [
         {
-          "type": "wall",
-          "sides": [
-            "S",
-            "W"
-          ]
+          "type": "laser",
+          "dir": "W",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 1,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "W",
+          "damage": 1
         }
       ]
     },
@@ -59,16 +153,9 @@
       "y": 1,
       "features": [
         {
-          "type": "belt",
-          "dir": "S",
-          "speed": 1
-        },
-        {
-          "type": "wall",
-          "sides": [
-            "N",
-            "W"
-          ]
+          "type": "laser",
+          "dir": "W",
+          "damage": 1
         }
       ]
     },
@@ -77,9 +164,9 @@
       "y": 1,
       "features": [
         {
-          "type": "belt",
+          "type": "laser",
           "dir": "W",
-          "speed": 1
+          "damage": 1
         }
       ]
     },
@@ -88,9 +175,10 @@
       "y": 1,
       "features": [
         {
-          "type": "belt",
-          "dir": "W",
-          "speed": 1
+          "type": "ledge",
+          "sides": [
+            "W"
+          ]
         }
       ]
     },
@@ -99,9 +187,14 @@
       "y": 1,
       "features": [
         {
-          "type": "belt",
-          "dir": "W",
-          "speed": 1
+          "type": "ledge",
+          "sides": [
+            "E",
+            "S"
+          ]
+        },
+        {
+          "type": "battery"
         }
       ]
     },
@@ -110,20 +203,8 @@
       "y": 1,
       "features": [
         {
-          "type": "belt",
-          "dir": "W",
-          "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 9,
-      "y": 1,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "W",
-          "speed": 1
+          "type": "ramp",
+          "dir": "N"
         }
       ]
     },
@@ -132,29 +213,19 @@
       "y": 1,
       "features": [
         {
-          "type": "belt",
-          "dir": "W",
-          "speed": 1
-        },
-        {
-          "type": "wall",
-          "sides": [
-            "E",
-            "N"
-          ]
+          "type": "laser",
+          "dir": "N",
+          "damage": 1
         }
       ]
     },
     {
-      "x": 0,
-      "y": 2,
+      "x": 11,
+      "y": 1,
       "features": [
         {
-          "type": "wall",
-          "sides": [
-            "E",
-            "S"
-          ]
+          "type": "ramp",
+          "dir": "E"
         }
       ]
     },
@@ -163,7 +234,11 @@
       "y": 2,
       "features": [
         {
-          "type": "oil"
+          "type": "crusher",
+          "timing": [
+            2,
+            4
+          ]
         }
       ]
     },
@@ -172,14 +247,89 @@
       "y": 2,
       "features": [
         {
-          "type": "oil"
+          "type": "ramp",
+          "dir": "W"
         }
       ]
     },
     {
-      "x": 3,
+      "x": 4,
       "y": 2,
       "features": [
+        {
+          "type": "crusher",
+          "timing": [
+            1,
+            3
+          ]
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 2,
+      "features": [
+        {
+          "type": "ramp",
+          "dir": "N"
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 2,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 2,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "N",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 11,
+      "y": 2,
+      "features": [
+        {
+          "type": "ramp",
+          "dir": "E"
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 3,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 3,
+      "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "E",
+            "N"
+          ]
+        },
         {
           "type": "battery"
         }
@@ -187,45 +337,23 @@
     },
     {
       "x": 4,
-      "y": 2,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "S",
-          "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 5,
-      "y": 2,
+      "y": 3,
       "features": [
         {
           "type": "wall",
           "sides": [
-            "E",
             "S"
           ]
         }
       ]
     },
     {
-      "x": 6,
-      "y": 2,
-      "features": [
-        {
-          "type": "oil"
-        }
-      ]
-    },
-    {
       "x": 7,
-      "y": 2,
+      "y": 3,
       "features": [
         {
           "type": "wall",
           "sides": [
-            "S",
             "W"
           ]
         }
@@ -233,111 +361,25 @@
     },
     {
       "x": 9,
-      "y": 2,
-      "features": [
-        {
-          "type": "portal",
-          "id": "2"
-        }
-      ]
-    },
-    {
-      "x": 10,
-      "y": 2,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "N",
-          "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 1,
       "y": 3,
       "features": [
         {
-          "type": "oil"
-        }
-      ]
-    },
-    {
-      "x": 2,
-      "y": 3,
-      "features": [
-        {
-          "type": "oil"
-        }
-      ]
-    },
-    {
-      "x": 3,
-      "y": 3,
-      "features": [
-        {
-          "type": "wall",
-          "sides": [
-            "S"
+          "type": "crusher",
+          "timing": [
+            3,
+            5
           ]
         }
       ]
     },
     {
-      "x": 4,
-      "y": 3,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "S",
-          "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 5,
-      "y": 3,
-      "features": [
-        {
-          "type": "oil"
-        }
-      ]
-    },
-    {
-      "x": 6,
-      "y": 3,
-      "features": [
-        {
-          "type": "oil"
-        }
-      ]
-    },
-    {
-      "x": 7,
-      "y": 3,
-      "features": [
-        {
-          "type": "oil"
-        }
-      ]
-    },
-    {
-      "x": 9,
-      "y": 3,
-      "features": [
-        {
-          "type": "gear",
-          "rotation": "ccw"
-        }
-      ]
-    },
-    {
       "x": 10,
       "y": 3,
       "features": [
         {
-          "type": "belt",
+          "type": "laser",
           "dir": "N",
-          "speed": 1
+          "damage": 1
         }
       ]
     },
@@ -346,10 +388,19 @@
       "y": 3,
       "features": [
         {
-          "type": "wall",
-          "sides": [
-            "S"
-          ]
+          "type": "ramp",
+          "dir": "E"
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 4,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
         }
       ]
     },
@@ -358,7 +409,9 @@
       "y": 4,
       "features": [
         {
-          "type": "oil"
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
         }
       ]
     },
@@ -367,18 +420,11 @@
       "y": 4,
       "features": [
         {
-          "type": "oil"
-        }
-      ]
-    },
-    {
-      "x": 4,
-      "y": 4,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "S",
-          "speed": 1
+          "type": "ledge",
+          "sides": [
+            "E",
+            "S"
+          ]
         }
       ]
     },
@@ -387,34 +433,37 @@
       "y": 4,
       "features": [
         {
+          "type": "battery"
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 4,
+      "features": [
+        {
+          "type": "ramp",
+          "dir": "S"
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 4,
+      "features": [
+        {
           "type": "laser",
           "dir": "N",
           "damage": 1
-        },
-        {
-          "type": "wall",
-          "sides": [
-            "E",
-            "N"
-          ]
         }
       ]
     },
     {
-      "x": 6,
+      "x": 11,
       "y": 4,
       "features": [
         {
-          "type": "oil"
-        }
-      ]
-    },
-    {
-      "x": 7,
-      "y": 4,
-      "features": [
-        {
-          "type": "wall",
+          "type": "ledge",
           "sides": [
             "N",
             "W"
@@ -423,35 +472,13 @@
       ]
     },
     {
-      "x": 9,
-      "y": 4,
-      "features": [
-        {
-          "type": "pit"
-        }
-      ]
-    },
-    {
-      "x": 10,
-      "y": 4,
+      "x": 0,
+      "y": 5,
       "features": [
         {
           "type": "belt",
           "dir": "N",
           "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 0,
-      "y": 5,
-      "features": [
-        {
-          "type": "wall",
-          "sides": [
-            "E",
-            "N"
-          ]
         }
       ]
     },
@@ -460,7 +487,10 @@
       "y": 5,
       "features": [
         {
-          "type": "oil"
+          "type": "ledge",
+          "sides": [
+            "S"
+          ]
         }
       ]
     },
@@ -469,8 +499,8 @@
       "y": 5,
       "features": [
         {
-          "type": "portal",
-          "id": "1"
+          "type": "ramp",
+          "dir": "W"
         }
       ]
     },
@@ -479,29 +509,11 @@
       "y": 5,
       "features": [
         {
-          "type": "pit"
-        }
-      ]
-    },
-    {
-      "x": 4,
-      "y": 5,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "S",
-          "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 5,
-      "y": 5,
-      "features": [
-        {
-          "type": "laser",
-          "dir": "N",
-          "damage": 1
+          "type": "crusher",
+          "timing": [
+            3,
+            4
+          ]
         }
       ]
     },
@@ -510,7 +522,16 @@
       "y": 5,
       "features": [
         {
-          "type": "oil"
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "N",
+            "W"
+          ]
         }
       ]
     },
@@ -520,8 +541,14 @@
       "features": [
         {
           "type": "belt",
-          "dir": "E",
+          "dir": "W",
           "speed": 1
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "N"
+          ]
         }
       ]
     },
@@ -531,8 +558,14 @@
       "features": [
         {
           "type": "belt",
-          "dir": "E",
+          "dir": "W",
           "speed": 1
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "N"
+          ]
         }
       ]
     },
@@ -542,7 +575,7 @@
       "features": [
         {
           "type": "belt",
-          "dir": "E",
+          "dir": "W",
           "speed": 1
         }
       ]
@@ -553,11 +586,39 @@
       "features": [
         {
           "type": "belt",
+          "dir": "W",
+          "speed": 1
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "N"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 11,
+      "y": 5,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 6,
+      "features": [
+        {
+          "type": "belt",
           "dir": "N",
           "speed": 1
         },
         {
-          "type": "wall",
+          "type": "ledge",
           "sides": [
             "E",
             "S"
@@ -570,42 +631,9 @@
       "y": 6,
       "features": [
         {
-          "type": "belt",
+          "type": "laser",
           "dir": "S",
-          "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 2,
-      "y": 6,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "W",
-          "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 3,
-      "y": 6,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "W",
-          "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 4,
-      "y": 6,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "W",
-          "speed": 1
+          "damage": 1
         }
       ]
     },
@@ -614,9 +642,7 @@
       "y": 6,
       "features": [
         {
-          "type": "laser",
-          "dir": "N",
-          "damage": 1
+          "type": "pit"
         }
       ]
     },
@@ -625,18 +651,14 @@
       "y": 6,
       "features": [
         {
-          "type": "oil"
-        }
-      ]
-    },
-    {
-      "x": 7,
-      "y": 6,
-      "features": [
+          "type": "ledge",
+          "sides": [
+            "S",
+            "W"
+          ]
+        },
         {
-          "type": "belt",
-          "dir": "N",
-          "speed": 1
+          "type": "battery"
         }
       ]
     },
@@ -645,7 +667,32 @@
       "y": 6,
       "features": [
         {
-          "type": "battery"
+          "type": "ledge",
+          "sides": [
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 6,
+      "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 7,
+      "features": [
+        {
+          "type": "ramp",
+          "dir": "W"
         }
       ]
     },
@@ -654,18 +701,9 @@
       "y": 7,
       "features": [
         {
-          "type": "belt",
+          "type": "laser",
           "dir": "S",
-          "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 2,
-      "y": 7,
-      "features": [
-        {
-          "type": "pit"
+          "damage": 1
         }
       ]
     },
@@ -674,22 +712,25 @@
       "y": 7,
       "features": [
         {
-          "type": "battery"
+          "type": "wall",
+          "sides": [
+            "W"
+          ]
         }
       ]
     },
     {
-      "x": 4,
+      "x": 7,
       "y": 7,
       "features": [
         {
-          "type": "portal",
-          "id": "2"
+          "type": "ramp",
+          "dir": "N"
         }
       ]
     },
     {
-      "x": 5,
+      "x": 9,
       "y": 7,
       "features": [
         {
@@ -700,50 +741,22 @@
       ]
     },
     {
-      "x": 6,
-      "y": 7,
-      "features": [
-        {
-          "type": "gear",
-          "rotation": "cw"
-        }
-      ]
-    },
-    {
-      "x": 7,
-      "y": 7,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "N",
-          "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 8,
-      "y": 7,
-      "features": [
-        {
-          "type": "oil"
-        }
-      ]
-    },
-    {
-      "x": 9,
-      "y": 7,
-      "features": [
-        {
-          "type": "oil"
-        }
-      ]
-    },
-    {
       "x": 10,
       "y": 7,
       "features": [
         {
-          "type": "oil"
+          "type": "crusher",
+          "timing": [
+            2,
+            3
+          ]
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "S",
+            "W"
+          ]
         }
       ]
     },
@@ -752,7 +765,7 @@
       "y": 7,
       "features": [
         {
-          "type": "wall",
+          "type": "ledge",
           "sides": [
             "S"
           ]
@@ -764,9 +777,8 @@
       "y": 8,
       "features": [
         {
-          "type": "belt",
-          "dir": "S",
-          "speed": 1
+          "type": "ramp",
+          "dir": "W"
         }
       ]
     },
@@ -775,16 +787,9 @@
       "y": 8,
       "features": [
         {
-          "type": "belt",
-          "dir": "W",
-          "speed": 1
-        },
-        {
-          "type": "wall",
-          "sides": [
-            "E",
-            "S"
-          ]
+          "type": "laser",
+          "dir": "S",
+          "damage": 1
         }
       ]
     },
@@ -793,28 +798,10 @@
       "y": 8,
       "features": [
         {
-          "type": "oil"
-        }
-      ]
-    },
-    {
-      "x": 3,
-      "y": 8,
-      "features": [
-        {
-          "type": "oil"
-        }
-      ]
-    },
-    {
-      "x": 4,
-      "y": 8,
-      "features": [
-        {
-          "type": "wall",
-          "sides": [
-            "S",
-            "W"
+          "type": "crusher",
+          "timing": [
+            1,
+            5
           ]
         }
       ]
@@ -824,124 +811,16 @@
       "y": 8,
       "features": [
         {
-          "type": "laser",
-          "dir": "N",
-          "damage": 1
-        }
-      ]
-    },
-    {
-      "x": 6,
-      "y": 8,
-      "features": [
-        {
-          "type": "pit"
-        }
-      ]
-    },
-    {
-      "x": 7,
-      "y": 8,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "N",
-          "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 8,
-      "y": 8,
-      "features": [
-        {
           "type": "wall",
           "sides": [
-            "E",
-            "N"
+            "E"
           ]
         }
       ]
     },
     {
-      "x": 9,
-      "y": 8,
-      "features": [
-        {
-          "type": "oil"
-        }
-      ]
-    },
-    {
-      "x": 10,
-      "y": 8,
-      "features": [
-        {
-          "type": "oil"
-        }
-      ]
-    },
-    {
-      "x": 0,
-      "y": 9,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "S",
-          "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 1,
-      "y": 9,
-      "features": [
-        {
-          "type": "oil"
-        }
-      ]
-    },
-    {
-      "x": 2,
-      "y": 9,
-      "features": [
-        {
-          "type": "oil"
-        }
-      ]
-    },
-    {
-      "x": 3,
-      "y": 9,
-      "features": [
-        {
-          "type": "oil"
-        }
-      ]
-    },
-    {
-      "x": 4,
-      "y": 9,
-      "features": [
-        {
-          "type": "oil"
-        }
-      ]
-    },
-    {
-      "x": 5,
-      "y": 9,
-      "features": [
-        {
-          "type": "laser",
-          "dir": "N",
-          "damage": 1
-        }
-      ]
-    },
-    {
       "x": 6,
-      "y": 9,
+      "y": 8,
       "features": [
         {
           "type": "battery"
@@ -949,23 +828,79 @@
       ]
     },
     {
-      "x": 7,
-      "y": 9,
+      "x": 8,
+      "y": 8,
       "features": [
         {
-          "type": "belt",
-          "dir": "N",
-          "speed": 1
+          "type": "crusher",
+          "timing": [
+            3,
+            4
+          ]
         }
       ]
     },
     {
-      "x": 8,
+      "x": 9,
+      "y": 8,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "N",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 11,
+      "y": 8,
+      "features": [
+        {
+          "type": "ramp",
+          "dir": "E"
+        }
+      ]
+    },
+    {
+      "x": 0,
       "y": 9,
       "features": [
         {
-          "type": "portal",
-          "id": "1"
+          "type": "ramp",
+          "dir": "W"
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 9,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "S",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 9,
+      "features": [
+        {
+          "type": "ramp",
+          "dir": "S"
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 9,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "E"
+          ]
         }
       ]
     },
@@ -974,20 +909,19 @@
       "y": 9,
       "features": [
         {
-          "type": "oil"
+          "type": "laser",
+          "dir": "N",
+          "damage": 1
         }
       ]
     },
     {
-      "x": 10,
+      "x": 11,
       "y": 9,
       "features": [
         {
-          "type": "wall",
-          "sides": [
-            "N",
-            "W"
-          ]
+          "type": "ramp",
+          "dir": "E"
         }
       ]
     },
@@ -996,9 +930,10 @@
       "y": 10,
       "features": [
         {
-          "type": "belt",
-          "dir": "S",
-          "speed": 1
+          "type": "ledge",
+          "sides": [
+            "N"
+          ]
         }
       ]
     },
@@ -1007,16 +942,17 @@
       "y": 10,
       "features": [
         {
-          "type": "oil"
-        }
-      ]
-    },
-    {
-      "x": 2,
-      "y": 10,
-      "features": [
+          "type": "crusher",
+          "timing": [
+            2,
+            5
+          ]
+        },
         {
-          "type": "oil"
+          "type": "ledge",
+          "sides": [
+            "N"
+          ]
         }
       ]
     },
@@ -1025,7 +961,15 @@
       "y": 10,
       "features": [
         {
-          "type": "oil"
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "N"
+          ]
         }
       ]
     },
@@ -1034,64 +978,55 @@
       "y": 10,
       "features": [
         {
-          "type": "oil"
+          "type": "ledge",
+          "sides": [
+            "E",
+            "N"
+          ]
+        },
+        {
+          "type": "battery"
         }
       ]
     },
     {
       "x": 5,
+      "y": 10,
+      "features": [
+        {
+          "type": "ramp",
+          "dir": "S"
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 10,
+      "features": [
+        {
+          "type": "ramp",
+          "dir": "S"
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 10,
+      "features": [
+        {
+          "type": "ramp",
+          "dir": "S"
+        }
+      ]
+    },
+    {
+      "x": 9,
       "y": 10,
       "features": [
         {
           "type": "laser",
           "dir": "N",
           "damage": 1
-        },
-        {
-          "type": "wall",
-          "sides": [
-            "S"
-          ]
-        }
-      ]
-    },
-    {
-      "x": 7,
-      "y": 10,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "N",
-          "speed": 1
-        },
-        {
-          "type": "wall",
-          "sides": [
-            "S",
-            "W"
-          ]
-        }
-      ]
-    },
-    {
-      "x": 8,
-      "y": 10,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "W",
-          "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 9,
-      "y": 10,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "W",
-          "speed": 1
         }
       ]
     },
@@ -1100,31 +1035,18 @@
       "y": 10,
       "features": [
         {
-          "type": "belt",
-          "dir": "W",
-          "speed": 1
+          "type": "ramp",
+          "dir": "S"
         }
       ]
     },
     {
-      "x": 0,
-      "y": 11,
+      "x": 11,
+      "y": 10,
       "features": [
         {
-          "type": "belt",
-          "dir": "E",
-          "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 1,
-      "y": 11,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "E",
-          "speed": 1
+          "type": "ramp",
+          "dir": "E"
         }
       ]
     },
@@ -1133,9 +1055,10 @@
       "y": 11,
       "features": [
         {
-          "type": "belt",
-          "dir": "E",
-          "speed": 1
+          "type": "wall",
+          "sides": [
+            "E"
+          ]
         }
       ]
     },
@@ -1145,29 +1068,7 @@
       "features": [
         {
           "type": "belt",
-          "dir": "E",
-          "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 4,
-      "y": 11,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "E",
-          "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 5,
-      "y": 11,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "E",
+          "dir": "N",
           "speed": 1
         }
       ]
@@ -1177,20 +1078,10 @@
       "y": 11,
       "features": [
         {
-          "type": "belt",
-          "dir": "E",
-          "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 7,
-      "y": 11,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "E",
-          "speed": 1
+          "type": "wall",
+          "sides": [
+            "E"
+          ]
         }
       ]
     },
@@ -1199,9 +1090,10 @@
       "y": 11,
       "features": [
         {
-          "type": "belt",
-          "dir": "S",
-          "speed": 1
+          "type": "ledge",
+          "sides": [
+            "N"
+          ]
         }
       ]
     },
@@ -1210,18 +1102,29 @@
       "y": 11,
       "features": [
         {
-          "type": "pit"
+          "type": "crusher",
+          "timing": [
+            1,
+            2
+          ]
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "N"
+          ]
         }
       ]
     },
     {
-      "x": 10,
+      "x": 11,
       "y": 11,
       "features": [
         {
-          "type": "belt",
-          "dir": "N",
-          "speed": 1
+          "type": "ledge",
+          "sides": [
+            "N"
+          ]
         }
       ]
     }

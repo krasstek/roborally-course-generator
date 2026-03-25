@@ -1,9 +1,9 @@
 {
-  "id": "coming-and-going",
-  "name": "Coming & Going",
+  "id": "the-wave",
+  "name": "The Wave",
   "expansionId": "master-builder",
   "physicalBoardId": "coming-and-going-the-wave",
-  "image": "./assets/boards/coming-and-going.PNG",
+  "image": "./assets/boards/the-wave.PNG",
   "kind": "small",
   "width": 6,
   "height": 6,
@@ -11,7 +11,7 @@
   "starts": [],
   "tiles": [
     {
-      "x": 0,
+      "x": 2,
       "y": 0,
       "features": [
         {
@@ -26,19 +26,35 @@
       "y": 0,
       "features": [
         {
-          "type": "wall",
-          "sides": [
-            "W"
-          ]
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
         }
       ]
     },
     {
-      "x": 4,
+      "x": 5,
       "y": 0,
       "features": [
         {
           "type": "battery"
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 1,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "S",
+          "damage": 1
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
         }
       ]
     },
@@ -54,20 +70,86 @@
       ]
     },
     {
+      "x": 2,
+      "y": 1,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "W"
+          ]
+        }
+      ]
+    },
+    {
       "x": 3,
       "y": 1,
       "features": [
         {
           "type": "belt",
-          "dir": "E",
+          "dir": "W",
           "speed": 1
         }
       ]
     },
     {
-      "x": 5,
+      "x": 4,
       "y": 1,
       "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 2,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "S",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 2,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 2,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 3,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "S",
+          "damage": 1
+        },
         {
           "type": "wall",
           "sides": [
@@ -78,19 +160,7 @@
     },
     {
       "x": 1,
-      "y": 2,
-      "features": [
-        {
-          "type": "wall",
-          "sides": [
-            "S"
-          ]
-        }
-      ]
-    },
-    {
-      "x": 2,
-      "y": 2,
+      "y": 3,
       "features": [
         {
           "type": "belt",
@@ -101,80 +171,32 @@
     },
     {
       "x": 4,
-      "y": 2,
+      "y": 3,
       "features": [
         {
           "type": "belt",
-          "dir": "E",
+          "dir": "S",
           "speed": 1
         }
       ]
     },
     {
       "x": 5,
-      "y": 2,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "E",
-          "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 0,
       "y": 3,
       "features": [
         {
-          "type": "belt",
-          "dir": "W",
-          "speed": 1
+          "type": "pit"
         }
       ]
     },
     {
       "x": 1,
-      "y": 3,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "W",
-          "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 3,
-      "y": 3,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "W",
-          "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 4,
-      "y": 3,
-      "features": [
-        {
-          "type": "wall",
-          "sides": [
-            "N"
-          ]
-        }
-      ]
-    },
-    {
-      "x": 0,
       "y": 4,
       "features": [
         {
-          "type": "wall",
-          "sides": [
-            "N"
-          ]
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
         }
       ]
     },
@@ -184,35 +206,9 @@
       "features": [
         {
           "type": "belt",
-          "dir": "E",
-          "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 4,
-      "y": 4,
-      "features": [
-        {
-          "type": "belt",
           "dir": "W",
           "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 1,
-      "y": 5,
-      "features": [
-        {
-          "type": "battery"
-        }
-      ]
-    },
-    {
-      "x": 3,
-      "y": 5,
-      "features": [
+        },
         {
           "type": "wall",
           "sides": [
@@ -222,7 +218,49 @@
       ]
     },
     {
-      "x": 5,
+      "x": 3,
+      "y": 4,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 4,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 5,
+      "features": [
+        {
+          "type": "battery"
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 5,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 3,
       "y": 5,
       "features": [
         {
