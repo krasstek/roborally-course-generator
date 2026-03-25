@@ -1,17 +1,27 @@
-import { render } from "./render.js";
-import { analyzeCourse, analyzeFlagLeg } from "./analyze.js";
-import {
-  buildMainFootprintTiles,
-  buildResolvedMap,
-  getBoundaryEdges,
-  getValidDockRuns,
-  groupBoundaryRuns,
-  placePiece,
-  projectDockPlacement,
-  rotatedDimensions,
-  validateDockPlacement,
-  validateMainBoardLayout
-} from "./board.js";
+const ASSET_VERSION = new URL(import.meta.url).searchParams.get("v") ?? "";
+const VERSION_SUFFIX = ASSET_VERSION ? `?v=${encodeURIComponent(ASSET_VERSION)}` : "";
+const versionedPath = (path) => `${path}${VERSION_SUFFIX}`;
+
+const [
+  { render },
+  { analyzeCourse, analyzeFlagLeg },
+  {
+    buildMainFootprintTiles,
+    buildResolvedMap,
+    getBoundaryEdges,
+    getValidDockRuns,
+    groupBoundaryRuns,
+    placePiece,
+    projectDockPlacement,
+    rotatedDimensions,
+    validateDockPlacement,
+    validateMainBoardLayout
+  }
+] = await Promise.all([
+  import(versionedPath("./render.js")),
+  import(versionedPath("./analyze.js")),
+  import(versionedPath("./board.js"))
+]);
 
 const ROTATIONS = [0, 90, 180, 270];
 const FACINGS = ["N", "E", "S", "W"];
@@ -86,7 +96,7 @@ let boardAuditState = {
 };
 
 async function loadJSON(path) {
-  const res = await fetch(path);
+  const res = await fetch(versionedPath(path), { cache: "no-store" });
   if (!res.ok) throw new Error(`Could not load ${path}`);
   return res.json();
 }
@@ -96,7 +106,7 @@ async function loadImage(src) {
     const img = new Image();
     img.onload = () => resolve(img);
     img.onerror = reject;
-    img.src = src;
+    img.src = versionedPath(src);
   });
 }
 
@@ -555,7 +565,8 @@ function renderBoardAudit(assets) {
 }
 
 function updateBoardAuditVisibility() {
-  document.getElementById("board-audit-panel")?.classList.toggle("hidden", !isDevViewEnabled());
+  const visible = isDevViewEnabled() && isBoardAuditEnabled();
+  document.getElementById("board-audit-panel")?.classList.toggle("hidden", !visible);
 }
 
 function initializeBoardAudit(assets) {
@@ -2640,10 +2651,15 @@ function isDevViewEnabled() {
   return document.getElementById("dev-view")?.checked ?? true;
 }
 
+function isBoardAuditEnabled() {
+  return document.getElementById("board-audit-toggle")?.checked ?? false;
+}
+
 function updateDevView() {
   const enabled = isDevViewEnabled();
   document.getElementById("trace-leg-label")?.classList.toggle("hidden", !enabled);
   document.getElementById("report-panel")?.classList.toggle("hidden", !enabled);
+  document.getElementById("board-audit-toggle-label")?.classList.toggle("hidden", !enabled);
   updateBoardAuditVisibility();
 }
 
@@ -2999,6 +3015,10 @@ document.getElementById("dev-view").addEventListener("change", () => {
   }
 });
 
+document.getElementById("board-audit-toggle").addEventListener("change", () => {
+  updateBoardAuditVisibility();
+});
+
 document.getElementById("variant-dynamic-archiving").addEventListener("click", () => {
   cycleVariantControlState("dynamicArchiving");
 });
@@ -3024,17 +3044,19 @@ document.getElementById("expansion-wet-and-wild").addEventListener("change", () 
 });
 
 document.addEventListener("click", (event) => {
-  const picker = document.querySelector(".variant-picker");
-  if (picker && !picker.contains(event.target)) {
-    picker.removeAttribute("open");
-  }
+  document.querySelectorAll(".variant-picker").forEach((picker) => {
+    if (!picker.contains(event.target)) {
+      picker.removeAttribute("open");
+    }
+  });
 });
 
 document.addEventListener("focusin", (event) => {
-  const picker = document.querySelector(".variant-picker");
-  if (picker && !picker.contains(event.target)) {
-    picker.removeAttribute("open");
-  }
+  document.querySelectorAll(".variant-picker").forEach((picker) => {
+    if (!picker.contains(event.target)) {
+      picker.removeAttribute("open");
+    }
+  });
 });
 
 document.addEventListener("keydown", (event) => {

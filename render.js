@@ -1,4 +1,13 @@
-import { buildResolvedMap, getBoundaryEdges, getBounds, groupBoundaryRuns } from "./board.js";
+const ASSET_VERSION = new URL(import.meta.url).searchParams.get("v") ?? "";
+const VERSION_SUFFIX = ASSET_VERSION ? `?v=${encodeURIComponent(ASSET_VERSION)}` : "";
+const versionedPath = (path) => `${path}${VERSION_SUFFIX}`;
+
+const {
+  buildResolvedMap,
+  getBoundaryEdges,
+  getBounds,
+  groupBoundaryRuns
+} = await import(versionedPath("./board.js"));
 
 function drawGrid(ctx, bounds, tileSize, margin) {
   const width = bounds.maxX - bounds.minX + 1;

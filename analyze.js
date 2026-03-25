@@ -1,3 +1,9 @@
+const ASSET_VERSION = new URL(import.meta.url).searchParams.get("v") ?? "";
+const VERSION_SUFFIX = ASSET_VERSION ? `?v=${encodeURIComponent(ASSET_VERSION)}` : "";
+const versionedPath = (path) => `${path}${VERSION_SUFFIX}`;
+
+const { rotatedDimensions } = await import(versionedPath("./board.js"));
+
 const DIRS = {
   N: { dx: 0, dy: -1 },
   E: { dx: 1, dy: 0 },
@@ -241,12 +247,18 @@ function directionBetween(a, b) {
 
 function canMoveBetween(tileMap, from, to, dir, options = {}) {
   const fromTile = tileMap.get(tileKey(from.x, from.y));
-  const toTile = tileMap.get(tileKey(to.x, to.y));
   const lessDeadlyGame = options.lessDeadlyGame ?? false;
 
   if (!fromTile) {
     return { ok: false, crash: EDGE_BEHAVIOR === "pit" && !lessDeadlyGame, offBoard: true };
   }
+
+  const fromWalls = getWalls(fromTile);
+  if (fromWalls.has(dir)) {
+    return { ok: false, crash: false, offBoard: false };
+  }
+
+  const toTile = tileMap.get(tileKey(to.x, to.y));
 
   if (!toTile) {
     return {
@@ -256,7 +268,6 @@ function canMoveBetween(tileMap, from, to, dir, options = {}) {
     };
   }
 
-  const fromWalls = getWalls(fromTile);
   const toWalls = getWalls(toTile);
   const fromLedges = getLedgeSides(fromTile);
   const toLedges = getLedgeSides(toTile);
@@ -1694,8 +1705,8 @@ export function analyzeCourse(tileMap, starts, goal, options = {}) {
     const nextOutlierSet = new Set(activeReachable
       .filter((item) => {
         const scoreOutlier = Math.abs(item.adjustedScore - scoreMean) > Math.max(5, scoreStdDev * 1.25);
-        const actionOutlier = item.bestActions - actionMean > Math.max(2, actionStdDev * 1.1);
-        const severeActionGap = item.bestActions - minActions >= 4;
+        const actionOutlier = item.bestActions - actionMean > Math.max(1.5, actionStdDev * 0.95);
+        const severeActionGap = item.bestActions - minActions >= 3;
 
         return scoreOutlier || (actionOutlier && severeActionGap);
       })

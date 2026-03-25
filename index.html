@@ -724,6 +724,10 @@
           <input id="dev-view" type="checkbox" />
           Dev View
         </label>
+        <label id="board-audit-toggle-label" class="toggle-label hidden">
+          <input id="board-audit-toggle" type="checkbox" />
+          Board Audit
+        </label>
         <button id="reroll" type="button">Generate Course</button>
       </div>
       <div id="setup-summary" class="setup-summary hidden">
@@ -799,6 +803,9 @@
       <pre id="report"></pre>
     </aside>
   </div>
-  <script type="module" src="./main.js"></script>
+  <script type="module">
+    const assetVersion = Date.now().toString();
+    import(`./main.js?v=${encodeURIComponent(assetVersion)}`).catch(console.error);
+  </script>
 </body>
 </html>
