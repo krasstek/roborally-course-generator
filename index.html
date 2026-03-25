@@ -216,6 +216,48 @@
       font-size: 13px;
     }
 
+    .variant-rule {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: center;
+      padding: 8px 0;
+    }
+
+    .variant-rule-name {
+      font-size: 13px;
+      line-height: 1.35;
+      color: #171d22;
+    }
+
+    button.variant-state {
+      min-width: 118px;
+      min-height: 34px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(76, 91, 102, 0.28);
+      background: linear-gradient(180deg, #8a949b 0%, #69747c 100%);
+      color: #fff;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14);
+      text-transform: none;
+      letter-spacing: 0;
+      font-size: 12px;
+    }
+
+    button.variant-state[data-state="off"] {
+      background: linear-gradient(180deg, #87929a 0%, #69747c 100%);
+    }
+
+    button.variant-state[data-state="allowed"] {
+      background: linear-gradient(180deg, #4d8ff1 0%, #2563eb 100%);
+      border-color: rgba(23, 60, 128, 0.35);
+    }
+
+    button.variant-state[data-state="forced"] {
+      background: linear-gradient(180deg, #4fb86d 0%, #2f8f4f 100%);
+      border-color: rgba(20, 88, 44, 0.34);
+    }
+
     .toggle-label input {
       width: 16px;
       height: 16px;
@@ -655,12 +697,16 @@
         <label class="variant-field">
           Allowed variants
           <details class="variant-picker">
-            <summary id="variant-summary">Dynamic Archiving</summary>
+            <summary id="variant-summary">1 selected</summary>
             <div class="variant-menu">
-              <label class="variant-option">
-                <input id="variant-dynamic-archiving" type="checkbox" checked />
-                Dynamic Archiving
-              </label>
+              <div class="variant-rule">
+                <div class="variant-rule-name">Dynamic Archiving</div>
+                <button id="variant-dynamic-archiving" class="variant-state" type="button" data-state="allowed">Allowed</button>
+              </div>
+              <div class="variant-rule">
+                <div class="variant-rule-name">A Less Deadly Game</div>
+                <button id="variant-less-deadly-game" class="variant-state" type="button" data-state="off">Not allowed</button>
+              </div>
             </div>
           </details>
         </label>

@@ -66,6 +66,15 @@ const PIECE_DATA_FILES = [
   "transition",
   "whirlpool"
 ];
+const VARIANT_STATES = {
+  off: { label: "Not allowed" },
+  allowed: { label: "Allowed" },
+  forced: { label: "Always on" }
+};
+const VARIANT_CONTROL_IDS = {
+  dynamicArchiving: "variant-dynamic-archiving",
+  lessDeadlyGame: "variant-less-deadly-game"
+};
 
 let currentScenario = null;
 let cachedAssets = null;
@@ -695,14 +704,13 @@ function updateSetupSummary(scenario) {
 
 function updateVariantSummary() {
   const summaryEl = document.getElementById("variant-summary");
-  const enabled = [];
-
-  if (document.getElementById("variant-dynamic-archiving").checked) {
-    enabled.push("Dynamic Archiving");
-  }
-
+  const states = [
+    ["Dynamic Archiving", getVariantControlState("dynamicArchiving")],
+    ["A Less Deadly Game", getVariantControlState("lessDeadlyGame")]
+  ];
+  const enabled = states.filter(([, state]) => state !== "off");
   summaryEl.textContent = `${enabled.length} selected`;
-  summaryEl.title = enabled.length ? enabled.join(", ") : "None";
+  summaryEl.title = states.map(([label, state]) => `${label}: ${VARIANT_STATES[state].label}`).join(", ");
 }
 
 function updateExpansionSummary() {
@@ -767,6 +775,10 @@ function updateRulesNote(scenario) {
     notes.push("This course uses Dynamic Archiving (Game Guide p. 32).");
   }
 
+  if (scenario.lessDeadlyGame) {
+    notes.push("This course uses A Less Deadly Game: board edges act as walls while pit spaces remain pits (Game Guide p. 32).");
+  }
+
   if (!notes.length) {
     noteEl.textContent = "";
     noteEl.classList.add("hidden");
@@ -777,18 +789,86 @@ function updateRulesNote(scenario) {
   noteEl.classList.remove("hidden");
 }
 
+function describeAllowedVariants(preferences = {}) {
+  const variants = [];
+  const states = preferences.allowedVariantRules || {};
+  const entries = [
+    ["Dynamic Archiving", states.dynamicArchiving ?? "allowed"],
+    ["A Less Deadly Game", states.lessDeadlyGame ?? "off"]
+  ];
+
+  for (const [label, state] of entries) {
+    const normalized = normalizeVariantState(state);
+    if (normalized === "off") {
+      continue;
+    }
+    variants.push(`${label} (${VARIANT_STATES[normalized].label})`);
+  }
+
+  return variants.length ? variants.join(", ") : "none";
+}
+
 function updateLegend(scenario) {
   const rebootTokenEl = document.getElementById("legend-reboot-token");
   rebootTokenEl?.classList.toggle("hidden", scenario?.recoveryRule !== "reboot_tokens");
 }
 
+function normalizeVariantState(value) {
+  if (value === true) return "allowed";
+  if (value === false) return "off";
+  return value === "forced" || value === "allowed" || value === "off" ? value : "off";
+}
+
+function getVariantControlState(variantId) {
+  const button = document.getElementById(VARIANT_CONTROL_IDS[variantId]);
+  return normalizeVariantState(button?.dataset.state ?? "off");
+}
+
+function setVariantControlState(variantId, state) {
+  const normalized = normalizeVariantState(state);
+  const button = document.getElementById(VARIANT_CONTROL_IDS[variantId]);
+  if (!button) {
+    return;
+  }
+
+  button.dataset.state = normalized;
+  button.textContent = VARIANT_STATES[normalized].label;
+}
+
+function cycleVariantControlState(variantId) {
+  const current = getVariantControlState(variantId);
+  const next = current === "off"
+    ? "allowed"
+    : current === "allowed"
+      ? "forced"
+      : "off";
+  setVariantControlState(variantId, next);
+  updateVariantSummary();
+}
+
+function chooseVariantEnabled(variantState, allowedChance = 0.5) {
+  const normalized = normalizeVariantState(variantState);
+  if (normalized === "forced") {
+    return true;
+  }
+  if (normalized === "off") {
+    return false;
+  }
+  return Math.random() < allowedChance;
+}
+
 function chooseRecoveryRule(preferences) {
-  const dynamicArchivingAllowed = preferences.allowedVariantRules?.dynamicArchiving ?? true;
-  if (dynamicArchivingAllowed && Math.random() < 0.5) {
+  const dynamicArchivingState = preferences.allowedVariantRules?.dynamicArchiving ?? "allowed";
+  if (chooseVariantEnabled(dynamicArchivingState, 0.5)) {
     return "dynamic_archiving";
   }
 
   return "reboot_tokens";
+}
+
+function chooseLessDeadlyGame(preferences) {
+  const lessDeadlyState = preferences.allowedVariantRules?.lessDeadlyGame ?? "off";
+  return chooseVariantEnabled(lessDeadlyState, 0.22);
 }
 
 function getPreferencesFromControls() {
@@ -804,7 +884,8 @@ function getPreferencesFromControls() {
       "wet-and-wild": document.getElementById("expansion-wet-and-wild").checked
     },
     allowedVariantRules: {
-      dynamicArchiving: document.getElementById("variant-dynamic-archiving").checked
+      dynamicArchiving: getVariantControlState("dynamicArchiving"),
+      lessDeadlyGame: getVariantControlState("lessDeadlyGame")
     }
   };
 }
@@ -822,7 +903,8 @@ function applyPreferencesToControls(preferences) {
   document.getElementById("expansion-master-builder").checked = preferences.selectedExpansions?.["master-builder"] ?? false;
   document.getElementById("expansion-thrills-and-spills").checked = preferences.selectedExpansions?.["thrills-and-spills"] ?? false;
   document.getElementById("expansion-wet-and-wild").checked = preferences.selectedExpansions?.["wet-and-wild"] ?? false;
-  document.getElementById("variant-dynamic-archiving").checked = preferences.allowedVariantRules?.dynamicArchiving ?? true;
+  setVariantControlState("dynamicArchiving", preferences.allowedVariantRules?.dynamicArchiving ?? "allowed");
+  setVariantControlState("lessDeadlyGame", preferences.allowedVariantRules?.lessDeadlyGame ?? "off");
   updateExpansionSummary();
   updateVariantSummary();
 }
@@ -2199,6 +2281,7 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
     flags,
     playerCount,
     recoveryRule: options.recoveryRule,
+    lessDeadlyGame: options.lessDeadlyGame,
     rebootTokens: options.rebootTokens,
     boardRects: options.boardRects
   });
@@ -2229,6 +2312,7 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
       playerCount,
       maxExpansions: 18000,
       recoveryRule: options.recoveryRule,
+      lessDeadlyGame: options.lessDeadlyGame,
       rebootTokens: options.rebootTokens,
       boardRects: options.boardRects
     });
@@ -2479,8 +2563,9 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     `Requested: ${scenario.preferences.playerCount} players, ${formatDifficultyLabel(scenario.preferences.difficulty)} difficulty, ${formatLengthLabel(scenario.preferences.length)} length`,
     `Layout mode: ${scenario.preferences.alignedLayout ? "aligned" : "freeform"}`,
     `Sets: ${[...getSelectedExpansionIds(scenario.preferences)].map((id) => formatExpansionName(id)).join(", ") || "none"}`,
-    `Allowed variants: ${scenario.preferences.allowedVariantRules?.dynamicArchiving ? "Dynamic Archiving" : "none"}`,
+    `Allowed variants: ${describeAllowedVariants(scenario.preferences)}`,
     `Recovery used: ${scenario.recoveryRule}`,
+    `A Less Deadly Game used: ${scenario.lessDeadlyGame ? "yes" : "no"}`,
     `Accepted after ${scenario.attempts} attempt(s)`,
     `Board count: ${scenario.boardCount}`,
     `Boards: ${scenario.mainBoardIds.map((pieceId, index) => `${pieceId}@${scenario.mainRotations[index]}`).join(", ")}`,
@@ -2618,6 +2703,7 @@ function renderScenario(scenario) {
     rebootTokens: scenario.rebootTokens,
     tileMap: scenario.goalTileMap,
     unusableStartIndices,
+    edgeOutlineColor: scenario.lessDeadlyGame ? "#f2c230" : null,
     showBoardLabels: devViewEnabled && selectedLegIndex !== null,
     showStartFacing: devViewEnabled && selectedLegIndex !== null,
     showWalls: devViewEnabled && selectedLegIndex !== null
@@ -2649,6 +2735,7 @@ function createRandomCandidate(assets, preferences, attempt = 1) {
   const availableDockIds = getAvailableDockIds(pieceMap, expansionIds);
   const dockPieceId = sample(availableDockIds);
   const recoveryRule = chooseRecoveryRule(preferences);
+  const lessDeadlyGame = chooseLessDeadlyGame(preferences);
   const dockFlipped = Math.random() < 0.5;
   const guidanceLevel = guidanceLevelForAttempt(attempt);
   const boardLayout = createBoardPlacements(pieceMap, preferences.length, preferences, guidanceLevel, expansionIds, dockPieceId);
@@ -2691,6 +2778,7 @@ function createRandomCandidate(assets, preferences, attempt = 1) {
   const goalTileMap = applyFlagOverrides(tileMap, checkpoints);
   const sequence = analyzeFlagSequence(goalTileMap, starts, checkpoints, preferences.playerCount, {
     recoveryRule,
+    lessDeadlyGame,
     rebootTokens,
     boardRects
   });
@@ -2714,6 +2802,7 @@ function createRandomCandidate(assets, preferences, attempt = 1) {
     goalTileMap,
     playerCount: preferences.playerCount,
     recoveryRule,
+    lessDeadlyGame,
     mainBoardIds: boardLayout.boardIds,
     mainRotations: boardLayout.placements.map((placement) => placement.rotation),
     boardCount: boardLayout.boardCount,
@@ -2734,6 +2823,7 @@ function serializeScenario(scenario) {
   return {
     preferences: scenario.preferences,
     recoveryRule: scenario.recoveryRule,
+    lessDeadlyGame: scenario.lessDeadlyGame,
     placements: scenario.placements,
     checkpoints: scenario.checkpoints,
     rebootTokens: scenario.rebootTokens,
@@ -2765,6 +2855,7 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
 
   const { pieceMap, imageMap } = assets;
   const recoveryRule = snapshot.recoveryRule ?? "reboot_tokens";
+  const lessDeadlyGame = Boolean(snapshot.lessDeadlyGame);
   const placements = snapshot.placements;
   const checkpoints = snapshot.checkpoints;
   const rebootTokens = snapshot.rebootTokens || [];
@@ -2784,6 +2875,7 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
   const goalTileMap = applyFlagOverrides(tileMap, checkpoints);
   const sequence = analyzeFlagSequence(goalTileMap, starts, checkpoints, snapshot.preferences.playerCount, {
     recoveryRule,
+    lessDeadlyGame,
     rebootTokens,
     boardRects
   });
@@ -2807,6 +2899,7 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     goalTileMap,
     playerCount: snapshot.preferences.playerCount,
     recoveryRule,
+    lessDeadlyGame,
     mainBoardIds: boardPlacements.map((placement) => placement.pieceId),
     mainRotations: boardPlacements.map((placement) => placement.rotation),
     boardCount: boardPlacements.length,
@@ -2906,8 +2999,12 @@ document.getElementById("dev-view").addEventListener("change", () => {
   }
 });
 
-document.getElementById("variant-dynamic-archiving").addEventListener("change", () => {
-  updateVariantSummary();
+document.getElementById("variant-dynamic-archiving").addEventListener("click", () => {
+  cycleVariantControlState("dynamicArchiving");
+});
+
+document.getElementById("variant-less-deadly-game").addEventListener("click", () => {
+  cycleVariantControlState("lessDeadlyGame");
 });
 
 document.getElementById("expansion-roborally").addEventListener("change", () => {

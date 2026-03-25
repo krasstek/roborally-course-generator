@@ -191,7 +191,7 @@ function getTilePenalty(tile) {
   return penalty;
 }
 
-function isExposedToPitOrEdge(tileMap, point, dir) {
+function isExposedToPitOrEdge(tileMap, point, dir, options = {}) {
   const fromTile = tileMap.get(tileKey(point.x, point.y));
   const next = {
     x: point.x + DIRS[dir].dx,
@@ -205,14 +205,18 @@ function isExposedToPitOrEdge(tileMap, point, dir) {
     return false;
   }
 
+  if (!toTile && options.lessDeadlyGame) {
+    return false;
+  }
+
   return !toTile || isPit(toTile);
 }
 
-function getPitPressurePenalty(tileMap, point) {
+function getPitPressurePenalty(tileMap, point, options = {}) {
   let penalty = 0;
 
   for (const dir of ROTATION_ORDER) {
-    if (!isExposedToPitOrEdge(tileMap, point, dir)) {
+    if (!isExposedToPitOrEdge(tileMap, point, dir, options)) {
       continue;
     }
 
@@ -235,18 +239,19 @@ function directionBetween(a, b) {
   return null;
 }
 
-function canMoveBetween(tileMap, from, to, dir) {
+function canMoveBetween(tileMap, from, to, dir, options = {}) {
   const fromTile = tileMap.get(tileKey(from.x, from.y));
   const toTile = tileMap.get(tileKey(to.x, to.y));
+  const lessDeadlyGame = options.lessDeadlyGame ?? false;
 
   if (!fromTile) {
-    return { ok: false, crash: EDGE_BEHAVIOR === "pit", offBoard: true };
+    return { ok: false, crash: EDGE_BEHAVIOR === "pit" && !lessDeadlyGame, offBoard: true };
   }
 
   if (!toTile) {
     return {
       ok: false,
-      crash: EDGE_BEHAVIOR === "pit",
+      crash: EDGE_BEHAVIOR === "pit" && !lessDeadlyGame,
       offBoard: true
     };
   }
@@ -456,7 +461,7 @@ function moveOneStep(tileMap, state, dir, mode, options = {}) {
     x: state.x + delta.dx,
     y: state.y + delta.dy
   };
-  const moveCheck = canMoveBetween(tileMap, state, next, dir);
+  const moveCheck = canMoveBetween(tileMap, state, next, dir, options);
 
   if (!moveCheck.ok) {
     const rebootToken = moveCheck.crash && options.recoveryRule === "reboot_tokens"
@@ -551,7 +556,7 @@ function moveOneStep(tileMap, state, dir, mode, options = {}) {
       speed: currentBelt?.speed ?? belt?.speed ?? 1,
       turned
     }] : [],
-    hazard: getTilePenalty(nextTile) + getPitPressurePenalty(tileMap, resolvedState) + (moveCheck.ledgeDamage || 0),
+    hazard: getTilePenalty(nextTile) + getPitPressurePenalty(tileMap, resolvedState, options) + (moveCheck.ledgeDamage || 0),
     rebootPenalty: 0,
     distance: 1,
     forcedDistance: mode === "belt" || mode === "oil" || mode === "push" ? 1 : 0,
@@ -1421,7 +1426,8 @@ function averageCrossLegThreat(tileMap, routes, previousLegRoutes) {
   return average(values);
 }
 
-function analyzeGoalApproaches(tileMap, goal) {
+function analyzeGoalApproaches(tileMap, goal, options = {}) {
+  const lessDeadlyGame = options.lessDeadlyGame ?? false;
   const approaches = [
     { side: "N", from: { x: goal.x, y: goal.y - 1 }, dir: "S" },
     { side: "E", from: { x: goal.x + 1, y: goal.y }, dir: "W" },
@@ -1429,7 +1435,7 @@ function analyzeGoalApproaches(tileMap, goal) {
     { side: "W", from: { x: goal.x - 1, y: goal.y }, dir: "E" }
   ].map((approach) => {
     const fromTile = tileMap.get(tileKey(approach.from.x, approach.from.y));
-    const move = canMoveBetween(tileMap, approach.from, goal, approach.dir);
+    const move = canMoveBetween(tileMap, approach.from, goal, approach.dir, options);
 
     return {
       ...approach,
@@ -1455,7 +1461,7 @@ function analyzeGoalApproaches(tileMap, goal) {
     blockedCount: blockedSides.length,
     trappedCorners,
     blockedByPit: approaches.filter((approach) => approach.pit).length,
-    blockedByVoid: approaches.filter((approach) => !approach.exists).length
+      blockedByVoid: lessDeadlyGame ? 0 : approaches.filter((approach) => !approach.exists).length
   };
 }
 
@@ -1463,7 +1469,7 @@ function scoreFlagArea(tileMap, goal, options = {}) {
   let score = 0;
   const playerCount = options.playerCount ?? 1;
   const trafficScale = playerCount <= 1 ? 0 : Math.min(1, (playerCount - 1) / 3);
-  const approaches = analyzeGoalApproaches(tileMap, goal);
+  const approaches = analyzeGoalApproaches(tileMap, goal, options);
 
   if (approaches.openCount <= 1) {
     score += 26 + trafficScale * 14;
@@ -1587,6 +1593,7 @@ export function analyzeCourse(tileMap, starts, goal, options = {}) {
       maxRoutes,
       maxExpansions: options.maxExpansions,
       recoveryRule: options.recoveryRule,
+      lessDeadlyGame: options.lessDeadlyGame,
       rebootTokens: options.rebootTokens,
       boardRects: options.boardRects
     });
@@ -1718,7 +1725,8 @@ export function analyzeCourse(tileMap, starts, goal, options = {}) {
   const overlapMean = average(overlapValues);
   const threatMean = average(threatValues);
   const flagAreaScore = scoreFlagArea(tileMap, goal, {
-    playerCount
+    playerCount,
+    lessDeadlyGame: options.lessDeadlyGame
   });
 
   const outliers = reachable
@@ -1786,6 +1794,7 @@ export function analyzeFlagLeg(tileMap, from, goal, options = {}) {
       maxRoutes: routesPerFacing,
       maxExpansions: options.maxExpansions,
       recoveryRule: options.recoveryRule,
+      lessDeadlyGame: options.lessDeadlyGame,
       rebootTokens: options.rebootTokens,
       boardRects: options.boardRects
     });

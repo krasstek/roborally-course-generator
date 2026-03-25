@@ -1,4 +1,4 @@
-import { buildResolvedMap, getBounds } from "./board.js";
+import { buildResolvedMap, getBoundaryEdges, getBounds, groupBoundaryRuns } from "./board.js";
 
 function drawGrid(ctx, bounds, tileSize, margin) {
   const width = bounds.maxX - bounds.minX + 1;
@@ -59,6 +59,24 @@ function drawFootprints(ctx, footprints, pieces, bounds, tileSize, margin) {
     ctx.fillText(label, labelX, labelY + 12);
   }
   ctx.restore();
+}
+
+function buildOutlineFootprintTiles(footprints) {
+  const tiles = new Set();
+
+  for (const footprint of footprints) {
+    if (footprint.kind === "overlay") {
+      continue;
+    }
+
+    for (let y = footprint.y; y < footprint.y + footprint.height; y += 1) {
+      for (let x = footprint.x; x < footprint.x + footprint.width; x += 1) {
+        tiles.add(`${x},${y}`);
+      }
+    }
+  }
+
+  return tiles;
 }
 
 function drawOverlayGlows(ctx, overlayPlacements, pieces, bounds, tileSize, margin, boardCount) {
@@ -319,6 +337,41 @@ function drawRoutes(ctx, analysis, bounds, tileSize, margin) {
   ctx.restore();
 }
 
+function drawBoardEdgeOutline(ctx, footprints, bounds, tileSize, margin, color = "#f2c230") {
+  const footprintTiles = buildOutlineFootprintTiles(footprints);
+  const boundaryRuns = groupBoundaryRuns(getBoundaryEdges(footprintTiles));
+
+  if (!boundaryRuns.length) {
+    return;
+  }
+
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 5;
+
+  for (const run of boundaryRuns) {
+    ctx.beginPath();
+
+    if (run.orientation === "horizontal") {
+      const y = margin + (run.line - bounds.minY) * tileSize;
+      const startX = margin + (run.start - bounds.minX) * tileSize;
+      const endX = margin + (run.end - bounds.minX) * tileSize;
+      ctx.moveTo(startX, y);
+      ctx.lineTo(endX, y);
+    } else {
+      const x = margin + (run.line - bounds.minX) * tileSize;
+      const startY = margin + (run.start - bounds.minY) * tileSize;
+      const endY = margin + (run.end - bounds.minY) * tileSize;
+      ctx.moveTo(x, startY);
+      ctx.lineTo(x, endY);
+    }
+
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
 function drawPieceImages(ctx, placements, pieces, imageMap, bounds, tileSize, margin) {
   for (const placement of placements) {
     const piece = pieces[placement.pieceId];
@@ -379,6 +432,7 @@ export function render(canvas, pieces, imageMap = {}, options = {}) {
   const showWalls = options.showWalls ?? true;
   const showPieceImages = options.showPieceImages ?? true;
   const showFootprints = options.showFootprints ?? true;
+  const edgeOutlineColor = options.edgeOutlineColor ?? null;
   const visibleFeatureTypes = options.visibleFeatureTypes
     ? new Set(options.visibleFeatureTypes)
     : null;
@@ -410,4 +464,7 @@ export function render(canvas, pieces, imageMap = {}, options = {}) {
   drawRebootTokens(ctx, options.rebootTokens || [], bounds, tileSize, margin);
   drawRoutes(ctx, options.analysis, bounds, tileSize, margin);
   drawGoals(ctx, options.goals || (options.goal ? [options.goal] : []), bounds, tileSize, margin);
+  if (edgeOutlineColor) {
+    drawBoardEdgeOutline(ctx, footprints, bounds, tileSize, margin, edgeOutlineColor);
+  }
 }
