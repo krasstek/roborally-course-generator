@@ -27,7 +27,7 @@ function drawGrid(ctx, bounds, tileSize, margin) {
   ctx.restore();
 }
 
-function drawFootprints(ctx, footprints, bounds, tileSize, margin) {
+function drawFootprints(ctx, footprints, pieces, bounds, tileSize, margin) {
   ctx.save();
   for (const fp of footprints) {
     if (fp.kind === "overlay") {
@@ -45,9 +45,18 @@ function drawFootprints(ctx, footprints, bounds, tileSize, margin) {
     ctx.lineWidth = 2;
     ctx.strokeRect(x, y, w, h);
 
-    ctx.fillStyle = "#222";
-    ctx.font = "12px sans-serif";
-    ctx.fillText(fp.id, x + 4, y + 14);
+    const piece = pieces[fp.id];
+    const label = piece?.name ?? fp.id;
+    ctx.font = "bold 14px sans-serif";
+    const textWidth = ctx.measureText(label).width;
+    const labelHeight = 18;
+    const labelX = x + 6;
+    const labelY = y + 6;
+
+    ctx.fillStyle = "rgba(17, 24, 31, 0.58)";
+    ctx.fillRect(labelX - 4, labelY - 2, textWidth + 8, labelHeight);
+    ctx.fillStyle = "rgba(248, 251, 255, 0.98)";
+    ctx.fillText(label, labelX, labelY + 12);
   }
   ctx.restore();
 }
@@ -105,7 +114,7 @@ function drawWalls(ctx, sides, x, y, tileSize) {
   ctx.restore();
 }
 
-function drawFeatures(ctx, tileMap, bounds, tileSize, margin, showLabels = true, showWalls = true) {
+function drawFeatures(ctx, tileMap, bounds, tileSize, margin, showLabels = true, showWalls = true, visibleFeatureTypes = null) {
   ctx.save();
   ctx.font = "10px monospace";
 
@@ -115,6 +124,10 @@ function drawFeatures(ctx, tileMap, bounds, tileSize, margin, showLabels = true,
 
     let line = 0;
     for (const feature of tile.features) {
+      if (visibleFeatureTypes && !visibleFeatureTypes.has(feature.type)) {
+        continue;
+      }
+
       if (feature.type === "wall") {
         if (showWalls) {
           drawWalls(ctx, feature.sides, px, py, tileSize);
@@ -139,7 +152,11 @@ function drawFeatures(ctx, tileMap, bounds, tileSize, margin, showLabels = true,
       } else if (feature.type === "checkpoint") {
         label = `cp ${feature.id}`;
       } else if (feature.type === "push") {
-        label = `push ${feature.dir ?? ""}`;
+        const timing = feature.timing?.length ? ` [${feature.timing.join(",")}]` : "";
+        label = `push ${feature.dir ?? ""}${timing}`.trim();
+      } else if (feature.type === "crusher") {
+        const timing = feature.timing?.length ? ` [${feature.timing.join(",")}]` : "";
+        label = `crusher${timing}`;
       } else if (feature.type === "portal") {
         label = `portal ${feature.id ?? ""}`.trim();
       } else if (feature.type === "oil") {
@@ -155,7 +172,11 @@ function drawFeatures(ctx, tileMap, bounds, tileSize, margin, showLabels = true,
   ctx.restore();
 }
 
-function drawStarts(ctx, starts, bounds, tileSize, margin, unusableStartIndices = new Set(), showFacing = true) {
+function drawStarts(ctx, starts, bounds, tileSize, margin, unusableStartIndices = new Set(), showFacing = true, visibleFeatureTypes = null) {
+  if (visibleFeatureTypes && !visibleFeatureTypes.has("start")) {
+    return;
+  }
+
   ctx.save();
 
   starts.forEach((s, index) => {
@@ -356,6 +377,11 @@ export function render(canvas, pieces, imageMap = {}, options = {}) {
   const showBoardLabels = options.showBoardLabels ?? true;
   const showStartFacing = options.showStartFacing ?? true;
   const showWalls = options.showWalls ?? true;
+  const showPieceImages = options.showPieceImages ?? true;
+  const showFootprints = options.showFootprints ?? true;
+  const visibleFeatureTypes = options.visibleFeatureTypes
+    ? new Set(options.visibleFeatureTypes)
+    : null;
 
   const tileSize = 40;
   const margin = 30;
@@ -371,12 +397,16 @@ export function render(canvas, pieces, imageMap = {}, options = {}) {
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  drawPieceImages(ctx, placements, pieces, imageMap, bounds, tileSize, margin);
+  if (showPieceImages) {
+    drawPieceImages(ctx, placements, pieces, imageMap, bounds, tileSize, margin);
+  }
   drawOverlayGlows(ctx, overlayPlacements, pieces, bounds, tileSize, margin, boardCount);
-  drawFootprints(ctx, footprints, bounds, tileSize, margin);
+  if (showFootprints) {
+    drawFootprints(ctx, footprints, pieces, bounds, tileSize, margin);
+  }
   drawGrid(ctx, bounds, tileSize, margin);
-  drawFeatures(ctx, tileMap, bounds, tileSize, margin, showBoardLabels, showWalls);
-  drawStarts(ctx, starts, bounds, tileSize, margin, unusableStartIndices, showStartFacing);
+  drawFeatures(ctx, tileMap, bounds, tileSize, margin, showBoardLabels, showWalls, visibleFeatureTypes);
+  drawStarts(ctx, starts, bounds, tileSize, margin, unusableStartIndices, showStartFacing, visibleFeatureTypes);
   drawRebootTokens(ctx, options.rebootTokens || [], bounds, tileSize, margin);
   drawRoutes(ctx, options.analysis, bounds, tileSize, margin);
   drawGoals(ctx, options.goals || (options.goal ? [options.goal] : []), bounds, tileSize, margin);

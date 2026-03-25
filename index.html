@@ -327,6 +327,174 @@
       letter-spacing: 0.05em;
     }
 
+    .audit-panel {
+      margin-top: 16px;
+      padding: 14px;
+      border-radius: 14px;
+      background: linear-gradient(180deg, rgba(24, 30, 36, 0.94) 0%, rgba(48, 58, 67, 0.96) 100%);
+      border: 1px solid rgba(61, 74, 85, 0.36);
+      color: #eef2f4;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    }
+
+    .audit-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: end;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+
+    .audit-title {
+      margin: 0;
+      font-size: 18px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #f5f7f8;
+    }
+
+    .audit-copy {
+      margin: 4px 0 0;
+      font-size: 13px;
+      line-height: 1.45;
+      color: rgba(232, 237, 240, 0.76);
+      max-width: 64ch;
+    }
+
+    .audit-controls {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      align-items: end;
+      margin-bottom: 12px;
+    }
+
+    .audit-controls label {
+      min-width: 220px;
+      color: rgba(227, 233, 237, 0.84);
+    }
+
+    .audit-filter-bar {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+
+    .audit-filter-button {
+      min-height: 34px;
+      padding: 6px 10px;
+      font-size: 12px;
+    }
+
+    .audit-filter-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+
+    .audit-filter-option {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: auto;
+      padding: 8px 10px;
+      border-radius: 10px;
+      background: rgba(236, 240, 242, 0.12);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      color: rgba(236, 240, 242, 0.92);
+      text-transform: none;
+      letter-spacing: 0;
+      font-size: 13px;
+    }
+
+    .audit-filter-option input {
+      width: 16px;
+      height: 16px;
+      accent-color: var(--accent);
+      flex: 0 0 auto;
+    }
+
+    .audit-boards {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .audit-card {
+      padding: 12px;
+      border-radius: 12px;
+      background: rgba(238, 242, 244, 0.98);
+      border: 1px solid rgba(66, 79, 89, 0.18);
+      color: #171d22;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.42);
+    }
+
+    .audit-card h3 {
+      margin: 0 0 8px;
+      font-size: 14px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #39444e;
+    }
+
+    .audit-canvas {
+      width: 100%;
+      max-height: 70vh;
+      object-fit: contain;
+    }
+
+    .audit-meta {
+      margin-top: 12px;
+      display: grid;
+      grid-template-columns: minmax(220px, 0.9fr) minmax(0, 1.1fr);
+      gap: 12px;
+    }
+
+    .audit-readout {
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: rgba(243, 246, 248, 0.98);
+      border: 1px solid rgba(66, 79, 89, 0.14);
+      color: #20282e;
+      font-size: 13px;
+      line-height: 1.5;
+      min-height: 110px;
+    }
+
+    .audit-readout strong {
+      display: block;
+      margin-bottom: 4px;
+      color: #39444e;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      font-size: 11px;
+    }
+
+    .audit-notes {
+      display: grid;
+      gap: 8px;
+    }
+
+    .audit-notes label {
+      min-width: auto;
+      color: #20282e;
+    }
+
+    .audit-notes textarea {
+      min-height: 110px;
+      resize: vertical;
+      border-radius: 10px;
+      border: 1px solid rgba(66, 79, 89, 0.2);
+      padding: 10px 12px;
+      font: 13px/1.45 "Trebuchet MS", Verdana, sans-serif;
+      color: #171d22;
+      background: rgba(255, 255, 255, 0.98);
+    }
+
     .overlay {
       position: absolute;
       inset: 0;
@@ -418,6 +586,11 @@
       .app-shell {
         grid-template-columns: 1fr;
       }
+
+      .audit-boards,
+      .audit-meta {
+        grid-template-columns: 1fr;
+      }
     }
   </style>
 </head>
@@ -472,6 +645,10 @@
                 <input id="expansion-thrills-and-spills" type="checkbox" />
                 Thrills &amp; Spills
               </label>
+              <label class="variant-option">
+                <input id="expansion-wet-and-wild" type="checkbox" />
+                Wet &amp; Wild
+              </label>
             </div>
           </details>
         </label>
@@ -486,6 +663,10 @@
               </label>
             </div>
           </details>
+        </label>
+        <label class="toggle-label">
+          <input id="aligned-layout" type="checkbox" />
+          Aligned Layout
         </label>
         <label id="trace-leg-label" class="hidden">
           Trace leg
@@ -520,6 +701,45 @@
         <span id="legend-reboot-token" class="pill hidden">Green marker: reboot token</span>
       </div>
       <p id="rules-note" class="rules-note hidden">Ruleset: RoboRally 2023. Reminder: on checkpoint spaces, only walls and lasers stay active; other board elements on that space do not (Game Guide p. 15).</p>
+      <section id="board-audit-panel" class="audit-panel hidden">
+        <div class="audit-header">
+          <div>
+            <h2 class="audit-title">Board Audit</h2>
+            <p class="audit-copy">Compare a source board image against its encoded JSON. Hover either pane to inspect the same tile on both sides and leave local feedback notes.</p>
+          </div>
+        </div>
+        <div class="audit-controls">
+          <label>
+            Board
+            <select id="audit-board-select"></select>
+          </label>
+        </div>
+        <div class="audit-filter-bar">
+          <button id="audit-filter-all" type="button" class="audit-filter-button">All Features</button>
+          <button id="audit-filter-none" type="button" class="audit-filter-button">Clear All</button>
+        </div>
+        <div id="audit-feature-filters" class="audit-filter-grid"></div>
+        <div class="audit-boards">
+          <div class="audit-card">
+            <h3>Source Image</h3>
+            <canvas id="audit-image-canvas" class="audit-canvas"></canvas>
+          </div>
+          <div class="audit-card">
+            <h3>Encoded JSON</h3>
+            <canvas id="audit-json-canvas" class="audit-canvas"></canvas>
+          </div>
+        </div>
+        <div class="audit-meta">
+          <div id="audit-readout" class="audit-readout">
+            <strong>Tile Readout</strong>
+            Select a board to inspect.
+          </div>
+          <div class="audit-notes">
+            <label for="audit-feedback">Feedback notes</label>
+            <textarea id="audit-feedback" placeholder="Example: Tile (5,7) north wall seems missing; compare against printed board."></textarea>
+          </div>
+        </div>
+      </section>
       <div id="generating-overlay" class="overlay visible" aria-live="polite" aria-busy="true">
         <div class="overlay-card">
           <h2 class="overlay-title">Generating Course</h2>

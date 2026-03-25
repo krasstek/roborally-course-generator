@@ -1,10 +1,10 @@
 {
   "id": "coliseum",
   "name": "Coliseum",
+  "kind": "base",
   "expansionId": "wet-and-wild",
   "physicalBoardId": "transition-coliseum",
   "image": "./assets/boards/coliseum.jpg",
-  "kind": "base",
   "width": 12,
   "height": 12,
   "mergeMode": "base",
@@ -143,6 +143,30 @@
       ]
     },
     {
+      "x": 3,
+      "y": 1,
+      "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 1,
+      "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "S"
+          ]
+        }
+      ]
+    },
+    {
       "x": 5,
       "y": 1,
       "features": [
@@ -150,6 +174,18 @@
           "type": "laser",
           "dir": "E",
           "damage": 1
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "W"
+          ]
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "S"
+          ]
         }
       ]
     },
@@ -166,6 +202,36 @@
           "type": "wall",
           "sides": [
             "E"
+          ]
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 1,
+      "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 1,
+      "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "S"
           ]
         }
       ]
@@ -215,6 +281,14 @@
           "type": "belt",
           "dir": "E",
           "speed": 1
+        },
+        {
+          "type": "ramp",
+          "dir": "N"
+        },
+        {
+          "type": "ramp",
+          "dir": "W"
         }
       ]
     },
@@ -292,6 +366,14 @@
           "type": "belt",
           "dir": "S",
           "speed": 1
+        },
+        {
+          "type": "ramp",
+          "dir": "N"
+        },
+        {
+          "type": "ramp",
+          "dir": "E"
         }
       ]
     },
@@ -301,6 +383,18 @@
       "features": [
         {
           "type": "wall",
+          "sides": [
+            "E"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 3,
+      "features": [
+        {
+          "type": "ledge",
           "sides": [
             "E"
           ]
@@ -351,9 +445,20 @@
       "y": 3,
       "features": [
         {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        },
+        {
           "type": "laser",
           "dir": "W",
           "damage": 1
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "S"
+          ]
         }
       ]
     },
@@ -362,9 +467,20 @@
       "y": 3,
       "features": [
         {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        },
+        {
           "type": "laser",
           "dir": "W",
           "damage": 1
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "S"
+          ]
         }
       ]
     },
@@ -373,9 +489,20 @@
       "y": 3,
       "features": [
         {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        },
+        {
           "type": "laser",
           "dir": "W",
           "damage": 1
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "S"
+          ]
         }
       ]
     },
@@ -384,9 +511,20 @@
       "y": 3,
       "features": [
         {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        },
+        {
           "type": "laser",
           "dir": "W",
           "damage": 1
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "S"
+          ]
         }
       ]
     },
@@ -394,6 +532,11 @@
       "x": 8,
       "y": 3,
       "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        },
         {
           "type": "laser",
           "dir": "W",
@@ -424,6 +567,12 @@
       "features": [
         {
           "type": "pit"
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "W"
+          ]
         }
       ]
     },
@@ -435,6 +584,18 @@
           "type": "wall",
           "sides": [
             "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 4,
+      "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "E"
           ]
         }
       ]
@@ -463,6 +624,24 @@
           "type": "laser",
           "dir": "S",
           "damage": 1
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "E"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 4,
+      "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "S"
+          ]
         }
       ]
     },
@@ -474,6 +653,12 @@
           "type": "belt",
           "dir": "S",
           "speed": 1
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "S"
+          ]
         }
       ]
     },
@@ -496,6 +681,12 @@
           "type": "belt",
           "dir": "N",
           "speed": 1
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "W"
+          ]
         }
       ]
     },
@@ -516,6 +707,12 @@
       "features": [
         {
           "type": "pit"
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "W"
+          ]
         }
       ]
     },
@@ -550,6 +747,12 @@
           "type": "belt",
           "dir": "S",
           "speed": 1
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "E"
+          ]
         }
       ]
     },
@@ -577,6 +780,12 @@
           "type": "laser",
           "dir": "S",
           "damage": 1
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "E"
+          ]
         }
       ]
     },
@@ -586,10 +795,13 @@
       "features": [
         {
           "type": "crusher",
-          "dir": "N",
           "timing": [
             3
           ]
+        },
+        {
+          "type": "ramp",
+          "dir": "W"
         }
       ]
     },
@@ -611,6 +823,16 @@
           "sides": [
             "W"
           ]
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "W"
+          ]
+        },
+        {
+          "type": "ramp",
+          "dir": "E"
         }
       ]
     },
@@ -644,6 +866,12 @@
           "type": "belt",
           "dir": "S",
           "speed": 1
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "W"
+          ]
         }
       ]
     },
@@ -677,6 +905,12 @@
           "type": "belt",
           "dir": "E",
           "speed": 1
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "E"
+          ]
         }
       ]
     },
@@ -716,6 +950,16 @@
           "sides": [
             "E"
           ]
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "E"
+          ]
+        },
+        {
+          "type": "ramp",
+          "dir": "W"
         }
       ]
     },
@@ -725,10 +969,13 @@
       "features": [
         {
           "type": "crusher",
-          "dir": "N",
           "timing": [
             2
           ]
+        },
+        {
+          "type": "ramp",
+          "dir": "E"
         }
       ]
     },
@@ -740,6 +987,12 @@
           "type": "belt",
           "dir": "N",
           "speed": 1
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "W"
+          ]
         }
       ]
     },
@@ -762,6 +1015,12 @@
           "type": "belt",
           "dir": "W",
           "speed": 1
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "W"
+          ]
         }
       ]
     },
@@ -784,6 +1043,18 @@
           "type": "wall",
           "sides": [
             "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 7,
+      "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "E"
           ]
         }
       ]
@@ -812,6 +1083,12 @@
           "type": "laser",
           "dir": "S",
           "damage": 1
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "E"
+          ]
         }
       ]
     },
@@ -834,6 +1111,24 @@
           "type": "belt",
           "dir": "N",
           "speed": 1
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "N"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 7,
+      "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "N"
+          ]
         }
       ]
     },
@@ -854,6 +1149,12 @@
           "type": "belt",
           "dir": "N",
           "speed": 1
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "W"
+          ]
         }
       ]
     },
@@ -869,11 +1170,35 @@
       ]
     },
     {
+      "x": 10,
+      "y": 7,
+      "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "W"
+          ]
+        }
+      ]
+    },
+    {
       "x": 11,
       "y": 7,
       "features": [
         {
           "type": "wall",
+          "sides": [
+            "E"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 8,
+      "features": [
+        {
+          "type": "ledge",
           "sides": [
             "E"
           ]
@@ -921,6 +1246,12 @@
           "type": "belt",
           "dir": "E",
           "speed": 1
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "N"
+          ]
         }
       ]
     },
@@ -932,6 +1263,12 @@
           "type": "belt",
           "dir": "E",
           "speed": 1
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "N"
+          ]
         }
       ]
     },
@@ -943,6 +1280,12 @@
           "type": "belt",
           "dir": "E",
           "speed": 1
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "N"
+          ]
         }
       ]
     },
@@ -954,6 +1297,12 @@
           "type": "belt",
           "dir": "E",
           "speed": 1
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "N"
+          ]
         }
       ]
     },
@@ -980,6 +1329,18 @@
       ]
     },
     {
+      "x": 10,
+      "y": 8,
+      "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "W"
+          ]
+        }
+      ]
+    },
+    {
       "x": 0,
       "y": 9,
       "features": [
@@ -999,6 +1360,14 @@
           "type": "belt",
           "dir": "N",
           "speed": 1
+        },
+        {
+          "type": "ramp",
+          "dir": "W"
+        },
+        {
+          "type": "ramp",
+          "dir": "S"
         }
       ]
     },
@@ -1076,6 +1445,14 @@
           "type": "belt",
           "dir": "W",
           "speed": 1
+        },
+        {
+          "type": "ramp",
+          "dir": "E"
+        },
+        {
+          "type": "ramp",
+          "dir": "S"
         }
       ]
     },
@@ -1132,6 +1509,12 @@
           "type": "belt",
           "dir": "E",
           "speed": 1
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "N"
+          ]
         }
       ]
     },
@@ -1143,6 +1526,12 @@
           "type": "belt",
           "dir": "E",
           "speed": 1
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "N"
+          ]
         }
       ]
     },
@@ -1154,6 +1543,12 @@
           "type": "belt",
           "dir": "S",
           "speed": 1
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "N"
+          ]
         }
       ]
     },
@@ -1163,6 +1558,36 @@
       "features": [
         {
           "type": "pit"
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "N"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 10,
+      "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "N"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 10,
+      "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "N"
+          ]
         }
       ]
     },
