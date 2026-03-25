@@ -558,7 +558,7 @@
         case "flamethrower":
           return a.dir === b.dir && sameArray(a.timing || [], b.timing || []);
         case "crusher":
-          return a.dir === b.dir && sameArray(a.timing || [], b.timing || []);
+          return sameArray(a.timing || [], b.timing || []);
         case "checkpoint":
         case "portal":
           return a.id === b.id;
@@ -679,7 +679,7 @@
         case "flamethrower":
           return { type: "flamethrower", dir, timing: pushTiming };
         case "crusher":
-          return { type: "crusher", dir, timing: pushTiming };
+          return { type: "crusher", timing: pushTiming };
         case "portal":
           return { type: "portal", id: featureId || "1" };
         case "teleporter":
@@ -914,7 +914,7 @@
           ctx.fillText(`F ${f.dir}`, left + 4, textY);
           textY += 12;
         } else if (f.type === "crusher") {
-          ctx.fillText(`Cr ${f.dir}`, left + 4, textY);
+          ctx.fillText(`Cr ${(f.timing || []).join("/") || "-"}`, left + 4, textY);
           textY += 12;
         } else if (f.type === "portal") {
           ctx.fillText(`Po${f.id}`, left + 4, textY);
@@ -1033,7 +1033,7 @@
         case "flamethrower":
           return `flamethrower dir=${feature.dir} timing=${(feature.timing || []).join(",")}`;
         case "crusher":
-          return `crusher dir=${feature.dir} timing=${(feature.timing || []).join(",")}`;
+          return `crusher timing=${(feature.timing || []).join(",")}`;
         case "portal":
           return `portal id=${feature.id}`;
         case "teleporter":

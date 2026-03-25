@@ -1,3 +1,9 @@
+const ASSET_VERSION = new URL(import.meta.url).searchParams.get("v") ?? "";
+const VERSION_SUFFIX = ASSET_VERSION ? `?v=${encodeURIComponent(ASSET_VERSION)}` : "";
+const versionedPath = (path) => `${path}${VERSION_SUFFIX}`;
+
+const { rotatedDimensions } = await import(versionedPath("./board.js"));
+
 const DIRS = {
   N: { dx: 0, dy: -1 },
   E: { dx: 1, dy: 0 },
@@ -67,8 +73,32 @@ function getBelt(tile) {
   return (tile?.features || []).find((feature) => feature.type === "belt") ?? null;
 }
 
+function getRamps(tile) {
+  return (tile?.features || []).filter((feature) => feature.type === "ramp");
+}
+
 function getGear(tile) {
   return (tile?.features || []).find((feature) => feature.type === "gear") ?? null;
+}
+
+function getPushes(tile) {
+  const pushes = [];
+  const seen = new Set();
+
+  for (const feature of tile?.features || []) {
+    if (feature.type !== "push" || !feature.dir || seen.has(feature.dir)) {
+      continue;
+    }
+
+    pushes.push(feature);
+    seen.add(feature.dir);
+  }
+
+  return pushes;
+}
+
+function hasCrusher(tile) {
+  return (tile?.features || []).some((feature) => feature.type === "crusher");
 }
 
 function getPortal(tile) {
@@ -79,8 +109,29 @@ function isOil(tile) {
   return (tile?.features || []).some((feature) => feature.type === "oil");
 }
 
+function isWater(tile) {
+  return (tile?.features || []).some((feature) => feature.type === "water");
+}
+
 function isPit(tile) {
   return (tile?.features || []).some((feature) => feature.type === "pit");
+}
+
+function getLedgeSides(tile) {
+  const sides = new Set();
+
+  for (const feature of tile?.features || []) {
+    if (feature.type !== "ledge") continue;
+    for (const side of feature.sides || []) {
+      sides.add(side);
+    }
+  }
+
+  return sides;
+}
+
+function hasRampForDir(tile, dir) {
+  return getRamps(tile).some((feature) => feature.dir === dir);
 }
 
 function buildPortalMap(tileMap) {
@@ -133,18 +184,24 @@ function getTilePenalty(tile) {
     } else if (feature.type === "gear") {
       penalty += 1.5;
     } else if (feature.type === "portal") {
-      penalty += 0.4;
+      penalty += 1.2;
     } else if (feature.type === "oil") {
       penalty += 2.8;
     } else if (feature.type === "battery") {
       penalty -= 2;
+    } else if (feature.type === "ledge") {
+      penalty += 0.8;
+    } else if (feature.type === "ramp") {
+      penalty += 0.35;
+    } else if (feature.type === "crusher") {
+      penalty += 6;
     }
   }
 
   return penalty;
 }
 
-function isExposedToPitOrEdge(tileMap, point, dir) {
+function isExposedToPitOrEdge(tileMap, point, dir, options = {}) {
   const fromTile = tileMap.get(tileKey(point.x, point.y));
   const next = {
     x: point.x + DIRS[dir].dx,
@@ -158,14 +215,18 @@ function isExposedToPitOrEdge(tileMap, point, dir) {
     return false;
   }
 
+  if (!toTile && options.lessDeadlyGame) {
+    return false;
+  }
+
   return !toTile || isPit(toTile);
 }
 
-function getPitPressurePenalty(tileMap, point) {
+function getPitPressurePenalty(tileMap, point, options = {}) {
   let penalty = 0;
 
   for (const dir of ROTATION_ORDER) {
-    if (!isExposedToPitOrEdge(tileMap, point, dir)) {
+    if (!isExposedToPitOrEdge(tileMap, point, dir, options)) {
       continue;
     }
 
@@ -188,26 +249,38 @@ function directionBetween(a, b) {
   return null;
 }
 
-function canMoveBetween(tileMap, from, to, dir) {
+function canMoveBetween(tileMap, from, to, dir, options = {}) {
   const fromTile = tileMap.get(tileKey(from.x, from.y));
-  const toTile = tileMap.get(tileKey(to.x, to.y));
+  const lessDeadlyGame = options.lessDeadlyGame ?? false;
 
   if (!fromTile) {
-    return { ok: false, crash: EDGE_BEHAVIOR === "pit", offBoard: true };
+    return { ok: false, crash: EDGE_BEHAVIOR === "pit" && !lessDeadlyGame, offBoard: true };
   }
+
+  const fromWalls = getWalls(fromTile);
+  if (fromWalls.has(dir)) {
+    return { ok: false, crash: false, offBoard: false };
+  }
+
+  const toTile = tileMap.get(tileKey(to.x, to.y));
 
   if (!toTile) {
     return {
       ok: false,
-      crash: EDGE_BEHAVIOR === "pit",
+      crash: EDGE_BEHAVIOR === "pit" && !lessDeadlyGame,
       offBoard: true
     };
   }
 
-  const fromWalls = getWalls(fromTile);
   const toWalls = getWalls(toTile);
+  const fromLedges = getLedgeSides(fromTile);
+  const toLedges = getLedgeSides(toTile);
 
   if (fromWalls.has(dir) || toWalls.has(OPPOSITE[dir])) {
+    return { ok: false, crash: false, offBoard: false };
+  }
+
+  if (toLedges.has(OPPOSITE[dir]) && !hasRampForDir(toTile, OPPOSITE[dir])) {
     return { ok: false, crash: false, offBoard: false };
   }
 
@@ -215,7 +288,12 @@ function canMoveBetween(tileMap, from, to, dir) {
     return { ok: false, crash: true, offBoard: false };
   }
 
-  return { ok: true, crash: false, offBoard: false };
+  return {
+    ok: true,
+    crash: false,
+    offBoard: false,
+    ledgeDamage: fromLedges.has(dir) ? 1 : 0
+  };
 }
 
 function resolvePortalDestination(tileMap, point, portalMap) {
@@ -367,13 +445,38 @@ function applyEndOfStepRotation(tileMap, state) {
   };
 }
 
+function applyRampCost(tileMap, state, dir, mode) {
+  if (mode !== "manual") {
+    return false;
+  }
+
+  const tile = tileMap.get(tileKey(state.x, state.y));
+  return hasRampForDir(tile, dir);
+}
+
 function moveOneStep(tileMap, state, dir, mode, options = {}) {
+  if (applyRampCost(tileMap, state, dir, mode)) {
+    return {
+      state: cloneState(state),
+      blocked: false,
+      crashed: false,
+      rebooted: false,
+      traversed: [],
+      conveyorSteps: [],
+      hazard: 0,
+      rebootPenalty: 0,
+      distance: 0,
+      forcedDistance: 0,
+      spentMove: true
+    };
+  }
+
   const delta = DIRS[dir];
   const next = {
     x: state.x + delta.dx,
     y: state.y + delta.dy
   };
-  const moveCheck = canMoveBetween(tileMap, state, next, dir);
+  const moveCheck = canMoveBetween(tileMap, state, next, dir, options);
 
   if (!moveCheck.ok) {
     const rebootToken = moveCheck.crash && options.recoveryRule === "reboot_tokens"
@@ -404,7 +507,8 @@ function moveOneStep(tileMap, state, dir, mode, options = {}) {
         hazard: REBOOT_DAMAGE_PENALTY,
         rebootPenalty: REBOOT_TEMPO_PENALTY,
         distance: 1,
-        forcedDistance: mode === "belt" ? 1 : 0
+        forcedDistance: mode === "belt" || mode === "push" ? 1 : 0,
+        spentMove: true
       };
     }
 
@@ -418,7 +522,8 @@ function moveOneStep(tileMap, state, dir, mode, options = {}) {
       hazard: moveCheck.crash ? 25 : 0,
       rebootPenalty: 0,
       distance: moveCheck.crash ? 1 : 0,
-      forcedDistance: mode === "belt" && moveCheck.crash ? 1 : 0
+      forcedDistance: (mode === "belt" || mode === "push") && moveCheck.crash ? 1 : 0,
+      spentMove: true
     };
   }
 
@@ -466,10 +571,11 @@ function moveOneStep(tileMap, state, dir, mode, options = {}) {
       speed: currentBelt?.speed ?? belt?.speed ?? 1,
       turned
     }] : [],
-    hazard: getTilePenalty(nextTile) + getPitPressurePenalty(tileMap, resolvedState),
+    hazard: getTilePenalty(nextTile) + getPitPressurePenalty(tileMap, resolvedState, options) + (moveCheck.ledgeDamage || 0),
     rebootPenalty: 0,
     distance: 1,
-    forcedDistance: mode === "belt" || mode === "oil" ? 1 : 0
+    forcedDistance: mode === "belt" || mode === "oil" || mode === "push" ? 1 : 0,
+    spentMove: true
   };
 
   if (mode !== "oil" && isOil(tileMap.get(tileKey(resolvedState.x, resolvedState.y)))) {
@@ -540,6 +646,129 @@ function resolveConveyorPhase(tileMap, state, eligibleSpeed, options = {}) {
   };
 }
 
+function resolvePushPhase(tileMap, state, options = {}) {
+  const tile = tileMap.get(tileKey(state.x, state.y));
+  const pushes = getPushes(tile);
+
+  if (!pushes.length) {
+    return {
+      state: cloneState(state),
+      traversed: [],
+      conveyorSteps: [],
+      hazard: 0,
+      rebootPenalty: 0,
+      distance: 0,
+      forcedDistance: 0,
+      crashed: false,
+      rebooted: false
+    };
+  }
+
+  const workingState = cloneState(state);
+  const traversed = [];
+  let hazard = 0;
+  let rebootPenalty = 0;
+  let distance = 0;
+  let forcedDistance = 0;
+
+  for (const push of pushes) {
+    const step = moveOneStep(tileMap, workingState, push.dir, "push", options);
+    traversed.push(...step.traversed);
+    hazard += step.hazard;
+    rebootPenalty += step.rebootPenalty || 0;
+    distance += step.distance;
+    forcedDistance += step.forcedDistance;
+
+    if (step.crashed || step.blocked || step.rebooted) {
+      return {
+        state: step.state,
+        rebootChoices: step.rebootChoices,
+        traversed,
+        conveyorSteps: [],
+        hazard,
+        rebootPenalty,
+        distance,
+        forcedDistance,
+        crashed: step.crashed,
+        rebooted: step.rebooted
+      };
+    }
+
+    workingState.x = step.state.x;
+    workingState.y = step.state.y;
+    workingState.facing = step.state.facing;
+  }
+
+  return {
+    state: workingState,
+    traversed,
+    conveyorSteps: [],
+    hazard,
+    rebootPenalty,
+    distance,
+    forcedDistance,
+    crashed: false,
+    rebooted: false
+  };
+}
+
+function resolveCrusherPhase(tileMap, state, options = {}) {
+  const tile = tileMap.get(tileKey(state.x, state.y));
+
+  if (!hasCrusher(tile)) {
+    return {
+      state: cloneState(state),
+      traversed: [],
+      conveyorSteps: [],
+      hazard: 0,
+      rebootPenalty: 0,
+      distance: 0,
+      forcedDistance: 0,
+      crashed: false,
+      rebooted: false
+    };
+  }
+
+  const rebootToken = options.recoveryRule === "reboot_tokens"
+    ? getRebootTokenForPoint(state, options.boardRects, options.rebootTokens)
+    : null;
+
+  if (rebootToken) {
+    return {
+      state: {
+        x: rebootToken.x,
+        y: rebootToken.y,
+        facing: state.facing
+      },
+      rebootChoices: ROTATION_ORDER.map((facing) => ({
+        x: rebootToken.x,
+        y: rebootToken.y,
+        facing
+      })),
+      traversed: [{ x: state.x, y: state.y }],
+      conveyorSteps: [],
+      hazard: REBOOT_DAMAGE_PENALTY,
+      rebootPenalty: REBOOT_TEMPO_PENALTY,
+      distance: 0,
+      forcedDistance: 0,
+      crashed: false,
+      rebooted: true
+    };
+  }
+
+  return {
+    state: cloneState(state),
+    traversed: [{ x: state.x, y: state.y }],
+    conveyorSteps: [],
+    hazard: 25,
+    rebootPenalty: 0,
+    distance: 0,
+    forcedDistance: 0,
+    crashed: true,
+    rebooted: false
+  };
+}
+
 function simulateAction(tileMap, startState, action, options = {}) {
   const state = cloneState(startState);
   const traversed = [];
@@ -558,9 +787,11 @@ function simulateAction(tileMap, startState, action, options = {}) {
   } else if (action.type === "move") {
     const startTile = tileMap.get(tileKey(state.x, state.y));
     const onOil = isOil(startTile);
-    const reducedSteps = onOil && action.relative === "forward"
-      ? Math.max(0, (action.steps ?? 1) - 1)
-      : action.steps ?? 1;
+    const onWater = isWater(startTile);
+    const movementPenalty = action.relative === "forward"
+      ? (onOil ? 1 : 0) + (onWater ? 1 : 0)
+      : 0;
+    const reducedSteps = Math.max(0, (action.steps ?? 1) - movementPenalty);
     const steps = reducedSteps;
 
     for (let index = 0; index < steps; index += 1) {
@@ -569,6 +800,7 @@ function simulateAction(tileMap, startState, action, options = {}) {
       hazard += step.hazard;
       rebootPenalty += step.rebootPenalty || 0;
       distance += step.distance;
+      forcedDistance += step.forcedDistance || 0;
 
       if (step.crashed || step.blocked || step.rebooted) {
         return {
@@ -622,6 +854,36 @@ function simulateAction(tileMap, startState, action, options = {}) {
     state.x = green.state.x;
     state.y = green.state.y;
     state.facing = green.state.facing;
+  }
+
+  if (!crashed && !rebooted) {
+    const pushed = resolvePushPhase(tileMap, state, options);
+    traversed.push(...pushed.traversed);
+    hazard += pushed.hazard;
+    rebootPenalty += pushed.rebootPenalty || 0;
+    distance += pushed.distance;
+    forcedDistance += pushed.forcedDistance;
+    crashed = pushed.crashed;
+    rebooted = pushed.rebooted;
+    rebootChoices = pushed.rebootChoices ?? rebootChoices;
+    state.x = pushed.state.x;
+    state.y = pushed.state.y;
+    state.facing = pushed.state.facing;
+  }
+
+  if (!crashed && !rebooted) {
+    const crushed = resolveCrusherPhase(tileMap, state, options);
+    traversed.push(...crushed.traversed);
+    hazard += crushed.hazard;
+    rebootPenalty += crushed.rebootPenalty || 0;
+    distance += crushed.distance;
+    forcedDistance += crushed.forcedDistance;
+    crashed = crushed.crashed;
+    rebooted = crushed.rebooted;
+    rebootChoices = crushed.rebootChoices ?? rebootChoices;
+    state.x = crushed.state.x;
+    state.y = crushed.state.y;
+    state.facing = crushed.state.facing;
   }
 
   if (!crashed && !rebooted) {
@@ -1181,7 +1443,8 @@ function averageCrossLegThreat(tileMap, routes, previousLegRoutes) {
   return average(values);
 }
 
-function analyzeGoalApproaches(tileMap, goal) {
+function analyzeGoalApproaches(tileMap, goal, options = {}) {
+  const lessDeadlyGame = options.lessDeadlyGame ?? false;
   const approaches = [
     { side: "N", from: { x: goal.x, y: goal.y - 1 }, dir: "S" },
     { side: "E", from: { x: goal.x + 1, y: goal.y }, dir: "W" },
@@ -1189,7 +1452,7 @@ function analyzeGoalApproaches(tileMap, goal) {
     { side: "W", from: { x: goal.x - 1, y: goal.y }, dir: "E" }
   ].map((approach) => {
     const fromTile = tileMap.get(tileKey(approach.from.x, approach.from.y));
-    const move = canMoveBetween(tileMap, approach.from, goal, approach.dir);
+    const move = canMoveBetween(tileMap, approach.from, goal, approach.dir, options);
 
     return {
       ...approach,
@@ -1215,7 +1478,7 @@ function analyzeGoalApproaches(tileMap, goal) {
     blockedCount: blockedSides.length,
     trappedCorners,
     blockedByPit: approaches.filter((approach) => approach.pit).length,
-    blockedByVoid: approaches.filter((approach) => !approach.exists).length
+      blockedByVoid: lessDeadlyGame ? 0 : approaches.filter((approach) => !approach.exists).length
   };
 }
 
@@ -1223,7 +1486,7 @@ function scoreFlagArea(tileMap, goal, options = {}) {
   let score = 0;
   const playerCount = options.playerCount ?? 1;
   const trafficScale = playerCount <= 1 ? 0 : Math.min(1, (playerCount - 1) / 3);
-  const approaches = analyzeGoalApproaches(tileMap, goal);
+  const approaches = analyzeGoalApproaches(tileMap, goal, options);
 
   if (approaches.openCount <= 1) {
     score += 26 + trafficScale * 14;
@@ -1258,6 +1521,8 @@ function scoreFlagArea(tileMap, goal, options = {}) {
           score += 4 * proximityWeight;
         } else if (feature.type === "push") {
           score += 2.5 * proximityWeight;
+        } else if (feature.type === "crusher") {
+          score += 3.25 * proximityWeight;
         } else if (feature.type === "belt") {
           score += (feature.speed === 2 ? 2 : 1.25) * proximityWeight;
         } else if (feature.type === "gear") {
@@ -1266,6 +1531,10 @@ function scoreFlagArea(tileMap, goal, options = {}) {
           score += 0.75 * proximityWeight;
         } else if (feature.type === "oil") {
           score += 2.2 * proximityWeight;
+        } else if (feature.type === "ledge") {
+          score += 1.35 * proximityWeight;
+        } else if (feature.type === "ramp") {
+          score += 0.75 * proximityWeight;
         } else if (feature.type === "battery") {
           score -= 2 * proximityWeight;
         }
@@ -1341,6 +1610,7 @@ export function analyzeCourse(tileMap, starts, goal, options = {}) {
       maxRoutes,
       maxExpansions: options.maxExpansions,
       recoveryRule: options.recoveryRule,
+      lessDeadlyGame: options.lessDeadlyGame,
       rebootTokens: options.rebootTokens,
       boardRects: options.boardRects
     });
@@ -1395,6 +1665,7 @@ export function analyzeCourse(tileMap, starts, goal, options = {}) {
   const reachable = startAnalyses.filter((item) => item.reachable && item.selectedRoute);
   let activeIndices = new Set(reachable.map((item) => item.index));
   let outlierSet = new Set();
+  const outlierDiagnostics = new Map();
   let activeReachable = reachable;
   let scoreMean = average(activeReachable.map((item) => item.adjustedScore));
   let scoreStdDev = stdDev(activeReachable.map((item) => item.adjustedScore));
@@ -1438,15 +1709,35 @@ export function analyzeCourse(tileMap, starts, goal, options = {}) {
     actionStdDev = stdDev(actions);
     const minActions = actions.length ? Math.min(...actions) : 0;
 
-    const nextOutlierSet = new Set(activeReachable
+    const passOutlierSet = new Set(activeReachable
       .filter((item) => {
-        const scoreOutlier = Math.abs(item.adjustedScore - scoreMean) > Math.max(5, scoreStdDev * 1.25);
-        const actionOutlier = item.bestActions - actionMean > Math.max(2, actionStdDev * 1.1);
-        const severeActionGap = item.bestActions - minActions >= 4;
+        const scoreThreshold = Math.max(8, scoreStdDev * 1.6);
+        const actionThreshold = Math.max(2, actionStdDev * 1.05);
+        const scoreGap = Math.abs(item.adjustedScore - scoreMean);
+        const actionGap = item.bestActions - actionMean;
+        const minActionGap = item.bestActions - minActions;
+        const scoreOutlier = scoreGap > scoreThreshold;
+        const actionOutlier = actionGap > actionThreshold;
+        const severeActionGap = minActionGap >= 4;
+        const flagged = scoreOutlier || (actionOutlier && severeActionGap);
 
-        return scoreOutlier || (actionOutlier && severeActionGap);
+        if (flagged) {
+          outlierDiagnostics.set(item.index, {
+            scoreOutlier,
+            actionOutlier,
+            severeActionGap,
+            scoreGap: Number(scoreGap.toFixed(2)),
+            scoreThreshold: Number(scoreThreshold.toFixed(2)),
+            actionGap: Number(actionGap.toFixed(2)),
+            actionThreshold: Number(actionThreshold.toFixed(2)),
+            minActionGap: Number(minActionGap.toFixed(2))
+          });
+        }
+
+        return flagged;
       })
       .map((item) => item.index));
+    const nextOutlierSet = new Set([...outlierSet, ...passOutlierSet]);
 
     if (sameSet(nextOutlierSet, outlierSet)) {
       outlierSet = nextOutlierSet;
@@ -1472,7 +1763,8 @@ export function analyzeCourse(tileMap, starts, goal, options = {}) {
   const overlapMean = average(overlapValues);
   const threatMean = average(threatValues);
   const flagAreaScore = scoreFlagArea(tileMap, goal, {
-    playerCount
+    playerCount,
+    lessDeadlyGame: options.lessDeadlyGame
   });
 
   const outliers = reachable
@@ -1481,7 +1773,8 @@ export function analyzeCourse(tileMap, starts, goal, options = {}) {
       index: item.index,
       score: item.adjustedScore,
       delta: Number((item.adjustedScore - scoreMean).toFixed(2)),
-      actionDelta: Number((item.bestActions - actionMean).toFixed(2))
+      actionDelta: Number((item.bestActions - actionMean).toFixed(2)),
+      reasons: outlierDiagnostics.get(item.index) ?? null
     }));
 
   const difficultyScore = Number(scoreMean.toFixed(2));
@@ -1540,6 +1833,7 @@ export function analyzeFlagLeg(tileMap, from, goal, options = {}) {
       maxRoutes: routesPerFacing,
       maxExpansions: options.maxExpansions,
       recoveryRule: options.recoveryRule,
+      lessDeadlyGame: options.lessDeadlyGame,
       rebootTokens: options.rebootTokens,
       boardRects: options.boardRects
     });

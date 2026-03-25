@@ -1,17 +1,27 @@
-import { render } from "./render.js";
-import { analyzeCourse, analyzeFlagLeg } from "./analyze.js";
-import {
-  buildMainFootprintTiles,
-  buildResolvedMap,
-  getBoundaryEdges,
-  getValidDockRuns,
-  groupBoundaryRuns,
-  placePiece,
-  projectDockPlacement,
-  rotatedDimensions,
-  validateDockPlacement,
-  validateMainBoardLayout
-} from "./board.js";
+const ASSET_VERSION = new URL(import.meta.url).searchParams.get("v") ?? "";
+const VERSION_SUFFIX = ASSET_VERSION ? `?v=${encodeURIComponent(ASSET_VERSION)}` : "";
+const versionedPath = (path) => `${path}${VERSION_SUFFIX}`;
+
+const [
+  { render },
+  { analyzeCourse, analyzeFlagLeg },
+  {
+    buildMainFootprintTiles,
+    buildResolvedMap,
+    getBoundaryEdges,
+    getValidDockRuns,
+    groupBoundaryRuns,
+    placePiece,
+    projectDockPlacement,
+    rotatedDimensions,
+    validateDockPlacement,
+    validateMainBoardLayout
+  }
+] = await Promise.all([
+  import(versionedPath("./render.js")),
+  import(versionedPath("./analyze.js")),
+  import(versionedPath("./board.js"))
+]);
 
 const ROTATIONS = [0, 90, 180, 270];
 const FACINGS = ["N", "E", "S", "W"];
@@ -23,12 +33,71 @@ const DOCK_BRIDGE_GAP = 3;
 const DOCK_BRIDGE_PROBABILITY = 0.12;
 const OVERLAY_UPDATE_INTERVAL = 4;
 const SAVED_SCENARIO_KEY = "roborally-course-generator:last-scenario";
+const BOARD_AUDIT_NOTES_KEY = "roborally-course-generator:board-audit-notes";
+const AUDIT_RENDER_TILE_SIZE = 40;
+const AUDIT_RENDER_MARGIN = 30;
+const AUDIT_FEATURE_TYPES = [
+  { id: "wall", label: "Walls" },
+  { id: "belt", label: "Belts" },
+  { id: "laser", label: "Lasers" },
+  { id: "pit", label: "Pits" },
+  { id: "gear", label: "Gears" },
+  { id: "push", label: "Push Panels" },
+  { id: "flamethrower", label: "Flamethrowers" },
+  { id: "crusher", label: "Crushers" },
+  { id: "portal", label: "Portals" },
+  { id: "teleporter", label: "Teleporters" },
+  { id: "randomizer", label: "Randomizers" },
+  { id: "water", label: "Water" },
+  { id: "oil", label: "Oil" },
+  { id: "ledge", label: "Ledges" },
+  { id: "ramp", label: "Ramps" },
+  { id: "checkpoint", label: "Checkpoints" },
+  { id: "battery", label: "Batteries" },
+  { id: "start", label: "Starts" }
+];
+const PIECE_DATA_FILES = [
+  "black-gold",
+  "blueprint",
+  "cactus",
+  "coliseum",
+  "docking-bay-a",
+  "docking-bay-b",
+  "doubles",
+  "energize",
+  "flood-zone",
+  "in-and-out",
+  "misdirection",
+  "sidewinder",
+  "steps",
+  "tempest",
+  "the-h",
+  "the-keep",
+  "the-o-ring",
+  "transition",
+  "whirlpool"
+];
+const VARIANT_STATES = {
+  off: { label: "Not allowed" },
+  allowed: { label: "Allowed" },
+  forced: { label: "Always on" }
+};
+const VARIANT_CONTROL_IDS = {
+  dynamicArchiving: "variant-dynamic-archiving",
+  lessDeadlyGame: "variant-less-deadly-game"
+};
 
 let currentScenario = null;
 let cachedAssets = null;
+let boardAuditInitialized = false;
+let boardAuditState = {
+  pieceId: null,
+  hoverTile: null,
+  selectedFeatures: new Set(AUDIT_FEATURE_TYPES.map((feature) => feature.id))
+};
 
 async function loadJSON(path) {
-  const res = await fetch(path);
+  const res = await fetch(versionedPath(path), { cache: "no-store" });
   if (!res.ok) throw new Error(`Could not load ${path}`);
   return res.json();
 }
@@ -38,7 +107,7 @@ async function loadImage(src) {
     const img = new Image();
     img.onload = () => resolve(img);
     img.onerror = reject;
-    img.src = src;
+    img.src = versionedPath(src);
   });
 }
 
@@ -47,40 +116,12 @@ async function loadAssets() {
     return cachedAssets;
   }
 
-  const cactus = await loadJSON("./data/cactus.json");
-  const energize = await loadJSON("./data/energize.json");
-  const misdirection = await loadJSON("./data/misdirection.json");
-  const steps = await loadJSON("./data/steps.json");
-  const inAndOut = await loadJSON("./data/in-and-out.json");
-  const theKeep = await loadJSON("./data/the-keep.json");
-  const tempest = await loadJSON("./data/tempest.json");
-  const sidewinder = await loadJSON("./data/sidewinder.json");
-  const dock = await loadJSON("./data/docking-bay-a.json");
-  const dockB = await loadJSON("./data/docking-bay-b.json");
-  const blueprint = await loadJSON("./data/blueprint.json");
-  const blackGold = await loadJSON("./data/black-gold.json");
-  const doubles = await loadJSON("./data/doubles.json");
-  const theH = await loadJSON("./data/the-h.json");
-  const whirlpool = await loadJSON("./data/whirlpool.json");
-  const theORing = await loadJSON("./data/the-o-ring.json");
-  const pieceMap = {
-    "black-gold": blackGold,
-    blueprint,
-    cactus,
-    doubles,
-    energize,
-    misdirection,
-    steps,
-    "in-and-out": inAndOut,
-    "the-keep": theKeep,
-    tempest,
-    sidewinder,
-    "the-h": theH,
-    "the-o-ring": theORing,
-    whirlpool,
-    "docking-bay-a": dock,
-    "docking-bay-b": dockB
-  };
+  const pieces = await Promise.all(
+    PIECE_DATA_FILES.map(async (pieceId) => loadJSON(`./data/${pieceId}.json`))
+  );
+  const pieceMap = Object.fromEntries(
+    pieces.map((piece) => [piece.id, piece])
+  );
 
   for (const piece of Object.values(pieceMap)) {
     piece.overlayCapable = piece.expansionId === "master-builder" && piece.width === 6 && piece.height === 6;
@@ -222,7 +263,8 @@ function formatExpansionName(expansionId) {
   const labels = {
     roborally: "RoboRally Base Game (2023)",
     "thrills-and-spills": "Thrills & Spills",
-    "master-builder": "Master Builder"
+    "master-builder": "Master Builder",
+    "wet-and-wild": "Wet & Wild"
   };
 
   return labels[expansionId] ?? titleCaseWords(expansionId);
@@ -242,6 +284,16 @@ function getReverseSideName(pieceId, pieceMap) {
   return reverseSide?.name ?? null;
 }
 
+function sameTile(left, right) {
+  if (!left && !right) return true;
+  if (!left || !right) return false;
+  return left.x === right.x && left.y === right.y;
+}
+
+function isAuditFeatureVisible(featureType) {
+  return boardAuditState.selectedFeatures.has(featureType);
+}
+
 function formatBoardLabel(pieceId, pieceMap) {
   const piece = pieceMap[pieceId];
   const name = piece?.name ?? titleCaseWords(pieceId);
@@ -251,6 +303,380 @@ function formatBoardLabel(pieceId, pieceMap) {
   return reverseSide
     ? `${name} (${expansion}; reverse side: ${reverseSide})`
     : `${name} (${expansion})`;
+}
+
+function loadBoardAuditNotes() {
+  try {
+    return JSON.parse(localStorage.getItem(BOARD_AUDIT_NOTES_KEY) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function saveBoardAuditNote(pieceId, note) {
+  const notes = loadBoardAuditNotes();
+  if (note) {
+    notes[pieceId] = note;
+  } else {
+    delete notes[pieceId];
+  }
+
+  try {
+    localStorage.setItem(BOARD_AUDIT_NOTES_KEY, JSON.stringify(notes));
+  } catch {
+    // ignore storage failures
+  }
+}
+
+function summarizeFeature(feature) {
+  switch (feature.type) {
+    case "pit":
+    case "oil":
+    case "battery":
+    case "randomizer":
+    case "water":
+      return feature.type;
+    case "belt":
+      return `belt ${feature.dir ?? "?"}${feature.speed ? ` speed ${feature.speed}` : ""}`;
+    case "gear":
+      return `gear ${feature.rotation ?? "?"}`;
+    case "laser":
+      return `laser ${feature.dir ?? "?"} dmg ${feature.damage ?? 1}`;
+    case "wall":
+      return `wall ${((feature.sides || []).join(", ")) || "?"}`;
+    case "push":
+    case "flamethrower":
+      return `${feature.type} ${feature.dir ?? "?"} [${(feature.timing || []).join(", ")}]`;
+    case "crusher":
+      return `crusher [${(feature.timing || []).join(", ")}]`;
+    case "portal":
+      return `portal ${feature.id ?? "?"}`;
+    case "teleporter":
+      return `teleporter power ${feature.power ?? 2}`;
+    case "ledge":
+      return `ledge ${((feature.sides || []).join(", ")) || "?"}`;
+    case "ramp":
+      return `ramp ${feature.dir ?? "?"}`;
+    case "checkpoint":
+      return `checkpoint ${feature.id ?? "?"}`;
+    default:
+      return JSON.stringify(feature);
+  }
+}
+
+function getAuditBoardOptions(pieceMap) {
+  return Object.values(pieceMap)
+    .filter((piece) => piece.image && piece.width > 0 && piece.height > 0)
+    .sort((left, right) => formatBoardLabel(left.id, pieceMap).localeCompare(formatBoardLabel(right.id, pieceMap)));
+}
+
+function getAuditPiece(assets) {
+  return boardAuditState.pieceId ? assets.pieceMap[boardAuditState.pieceId] ?? null : null;
+}
+
+function getAuditTileMap(piece) {
+  return buildResolvedMap([{ pieceId: piece.id, x: 0, y: 0, rotation: 0 }], { [piece.id]: piece }).tileMap;
+}
+
+function getTileFromAuditCanvas(evt, canvas, piece) {
+  if (!piece || !canvas.width || !canvas.height) {
+    return null;
+  }
+
+  const rect = canvas.getBoundingClientRect();
+  if (!rect.width || !rect.height) {
+    return null;
+  }
+
+  const localX = (evt.clientX - rect.left) * (canvas.width / rect.width);
+  const localY = (evt.clientY - rect.top) * (canvas.height / rect.height);
+  const tileX = Math.floor(localX / (canvas.width / piece.width));
+  const tileY = Math.floor(localY / (canvas.height / piece.height));
+
+  if (tileX < 0 || tileX >= piece.width || tileY < 0 || tileY >= piece.height) {
+    return null;
+  }
+
+  return { x: tileX, y: tileY };
+}
+
+function getTileFromAuditRenderCanvas(evt, canvas, piece) {
+  if (!piece || !canvas.width || !canvas.height) {
+    return null;
+  }
+
+  const rect = canvas.getBoundingClientRect();
+  if (!rect.width || !rect.height) {
+    return null;
+  }
+
+  const localX = (evt.clientX - rect.left) * (canvas.width / rect.width);
+  const localY = (evt.clientY - rect.top) * (canvas.height / rect.height);
+  const tileSize = (canvas.width - AUDIT_RENDER_MARGIN * 2) / piece.width;
+  const tileX = Math.floor((localX - AUDIT_RENDER_MARGIN) / tileSize);
+  const tileY = Math.floor((localY - AUDIT_RENDER_MARGIN) / tileSize);
+
+  if (tileX < 0 || tileX >= piece.width || tileY < 0 || tileY >= piece.height) {
+    return null;
+  }
+
+  return { x: tileX, y: tileY };
+}
+
+function drawAuditImageCanvas(canvas, piece, img, hoverTile = null) {
+  const ctx = canvas.getContext("2d");
+  if (!piece || !img) {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    return;
+  }
+
+  const maxWidth = 720;
+  const scale = Math.min(1, maxWidth / img.width);
+  canvas.width = Math.round(img.width * scale);
+  canvas.height = Math.round(img.height * scale);
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+  const tileWidth = canvas.width / piece.width;
+  const tileHeight = canvas.height / piece.height;
+
+  ctx.save();
+  ctx.strokeStyle = "rgba(26, 43, 58, 0.35)";
+  ctx.lineWidth = 1;
+
+  for (let x = 0; x <= piece.width; x += 1) {
+    const px = x * tileWidth;
+    ctx.beginPath();
+    ctx.moveTo(px, 0);
+    ctx.lineTo(px, canvas.height);
+    ctx.stroke();
+  }
+
+  for (let y = 0; y <= piece.height; y += 1) {
+    const py = y * tileHeight;
+    ctx.beginPath();
+    ctx.moveTo(0, py);
+    ctx.lineTo(canvas.width, py);
+    ctx.stroke();
+  }
+
+  if (hoverTile) {
+    ctx.fillStyle = "rgba(228, 103, 36, 0.18)";
+    ctx.strokeStyle = "rgba(228, 103, 36, 0.96)";
+    ctx.lineWidth = 3;
+    ctx.fillRect(hoverTile.x * tileWidth, hoverTile.y * tileHeight, tileWidth, tileHeight);
+    ctx.strokeRect(hoverTile.x * tileWidth + 1.5, hoverTile.y * tileHeight + 1.5, tileWidth - 3, tileHeight - 3);
+  }
+
+  ctx.restore();
+}
+
+function drawAuditRenderHover(canvas, piece, hoverTile = null) {
+  if (!piece || !hoverTile) {
+    return;
+  }
+
+  const ctx = canvas.getContext("2d");
+  const tileSize = (canvas.width - AUDIT_RENDER_MARGIN * 2) / piece.width;
+  const left = AUDIT_RENDER_MARGIN + hoverTile.x * tileSize;
+  const top = AUDIT_RENDER_MARGIN + hoverTile.y * tileSize;
+
+  ctx.save();
+  ctx.fillStyle = "rgba(228, 103, 36, 0.16)";
+  ctx.strokeStyle = "rgba(228, 103, 36, 0.96)";
+  ctx.lineWidth = 3;
+  ctx.fillRect(left, top, tileSize, tileSize);
+  ctx.strokeRect(left + 1.5, top + 1.5, tileSize - 3, tileSize - 3);
+  ctx.restore();
+}
+
+function updateAuditReadout(assets) {
+  const readout = document.getElementById("audit-readout");
+  const piece = getAuditPiece(assets);
+  if (!piece) {
+    readout.innerHTML = "<strong>Tile Readout</strong>Select a board to inspect.";
+    return;
+  }
+
+  const lines = [
+    `<strong>${piece.name}</strong>`,
+    `${piece.width}x${piece.height} tiles`,
+    `${formatExpansionName(piece.expansionId ?? "unknown")}`
+  ];
+
+  if (boardAuditState.hoverTile) {
+    const tileMap = getAuditTileMap(piece);
+    const tile = tileMap.get(`${boardAuditState.hoverTile.x},${boardAuditState.hoverTile.y}`);
+    const features = (tile?.features || [])
+      .filter((feature) => isAuditFeatureVisible(feature.type))
+      .map(summarizeFeature);
+    const starts = (piece.starts || [])
+      .filter(() => isAuditFeatureVisible("start"))
+      .filter((start) => start.x === boardAuditState.hoverTile.x && start.y === boardAuditState.hoverTile.y)
+      .map((start) => `start ${start.facing ?? "E"}`);
+
+    lines.push(`Tile (${boardAuditState.hoverTile.x}, ${boardAuditState.hoverTile.y})`);
+    if (features.length || starts.length) {
+      lines.push([...features, ...starts].join(" | "));
+    } else {
+      lines.push("No encoded features on this tile.");
+    }
+  } else {
+    lines.push("Hover a tile in either pane to inspect its encoding.");
+  }
+
+  readout.innerHTML = lines.map((line) => `<div>${line}</div>`).join("");
+}
+
+function renderBoardAudit(assets) {
+  const piece = getAuditPiece(assets);
+  const imageCanvas = document.getElementById("audit-image-canvas");
+  const jsonCanvas = document.getElementById("audit-json-canvas");
+  const notesInput = document.getElementById("audit-feedback");
+
+  if (!piece) {
+    const imageCtx = imageCanvas.getContext("2d");
+    const jsonCtx = jsonCanvas.getContext("2d");
+    imageCtx.clearRect(0, 0, imageCanvas.width, imageCanvas.height);
+    jsonCtx.clearRect(0, 0, jsonCanvas.width, jsonCanvas.height);
+    notesInput.value = "";
+    updateAuditReadout(assets);
+    return;
+  }
+
+  drawAuditImageCanvas(imageCanvas, piece, assets.imageMap[piece.id], boardAuditState.hoverTile);
+  render(jsonCanvas, assets.pieceMap, assets.imageMap, {
+    placements: [{ pieceId: piece.id, x: 0, y: 0, rotation: 0 }],
+    showBoardLabels: true,
+    showStartFacing: true,
+    showWalls: true,
+    showPieceImages: false,
+    showFootprints: false,
+    visibleFeatureTypes: boardAuditState.selectedFeatures
+  });
+  drawAuditRenderHover(jsonCanvas, piece, boardAuditState.hoverTile);
+
+  const notes = loadBoardAuditNotes();
+  if (document.activeElement !== notesInput) {
+    notesInput.value = notes[piece.id] ?? "";
+  }
+
+  updateAuditReadout(assets);
+}
+
+function updateBoardAuditVisibility() {
+  const visible = isDevViewEnabled() && isBoardAuditEnabled();
+  document.getElementById("board-audit-panel")?.classList.toggle("hidden", !visible);
+}
+
+function initializeBoardAudit(assets) {
+  if (boardAuditInitialized) {
+    renderBoardAudit(assets);
+    return;
+  }
+
+  const select = document.getElementById("audit-board-select");
+  const imageCanvas = document.getElementById("audit-image-canvas");
+  const jsonCanvas = document.getElementById("audit-json-canvas");
+  const notesInput = document.getElementById("audit-feedback");
+  const featureFilters = document.getElementById("audit-feature-filters");
+  const allButton = document.getElementById("audit-filter-all");
+  const noneButton = document.getElementById("audit-filter-none");
+  const options = getAuditBoardOptions(assets.pieceMap);
+
+  select.innerHTML = "";
+  options.forEach((piece) => {
+    const option = document.createElement("option");
+    option.value = piece.id;
+    option.textContent = formatBoardLabel(piece.id, assets.pieceMap);
+    select.appendChild(option);
+  });
+
+  boardAuditState.pieceId = options[0]?.id ?? null;
+  select.value = boardAuditState.pieceId ?? "";
+
+  featureFilters.innerHTML = "";
+  AUDIT_FEATURE_TYPES.forEach((feature) => {
+    const label = document.createElement("label");
+    label.className = "audit-filter-option";
+
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = boardAuditState.selectedFeatures.has(feature.id);
+    input.dataset.featureType = feature.id;
+    input.addEventListener("change", () => {
+      if (input.checked) {
+        boardAuditState.selectedFeatures.add(feature.id);
+      } else {
+        boardAuditState.selectedFeatures.delete(feature.id);
+      }
+      renderBoardAudit(assets);
+    });
+
+    label.append(input, document.createTextNode(feature.label));
+    featureFilters.appendChild(label);
+  });
+
+  allButton.addEventListener("click", () => {
+    boardAuditState.selectedFeatures = new Set(AUDIT_FEATURE_TYPES.map((feature) => feature.id));
+    featureFilters.querySelectorAll("input[type=\"checkbox\"]").forEach((input) => {
+      input.checked = true;
+    });
+    renderBoardAudit(assets);
+  });
+
+  noneButton.addEventListener("click", () => {
+    boardAuditState.selectedFeatures = new Set();
+    featureFilters.querySelectorAll("input[type=\"checkbox\"]").forEach((input) => {
+      input.checked = false;
+    });
+    renderBoardAudit(assets);
+  });
+
+  select.addEventListener("change", () => {
+    boardAuditState.pieceId = select.value || null;
+    boardAuditState.hoverTile = null;
+    renderBoardAudit(assets);
+  });
+
+  imageCanvas.addEventListener("mousemove", (evt) => {
+    const nextTile = getTileFromAuditCanvas(evt, imageCanvas, getAuditPiece(assets));
+    if (!sameTile(boardAuditState.hoverTile, nextTile)) {
+      boardAuditState.hoverTile = nextTile;
+      renderBoardAudit(assets);
+    }
+  });
+
+  jsonCanvas.addEventListener("mousemove", (evt) => {
+    const nextTile = getTileFromAuditRenderCanvas(evt, jsonCanvas, getAuditPiece(assets));
+    if (!sameTile(boardAuditState.hoverTile, nextTile)) {
+      boardAuditState.hoverTile = nextTile;
+      renderBoardAudit(assets);
+    }
+  });
+
+  imageCanvas.addEventListener("mouseleave", () => {
+    boardAuditState.hoverTile = null;
+    renderBoardAudit(assets);
+  });
+
+  jsonCanvas.addEventListener("mouseleave", () => {
+    boardAuditState.hoverTile = null;
+    renderBoardAudit(assets);
+  });
+
+  notesInput.addEventListener("input", () => {
+    const pieceId = boardAuditState.pieceId;
+    if (!pieceId) {
+      return;
+    }
+
+    saveBoardAuditNote(pieceId, notesInput.value.trim());
+  });
+
+  boardAuditInitialized = true;
+  renderBoardAudit(assets);
 }
 
 function updateSetupSummary(scenario) {
@@ -290,13 +716,13 @@ function updateSetupSummary(scenario) {
 
 function updateVariantSummary() {
   const summaryEl = document.getElementById("variant-summary");
-  const enabled = [];
-
-  if (document.getElementById("variant-dynamic-archiving").checked) {
-    enabled.push("Dynamic Archiving");
-  }
-
-  summaryEl.textContent = enabled.length ? enabled.join(", ") : "None";
+  const states = [
+    ["Dynamic Archiving", getVariantControlState("dynamicArchiving")],
+    ["A Less Deadly Game", getVariantControlState("lessDeadlyGame")]
+  ];
+  const enabled = states.filter(([, state]) => state !== "off");
+  summaryEl.textContent = `${enabled.length} selected`;
+  summaryEl.title = states.map(([label, state]) => `${label}: ${VARIANT_STATES[state].label}`).join(", ");
 }
 
 function updateExpansionSummary() {
@@ -312,8 +738,12 @@ function updateExpansionSummary() {
   if (document.getElementById("expansion-thrills-and-spills").checked) {
     enabled.push(formatExpansionName("thrills-and-spills"));
   }
+  if (document.getElementById("expansion-wet-and-wild").checked) {
+    enabled.push(formatExpansionName("wet-and-wild"));
+  }
 
-  summaryEl.textContent = enabled.length ? enabled.join(", ") : "None";
+  summaryEl.textContent = `${enabled.length} selected`;
+  summaryEl.title = enabled.length ? enabled.join(", ") : "None";
 }
 
 function closeVariantPicker() {
@@ -357,6 +787,10 @@ function updateRulesNote(scenario) {
     notes.push("This course uses Dynamic Archiving (Game Guide p. 32).");
   }
 
+  if (scenario.lessDeadlyGame) {
+    notes.push("This course uses A Less Deadly Game: board edges act as walls while pit spaces remain pits (Game Guide p. 32).");
+  }
+
   if (!notes.length) {
     noteEl.textContent = "";
     noteEl.classList.add("hidden");
@@ -367,18 +801,86 @@ function updateRulesNote(scenario) {
   noteEl.classList.remove("hidden");
 }
 
+function describeAllowedVariants(preferences = {}) {
+  const variants = [];
+  const states = preferences.allowedVariantRules || {};
+  const entries = [
+    ["Dynamic Archiving", states.dynamicArchiving ?? "allowed"],
+    ["A Less Deadly Game", states.lessDeadlyGame ?? "off"]
+  ];
+
+  for (const [label, state] of entries) {
+    const normalized = normalizeVariantState(state);
+    if (normalized === "off") {
+      continue;
+    }
+    variants.push(`${label} (${VARIANT_STATES[normalized].label})`);
+  }
+
+  return variants.length ? variants.join(", ") : "none";
+}
+
 function updateLegend(scenario) {
   const rebootTokenEl = document.getElementById("legend-reboot-token");
   rebootTokenEl?.classList.toggle("hidden", scenario?.recoveryRule !== "reboot_tokens");
 }
 
+function normalizeVariantState(value) {
+  if (value === true) return "allowed";
+  if (value === false) return "off";
+  return value === "forced" || value === "allowed" || value === "off" ? value : "off";
+}
+
+function getVariantControlState(variantId) {
+  const button = document.getElementById(VARIANT_CONTROL_IDS[variantId]);
+  return normalizeVariantState(button?.dataset.state ?? "off");
+}
+
+function setVariantControlState(variantId, state) {
+  const normalized = normalizeVariantState(state);
+  const button = document.getElementById(VARIANT_CONTROL_IDS[variantId]);
+  if (!button) {
+    return;
+  }
+
+  button.dataset.state = normalized;
+  button.textContent = VARIANT_STATES[normalized].label;
+}
+
+function cycleVariantControlState(variantId) {
+  const current = getVariantControlState(variantId);
+  const next = current === "off"
+    ? "allowed"
+    : current === "allowed"
+      ? "forced"
+      : "off";
+  setVariantControlState(variantId, next);
+  updateVariantSummary();
+}
+
+function chooseVariantEnabled(variantState, allowedChance = 0.5) {
+  const normalized = normalizeVariantState(variantState);
+  if (normalized === "forced") {
+    return true;
+  }
+  if (normalized === "off") {
+    return false;
+  }
+  return Math.random() < allowedChance;
+}
+
 function chooseRecoveryRule(preferences) {
-  const dynamicArchivingAllowed = preferences.allowedVariantRules?.dynamicArchiving ?? true;
-  if (dynamicArchivingAllowed && Math.random() < 0.5) {
+  const dynamicArchivingState = preferences.allowedVariantRules?.dynamicArchiving ?? "allowed";
+  if (chooseVariantEnabled(dynamicArchivingState, 0.5)) {
     return "dynamic_archiving";
   }
 
   return "reboot_tokens";
+}
+
+function chooseLessDeadlyGame(preferences) {
+  const lessDeadlyState = preferences.allowedVariantRules?.lessDeadlyGame ?? "off";
+  return chooseVariantEnabled(lessDeadlyState, 0.22);
 }
 
 function getPreferencesFromControls() {
@@ -386,13 +888,16 @@ function getPreferencesFromControls() {
     playerCount: Number(document.getElementById("player-count").value),
     difficulty: document.getElementById("difficulty").value,
     length: document.getElementById("length").value,
+    alignedLayout: document.getElementById("aligned-layout").checked,
     selectedExpansions: {
       roborally: document.getElementById("expansion-roborally").checked,
       "master-builder": document.getElementById("expansion-master-builder").checked,
-      "thrills-and-spills": document.getElementById("expansion-thrills-and-spills").checked
+      "thrills-and-spills": document.getElementById("expansion-thrills-and-spills").checked,
+      "wet-and-wild": document.getElementById("expansion-wet-and-wild").checked
     },
     allowedVariantRules: {
-      dynamicArchiving: document.getElementById("variant-dynamic-archiving").checked
+      dynamicArchiving: getVariantControlState("dynamicArchiving"),
+      lessDeadlyGame: getVariantControlState("lessDeadlyGame")
     }
   };
 }
@@ -405,10 +910,13 @@ function applyPreferencesToControls(preferences) {
   document.getElementById("player-count").value = String(preferences.playerCount ?? 4);
   document.getElementById("difficulty").value = preferences.difficulty ?? "moderate";
   document.getElementById("length").value = preferences.length ?? "moderate";
+  document.getElementById("aligned-layout").checked = preferences.alignedLayout ?? false;
   document.getElementById("expansion-roborally").checked = preferences.selectedExpansions?.roborally ?? true;
   document.getElementById("expansion-master-builder").checked = preferences.selectedExpansions?.["master-builder"] ?? false;
   document.getElementById("expansion-thrills-and-spills").checked = preferences.selectedExpansions?.["thrills-and-spills"] ?? false;
-  document.getElementById("variant-dynamic-archiving").checked = preferences.allowedVariantRules?.dynamicArchiving ?? true;
+  document.getElementById("expansion-wet-and-wild").checked = preferences.selectedExpansions?.["wet-and-wild"] ?? false;
+  setVariantControlState("dynamicArchiving", preferences.allowedVariantRules?.dynamicArchiving ?? "allowed");
+  setVariantControlState("lessDeadlyGame", preferences.allowedVariantRules?.lessDeadlyGame ?? "off");
   updateExpansionSummary();
   updateVariantSummary();
 }
@@ -447,15 +955,24 @@ function deriveBoardBias(piece) {
       } else if (feature.type === "push") {
         hazardWeight += 1;
         complexityWeight += 1.2;
+      } else if (feature.type === "crusher") {
+        hazardWeight += 2.2;
+        complexityWeight += 0.8;
       } else if (feature.type === "belt") {
         complexityWeight += feature.speed === 2 ? 2 : 1.2;
       } else if (feature.type === "gear") {
         complexityWeight += 1.4;
       } else if (feature.type === "portal") {
+        hazardWeight += 0.7;
         complexityWeight += 1.3;
       } else if (feature.type === "oil") {
         hazardWeight += 1.2;
         complexityWeight += 1.8;
+      } else if (feature.type === "ledge") {
+        hazardWeight += 0.8;
+        congestionWeight += Math.max(1, (feature.sides || []).length) * 0.85;
+      } else if (feature.type === "ramp") {
+        complexityWeight += 0.7;
       } else if (feature.type === "wall") {
         congestionWeight += Math.max(1, (feature.sides || []).length) * 1.25;
       } else if (feature.type === "battery") {
@@ -651,6 +1168,111 @@ function getLegalOverlayPlacements(overlayPiece, structuralPlacements, dockPlace
   return placements;
 }
 
+function getAlignedEdgeOffsets(anchorStart, anchorLength, candidateLength) {
+  if (anchorLength === candidateLength) {
+    return [anchorStart];
+  }
+
+  if (candidateLength < anchorLength) {
+    const slack = anchorLength - candidateLength;
+    return [...new Set([
+      anchorStart,
+      anchorStart + Math.floor(slack / 2),
+      anchorStart + slack
+    ])];
+  }
+
+  const slack = candidateLength - anchorLength;
+  return [...new Set([
+    anchorStart - slack,
+    anchorStart - Math.floor(slack / 2),
+    anchorStart
+  ])];
+}
+
+function createAlignedAttachedBoardPlacements(anchorPlacement, anchorPiece, pieceId, piece, side, rotation) {
+  const dims = rotatedDimensions(piece, rotation);
+  const anchorDims = rotatedDimensions(anchorPiece, anchorPlacement.rotation ?? 0);
+  const placements = [];
+
+  if (side === "left" || side === "right") {
+    const yOffsets = getAlignedEdgeOffsets(anchorPlacement.y, anchorDims.height, dims.height);
+    const x = side === "left"
+      ? anchorPlacement.x - dims.width
+      : anchorPlacement.x + anchorDims.width;
+
+    for (const y of yOffsets) {
+      placements.push({ pieceId, x, y, rotation });
+    }
+
+    return placements;
+  }
+
+  const xOffsets = getAlignedEdgeOffsets(anchorPlacement.x, anchorDims.width, dims.width);
+  const y = side === "top"
+    ? anchorPlacement.y - dims.height
+    : anchorPlacement.y + anchorDims.height;
+
+  for (const x of xOffsets) {
+    placements.push({ pieceId, x, y, rotation });
+  }
+
+  return placements;
+}
+
+function getAlignedOverlayPlacements(overlayPiece, structuralPlacements, dockPlacement, pieceMap) {
+  if (overlayPiece.width !== 6 || overlayPiece.height !== 6) {
+    return getLegalOverlayPlacements(overlayPiece, structuralPlacements, dockPlacement, pieceMap);
+  }
+
+  const dockTiles = getDockTileKeys(dockPlacement, pieceMap);
+  const placements = [];
+
+  for (const basePlacement of structuralPlacements) {
+    const basePiece = pieceMap[basePlacement.pieceId];
+    const dims = rotatedDimensions(basePiece, basePlacement.rotation ?? 0);
+    if (dims.width !== 12 || dims.height !== 12) {
+      continue;
+    }
+
+    const anchors = [
+      { dx: 0, dy: 0 },
+      { dx: 6, dy: 0 },
+      { dx: 0, dy: 6 },
+      { dx: 6, dy: 6 },
+      { dx: 3, dy: 3 }
+    ];
+
+    for (const rotation of ROTATIONS) {
+      for (const anchor of anchors) {
+        const placement = {
+          pieceId: overlayPiece.id,
+          x: basePlacement.x + anchor.dx,
+          y: basePlacement.y + anchor.dy,
+          rotation,
+          overlay: true
+        };
+
+        let valid = true;
+        for (let dy = 0; dy < 6 && valid; dy += 1) {
+          for (let dx = 0; dx < 6; dx += 1) {
+            if (dockTiles.has(`${placement.x + dx},${placement.y + dy}`)) {
+              valid = false;
+              break;
+            }
+          }
+        }
+
+        if (valid) {
+          placements.push(placement);
+        }
+      }
+    }
+  }
+
+  return placements;
+}
+
 function chooseOverlayPlacements(structuralPlacements, dockPlacement, pieceMap, preferences, expansionIds) {
   const usedStructuralBoards = new Set(
     structuralPlacements.map((placement) => getPhysicalBoardId(pieceMap[placement.pieceId]))
@@ -686,7 +1308,11 @@ function chooseOverlayPlacements(structuralPlacements, dockPlacement, pieceMap, 
   for (const groupOverlayIds of chosenGroups) {
     const chosenOverlayId = sample(groupOverlayIds);
     const overlayPiece = pieceMap[chosenOverlayId];
-    const legalPlacements = getLegalOverlayPlacements(overlayPiece, structuralPlacements, dockPlacement, pieceMap)
+    const legalPlacements = (
+      preferences.alignedLayout
+        ? getAlignedOverlayPlacements(overlayPiece, structuralPlacements, dockPlacement, pieceMap)
+        : getLegalOverlayPlacements(overlayPiece, structuralPlacements, dockPlacement, pieceMap)
+    )
       .filter((placement) => {
         const dims = rotatedDimensions(overlayPiece, placement.rotation);
         for (let dy = 0; dy < dims.height; dy += 1) {
@@ -1506,6 +2132,38 @@ function tryExtendBoardLayout(existingPlacements, nextBoardId, pieceMap, dockPie
   return null;
 }
 
+function tryExtendAlignedBoardLayout(existingPlacements, nextBoardId, pieceMap) {
+  const nextBoard = pieceMap[nextBoardId];
+  const anchorIndices = shuffle(existingPlacements.map((_, index) => index));
+
+  for (const anchorIndex of anchorIndices) {
+    const anchorPlacement = existingPlacements[anchorIndex];
+    const anchorPiece = pieceMap[anchorPlacement.pieceId];
+
+    for (const side of shuffle(DOCK_SIDES)) {
+      for (const rotation of shuffle(ROTATIONS)) {
+        const candidates = createAlignedAttachedBoardPlacements(anchorPlacement, anchorPiece, nextBoardId, nextBoard, side, rotation);
+
+        for (const nextPlacement of shuffle(candidates)) {
+          const candidatePlacements = [...existingPlacements, nextPlacement];
+          const validation = validateMainBoardLayout(candidatePlacements, pieceMap, {
+            minSharedEdge: MIN_SHARED_EDGE
+          });
+
+          if (validation.valid) {
+            return {
+              placements: candidatePlacements,
+              layoutValidation: validation
+            };
+          }
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
 function createBoardPlacements(pieceMap, lengthPreference, preferences, guidanceLevel, expansionIds = null, dockPieceId = "docking-bay-a") {
   const mainBoardIds = getAvailableMainBoardIds(pieceMap, expansionIds);
   const maxBoards = Math.min(4, countPhysicalBoards(mainBoardIds, pieceMap));
@@ -1540,8 +2198,10 @@ function createBoardPlacements(pieceMap, lengthPreference, preferences, guidance
   });
 
   for (const [index, nextBoardId] of boardIds.slice(1).entries()) {
-    const allowDockBridge = index === boardIds.length - 2 && Math.random() < DOCK_BRIDGE_PROBABILITY;
-    const extension = tryExtendBoardLayout(placements, nextBoardId, pieceMap, dockPieceId, allowDockBridge);
+    const allowDockBridge = !preferences.alignedLayout && index === boardIds.length - 2 && Math.random() < DOCK_BRIDGE_PROBABILITY;
+    const extension = preferences.alignedLayout
+      ? tryExtendAlignedBoardLayout(placements, nextBoardId, pieceMap)
+      : tryExtendBoardLayout(placements, nextBoardId, pieceMap, dockPieceId, allowDockBridge);
     if (!extension) {
       return null;
     }
@@ -1633,6 +2293,7 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
     flags,
     playerCount,
     recoveryRule: options.recoveryRule,
+    lessDeadlyGame: options.lessDeadlyGame,
     rebootTokens: options.rebootTokens,
     boardRects: options.boardRects
   });
@@ -1663,6 +2324,7 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
       playerCount,
       maxExpansions: 18000,
       recoveryRule: options.recoveryRule,
+      lessDeadlyGame: options.lessDeadlyGame,
       rebootTokens: options.rebootTokens,
       boardRects: options.boardRects
     });
@@ -1780,7 +2442,7 @@ function computeDifficultyRaw(sequence) {
   ).toFixed(2));
 }
 
-function computeLengthRaw(sequence, flagCount, playerCount, boardCount) {
+function computeLengthMetrics(sequence, flagCount, playerCount, boardCount) {
   const first = sequence.firstLeg.summary;
   const later = sequence.legs.slice(1);
   const totalRouteDistance = first.lengthScore + later.reduce((sum, leg) => sum + (leg.analysis.summary.averageRouteDistance || 0), 0);
@@ -1788,10 +2450,39 @@ function computeLengthRaw(sequence, flagCount, playerCount, boardCount) {
   const totalCongestion = first.averageTrafficPenalty + later.reduce((sum, leg) => sum + (leg.analysis.summary.congestionScore || 0), 0);
   const checkpointLoad = flagCount * 2.2;
   const playerLoad = (playerCount || 4) * 1.6;
-  const routeLoad = totalActionLoad * 2.8 + totalRouteDistance * 0.75;
-  const frictionLoad = totalCongestion * 0.12 + first.flagAreaScore * 0.08 + sequence.summary.totalDifficulty * 0.03;
+  const actionLoad = totalActionLoad * 2.8;
+  const distanceLoad = totalRouteDistance * 0.75;
+  const congestionLoad = totalCongestion * 0.12;
+  const flagAreaLoad = first.flagAreaScore * 0.08;
+  const difficultyLoad = sequence.summary.totalDifficulty * 0.03;
+  const routeLoad = actionLoad + distanceLoad;
+  const frictionLoad = congestionLoad + flagAreaLoad + difficultyLoad;
+  const raw = Number((checkpointLoad + playerLoad + routeLoad + frictionLoad).toFixed(2));
 
-  return Number((checkpointLoad + playerLoad + routeLoad + frictionLoad).toFixed(2));
+  return {
+    raw,
+    inputs: {
+      flagCount,
+      playerCount: playerCount || 4,
+      totalActionLoad: Number(totalActionLoad.toFixed(2)),
+      totalRouteDistance: Number(totalRouteDistance.toFixed(2)),
+      totalCongestion: Number(totalCongestion.toFixed(2)),
+      flagAreaScore: Number(first.flagAreaScore.toFixed(2)),
+      totalDifficulty: Number(sequence.summary.totalDifficulty.toFixed(2)),
+      boardCount
+    },
+    contributions: {
+      checkpointLoad: Number(checkpointLoad.toFixed(2)),
+      playerLoad: Number(playerLoad.toFixed(2)),
+      actionLoad: Number(actionLoad.toFixed(2)),
+      distanceLoad: Number(distanceLoad.toFixed(2)),
+      congestionLoad: Number(congestionLoad.toFixed(2)),
+      flagAreaLoad: Number(flagAreaLoad.toFixed(2)),
+      difficultyLoad: Number(difficultyLoad.toFixed(2)),
+      routeLoad: Number(routeLoad.toFixed(2)),
+      frictionLoad: Number(frictionLoad.toFixed(2))
+    }
+  };
 }
 
 function bandDistance(value, band, thresholds) {
@@ -1804,12 +2495,13 @@ function bandDistance(value, band, thresholds) {
 function classifyCandidate(sequence, preferences, context = {}) {
   const usableStarts = computeUsableStarts(sequence.firstLeg);
   const difficultyRaw = computeDifficultyRaw(sequence);
-  const lengthRaw = computeLengthRaw(
+  const lengthMetrics = computeLengthMetrics(
     sequence,
     preferences.flagCount,
     preferences.playerCount,
     context.boardPlacements?.length ?? 1
   );
+  const lengthRaw = lengthMetrics.raw;
   const fairnessStdDev = sequence.firstLeg.summary.scoreStdDev;
 
   const difficultyThresholds = {
@@ -1818,9 +2510,9 @@ function classifyCandidate(sequence, preferences, context = {}) {
     hard: [105, Infinity]
   };
   const lengthThresholds = {
-    short: [MIN_LENGTH_RAW, 58],
-    moderate: [58, 86],
-    long: [86, Infinity]
+    short: [MIN_LENGTH_RAW, 130],
+    moderate: [130, 180],
+    long: [180, Infinity]
   };
 
   const hardFailures = [];
@@ -1864,6 +2556,7 @@ function classifyCandidate(sequence, preferences, context = {}) {
     usableStarts,
     difficultyRaw,
     lengthRaw,
+    lengthMetrics,
     fairnessStdDev,
     acceptable: hardFailures.length === 0 && difficultyFit === 0 && lengthFit === 0,
     hardFailures,
@@ -1877,12 +2570,31 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     index === 0 ? "Dock -> 1" : `${leg.from} -> ${leg.to}`
   ));
   const goal = scenario.checkpoints[selectedLegIndex === 0 ? 0 : selectedLegIndex];
+  const outlierReasonByIndex = new Map((summary.outliers || []).map((item) => [item.index, item.reasons ?? null]));
+
+  function formatOutlierReasons(reasons) {
+    if (!reasons) {
+      return "reason unavailable";
+    }
+
+    const parts = [];
+    if (reasons.scoreOutlier) {
+      parts.push(`score gap ${reasons.scoreGap} > ${reasons.scoreThreshold}`);
+    }
+    if (reasons.actionOutlier && reasons.severeActionGap) {
+      parts.push(`actions gap ${reasons.actionGap} > ${reasons.actionThreshold} and best-gap ${reasons.minActionGap} >= 3`);
+    }
+
+    return parts.join("; ") || "reason unavailable";
+  }
 
   const lines = [
     `Requested: ${scenario.preferences.playerCount} players, ${formatDifficultyLabel(scenario.preferences.difficulty)} difficulty, ${formatLengthLabel(scenario.preferences.length)} length`,
+    `Layout mode: ${scenario.preferences.alignedLayout ? "aligned" : "freeform"}`,
     `Sets: ${[...getSelectedExpansionIds(scenario.preferences)].map((id) => formatExpansionName(id)).join(", ") || "none"}`,
-    `Allowed variants: ${scenario.preferences.allowedVariantRules?.dynamicArchiving ? "Dynamic Archiving" : "none"}`,
+    `Allowed variants: ${describeAllowedVariants(scenario.preferences)}`,
     `Recovery used: ${scenario.recoveryRule}`,
+    `A Less Deadly Game used: ${scenario.lessDeadlyGame ? "yes" : "no"}`,
     `Accepted after ${scenario.attempts} attempt(s)`,
     `Board count: ${scenario.boardCount}`,
     `Boards: ${scenario.mainBoardIds.map((pieceId, index) => `${pieceId}@${scenario.mainRotations[index]}`).join(", ")}`,
@@ -1897,6 +2609,8 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     `Usable starts: ${scenario.metrics.usableStarts.length}/${scenario.sequence.starts.length}`,
     `Difficulty raw: ${scenario.metrics.difficultyRaw}`,
     `Length raw: ${scenario.metrics.lengthRaw}`,
+    `Length inputs: flags ${scenario.metrics.lengthMetrics.inputs.flagCount}, players ${scenario.metrics.lengthMetrics.inputs.playerCount}, actionScore ${scenario.metrics.lengthMetrics.inputs.totalActionLoad}, distanceScore ${scenario.metrics.lengthMetrics.inputs.totalRouteDistance}, congestion ${scenario.metrics.lengthMetrics.inputs.totalCongestion}, flagArea ${scenario.metrics.lengthMetrics.inputs.flagAreaScore}, totalDifficulty ${scenario.metrics.lengthMetrics.inputs.totalDifficulty}`,
+    `Length contributions: flags ${scenario.metrics.lengthMetrics.contributions.checkpointLoad}, players ${scenario.metrics.lengthMetrics.contributions.playerLoad}, actions ${scenario.metrics.lengthMetrics.contributions.actionLoad}, distance ${scenario.metrics.lengthMetrics.contributions.distanceLoad}, congestion ${scenario.metrics.lengthMetrics.contributions.congestionLoad}, flagArea ${scenario.metrics.lengthMetrics.contributions.flagAreaLoad}, difficulty ${scenario.metrics.lengthMetrics.contributions.difficultyLoad}`,
     `Fairness stddev: ${scenario.metrics.fairnessStdDev}`,
     `Course difficulty score: ${summary.difficultyScore}`,
     `Course length score: ${summary.lengthScore}`,
@@ -1909,7 +2623,7 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     `Sequence total difficulty: ${scenario.sequence.summary.totalDifficulty}`,
     `Sequence total length: ${scenario.sequence.summary.totalLength}`,
     summary.outliers.length
-      ? `Outlier starts: ${summary.outliers.map((item) => `#${item.index + 1} (${item.delta > 0 ? "+" : ""}${item.delta})`).join(", ")}`
+      ? `Outlier starts: ${summary.outliers.map((item) => `#${item.index + 1} (${item.delta > 0 ? "+" : ""}${item.delta}; ${formatOutlierReasons(item.reasons)})`).join(", ")}`
       : "Outlier starts: none",
     "",
     "Leg summaries:",
@@ -1934,8 +2648,11 @@ function buildScenarioReport(scenario, selectedLegIndex) {
 
     const selected = startAnalysis.selectedRoute;
     const usable = scenario.metrics.usableStarts.some((item) => item.index === startAnalysis.index) ? "usable" : "outlier";
+    const outlierReason = usable === "outlier"
+      ? ` reason ${formatOutlierReasons(outlierReasonByIndex.get(startAnalysis.index))}`
+      : "";
     lines.push(
-      `Start #${startAnalysis.index + 1} ${usable} at (${startAnalysis.start.x}, ${startAnalysis.start.y}) route ${startAnalysis.selectedRouteIndex + 1}/${startAnalysis.routes.length} adjusted ${startAnalysis.adjustedScore} raw ${selected.score} traffic ${startAnalysis.trafficPenalty} overlapRaw ${startAnalysis.overlapPenalty} distance ${selected.distance} actions ${selected.actions} forced ${selected.forcedDistance} hazard ${selected.hazard}`
+      `Start #${startAnalysis.index + 1} ${usable} at (${startAnalysis.start.x}, ${startAnalysis.start.y}) route ${startAnalysis.selectedRouteIndex + 1}/${startAnalysis.routes.length} adjusted ${startAnalysis.adjustedScore} raw ${selected.score} traffic ${startAnalysis.trafficPenalty} overlapRaw ${startAnalysis.overlapPenalty} distance ${selected.distance} actions ${selected.actions} forced ${selected.forcedDistance} hazard ${selected.hazard}${outlierReason}`
     );
   }
 
@@ -1955,10 +2672,16 @@ function isDevViewEnabled() {
   return document.getElementById("dev-view")?.checked ?? true;
 }
 
+function isBoardAuditEnabled() {
+  return document.getElementById("board-audit-toggle")?.checked ?? false;
+}
+
 function updateDevView() {
   const enabled = isDevViewEnabled();
   document.getElementById("trace-leg-label")?.classList.toggle("hidden", !enabled);
   document.getElementById("report-panel")?.classList.toggle("hidden", !enabled);
+  document.getElementById("board-audit-toggle-label")?.classList.toggle("hidden", !enabled);
+  updateBoardAuditVisibility();
 }
 
 function renderScenario(scenario) {
@@ -2017,6 +2740,7 @@ function renderScenario(scenario) {
     rebootTokens: scenario.rebootTokens,
     tileMap: scenario.goalTileMap,
     unusableStartIndices,
+    edgeOutlineColor: scenario.lessDeadlyGame ? "#f2c230" : null,
     showBoardLabels: devViewEnabled && selectedLegIndex !== null,
     showStartFacing: devViewEnabled && selectedLegIndex !== null,
     showWalls: devViewEnabled && selectedLegIndex !== null
@@ -2048,6 +2772,7 @@ function createRandomCandidate(assets, preferences, attempt = 1) {
   const availableDockIds = getAvailableDockIds(pieceMap, expansionIds);
   const dockPieceId = sample(availableDockIds);
   const recoveryRule = chooseRecoveryRule(preferences);
+  const lessDeadlyGame = chooseLessDeadlyGame(preferences);
   const dockFlipped = Math.random() < 0.5;
   const guidanceLevel = guidanceLevelForAttempt(attempt);
   const boardLayout = createBoardPlacements(pieceMap, preferences.length, preferences, guidanceLevel, expansionIds, dockPieceId);
@@ -2090,6 +2815,7 @@ function createRandomCandidate(assets, preferences, attempt = 1) {
   const goalTileMap = applyFlagOverrides(tileMap, checkpoints);
   const sequence = analyzeFlagSequence(goalTileMap, starts, checkpoints, preferences.playerCount, {
     recoveryRule,
+    lessDeadlyGame,
     rebootTokens,
     boardRects
   });
@@ -2113,6 +2839,7 @@ function createRandomCandidate(assets, preferences, attempt = 1) {
     goalTileMap,
     playerCount: preferences.playerCount,
     recoveryRule,
+    lessDeadlyGame,
     mainBoardIds: boardLayout.boardIds,
     mainRotations: boardLayout.placements.map((placement) => placement.rotation),
     boardCount: boardLayout.boardCount,
@@ -2133,6 +2860,7 @@ function serializeScenario(scenario) {
   return {
     preferences: scenario.preferences,
     recoveryRule: scenario.recoveryRule,
+    lessDeadlyGame: scenario.lessDeadlyGame,
     placements: scenario.placements,
     checkpoints: scenario.checkpoints,
     rebootTokens: scenario.rebootTokens,
@@ -2164,6 +2892,7 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
 
   const { pieceMap, imageMap } = assets;
   const recoveryRule = snapshot.recoveryRule ?? "reboot_tokens";
+  const lessDeadlyGame = Boolean(snapshot.lessDeadlyGame);
   const placements = snapshot.placements;
   const checkpoints = snapshot.checkpoints;
   const rebootTokens = snapshot.rebootTokens || [];
@@ -2183,6 +2912,7 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
   const goalTileMap = applyFlagOverrides(tileMap, checkpoints);
   const sequence = analyzeFlagSequence(goalTileMap, starts, checkpoints, snapshot.preferences.playerCount, {
     recoveryRule,
+    lessDeadlyGame,
     rebootTokens,
     boardRects
   });
@@ -2206,6 +2936,7 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     goalTileMap,
     playerCount: snapshot.preferences.playerCount,
     recoveryRule,
+    lessDeadlyGame,
     mainBoardIds: boardPlacements.map((placement) => placement.pieceId),
     mainRotations: boardPlacements.map((placement) => placement.rotation),
     boardCount: boardPlacements.length,
@@ -2228,6 +2959,7 @@ async function start() {
   setGeneratingOverlay(true, "Trying random setups and checking difficulty, length, and usable starts.");
   await nextFrame();
   const assets = await loadAssets();
+  initializeBoardAudit(assets);
   const preferences = getPreferencesFromControls();
   const inventoryError = validateSelectedInventory(assets, preferences);
   if (inventoryError) {
@@ -2304,8 +3036,16 @@ document.getElementById("dev-view").addEventListener("change", () => {
   }
 });
 
-document.getElementById("variant-dynamic-archiving").addEventListener("change", () => {
-  updateVariantSummary();
+document.getElementById("board-audit-toggle").addEventListener("change", () => {
+  updateBoardAuditVisibility();
+});
+
+document.getElementById("variant-dynamic-archiving").addEventListener("click", () => {
+  cycleVariantControlState("dynamicArchiving");
+});
+
+document.getElementById("variant-less-deadly-game").addEventListener("click", () => {
+  cycleVariantControlState("lessDeadlyGame");
 });
 
 document.getElementById("expansion-roborally").addEventListener("change", () => {
@@ -2320,18 +3060,24 @@ document.getElementById("expansion-thrills-and-spills").addEventListener("change
   updateExpansionSummary();
 });
 
+document.getElementById("expansion-wet-and-wild").addEventListener("change", () => {
+  updateExpansionSummary();
+});
+
 document.addEventListener("click", (event) => {
-  const picker = document.querySelector(".variant-picker");
-  if (picker && !picker.contains(event.target)) {
-    picker.removeAttribute("open");
-  }
+  document.querySelectorAll(".variant-picker").forEach((picker) => {
+    if (!picker.contains(event.target)) {
+      picker.removeAttribute("open");
+    }
+  });
 });
 
 document.addEventListener("focusin", (event) => {
-  const picker = document.querySelector(".variant-picker");
-  if (picker && !picker.contains(event.target)) {
-    picker.removeAttribute("open");
-  }
+  document.querySelectorAll(".variant-picker").forEach((picker) => {
+    if (!picker.contains(event.target)) {
+      picker.removeAttribute("open");
+    }
+  });
 });
 
 document.addEventListener("keydown", (event) => {
@@ -2342,8 +3088,10 @@ document.addEventListener("keydown", (event) => {
 
 async function init() {
   const assets = await loadAssets();
+  initializeBoardAudit(assets);
   updateExpansionSummary();
   updateVariantSummary();
+  updateDevView();
   const snapshot = loadScenarioSnapshot();
 
   if (snapshot) {

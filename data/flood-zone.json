@@ -1,9 +1,9 @@
 {
-  "id": "transition",
-  "name": "Transition",
+  "id": "flood-zone",
+  "name": "Flood Zone",
   "expansionId": "wet-and-wild",
-  "physicalBoardId": "transition-coliseum",
-  "image": "./assets/boards/transition.jpg",
+  "physicalBoardId": "flood-zone-trench-run",
+  "image": "./assets/boards/flood-zone.jpg",
   "kind": "base",
   "width": 12,
   "height": 12,
@@ -11,22 +11,13 @@
   "starts": [],
   "tiles": [
     {
-      "x": 0,
-      "y": 0,
-      "features": [
-        {
-          "type": "pit"
-        }
-      ]
-    },
-    {
       "x": 1,
       "y": 0,
       "features": [
         {
           "type": "belt",
-          "dir": "E",
-          "speed": 2
+          "dir": "S",
+          "speed": 1
         }
       ]
     },
@@ -34,234 +25,155 @@
       "x": 2,
       "y": 0,
       "features": [
-        {
-          "type": "belt",
-          "dir": "E",
-          "speed": 2
-        },
-        {
-          "type": "wall",
-          "sides": [
-            "N"
-          ]
-        }
-      ]
-    },
-    {
-      "x": 3,
-      "y": 0,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "E",
-          "speed": 2
-        }
-      ]
-    },
-    {
-      "x": 4,
-      "y": 0,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "E",
-          "speed": 2
-        },
-        {
-          "type": "wall",
-          "sides": [
-            "N"
-          ]
-        },
-        {
-          "type": "push",
-          "dir": "S",
-          "timing": [
-            1,
-            3,
-            5
-          ]
-        }
-      ]
-    },
-    {
-      "x": 5,
-      "y": 0,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "E",
-          "speed": 2
-        }
-      ]
-    },
-    {
-      "x": 6,
-      "y": 0,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "E",
-          "speed": 2
-        }
-      ]
-    },
-    {
-      "x": 7,
-      "y": 0,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "E",
-          "speed": 2
-        },
-        {
-          "type": "wall",
-          "sides": [
-            "N"
-          ]
-        },
-        {
-          "type": "push",
-          "dir": "S",
-          "timing": [
-            2,
-            4
-          ]
-        }
-      ]
-    },
-    {
-      "x": 8,
-      "y": 0,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "E",
-          "speed": 2
-        }
-      ]
-    },
-    {
-      "x": 9,
-      "y": 0,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "E",
-          "speed": 2
-        },
-        {
-          "type": "wall",
-          "sides": [
-            "N"
-          ]
-        }
-      ]
-    },
-    {
-      "x": 10,
-      "y": 0,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "E",
-          "speed": 2
-        }
-      ]
-    },
-    {
-      "x": 0,
-      "y": 1,
-      "features": [
-        {
-          "type": "gear",
-          "rotation": "ccw"
-        }
-      ]
-    },
-    {
-      "x": 1,
-      "y": 1,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "W",
-          "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 2,
-      "y": 1,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "W",
-          "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 3,
-      "y": 1,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "W",
-          "speed": 1
-        },
-        {
-          "type": "crusher",
-          "timing": [
-            1,
-            5
-          ]
-        }
-      ]
-    },
-    {
-      "x": 4,
-      "y": 1,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "W",
-          "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 5,
-      "y": 1,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "W",
-          "speed": 1
-        },
-        {
-          "type": "crusher",
-          "timing": [
-            2,
-            4
-          ]
-        }
-      ]
-    },
-    {
-      "x": 6,
-      "y": 1,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "W",
-          "speed": 1
-        },
         {
           "type": "laser",
+          "dir": "S",
+          "damage": 2
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 0,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 0,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 0,
+      "features": [
+        {
+          "type": "belt",
           "dir": "N",
-          "damage": 1
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 0,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 0,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 0,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 1,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 1,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 1,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "S",
+          "damage": 2
+        },
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 1,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 1,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 1,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 1,
+      "features": [
+        {
+          "type": "water"
         }
       ]
     },
@@ -270,70 +182,9 @@
       "y": 1,
       "features": [
         {
-          "type": "belt",
+          "type": "laser",
           "dir": "W",
-          "speed": 1
-        },
-        {
-          "type": "crusher",
-          "timing": [
-            1,
-            3
-          ]
-        }
-      ]
-    },
-    {
-      "x": 8,
-      "y": 1,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "W",
-          "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 9,
-      "y": 1,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "W",
-          "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 10,
-      "y": 1,
-      "features": [
-        {
-          "type": "gear",
-          "rotation": "cw"
-        }
-      ]
-    },
-    {
-      "x": 11,
-      "y": 1,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "S",
-          "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 0,
-      "y": 2,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "N",
-          "speed": 2
+          "damage": 2
         },
         {
           "type": "wall",
@@ -344,24 +195,86 @@
       ]
     },
     {
+      "x": 8,
+      "y": 1,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "W",
+          "damage": 2
+        },
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 1,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "W",
+          "damage": 2
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "E"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 1,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 11,
+      "y": 1,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 2,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 2,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
+        }
+      ]
+    },
+    {
       "x": 3,
       "y": 2,
       "features": [
         {
-          "type": "push",
-          "dir": "N",
-          "timing": [
-            1,
-            3,
-            5
-          ]
-        },
-        {
-          "type": "push",
-          "dir": "N",
-          "timing": [
-            2,
-            4
+          "type": "wall",
+          "sides": [
+            "N"
           ]
         }
       ]
@@ -371,13 +284,7 @@
       "y": 2,
       "features": [
         {
-          "type": "push",
-          "dir": "N",
-          "timing": [
-            1,
-            3,
-            5
-          ]
+          "type": "water"
         }
       ]
     },
@@ -386,60 +293,250 @@
       "y": 2,
       "features": [
         {
-          "type": "laser",
-          "dir": "N",
-          "damage": 1
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 2,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 2,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 11,
+      "y": 2,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "E"
+          ]
+        },
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 3,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 3,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 3,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 3,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 3,
+      "features": [
+        {
+          "type": "water"
         }
       ]
     },
     {
       "x": 7,
-      "y": 2,
+      "y": 3,
       "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 3,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 3,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 3,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 11,
+      "y": 3,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 4,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 4,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 4,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 4,
+      "features": [
+        {
+          "type": "water"
+        },
         {
           "type": "battery"
         }
       ]
     },
     {
-      "x": 8,
-      "y": 2,
+      "x": 6,
+      "y": 4,
       "features": [
         {
-          "type": "wall",
-          "sides": [
-            "S"
-          ]
+          "type": "pit"
+        },
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 4,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        },
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 4,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        },
+        {
+          "type": "water"
         }
       ]
     },
     {
       "x": 9,
-      "y": 2,
+      "y": 4,
       "features": [
         {
-          "type": "pit"
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        },
+        {
+          "type": "water"
         }
       ]
     },
     {
       "x": 10,
-      "y": 2,
+      "y": 4,
       "features": [
         {
           "type": "belt",
-          "dir": "N",
-          "speed": 2
+          "dir": "W",
+          "speed": 1
+        },
+        {
+          "type": "water"
         }
       ]
     },
     {
       "x": 11,
-      "y": 2,
+      "y": 4,
       "features": [
         {
           "type": "belt",
-          "dir": "S",
+          "dir": "W",
           "speed": 1
         },
         {
@@ -449,197 +546,96 @@
           ]
         },
         {
-          "type": "push",
-          "dir": "W",
-          "timing": [
-            2,
-            4
-          ]
+          "type": "water"
         }
       ]
     },
     {
       "x": 0,
-      "y": 3,
+      "y": 5,
       "features": [
         {
           "type": "belt",
-          "dir": "N",
-          "speed": 2
-        },
-        {
-          "type": "crusher",
-          "timing": [
-            4
-          ]
-        }
-      ]
-    },
-    {
-      "x": 3,
-      "y": 3,
-      "features": [
-        {
-          "type": "laser",
-          "dir": "N",
-          "damage": 1
-        },
-        {
-          "type": "wall",
-          "sides": [
-            "N"
-          ]
-        }
-      ]
-    },
-    {
-      "x": 5,
-      "y": 3,
-      "features": [
-        {
-          "type": "wall",
-          "sides": [
-            "N"
-          ]
-        }
-      ]
-    },
-    {
-      "x": 6,
-      "y": 3,
-      "features": [
-        {
-          "type": "laser",
-          "dir": "N",
-          "damage": 1
-        }
-      ]
-    },
-    {
-      "x": 8,
-      "y": 3,
-      "features": [
-        {
-          "type": "gear",
-          "rotation": "ccw"
-        }
-      ]
-    },
-    {
-      "x": 9,
-      "y": 3,
-      "features": [
-        {
-          "type": "wall",
-          "sides": [
-            "W"
-          ]
-        }
-      ]
-    },
-    {
-      "x": 10,
-      "y": 3,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "N",
-          "speed": 2
-        }
-      ]
-    },
-    {
-      "x": 11,
-      "y": 3,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "S",
+          "dir": "W",
           "speed": 1
         }
       ]
     },
     {
-      "x": 0,
-      "y": 4,
+      "x": 1,
+      "y": 5,
       "features": [
         {
-          "type": "belt",
-          "dir": "N",
-          "speed": 2
-        },
-        {
-          "type": "wall",
-          "sides": [
-            "W"
-          ]
+          "type": "water"
         }
       ]
     },
     {
       "x": 2,
-      "y": 4,
+      "y": 5,
       "features": [
         {
-          "type": "wall",
-          "sides": [
-            "N"
-          ]
+          "type": "water"
         }
       ]
     },
     {
       "x": 3,
-      "y": 4,
+      "y": 5,
       "features": [
         {
-          "type": "laser",
-          "dir": "N",
-          "damage": 1
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 5,
+      "features": [
+        {
+          "type": "water"
         }
       ]
     },
     {
       "x": 6,
-      "y": 4,
+      "y": 5,
       "features": [
         {
-          "type": "laser",
+          "type": "belt",
           "dir": "N",
-          "damage": 1
+          "speed": 1
         },
         {
-          "type": "wall",
-          "sides": [
-            "S"
-          ]
+          "type": "water"
         }
       ]
     },
     {
       "x": 7,
-      "y": 4,
+      "y": 5,
       "features": [
         {
-          "type": "pit"
+          "type": "water"
         }
       ]
     },
     {
       "x": 8,
-      "y": 4,
+      "y": 5,
       "features": [
         {
-          "type": "belt",
-          "dir": "S",
-          "speed": 1
+          "type": "water"
         }
       ]
     },
     {
       "x": 9,
-      "y": 4,
+      "y": 5,
       "features": [
+        {
+          "type": "water"
+        },
         {
           "type": "battery"
         }
@@ -647,24 +643,191 @@
     },
     {
       "x": 10,
-      "y": 4,
+      "y": 5,
       "features": [
         {
-          "type": "belt",
-          "dir": "N",
-          "speed": 2
+          "type": "water"
         }
       ]
     },
     {
       "x": 11,
-      "y": 4,
+      "y": 5,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 6,
       "features": [
         {
           "type": "belt",
-          "dir": "S",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 6,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 6,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 6,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 6,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
           "speed": 1
         },
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 6,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 6,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 6,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 11,
+      "y": 6,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 7,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 7,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 7,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 7,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 7,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        },
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 7,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 7,
+      "features": [
+        {
+          "type": "pit"
+        },
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 11,
+      "y": 7,
+      "features": [
         {
           "type": "wall",
           "sides": [
@@ -672,85 +835,139 @@
           ]
         },
         {
-          "type": "push",
-          "dir": "W",
-          "timing": [
-            1,
-            3,
-            5
-          ]
-        }
-      ]
-    },
-    {
-      "x": 0,
-      "y": 5,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "N",
-          "speed": 2
-        }
-      ]
-    },
-    {
-      "x": 1,
-      "y": 5,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "W",
-          "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 2,
-      "y": 5,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "W",
-          "speed": 1
+          "type": "water"
         }
       ]
     },
     {
       "x": 3,
-      "y": 5,
+      "y": 8,
       "features": [
         {
-          "type": "belt",
-          "dir": "W",
-          "speed": 1
-        },
-        {
-          "type": "laser",
-          "dir": "N",
-          "damage": 1
+          "type": "water"
         }
       ]
     },
     {
       "x": 4,
-      "y": 5,
+      "y": 8,
       "features": [
         {
-          "type": "belt",
-          "dir": "W",
-          "speed": 1
+          "type": "water"
         }
       ]
     },
     {
       "x": 5,
-      "y": 5,
+      "y": 8,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 8,
       "features": [
         {
           "type": "belt",
-          "dir": "W",
+          "dir": "N",
           "speed": 1
         },
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 8,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 8,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 8,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 8,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 11,
+      "y": 8,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 9,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 9,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 9,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 9,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 9,
+      "features": [
         {
           "type": "wall",
           "sides": [
@@ -760,557 +977,11 @@
       ]
     },
     {
-      "x": 6,
-      "y": 5,
-      "features": [
-        {
-          "type": "gear",
-          "rotation": "cw"
-        }
-      ]
-    },
-    {
-      "x": 7,
-      "y": 5,
-      "features": [
-        {
-          "type": "wall",
-          "sides": [
-            "W"
-          ]
-        }
-      ]
-    },
-    {
-      "x": 8,
-      "y": 5,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "S",
-          "speed": 1
-        },
-        {
-          "type": "crusher",
-          "timing": [
-            1,
-            3
-          ]
-        }
-      ]
-    },
-    {
-      "x": 10,
-      "y": 5,
-      "features": [
-        {
-          "type": "pit"
-        }
-      ]
-    },
-    {
-      "x": 11,
-      "y": 5,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "S",
-          "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 0,
-      "y": 6,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "N",
-          "speed": 2
-        },
-        {
-          "type": "wall",
-          "sides": [
-            "E"
-          ]
-        },
-        {
-          "type": "crusher",
-          "timing": [
-            3
-          ]
-        }
-      ]
-    },
-    {
-      "x": 3,
-      "y": 6,
-      "features": [
-        {
-          "type": "laser",
-          "dir": "N",
-          "damage": 1
-        }
-      ]
-    },
-    {
-      "x": 5,
-      "y": 6,
-      "features": [
-        {
-          "type": "gear",
-          "rotation": "ccw"
-        }
-      ]
-    },
-    {
-      "x": 6,
-      "y": 6,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "N",
-          "speed": 2
-        },
-        {
-          "type": "laser",
-          "dir": "W",
-          "damage": 1
-        },
-        {
-          "type": "wall",
-          "sides": [
-            "W"
-          ]
-        }
-      ]
-    },
-    {
-      "x": 7,
-      "y": 6,
-      "features": [
-        {
-          "type": "laser",
-          "dir": "W",
-          "damage": 1
-        }
-      ]
-    },
-    {
-      "x": 8,
-      "y": 6,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "S",
-          "speed": 1
-        },
-        {
-          "type": "laser",
-          "dir": "W",
-          "damage": 1
-        }
-      ]
-    },
-    {
       "x": 9,
-      "y": 6,
-      "features": [
-        {
-          "type": "laser",
-          "dir": "W",
-          "damage": 1
-        },
-        {
-          "type": "wall",
-          "sides": [
-            "E"
-          ]
-        }
-      ]
-    },
-    {
-      "x": 11,
-      "y": 6,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "S",
-          "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 0,
-      "y": 7,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "N",
-          "speed": 2
-        },
-        {
-          "type": "wall",
-          "sides": [
-            "W"
-          ]
-        },
-        {
-          "type": "crusher",
-          "timing": [
-            3
-          ]
-        }
-      ]
-    },
-    {
-      "x": 3,
-      "y": 7,
-      "features": [
-        {
-          "type": "laser",
-          "dir": "N",
-          "damage": 1
-        },
-        {
-          "type": "wall",
-          "sides": [
-            "S"
-          ]
-        }
-      ]
-    },
-    {
-      "x": 4,
-      "y": 7,
-      "features": [
-        {
-          "type": "pit"
-        }
-      ]
-    },
-    {
-      "x": 5,
-      "y": 7,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "S",
-          "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 6,
-      "y": 7,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "N",
-          "speed": 2
-        }
-      ]
-    },
-    {
-      "x": 8,
-      "y": 7,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "S",
-          "speed": 1
-        },
-        {
-          "type": "crusher",
-          "timing": [
-            2,
-            4
-          ]
-        }
-      ]
-    },
-    {
-      "x": 10,
-      "y": 7,
-      "features": [
-        {
-          "type": "pit"
-        }
-      ]
-    },
-    {
-      "x": 11,
-      "y": 7,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "S",
-          "speed": 1
-        },
-        {
-          "type": "wall",
-          "sides": [
-            "E"
-          ]
-        },
-        {
-          "type": "push",
-          "dir": "W",
-          "timing": [
-            2,
-            4
-          ]
-        }
-      ]
-    },
-    {
-      "x": 0,
-      "y": 8,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "N",
-          "speed": 2
-        }
-      ]
-    },
-    {
-      "x": 1,
-      "y": 8,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "W",
-          "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 2,
-      "y": 8,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "W",
-          "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 3,
-      "y": 8,
-      "features": [
-        {
-          "type": "gear",
-          "rotation": "cw"
-        }
-      ]
-    },
-    {
-      "x": 4,
-      "y": 8,
-      "features": [
-        {
-          "type": "laser",
-          "dir": "E",
-          "damage": 1
-        },
-        {
-          "type": "wall",
-          "sides": [
-            "W"
-          ]
-        }
-      ]
-    },
-    {
-      "x": 5,
-      "y": 8,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "S",
-          "speed": 1
-        },
-        {
-          "type": "laser",
-          "dir": "E",
-          "damage": 1
-        }
-      ]
-    },
-    {
-      "x": 6,
-      "y": 8,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "N",
-          "speed": 2
-        },
-        {
-          "type": "laser",
-          "dir": "E",
-          "damage": 1
-        }
-      ]
-    },
-    {
-      "x": 7,
-      "y": 8,
-      "features": [
-        {
-          "type": "laser",
-          "dir": "E",
-          "damage": 1
-        }
-      ]
-    },
-    {
-      "x": 8,
-      "y": 8,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "S",
-          "speed": 1
-        },
-        {
-          "type": "laser",
-          "dir": "E",
-          "damage": 1
-        }
-      ]
-    },
-    {
-      "x": 9,
-      "y": 8,
-      "features": [
-        {
-          "type": "laser",
-          "dir": "E",
-          "damage": 1
-        },
-        {
-          "type": "wall",
-          "sides": [
-            "E"
-          ]
-        }
-      ]
-    },
-    {
-      "x": 10,
-      "y": 8,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "N",
-          "speed": 2
-        },
-        {
-          "type": "push",
-          "dir": "E",
-          "timing": [
-            2,
-            4
-          ]
-        }
-      ]
-    },
-    {
-      "x": 11,
-      "y": 8,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "S",
-          "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 0,
       "y": 9,
       "features": [
         {
-          "type": "belt",
-          "dir": "N",
-          "speed": 2
-        },
-        {
-          "type": "wall",
-          "sides": [
-            "W"
-          ]
-        },
-        {
-          "type": "push",
-          "dir": "E",
-          "timing": [
-            2,
-            4
-          ]
-        }
-      ]
-    },
-    {
-      "x": 2,
-      "y": 9,
-      "features": [
-        {
-          "type": "pit"
-        }
-      ]
-    },
-    {
-      "x": 3,
-      "y": 9,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "N",
-          "speed": 2
-        }
-      ]
-    },
-    {
-      "x": 5,
-      "y": 9,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "S",
-          "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 6,
-      "y": 9,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "N",
-          "speed": 2
-        }
-      ]
-    },
-    {
-      "x": 8,
-      "y": 9,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "S",
-          "speed": 1
-        },
-        {
-          "type": "crusher",
-          "timing": [
-            1,
-            5
-          ]
+          "type": "water"
         }
       ]
     },
@@ -1319,9 +990,7 @@
       "y": 9,
       "features": [
         {
-          "type": "belt",
-          "dir": "N",
-          "speed": 2
+          "type": "water"
         }
       ]
     },
@@ -1330,23 +999,9 @@
       "y": 9,
       "features": [
         {
-          "type": "belt",
-          "dir": "S",
-          "speed": 1
-        },
-        {
           "type": "wall",
           "sides": [
             "E"
-          ]
-        },
-        {
-          "type": "push",
-          "dir": "W",
-          "timing": [
-            1,
-            3,
-            5
           ]
         }
       ]
@@ -1357,13 +1012,88 @@
       "features": [
         {
           "type": "belt",
-          "dir": "N",
-          "speed": 2
+          "dir": "S",
+          "speed": 1
         }
       ]
     },
     {
       "x": 1,
+      "y": 10,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 10,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 10,
+      "features": [
+        {
+          "type": "pit"
+        },
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 10,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 10,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 10,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 10,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 10,
+      "features": [
+        {
+          "type": "water"
+        }
+      ]
+    },
+    {
+      "x": 10,
       "y": 10,
       "features": [
         {
@@ -1372,123 +1102,12 @@
       ]
     },
     {
-      "x": 2,
-      "y": 10,
-      "features": [
-        {
-          "type": "wall",
-          "sides": [
-            "E"
-          ]
-        }
-      ]
-    },
-    {
-      "x": 3,
-      "y": 10,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "N",
-          "speed": 2
-        },
-        {
-          "type": "push",
-          "dir": "E",
-          "timing": [
-            2,
-            4
-          ]
-        }
-      ]
-    },
-    {
-      "x": 5,
-      "y": 10,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "S",
-          "speed": 1
-        },
-        {
-          "type": "wall",
-          "sides": [
-            "E"
-          ]
-        },
-        {
-          "type": "push",
-          "dir": "W",
-          "timing": [
-            1,
-            3,
-            5
-          ]
-        }
-      ]
-    },
-    {
-      "x": 6,
-      "y": 10,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "N",
-          "speed": 2
-        }
-      ]
-    },
-    {
-      "x": 7,
-      "y": 10,
-      "features": [
-        {
-          "type": "battery"
-        }
-      ]
-    },
-    {
-      "x": 8,
-      "y": 10,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "S",
-          "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 9,
-      "y": 10,
-      "features": [
-        {
-          "type": "wall",
-          "sides": [
-            "E"
-          ]
-        }
-      ]
-    },
-    {
-      "x": 10,
-      "y": 10,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "N",
-          "speed": 2
-        }
-      ]
-    },
-    {
       "x": 11,
       "y": 10,
       "features": [
         {
           "type": "belt",
-          "dir": "S",
+          "dir": "E",
           "speed": 1
         }
       ]
@@ -1499,8 +1118,19 @@
       "features": [
         {
           "type": "belt",
-          "dir": "N",
-          "speed": 2
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 11,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
         }
       ]
     },
@@ -1509,8 +1139,14 @@
       "y": 11,
       "features": [
         {
+          "type": "laser",
+          "dir": "N",
+          "damage": 2
+        },
+        {
           "type": "wall",
           "sides": [
+            "N",
             "S"
           ]
         }
@@ -1522,8 +1158,8 @@
       "features": [
         {
           "type": "belt",
-          "dir": "N",
-          "speed": 2
+          "dir": "W",
+          "speed": 1
         }
       ]
     },
@@ -1531,6 +1167,11 @@
       "x": 4,
       "y": 11,
       "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        },
         {
           "type": "wall",
           "sides": [
@@ -1545,7 +1186,7 @@
       "features": [
         {
           "type": "belt",
-          "dir": "S",
+          "dir": "W",
           "speed": 1
         }
       ]
@@ -1556,8 +1197,8 @@
       "features": [
         {
           "type": "belt",
-          "dir": "N",
-          "speed": 2
+          "dir": "W",
+          "speed": 1
         }
       ]
     },
@@ -1578,9 +1219,7 @@
       "y": 11,
       "features": [
         {
-          "type": "belt",
-          "dir": "S",
-          "speed": 1
+          "type": "water"
         }
       ]
     },
@@ -1603,16 +1242,7 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 2
-        }
-      ]
-    },
-    {
-      "x": 11,
-      "y": 11,
-      "features": [
-        {
-          "type": "pit"
+          "speed": 1
         }
       ]
     }

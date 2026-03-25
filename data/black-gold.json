@@ -1,7 +1,7 @@
 {
   "id": "black-gold",
   "name": "Black Gold",
-  "expansionId": "thrills-and-spills",
+"expansionId": "thrills-and-spills",
   "physicalBoardId": "black-gold-fireball-factory",
   "image": "./assets/boards/black-gold.jpg",
   "kind": "base",
@@ -135,6 +135,13 @@
           "type": "belt",
           "dir": "W",
           "speed": 1
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "E",
+            "N"
+          ]
         }
       ]
     },
@@ -442,6 +449,7 @@
         {
           "type": "wall",
           "sides": [
+            "E",
             "N"
           ]
         }
@@ -547,6 +555,13 @@
           "type": "belt",
           "dir": "N",
           "speed": 1
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "E",
+            "S"
+          ]
         }
       ]
     },
