@@ -1665,6 +1665,7 @@ export function analyzeCourse(tileMap, starts, goal, options = {}) {
   const reachable = startAnalyses.filter((item) => item.reachable && item.selectedRoute);
   let activeIndices = new Set(reachable.map((item) => item.index));
   let outlierSet = new Set();
+  const outlierDiagnostics = new Map();
   let activeReachable = reachable;
   let scoreMean = average(activeReachable.map((item) => item.adjustedScore));
   let scoreStdDev = stdDev(activeReachable.map((item) => item.adjustedScore));
@@ -1708,15 +1709,35 @@ export function analyzeCourse(tileMap, starts, goal, options = {}) {
     actionStdDev = stdDev(actions);
     const minActions = actions.length ? Math.min(...actions) : 0;
 
-    const nextOutlierSet = new Set(activeReachable
+    const passOutlierSet = new Set(activeReachable
       .filter((item) => {
-        const scoreOutlier = Math.abs(item.adjustedScore - scoreMean) > Math.max(5, scoreStdDev * 1.25);
-        const actionOutlier = item.bestActions - actionMean > Math.max(1.5, actionStdDev * 0.95);
-        const severeActionGap = item.bestActions - minActions >= 3;
+        const scoreThreshold = Math.max(8, scoreStdDev * 1.6);
+        const actionThreshold = Math.max(2, actionStdDev * 1.05);
+        const scoreGap = Math.abs(item.adjustedScore - scoreMean);
+        const actionGap = item.bestActions - actionMean;
+        const minActionGap = item.bestActions - minActions;
+        const scoreOutlier = scoreGap > scoreThreshold;
+        const actionOutlier = actionGap > actionThreshold;
+        const severeActionGap = minActionGap >= 4;
+        const flagged = scoreOutlier || (actionOutlier && severeActionGap);
 
-        return scoreOutlier || (actionOutlier && severeActionGap);
+        if (flagged) {
+          outlierDiagnostics.set(item.index, {
+            scoreOutlier,
+            actionOutlier,
+            severeActionGap,
+            scoreGap: Number(scoreGap.toFixed(2)),
+            scoreThreshold: Number(scoreThreshold.toFixed(2)),
+            actionGap: Number(actionGap.toFixed(2)),
+            actionThreshold: Number(actionThreshold.toFixed(2)),
+            minActionGap: Number(minActionGap.toFixed(2))
+          });
+        }
+
+        return flagged;
       })
       .map((item) => item.index));
+    const nextOutlierSet = new Set([...outlierSet, ...passOutlierSet]);
 
     if (sameSet(nextOutlierSet, outlierSet)) {
       outlierSet = nextOutlierSet;
@@ -1752,7 +1773,8 @@ export function analyzeCourse(tileMap, starts, goal, options = {}) {
       index: item.index,
       score: item.adjustedScore,
       delta: Number((item.adjustedScore - scoreMean).toFixed(2)),
-      actionDelta: Number((item.bestActions - actionMean).toFixed(2))
+      actionDelta: Number((item.bestActions - actionMean).toFixed(2)),
+      reasons: outlierDiagnostics.get(item.index) ?? null
     }));
 
   const difficultyScore = Number(scoreMean.toFixed(2));

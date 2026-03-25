@@ -2570,6 +2570,23 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     index === 0 ? "Dock -> 1" : `${leg.from} -> ${leg.to}`
   ));
   const goal = scenario.checkpoints[selectedLegIndex === 0 ? 0 : selectedLegIndex];
+  const outlierReasonByIndex = new Map((summary.outliers || []).map((item) => [item.index, item.reasons ?? null]));
+
+  function formatOutlierReasons(reasons) {
+    if (!reasons) {
+      return "reason unavailable";
+    }
+
+    const parts = [];
+    if (reasons.scoreOutlier) {
+      parts.push(`score gap ${reasons.scoreGap} > ${reasons.scoreThreshold}`);
+    }
+    if (reasons.actionOutlier && reasons.severeActionGap) {
+      parts.push(`actions gap ${reasons.actionGap} > ${reasons.actionThreshold} and best-gap ${reasons.minActionGap} >= 3`);
+    }
+
+    return parts.join("; ") || "reason unavailable";
+  }
 
   const lines = [
     `Requested: ${scenario.preferences.playerCount} players, ${formatDifficultyLabel(scenario.preferences.difficulty)} difficulty, ${formatLengthLabel(scenario.preferences.length)} length`,
@@ -2606,7 +2623,7 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     `Sequence total difficulty: ${scenario.sequence.summary.totalDifficulty}`,
     `Sequence total length: ${scenario.sequence.summary.totalLength}`,
     summary.outliers.length
-      ? `Outlier starts: ${summary.outliers.map((item) => `#${item.index + 1} (${item.delta > 0 ? "+" : ""}${item.delta})`).join(", ")}`
+      ? `Outlier starts: ${summary.outliers.map((item) => `#${item.index + 1} (${item.delta > 0 ? "+" : ""}${item.delta}; ${formatOutlierReasons(item.reasons)})`).join(", ")}`
       : "Outlier starts: none",
     "",
     "Leg summaries:",
@@ -2631,8 +2648,11 @@ function buildScenarioReport(scenario, selectedLegIndex) {
 
     const selected = startAnalysis.selectedRoute;
     const usable = scenario.metrics.usableStarts.some((item) => item.index === startAnalysis.index) ? "usable" : "outlier";
+    const outlierReason = usable === "outlier"
+      ? ` reason ${formatOutlierReasons(outlierReasonByIndex.get(startAnalysis.index))}`
+      : "";
     lines.push(
-      `Start #${startAnalysis.index + 1} ${usable} at (${startAnalysis.start.x}, ${startAnalysis.start.y}) route ${startAnalysis.selectedRouteIndex + 1}/${startAnalysis.routes.length} adjusted ${startAnalysis.adjustedScore} raw ${selected.score} traffic ${startAnalysis.trafficPenalty} overlapRaw ${startAnalysis.overlapPenalty} distance ${selected.distance} actions ${selected.actions} forced ${selected.forcedDistance} hazard ${selected.hazard}`
+      `Start #${startAnalysis.index + 1} ${usable} at (${startAnalysis.start.x}, ${startAnalysis.start.y}) route ${startAnalysis.selectedRouteIndex + 1}/${startAnalysis.routes.length} adjusted ${startAnalysis.adjustedScore} raw ${selected.score} traffic ${startAnalysis.trafficPenalty} overlapRaw ${startAnalysis.overlapPenalty} distance ${selected.distance} actions ${selected.actions} forced ${selected.forcedDistance} hazard ${selected.hazard}${outlierReason}`
     );
   }
 
