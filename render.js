@@ -37,6 +37,48 @@ function drawGrid(ctx, bounds, tileSize, margin) {
 }
 
 function drawFootprints(ctx, footprints, pieces, bounds, tileSize, margin) {
+  function measurePieceLabel(label, x, y, styles) {
+    ctx.save();
+    ctx.font = "bold 14px sans-serif";
+    const textWidth = ctx.measureText(label).width;
+    const labelHeight = 18;
+    const labelX = x + 6;
+    const labelY = y + (styles.offsetY ?? 6);
+    ctx.restore();
+
+    return {
+      left: labelX - 4,
+      top: labelY - 2,
+      right: labelX - 4 + textWidth + 8,
+      bottom: labelY - 2 + labelHeight,
+      textWidth,
+      labelX,
+      labelY,
+      labelHeight
+    };
+  }
+
+  function drawPieceLabel(label, x, y, styles) {
+    const rect = measurePieceLabel(label, x, y, styles);
+
+    ctx.save();
+    ctx.font = "bold 14px sans-serif";
+
+    ctx.fillStyle = styles.background;
+    ctx.fillRect(rect.left, rect.top, rect.textWidth + 8, rect.labelHeight);
+    ctx.fillStyle = styles.color;
+    ctx.fillText(label, rect.labelX, rect.labelY + 12);
+    ctx.restore();
+
+    return rect;
+  }
+
+  function rectsOverlap(a, b) {
+    return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+  }
+
+  const mainLabelRects = [];
+
   ctx.save();
   for (const fp of footprints) {
     if (fp.kind === "overlay") {
@@ -56,16 +98,30 @@ function drawFootprints(ctx, footprints, pieces, bounds, tileSize, margin) {
 
     const piece = pieces[fp.id];
     const label = piece?.name ?? fp.id;
-    ctx.font = "bold 14px sans-serif";
-    const textWidth = ctx.measureText(label).width;
-    const labelHeight = 18;
-    const labelX = x + 6;
-    const labelY = y + 6;
+    mainLabelRects.push(drawPieceLabel(label, x, y, {
+      background: "rgba(17, 24, 31, 0.58)",
+      color: "rgba(248, 251, 255, 0.98)"
+    }));
+  }
 
-    ctx.fillStyle = "rgba(17, 24, 31, 0.58)";
-    ctx.fillRect(labelX - 4, labelY - 2, textWidth + 8, labelHeight);
-    ctx.fillStyle = "rgba(248, 251, 255, 0.98)";
-    ctx.fillText(label, labelX, labelY + 12);
+  for (const fp of footprints) {
+    if (fp.kind !== "overlay") {
+      continue;
+    }
+
+    const x = margin + (fp.x - bounds.minX) * tileSize;
+    const y = margin + (fp.y - bounds.minY) * tileSize;
+    const piece = pieces[fp.id];
+    const label = piece?.name ?? fp.id;
+
+    const overlayStyles = {
+      background: "rgba(111, 201, 236, 0.55)",
+      color: "rgba(9, 30, 39, 0.96)"
+    };
+
+    const defaultRect = measurePieceLabel(label, x, y, overlayStyles);
+    const shouldOffset = mainLabelRects.some((rect) => rectsOverlap(rect, defaultRect));
+    drawPieceLabel(label, x, y, shouldOffset ? { ...overlayStyles, offsetY: 32 } : overlayStyles);
   }
   ctx.restore();
 }

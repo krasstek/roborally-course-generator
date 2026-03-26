@@ -93,10 +93,11 @@ const VARIANT_STATES = {
   forced: { label: "Always on" }
 };
 const VARIANT_CONTROL_IDS = {
-  dynamicArchiving: "variant-dynamic-archiving",
+  lighterGame: "variant-lighter-game",
   lessDeadlyGame: "variant-less-deadly-game",
   moreDeadlyGame: "variant-more-deadly-game",
-  lighterGame: "variant-lighter-game",
+  dynamicArchiving: "variant-dynamic-archiving",
+  hazardousFlags: "variant-hazardous-flags",
   lessForeshadowing: "variant-less-foreshadowing"
 };
 
@@ -730,10 +731,11 @@ function updateSetupSummary(scenario) {
 function updateVariantSummary() {
   const summaryEl = document.getElementById("variant-summary");
   const states = [
-    ["Dynamic Archiving", getVariantControlState("dynamicArchiving")],
+    ["A Lighter Game", getVariantControlState("lighterGame")],
     ["A Less Deadly Game", getVariantControlState("lessDeadlyGame")],
     ["A More Deadly Game", getVariantControlState("moreDeadlyGame")],
-    ["A Lighter Game", getVariantControlState("lighterGame")],
+    ["Dynamic Archiving", getVariantControlState("dynamicArchiving")],
+    ["Hazardous Flags", getVariantControlState("hazardousFlags")],
     ["Less Foreshadowing", getVariantControlState("lessForeshadowing")]
   ];
   const enabled = states.filter(([, state]) => state !== "off");
@@ -785,6 +787,21 @@ function hasSuppressedCheckpointFeatures(scenario) {
   });
 }
 
+function hasCheckpointBoardFeatures(scenario, featureFilter = null) {
+  if (!scenario?.placements?.length || !scenario?.checkpoints?.length) {
+    return false;
+  }
+
+  const { tileMap } = buildResolvedMap(scenario.placements, scenario.pieceMap);
+
+  return scenario.checkpoints.some((checkpoint) => {
+    const tile = tileMap.get(`${checkpoint.x},${checkpoint.y}`);
+    return (tile?.features || []).some((feature) => (
+      feature.type !== "checkpoint" && (!featureFilter || featureFilter(feature))
+    ));
+  });
+}
+
 function updateRulesNote(scenario) {
   const noteEl = document.getElementById("rules-note");
   const notes = [];
@@ -795,28 +812,32 @@ function updateRulesNote(scenario) {
     return;
   }
 
-  if (hasSuppressedCheckpointFeatures(scenario)) {
+  if (scenario.hazardousFlags) {
+    if (hasCheckpointBoardFeatures(scenario, (feature) => feature.type !== "wall" && feature.type !== "laser")) {
+      notes.push("Hazardous Flags: board elements under checkpoints remain active, but do not move or affect the checkpoints.");
+    }
+  } else if (hasSuppressedCheckpointFeatures(scenario)) {
     notes.push("Checkpoint spaces suppress non-wall, non-laser board elements (Game Guide p. 15).");
   }
 
   if (scenario.recoveryRule === "dynamic_archiving") {
-    notes.push("This course uses Dynamic Archiving (Game Guide p. 32).");
+    notes.push("Dynamic Archiving active (Game Guide p. 32).");
   }
 
   if (scenario.lessDeadlyGame) {
-    notes.push("This course uses A Less Deadly Game: board edges act as walls while pit spaces remain pits (Game Guide p. 32).");
+    notes.push("A Less Deadly Game: board edges act as walls while pit spaces remain pits (Game Guide p. 32).");
   }
 
   if (scenario.moreDeadlyGame) {
-    notes.push("This course uses A More Deadly Game: rebooting deals 3 damage instead of 2 (Game Guide p. 28).");
+    notes.push("A More Deadly Game: rebooting deals 3 damage instead of 2 (Game Guide p. 28).");
   }
 
   if (scenario.lighterGame) {
-    notes.push("This course uses A Lighter Game: upgrade cards are removed and battery spaces are inactive (Game Guide p. 32).");
+    notes.push("A Lighter Game: upgrade cards are removed and battery spaces are inactive (Game Guide p. 32).");
   }
 
   if (scenario.lessForeshadowing) {
-    notes.push("This course uses Less Foreshadowing: decks reshuffle every turn, reducing card-draw consistency (Game Guide p. 32).");
+    notes.push("Less Foreshadowing: decks reshuffle every turn, reducing card-draw consistency (Game Guide p. 32).");
   }
 
   if (!notes.length) {
@@ -833,10 +854,11 @@ function describeAllowedVariants(preferences = {}) {
   const variants = [];
   const states = preferences.allowedVariantRules || {};
   const entries = [
-    ["Dynamic Archiving", states.dynamicArchiving ?? "allowed"],
+    ["A Lighter Game", states.lighterGame ?? "off"],
     ["A Less Deadly Game", states.lessDeadlyGame ?? "off"],
     ["A More Deadly Game", states.moreDeadlyGame ?? "off"],
-    ["A Lighter Game", states.lighterGame ?? "off"],
+    ["Dynamic Archiving", states.dynamicArchiving ?? "allowed"],
+    ["Hazardous Flags", states.hazardousFlags ?? "off"],
     ["Less Foreshadowing", states.lessForeshadowing ?? "off"]
   ];
 
@@ -924,6 +946,11 @@ function chooseLighterGame(preferences) {
   return chooseVariantEnabled(lighterState, 0.24);
 }
 
+function chooseHazardousFlags(preferences) {
+  const hazardousFlagsState = preferences.allowedVariantRules?.hazardousFlags ?? "off";
+  return chooseVariantEnabled(hazardousFlagsState, 0.2);
+}
+
 function chooseLessForeshadowing(preferences) {
   const lessForeshadowingState = preferences.allowedVariantRules?.lessForeshadowing ?? "off";
   return chooseVariantEnabled(lessForeshadowingState, 0.22);
@@ -942,10 +969,11 @@ function getPreferencesFromControls() {
       "wet-and-wild": document.getElementById("expansion-wet-and-wild").checked
     },
     allowedVariantRules: {
-      dynamicArchiving: getVariantControlState("dynamicArchiving"),
+      lighterGame: getVariantControlState("lighterGame"),
       lessDeadlyGame: getVariantControlState("lessDeadlyGame"),
       moreDeadlyGame: getVariantControlState("moreDeadlyGame"),
-      lighterGame: getVariantControlState("lighterGame"),
+      dynamicArchiving: getVariantControlState("dynamicArchiving"),
+      hazardousFlags: getVariantControlState("hazardousFlags"),
       lessForeshadowing: getVariantControlState("lessForeshadowing")
     }
   };
@@ -964,10 +992,11 @@ function applyPreferencesToControls(preferences) {
   document.getElementById("expansion-master-builder").checked = preferences.selectedExpansions?.["master-builder"] ?? false;
   document.getElementById("expansion-thrills-and-spills").checked = preferences.selectedExpansions?.["thrills-and-spills"] ?? false;
   document.getElementById("expansion-wet-and-wild").checked = preferences.selectedExpansions?.["wet-and-wild"] ?? false;
+  setVariantControlState("lighterGame", preferences.allowedVariantRules?.lighterGame ?? "off");
   setVariantControlState("dynamicArchiving", preferences.allowedVariantRules?.dynamicArchiving ?? "allowed");
   setVariantControlState("lessDeadlyGame", preferences.allowedVariantRules?.lessDeadlyGame ?? "off");
   setVariantControlState("moreDeadlyGame", preferences.allowedVariantRules?.moreDeadlyGame ?? "off");
-  setVariantControlState("lighterGame", preferences.allowedVariantRules?.lighterGame ?? "off");
+  setVariantControlState("hazardousFlags", preferences.allowedVariantRules?.hazardousFlags ?? "off");
   setVariantControlState("lessForeshadowing", preferences.allowedVariantRules?.lessForeshadowing ?? "off");
   updateExpansionSummary();
   updateVariantSummary();
@@ -1055,7 +1084,7 @@ function guidanceLevelForAttempt(attempt) {
 function weightedFlagCount(lengthPreference, maxFlags) {
   const table = {
     short: [2, 2, 2, 3, 3],
-    moderate: [2, 3, 3, 4, 4],
+    moderate: [3, 3, 4, 4, 4],
     long: [3, 4, 4, 5, 5, 6]
   };
 
@@ -1066,7 +1095,7 @@ function weightedFlagCount(lengthPreference, maxFlags) {
 function weightedBoardCount(lengthPreference, maxBoards) {
   const table = {
     short: [1, 1, 1, 2, 2],
-    moderate: [1, 2, 2, 2, 3],
+    moderate: [1, 2, 2, 3, 3],
     long: [2, 2, 3, 3, 4]
   };
 
@@ -1791,7 +1820,7 @@ function getConsecutiveFlagDistanceThreshold(preferences = {}, guidanceLevel = 0
   };
   const byLengthOffset = {
     short: -2,
-    moderate: 0,
+    moderate: 1,
     long: 1
   };
 
@@ -1812,7 +1841,7 @@ function getSequentialFlagDistanceThreshold(preferences = {}, pairIndex = 0, tot
   let lateBonus = 0;
   if (pairIndex === totalFlags - 2) {
     if (lengthPreference === "moderate") {
-      lateBonus = 2;
+      lateBonus = 3;
     } else if (lengthPreference === "long") {
       lateBonus = 3;
     } else if ((preferences.difficulty ?? "moderate") !== "hard") {
@@ -1820,7 +1849,7 @@ function getSequentialFlagDistanceThreshold(preferences = {}, pairIndex = 0, tot
     }
   } else if (pairIndex === totalFlags - 3) {
     if (lengthPreference === "moderate") {
-      lateBonus = 1;
+      lateBonus = 2;
     } else if (lengthPreference === "long") {
       lateBonus = 2;
     }
@@ -1832,7 +1861,7 @@ function getSequentialFlagDistanceThreshold(preferences = {}, pairIndex = 0, tot
 function getFirstFlagDistanceThresholds(lengthPreference, guidanceLevel) {
   const base = {
     short: { nearest: 4, average: 6 },
-    moderate: { nearest: 5, average: 8 },
+    moderate: { nearest: 6, average: 9 },
     long: { nearest: 6, average: 9 }
   };
   const selected = base[lengthPreference] || base.moderate;
@@ -1899,6 +1928,19 @@ function getFlagCandidateApproachStats(tileMap, point) {
   };
 }
 
+function canUseCheckpointTile(candidate, tileMap, starts, preferences = {}) {
+  if (!preferences.hazardousFlags) {
+    return true;
+  }
+
+  if (starts.some((start) => start.x === candidate.x && start.y === candidate.y)) {
+    return false;
+  }
+
+  const tile = tileMap.get(`${candidate.x},${candidate.y}`);
+  return !(tile?.features || []).some((feature) => feature.type === "pit");
+}
+
 function getFlagCandidateWeight(candidate, tileMap, starts, preferences, sequenceIndex, guidanceLevel, thresholds, previousFlag = null) {
   let weight = candidate.weight ?? 1;
   const approachStats = getFlagCandidateApproachStats(tileMap, candidate);
@@ -1925,7 +1967,7 @@ function getFlagCandidateWeight(candidate, tileMap, starts, preferences, sequenc
     if (lengthPreference === "short") {
       weight += legDistance <= 7 ? 2.2 : legDistance <= 10 ? 0.9 : -1.8;
     } else if (lengthPreference === "moderate") {
-      weight += legDistance >= 5 && legDistance <= 10 ? 1.2 : 0;
+      weight += legDistance >= 6 && legDistance <= 12 ? 1.4 : legDistance >= 5 ? 0.5 : 0;
     } else if (legDistance >= 8) {
       weight += 1.4;
     }
@@ -1951,6 +1993,7 @@ function sampleFlagSequence(flagCandidates, flagCount, tileMap, starts, preferen
     const previousFlag = picked[sequenceIndex - 1] ?? null;
     const eligible = pool
       .filter((candidate) => (
+        canUseCheckpointTile(candidate, tileMap, starts, preferences) &&
         picked.every((flag, index) => {
           const minDistance = index === sequenceIndex - 1
             ? getSequentialFlagDistanceThreshold(preferences, index, flagCount, guidanceLevel)
@@ -2037,16 +2080,20 @@ function pickFlags(flagCandidates, flagCount, boardPlacements, dockPlacement, pi
   return null;
 }
 
-function applyFlagOverrides(tileMap, goals) {
+function applyFlagOverrides(tileMap, goals, options = {}) {
   const next = cloneTileMap(tileMap);
+  const hazardousFlags = Boolean(options.hazardousFlags);
 
   goals.forEach((goal, index) => {
     const key = `${goal.x},${goal.y}`;
     const tile = next.get(key) ?? { x: goal.x, y: goal.y, features: [] };
 
-    tile.features = tile.features.filter((feature) => (
-      feature.type === "laser" || feature.type === "wall"
-    ));
+    if (!hazardousFlags) {
+      tile.features = tile.features.filter((feature) => (
+        feature.type === "laser" || feature.type === "wall"
+      ));
+    }
+    tile.features = tile.features.filter((feature) => feature.type !== "checkpoint");
     tile.features.push({
       type: "checkpoint",
       id: index + 1
@@ -2377,6 +2424,52 @@ function pointInRect(point, rect) {
   );
 }
 
+function getRectEdgeSpan(rect, facing) {
+  if (facing === "E" || facing === "W") {
+    return {
+      start: rect.y,
+      length: rect.height
+    };
+  }
+
+  if (facing === "N" || facing === "S") {
+    return {
+      start: rect.x,
+      length: rect.width
+    };
+  }
+
+  return null;
+}
+
+function isAllowedSingleBoardDockAlignment(frontageTiles, rect, facing) {
+  const edgeSpan = getRectEdgeSpan(rect, facing);
+  if (!edgeSpan || !frontageTiles.length) {
+    return false;
+  }
+
+  const frontageStart = (facing === "E" || facing === "W")
+    ? frontageTiles[0].y
+    : frontageTiles[0].x;
+  const frontageLength = frontageTiles.length;
+  const slack = edgeSpan.length - frontageLength;
+
+  if (slack < 0) {
+    return false;
+  }
+
+  const allowedStarts = new Set([
+    edgeSpan.start,
+    edgeSpan.start + slack
+  ]);
+
+  if (slack % 2 === 0) {
+    allowedStarts.add(edgeSpan.start + slack / 2);
+  }
+
+  return allowedStarts.has(frontageStart);
+}
+
 function hasAlignedDockFrontage(structuralPlacements, pieceMap, dockPlacement) {
   const frontageTiles = getDockFrontageTiles(dockPlacement, pieceMap);
   if (!frontageTiles.length) {
@@ -2404,7 +2497,7 @@ function hasAlignedDockFrontage(structuralPlacements, pieceMap, dockPlacement) {
   }
 
   if (spans.length === 1) {
-    return true;
+    return isAllowedSingleBoardDockAlignment(frontageTiles, boardRects[spans[0].index], dockPlacement.startFacingOverride);
   }
 
   if (spans.length !== 2) {
@@ -2553,14 +2646,84 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
 
     return sum + leg.analysis.summary.averageRouteDistance;
   }, 0);
+  const courseAdjustedFirstLeg = adjustStartOutliersForCourseLength(firstLeg, totalLength);
 
   return {
     starts,
-    firstLeg,
+    firstLeg: courseAdjustedFirstLeg,
     legs,
     summary: {
       totalDifficulty: Number(totalDifficulty.toFixed(2)),
       totalLength: Number(totalLength.toFixed(2))
+    }
+  };
+}
+
+function adjustStartOutliersForCourseLength(firstLeg, totalLength) {
+  const reachable = firstLeg.starts.filter((item) => item.reachable && item.selectedRoute);
+  if (reachable.length < 2) {
+    return firstLeg;
+  }
+
+  const firstLegLength = firstLeg.summary.lengthScore || 0;
+  const safeTotalLength = Math.max(totalLength || 0, firstLegLength || 1);
+  const firstLegShare = firstLegLength / safeTotalLength;
+  const shortCourseFactor = clamp((160 - safeTotalLength) / 80, 0, 1);
+  const longCourseFactor = clamp((safeTotalLength - 190) / 80, 0, 1);
+  const firstLegShareFactor = clamp((firstLegShare - 0.24) / 0.34, 0, 1);
+  const thresholdScale = clamp(
+    1 - shortCourseFactor * 0.18 - firstLegShareFactor * 0.1 + longCourseFactor * 0.1,
+    0.78,
+    1.08
+  );
+
+  const adjustedScores = reachable.map((item) => item.adjustedScore);
+  const actions = reachable.map((item) => item.bestActions);
+  const scoreMean = adjustedScores.reduce((sum, value) => sum + value, 0) / adjustedScores.length;
+  const actionMean = actions.reduce((sum, value) => sum + value, 0) / actions.length;
+  const minActions = Math.min(...actions);
+  const scoreStdDev = Math.sqrt(adjustedScores.reduce((sum, value) => sum + (value - scoreMean) ** 2, 0) / adjustedScores.length);
+  const actionStdDev = Math.sqrt(actions.reduce((sum, value) => sum + (value - actionMean) ** 2, 0) / actions.length);
+  const scoreThreshold = Math.max(8, scoreStdDev * 1.6) * thresholdScale;
+  const actionThreshold = Math.max(2, actionStdDev * 1.05) * thresholdScale;
+
+  const outliers = reachable
+    .filter((item) => {
+      const scoreGap = Math.abs(item.adjustedScore - scoreMean);
+      const actionGap = item.bestActions - actionMean;
+      const minActionGap = item.bestActions - minActions;
+      return scoreGap > scoreThreshold || (actionGap > actionThreshold && minActionGap >= 4);
+    })
+    .map((item) => {
+      const scoreGap = Math.abs(item.adjustedScore - scoreMean);
+      const actionGap = item.bestActions - actionMean;
+      const minActionGap = item.bestActions - minActions;
+      return {
+        index: item.index,
+        score: item.adjustedScore,
+        delta: Number((item.adjustedScore - scoreMean).toFixed(2)),
+        actionDelta: Number((item.bestActions - actionMean).toFixed(2)),
+        reasons: {
+          scoreOutlier: scoreGap > scoreThreshold,
+          actionOutlier: actionGap > actionThreshold,
+          severeActionGap: minActionGap >= 4,
+          scoreGap: Number(scoreGap.toFixed(2)),
+          scoreThreshold: Number(scoreThreshold.toFixed(2)),
+          actionGap: Number(actionGap.toFixed(2)),
+          actionThreshold: Number(actionThreshold.toFixed(2)),
+          minActionGap: Number(minActionGap.toFixed(2)),
+          totalCourseLength: Number(safeTotalLength.toFixed(2)),
+          firstLegShare: Number(firstLegShare.toFixed(2)),
+          thresholdScale: Number(thresholdScale.toFixed(2))
+        }
+      };
+    });
+
+  return {
+    ...firstLeg,
+    summary: {
+      ...firstLeg.summary,
+      outliers
     }
   };
 }
@@ -2732,7 +2895,7 @@ function classifyCandidate(sequence, preferences, context = {}) {
   };
   const lengthThresholds = {
     short: [MIN_LENGTH_RAW, 140],
-    moderate: [120, 190],
+    moderate: [135, 205],
     long: [180, Infinity]
   };
 
@@ -2815,9 +2978,10 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     `Sets: ${[...getSelectedExpansionIds(scenario.preferences)].map((id) => formatExpansionName(id)).join(", ") || "none"}`,
     `Allowed variants: ${describeAllowedVariants(scenario.preferences)}`,
     `Recovery used: ${scenario.recoveryRule}`,
+    `A Lighter Game used: ${scenario.lighterGame ? "yes" : "no"}`,
     `A Less Deadly Game used: ${scenario.lessDeadlyGame ? "yes" : "no"}`,
     `A More Deadly Game used: ${scenario.moreDeadlyGame ? "yes" : "no"}`,
-    `A Lighter Game used: ${scenario.lighterGame ? "yes" : "no"}`,
+    `Hazardous Flags used: ${scenario.hazardousFlags ? "yes" : "no"}`,
     `Less Foreshadowing used: ${scenario.lessForeshadowing ? "yes" : "no"}`,
     `Accepted after ${scenario.attempts} attempt(s)`,
     `Board count: ${scenario.boardCount}`,
@@ -2890,6 +3054,23 @@ function setGeneratingOverlay(visible, text = "") {
   if (text) {
     overlayText.textContent = text;
   }
+}
+
+function openAboutDialog() {
+  const dialog = document.getElementById("about-dialog");
+  if (!dialog?.showModal || dialog.open) {
+    return;
+  }
+  closeVariantPicker();
+  dialog.showModal();
+}
+
+function closeAboutDialog() {
+  const dialog = document.getElementById("about-dialog");
+  if (!dialog?.open) {
+    return;
+  }
+  dialog.close();
 }
 
 function isDevViewEnabled() {
@@ -2999,6 +3180,7 @@ function createRandomCandidate(assets, preferences, attempt = 1) {
   const lessDeadlyGame = chooseLessDeadlyGame(preferences);
   const moreDeadlyGame = chooseMoreDeadlyGame(preferences);
   const lighterGame = chooseLighterGame(preferences);
+  const hazardousFlags = chooseHazardousFlags(preferences);
   const lessForeshadowing = chooseLessForeshadowing(preferences);
   const guidanceLevel = guidanceLevelForAttempt(attempt);
   const orderedDockIds = weightedOrder(
@@ -3064,7 +3246,7 @@ function createRandomCandidate(assets, preferences, attempt = 1) {
     dockLayout.dockPlacement,
     pieceMap,
     starts,
-    preferences,
+    { ...preferences, hazardousFlags },
     guidanceLevel
   );
   if (!checkpoints) {
@@ -3073,13 +3255,14 @@ function createRandomCandidate(assets, preferences, attempt = 1) {
   const rebootTokens = recoveryRule === "reboot_tokens"
     ? placeRebootTokens(boardRects, pieceMap, tileMap, checkpoints, preferences.playerCount)
     : [];
-  const goalTileMap = applyFlagOverrides(tileMap, checkpoints);
+  const goalTileMap = applyFlagOverrides(tileMap, checkpoints, { hazardousFlags });
   const activeStarts = filterStartsForGoals(starts, checkpoints);
   const sequence = analyzeFlagSequence(goalTileMap, activeStarts, checkpoints, preferences.playerCount, {
     recoveryRule,
     lessDeadlyGame,
     moreDeadlyGame,
     lighterGame,
+    hazardousFlags,
     lessForeshadowing,
     rebootTokens,
     boardRects
@@ -3087,6 +3270,7 @@ function createRandomCandidate(assets, preferences, attempt = 1) {
   const metrics = classifyCandidate(sequence, {
     ...preferences,
     flagCount,
+    hazardousFlags,
     lighterGame,
     lessForeshadowing
   }, {
@@ -3110,6 +3294,7 @@ function createRandomCandidate(assets, preferences, attempt = 1) {
     lessDeadlyGame,
     moreDeadlyGame,
     lighterGame,
+    hazardousFlags,
     lessForeshadowing,
     mainBoardIds: boardLayout.boardIds,
     mainRotations: boardLayout.placements.map((placement) => placement.rotation),
@@ -3122,7 +3307,8 @@ function createRandomCandidate(assets, preferences, attempt = 1) {
     metrics,
     preferences: {
       ...preferences,
-      flagCount
+      flagCount,
+      hazardousFlags
     }
   };
 }
@@ -3134,6 +3320,7 @@ function serializeScenario(scenario) {
     lessDeadlyGame: scenario.lessDeadlyGame,
     moreDeadlyGame: scenario.moreDeadlyGame,
     lighterGame: scenario.lighterGame,
+    hazardousFlags: scenario.hazardousFlags,
     lessForeshadowing: scenario.lessForeshadowing,
     placements: scenario.placements,
     checkpoints: scenario.checkpoints,
@@ -3169,6 +3356,7 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
   const lessDeadlyGame = Boolean(snapshot.lessDeadlyGame);
   const moreDeadlyGame = Boolean(snapshot.moreDeadlyGame);
   const lighterGame = Boolean(snapshot.lighterGame);
+  const hazardousFlags = Boolean(snapshot.hazardousFlags);
   const lessForeshadowing = Boolean(snapshot.lessForeshadowing);
   const placements = snapshot.placements;
   const checkpoints = snapshot.checkpoints;
@@ -3186,13 +3374,14 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
   }
 
   const { tileMap, starts } = buildResolvedMap(placements, pieceMap);
-  const goalTileMap = applyFlagOverrides(tileMap, checkpoints);
+  const goalTileMap = applyFlagOverrides(tileMap, checkpoints, { hazardousFlags });
   const activeStarts = filterStartsForGoals(starts, checkpoints);
   const sequence = analyzeFlagSequence(goalTileMap, activeStarts, checkpoints, snapshot.preferences.playerCount, {
     recoveryRule,
     lessDeadlyGame,
     moreDeadlyGame,
     lighterGame,
+    hazardousFlags,
     lessForeshadowing,
     rebootTokens,
     boardRects
@@ -3201,6 +3390,7 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     ...snapshot.preferences,
     recoveryRule,
     flagCount: checkpoints.length,
+    hazardousFlags,
     lighterGame,
     lessForeshadowing
   }, {
@@ -3223,6 +3413,7 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     lessDeadlyGame,
     moreDeadlyGame,
     lighterGame,
+    hazardousFlags,
     lessForeshadowing,
     mainBoardIds: boardPlacements.map((placement) => placement.pieceId),
     mainRotations: boardPlacements.map((placement) => placement.rotation),
@@ -3236,7 +3427,8 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     preferences: {
       ...snapshot.preferences,
       recoveryRule,
-      flagCount: checkpoints.length
+      flagCount: checkpoints.length,
+      hazardousFlags
     },
     attempts: snapshot.attempts ?? 0
   };
@@ -3310,6 +3502,25 @@ document.getElementById("reroll").addEventListener("click", () => {
   start().catch(console.error);
 });
 
+document.getElementById("about-button").addEventListener("click", () => {
+  openAboutDialog();
+});
+
+document.getElementById("about-close-icon").addEventListener("click", () => {
+  closeAboutDialog();
+});
+
+document.getElementById("about-close-button").addEventListener("click", () => {
+  closeAboutDialog();
+});
+
+document.getElementById("about-dialog").addEventListener("click", (event) => {
+  const dialog = event.currentTarget;
+  if (event.target === dialog) {
+    closeAboutDialog();
+  }
+});
+
 document.getElementById("leg-select").addEventListener("change", () => {
   if (currentScenario) {
     renderScenario(currentScenario);
@@ -3329,6 +3540,10 @@ document.getElementById("board-audit-toggle").addEventListener("change", () => {
 
 document.getElementById("variant-dynamic-archiving").addEventListener("click", () => {
   cycleVariantControlState("dynamicArchiving");
+});
+
+document.getElementById("variant-hazardous-flags").addEventListener("click", () => {
+  cycleVariantControlState("hazardousFlags");
 });
 
 document.getElementById("variant-less-deadly-game").addEventListener("click", () => {
@@ -3381,6 +3596,7 @@ document.addEventListener("focusin", (event) => {
 
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
+    closeAboutDialog();
     closeVariantPicker();
   }
 });
