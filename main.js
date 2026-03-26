@@ -8,9 +8,11 @@ const [
   {
     buildMainFootprintTiles,
     buildResolvedMap,
+    getDockFrontageLength,
     getBoundaryEdges,
     getValidDockRuns,
     groupBoundaryRuns,
+    getPlacedRect,
     placePiece,
     projectDockPlacement,
     rotatedDimensions,
@@ -57,16 +59,21 @@ const AUDIT_FEATURE_TYPES = [
   { id: "start", label: "Starts" }
 ];
 const PIECE_DATA_FILES = [
+  "all-roads",
   "black-gold",
   "blueprint",
   "cactus",
   "coliseum",
+  "coming-and-going",
   "docking-bay-a",
   "docking-bay-b",
   "doubles",
   "energize",
+  "fireball-factory",
   "flood-zone",
   "in-and-out",
+  "mb-docking-bay",
+  "mb-docking-bay-a",
   "misdirection",
   "sidewinder",
   "steps",
@@ -74,7 +81,10 @@ const PIECE_DATA_FILES = [
   "the-h",
   "the-keep",
   "the-o-ring",
+  "the-wave",
   "transition",
+  "trench-run",
+  "winding",
   "whirlpool"
 ];
 const VARIANT_STATES = {
@@ -84,7 +94,10 @@ const VARIANT_STATES = {
 };
 const VARIANT_CONTROL_IDS = {
   dynamicArchiving: "variant-dynamic-archiving",
-  lessDeadlyGame: "variant-less-deadly-game"
+  lessDeadlyGame: "variant-less-deadly-game",
+  moreDeadlyGame: "variant-more-deadly-game",
+  lighterGame: "variant-lighter-game",
+  lessForeshadowing: "variant-less-foreshadowing"
 };
 
 let currentScenario = null;
@@ -718,7 +731,10 @@ function updateVariantSummary() {
   const summaryEl = document.getElementById("variant-summary");
   const states = [
     ["Dynamic Archiving", getVariantControlState("dynamicArchiving")],
-    ["A Less Deadly Game", getVariantControlState("lessDeadlyGame")]
+    ["A Less Deadly Game", getVariantControlState("lessDeadlyGame")],
+    ["A More Deadly Game", getVariantControlState("moreDeadlyGame")],
+    ["A Lighter Game", getVariantControlState("lighterGame")],
+    ["Less Foreshadowing", getVariantControlState("lessForeshadowing")]
   ];
   const enabled = states.filter(([, state]) => state !== "off");
   summaryEl.textContent = `${enabled.length} selected`;
@@ -791,13 +807,25 @@ function updateRulesNote(scenario) {
     notes.push("This course uses A Less Deadly Game: board edges act as walls while pit spaces remain pits (Game Guide p. 32).");
   }
 
+  if (scenario.moreDeadlyGame) {
+    notes.push("This course uses A More Deadly Game: rebooting deals 3 damage instead of 2 (Game Guide p. 28).");
+  }
+
+  if (scenario.lighterGame) {
+    notes.push("This course uses A Lighter Game: upgrade cards are removed and battery spaces are inactive (Game Guide p. 32).");
+  }
+
+  if (scenario.lessForeshadowing) {
+    notes.push("This course uses Less Foreshadowing: decks reshuffle every turn, reducing card-draw consistency (Game Guide p. 32).");
+  }
+
   if (!notes.length) {
     noteEl.textContent = "";
     noteEl.classList.add("hidden");
     return;
   }
 
-  noteEl.textContent = notes.join(" ");
+  noteEl.textContent = `Special rules active: ${notes.join(" ")}`;
   noteEl.classList.remove("hidden");
 }
 
@@ -806,7 +834,10 @@ function describeAllowedVariants(preferences = {}) {
   const states = preferences.allowedVariantRules || {};
   const entries = [
     ["Dynamic Archiving", states.dynamicArchiving ?? "allowed"],
-    ["A Less Deadly Game", states.lessDeadlyGame ?? "off"]
+    ["A Less Deadly Game", states.lessDeadlyGame ?? "off"],
+    ["A More Deadly Game", states.moreDeadlyGame ?? "off"],
+    ["A Lighter Game", states.lighterGame ?? "off"],
+    ["Less Foreshadowing", states.lessForeshadowing ?? "off"]
   ];
 
   for (const [label, state] of entries) {
@@ -883,6 +914,21 @@ function chooseLessDeadlyGame(preferences) {
   return chooseVariantEnabled(lessDeadlyState, 0.22);
 }
 
+function chooseMoreDeadlyGame(preferences) {
+  const moreDeadlyState = preferences.allowedVariantRules?.moreDeadlyGame ?? "off";
+  return chooseVariantEnabled(moreDeadlyState, 0.22);
+}
+
+function chooseLighterGame(preferences) {
+  const lighterState = preferences.allowedVariantRules?.lighterGame ?? "off";
+  return chooseVariantEnabled(lighterState, 0.24);
+}
+
+function chooseLessForeshadowing(preferences) {
+  const lessForeshadowingState = preferences.allowedVariantRules?.lessForeshadowing ?? "off";
+  return chooseVariantEnabled(lessForeshadowingState, 0.22);
+}
+
 function getPreferencesFromControls() {
   return {
     playerCount: Number(document.getElementById("player-count").value),
@@ -897,7 +943,10 @@ function getPreferencesFromControls() {
     },
     allowedVariantRules: {
       dynamicArchiving: getVariantControlState("dynamicArchiving"),
-      lessDeadlyGame: getVariantControlState("lessDeadlyGame")
+      lessDeadlyGame: getVariantControlState("lessDeadlyGame"),
+      moreDeadlyGame: getVariantControlState("moreDeadlyGame"),
+      lighterGame: getVariantControlState("lighterGame"),
+      lessForeshadowing: getVariantControlState("lessForeshadowing")
     }
   };
 }
@@ -917,6 +966,9 @@ function applyPreferencesToControls(preferences) {
   document.getElementById("expansion-wet-and-wild").checked = preferences.selectedExpansions?.["wet-and-wild"] ?? false;
   setVariantControlState("dynamicArchiving", preferences.allowedVariantRules?.dynamicArchiving ?? "allowed");
   setVariantControlState("lessDeadlyGame", preferences.allowedVariantRules?.lessDeadlyGame ?? "off");
+  setVariantControlState("moreDeadlyGame", preferences.allowedVariantRules?.moreDeadlyGame ?? "off");
+  setVariantControlState("lighterGame", preferences.allowedVariantRules?.lighterGame ?? "off");
+  setVariantControlState("lessForeshadowing", preferences.allowedVariantRules?.lessForeshadowing ?? "off");
   updateExpansionSummary();
   updateVariantSummary();
 }
@@ -943,6 +995,10 @@ function deriveBoardBias(piece) {
   let hazardWeight = 0;
   let congestionWeight = 0;
   let complexityWeight = 0;
+  const getTimingWeight = (feature) => {
+    const timingCount = feature?.timing?.length ?? 0;
+    return timingCount > 0 ? timingCount / 5 : 1;
+  };
 
   for (const tile of tiles) {
     for (const feature of tile.features || []) {
@@ -951,13 +1007,15 @@ function deriveBoardBias(piece) {
       } else if (feature.type === "laser") {
         hazardWeight += 2 + (feature.damage || 1) * 0.35;
       } else if (feature.type === "flamethrower") {
-        hazardWeight += 2.6;
+        hazardWeight += 2.7 * getTimingWeight(feature);
       } else if (feature.type === "push") {
-        hazardWeight += 1;
-        complexityWeight += 1.2;
+        const timingWeight = getTimingWeight(feature);
+        hazardWeight += 1 * timingWeight;
+        complexityWeight += 1.2 * timingWeight;
       } else if (feature.type === "crusher") {
-        hazardWeight += 2.2;
-        complexityWeight += 0.8;
+        const timingWeight = getTimingWeight(feature);
+        hazardWeight += 3 * timingWeight;
+        complexityWeight += 0.8 * timingWeight;
       } else if (feature.type === "belt") {
         complexityWeight += feature.speed === 2 ? 2 : 1.2;
       } else if (feature.type === "gear") {
@@ -1030,6 +1088,62 @@ function getAvailableDockIds(pieceMap, expansionIds = null) {
     .map((piece) => piece.id);
 }
 
+function getEligibleDockIds(pieceMap, expansionIds = null, preferences = {}) {
+  const playerCount = preferences.playerCount ?? 4;
+
+  return getAvailableDockIds(pieceMap, expansionIds)
+    .filter((dockId) => (pieceMap[dockId]?.starts?.length ?? 0) >= playerCount);
+}
+
+function getDockSelectionWeight(piece, preferences = {}) {
+  const playerCount = preferences.playerCount ?? 4;
+
+  if ((piece?.starts?.length ?? 0) < playerCount) {
+    return 0;
+  }
+
+  if (piece?.physicalBoardId === "master-builder-docking-bay") {
+    if (playerCount >= 6) {
+      return 0.3;
+    }
+    if (playerCount >= 5) {
+      return 0.45;
+    }
+  }
+
+  return 1;
+}
+
+function weightedOrder(items, getWeight) {
+  const remaining = [...items];
+  const ordered = [];
+
+  while (remaining.length) {
+    const weights = remaining.map((item) => Math.max(0, Number(getWeight(item)) || 0));
+    const total = weights.reduce((sum, weight) => sum + weight, 0);
+
+    if (total <= 0) {
+      ordered.push(...shuffle(remaining));
+      break;
+    }
+
+    let pick = Math.random() * total;
+    let selectedIndex = 0;
+    for (let index = 0; index < remaining.length; index += 1) {
+      pick -= weights[index];
+      if (pick <= 0) {
+        selectedIndex = index;
+        break;
+      }
+    }
+
+    ordered.push(remaining[selectedIndex]);
+    remaining.splice(selectedIndex, 1);
+  }
+
+  return ordered;
+}
+
 function getAvailableOverlayIds(pieceMap, expansionIds = null) {
   return Object.values(pieceMap)
     .filter((piece) => piece.overlayCapable)
@@ -1078,7 +1192,7 @@ function boardIdsCanSupportDock(boardIds, pieceMap, dockPieceId) {
     return sum + Math.max(piece?.width ?? 0, piece?.height ?? 0);
   }, 0);
 
-  return totalSpanCapacity >= dockPiece.height;
+  return totalSpanCapacity >= getDockFrontageLength(dockPiece);
 }
 
 function getDockTileKeys(dockPlacement, pieceMap) {
@@ -1944,6 +2058,11 @@ function applyFlagOverrides(tileMap, goals) {
   return next;
 }
 
+function filterStartsForGoals(starts, goals) {
+  const goalKeys = new Set((goals || []).map((goal) => `${goal.x},${goal.y}`));
+  return (starts || []).filter((start) => !goalKeys.has(`${start.x},${start.y}`));
+}
+
 function getAttachmentRange(anchorPlacement, anchorPiece, candidatePiece, candidateRotation, side, minSharedEdge = MIN_SHARED_EDGE) {
   const anchorDims = rotatedDimensions(anchorPiece, anchorPlacement.rotation ?? 0);
   const candidateDims = rotatedDimensions(candidatePiece, candidateRotation);
@@ -2017,6 +2136,7 @@ function findBridgeDockPlacement(structuralPlacements, pieceMap, dockPieceId, do
   const dock = pieceMap[dockPieceId];
   const footprintTiles = buildMainFootprintTiles(structuralPlacements, pieceMap);
   const boundaryRuns = getValidDockRuns(groupBoundaryRuns(getBoundaryEdges(footprintTiles)), dock);
+  const dockFrontageLength = getDockFrontageLength(dock);
   const candidates = [];
 
   for (const run of boundaryRuns) {
@@ -2033,7 +2153,7 @@ function findBridgeDockPlacement(structuralPlacements, pieceMap, dockPieceId, do
 
       const overlapStart = Math.max(run.start, other.start);
       const overlapEnd = Math.min(run.end, other.end);
-      if (overlapEnd - overlapStart < dock.height) {
+      if (overlapEnd - overlapStart < dockFrontageLength) {
         continue;
       }
 
@@ -2218,7 +2338,83 @@ function createBoardPlacements(pieceMap, lengthPreference, preferences, guidance
   };
 }
 
-function createDockPlacement(structuralPlacements, pieceMap, dockPieceId, dockFlipped) {
+function getDockFrontageTiles(dockPlacement, pieceMap) {
+  const dockPiece = pieceMap[dockPlacement.pieceId];
+  if (!dockPiece) {
+    return [];
+  }
+
+  const dims = rotatedDimensions(dockPiece, dockPlacement.rotation ?? 0);
+  const frontage = [];
+
+  if (dockPlacement.startFacingOverride === "E") {
+    for (let y = dockPlacement.y; y < dockPlacement.y + dims.height; y += 1) {
+      frontage.push({ x: dockPlacement.x + dims.width, y });
+    }
+  } else if (dockPlacement.startFacingOverride === "W") {
+    for (let y = dockPlacement.y; y < dockPlacement.y + dims.height; y += 1) {
+      frontage.push({ x: dockPlacement.x - 1, y });
+    }
+  } else if (dockPlacement.startFacingOverride === "S") {
+    for (let x = dockPlacement.x; x < dockPlacement.x + dims.width; x += 1) {
+      frontage.push({ x, y: dockPlacement.y + dims.height });
+    }
+  } else if (dockPlacement.startFacingOverride === "N") {
+    for (let x = dockPlacement.x; x < dockPlacement.x + dims.width; x += 1) {
+      frontage.push({ x, y: dockPlacement.y - 1 });
+    }
+  }
+
+  return frontage;
+}
+
+function pointInRect(point, rect) {
+  return (
+    point.x >= rect.x &&
+    point.x < rect.x + rect.width &&
+    point.y >= rect.y &&
+    point.y < rect.y + rect.height
+  );
+}
+
+function hasAlignedDockFrontage(structuralPlacements, pieceMap, dockPlacement) {
+  const frontageTiles = getDockFrontageTiles(dockPlacement, pieceMap);
+  if (!frontageTiles.length) {
+    return false;
+  }
+
+  const boardRects = structuralPlacements.map((placement, index) => ({
+    index,
+    ...getPlacedRect(pieceMap[placement.pieceId], placement)
+  }));
+  const spans = [];
+
+  for (const point of frontageTiles) {
+    const rect = boardRects.find((candidate) => pointInRect(point, candidate));
+    if (!rect) {
+      return false;
+    }
+
+    const previous = spans[spans.length - 1];
+    if (previous?.index === rect.index) {
+      previous.length += 1;
+    } else {
+      spans.push({ index: rect.index, length: 1 });
+    }
+  }
+
+  if (spans.length === 1) {
+    return true;
+  }
+
+  if (spans.length !== 2) {
+    return false;
+  }
+
+  return spans[0].length === spans[1].length;
+}
+
+function createDockPlacement(structuralPlacements, pieceMap, dockPieceId, dockFlipped, options = {}) {
   const layoutValidation = validateMainBoardLayout(structuralPlacements, pieceMap, {
     minSharedEdge: MIN_SHARED_EDGE
   });
@@ -2230,9 +2426,10 @@ function createDockPlacement(structuralPlacements, pieceMap, dockPieceId, dockFl
   const footprintTiles = buildMainFootprintTiles(structuralPlacements, pieceMap);
   const boundaryRuns = groupBoundaryRuns(getBoundaryEdges(footprintTiles));
   const validRuns = getValidDockRuns(boundaryRuns, dock);
+  const dockFrontageLength = getDockFrontageLength(dock);
 
   for (const run of shuffle(validRuns)) {
-    const availableOffsets = run.length - dock.height;
+    const availableOffsets = run.length - dockFrontageLength;
     const offsets = [];
     for (let offset = 0; offset <= availableOffsets; offset += 1) {
       offsets.push(offset);
@@ -2242,7 +2439,7 @@ function createDockPlacement(structuralPlacements, pieceMap, dockPieceId, dockFl
       const dockPlacement = projectDockPlacement(run, offset, dock, dockFlipped);
       const dockValidation = validateDockPlacement(dockPlacement, structuralPlacements, pieceMap, footprintTiles);
 
-      if (dockValidation.valid) {
+      if (dockValidation.valid && (!options.alignedLayout || hasAlignedDockFrontage(structuralPlacements, pieceMap, dockPlacement))) {
         return {
           dockPlacement,
           dockValidation,
@@ -2260,6 +2457,7 @@ function getDockBoundaryRun(structuralPlacements, dockPlacement, pieceMap) {
   const footprintTiles = buildMainFootprintTiles(structuralPlacements, pieceMap);
   const boundaryRuns = groupBoundaryRuns(getBoundaryEdges(footprintTiles));
   const validRuns = getValidDockRuns(boundaryRuns, dock);
+  const dockDims = rotatedDimensions(dock, dockPlacement.rotation ?? 0);
   const expectedSide = {
     E: "W",
     S: "N",
@@ -2272,18 +2470,18 @@ function getDockBoundaryRun(structuralPlacements, dockPlacement, pieceMap) {
       return false;
     }
 
-    const projected = projectDockPlacement(run, 0, dock, dockPlacement.rotation === (({
-      W: 180,
-      N: 270,
-      E: 0,
-      S: 90
-    })[run.side] ?? 0));
+    return [false, true].some((flipped) => {
+      const projected = projectDockPlacement(run, 0, dock, flipped);
+      if (projected.rotation !== (dockPlacement.rotation ?? 0)) {
+        return false;
+      }
 
-    if (run.side === "W" || run.side === "E") {
-      return projected.x === dockPlacement.x && dockPlacement.y >= projected.y && dockPlacement.y + dock.height <= projected.y + run.length;
-    }
+      if (run.side === "W" || run.side === "E") {
+        return projected.x === dockPlacement.x && dockPlacement.y >= projected.y && dockPlacement.y + dockDims.height <= projected.y + run.length;
+      }
 
-    return projected.y === dockPlacement.y && dockPlacement.x >= projected.x && dockPlacement.x + dock.width <= projected.x + run.length;
+      return projected.y === dockPlacement.y && dockPlacement.x >= projected.x && dockPlacement.x + dockDims.width <= projected.x + run.length;
+    });
   }) ?? null;
 }
 
@@ -2294,6 +2492,7 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
     playerCount,
     recoveryRule: options.recoveryRule,
     lessDeadlyGame: options.lessDeadlyGame,
+    moreDeadlyGame: options.moreDeadlyGame,
     rebootTokens: options.rebootTokens,
     boardRects: options.boardRects
   });
@@ -2325,6 +2524,7 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
       maxExpansions: 18000,
       recoveryRule: options.recoveryRule,
       lessDeadlyGame: options.lessDeadlyGame,
+      moreDeadlyGame: options.moreDeadlyGame,
       rebootTokens: options.rebootTokens,
       boardRects: options.boardRects
     });
@@ -2442,7 +2642,20 @@ function computeDifficultyRaw(sequence) {
   ).toFixed(2));
 }
 
-function computeLengthMetrics(sequence, flagCount, playerCount, boardCount) {
+function applyVariantDifficultyModifiers(raw, preferences = {}) {
+  let adjusted = raw;
+
+  if (preferences.lighterGame) {
+    adjusted *= 0.96;
+  }
+  if (preferences.lessForeshadowing) {
+    adjusted *= 1.1;
+  }
+
+  return Number(adjusted.toFixed(2));
+}
+
+function computeLengthMetrics(sequence, flagCount, playerCount, boardCount, preferences = {}) {
   const first = sequence.firstLeg.summary;
   const later = sequence.legs.slice(1);
   const totalRouteDistance = first.lengthScore + later.reduce((sum, leg) => sum + (leg.analysis.summary.averageRouteDistance || 0), 0);
@@ -2457,7 +2670,14 @@ function computeLengthMetrics(sequence, flagCount, playerCount, boardCount) {
   const difficultyLoad = sequence.summary.totalDifficulty * 0.03;
   const routeLoad = actionLoad + distanceLoad;
   const frictionLoad = congestionLoad + flagAreaLoad + difficultyLoad;
-  const raw = Number((checkpointLoad + playerLoad + routeLoad + frictionLoad).toFixed(2));
+  let raw = Number((checkpointLoad + playerLoad + routeLoad + frictionLoad).toFixed(2));
+
+  if (preferences.lighterGame) {
+    raw = Number((raw * 0.92).toFixed(2));
+  }
+  if (preferences.lessForeshadowing) {
+    raw = Number((raw * 1.04).toFixed(2));
+  }
 
   return {
     raw,
@@ -2494,12 +2714,13 @@ function bandDistance(value, band, thresholds) {
 
 function classifyCandidate(sequence, preferences, context = {}) {
   const usableStarts = computeUsableStarts(sequence.firstLeg);
-  const difficultyRaw = computeDifficultyRaw(sequence);
+  const difficultyRaw = applyVariantDifficultyModifiers(computeDifficultyRaw(sequence), preferences);
   const lengthMetrics = computeLengthMetrics(
     sequence,
     preferences.flagCount,
     preferences.playerCount,
-    context.boardPlacements?.length ?? 1
+    context.boardPlacements?.length ?? 1,
+    preferences
   );
   const lengthRaw = lengthMetrics.raw;
   const fairnessStdDev = sequence.firstLeg.summary.scoreStdDev;
@@ -2510,8 +2731,8 @@ function classifyCandidate(sequence, preferences, context = {}) {
     hard: [105, Infinity]
   };
   const lengthThresholds = {
-    short: [MIN_LENGTH_RAW, 130],
-    moderate: [130, 180],
+    short: [MIN_LENGTH_RAW, 140],
+    moderate: [120, 190],
     long: [180, Infinity]
   };
 
@@ -2595,6 +2816,9 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     `Allowed variants: ${describeAllowedVariants(scenario.preferences)}`,
     `Recovery used: ${scenario.recoveryRule}`,
     `A Less Deadly Game used: ${scenario.lessDeadlyGame ? "yes" : "no"}`,
+    `A More Deadly Game used: ${scenario.moreDeadlyGame ? "yes" : "no"}`,
+    `A Lighter Game used: ${scenario.lighterGame ? "yes" : "no"}`,
+    `Less Foreshadowing used: ${scenario.lessForeshadowing ? "yes" : "no"}`,
     `Accepted after ${scenario.attempts} attempt(s)`,
     `Board count: ${scenario.boardCount}`,
     `Boards: ${scenario.mainBoardIds.map((pieceId, index) => `${pieceId}@${scenario.mainRotations[index]}`).join(", ")}`,
@@ -2737,6 +2961,7 @@ function renderScenario(scenario) {
     goal,
     analysis: renderAnalysis,
     goals: scenario.checkpoints,
+    starts: scenario.activeStarts,
     rebootTokens: scenario.rebootTokens,
     tileMap: scenario.goalTileMap,
     unusableStartIndices,
@@ -2753,7 +2978,7 @@ function renderScenario(scenario) {
 
 function validateSelectedInventory(assets, preferences) {
   const expansionIds = getSelectedExpansionIds(preferences);
-  const availableDockIds = getAvailableDockIds(assets.pieceMap, expansionIds);
+  const availableDockIds = getEligibleDockIds(assets.pieceMap, expansionIds, preferences);
   if (!availableDockIds.length) {
     return "The selected sets contain no docking bay. Enable a set with a docking bay to generate a course.";
   }
@@ -2769,21 +2994,57 @@ function validateSelectedInventory(assets, preferences) {
 function createRandomCandidate(assets, preferences, attempt = 1) {
   const { pieceMap } = assets;
   const expansionIds = getSelectedExpansionIds(preferences);
-  const availableDockIds = getAvailableDockIds(pieceMap, expansionIds);
-  const dockPieceId = sample(availableDockIds);
+  const availableDockIds = getEligibleDockIds(pieceMap, expansionIds, preferences);
   const recoveryRule = chooseRecoveryRule(preferences);
   const lessDeadlyGame = chooseLessDeadlyGame(preferences);
-  const dockFlipped = Math.random() < 0.5;
+  const moreDeadlyGame = chooseMoreDeadlyGame(preferences);
+  const lighterGame = chooseLighterGame(preferences);
+  const lessForeshadowing = chooseLessForeshadowing(preferences);
   const guidanceLevel = guidanceLevelForAttempt(attempt);
-  const boardLayout = createBoardPlacements(pieceMap, preferences.length, preferences, guidanceLevel, expansionIds, dockPieceId);
+  const orderedDockIds = weightedOrder(
+    availableDockIds,
+    (dockId) => getDockSelectionWeight(pieceMap[dockId], preferences)
+  );
+  let boardLayout = null;
+  let dockLayout = null;
+  let dockPieceId = null;
+  let dockFlipped = false;
+
+  for (const candidateDockId of orderedDockIds) {
+    const candidateBoardLayout = createBoardPlacements(pieceMap, preferences.length, preferences, guidanceLevel, expansionIds, candidateDockId);
+    if (!candidateBoardLayout) {
+      continue;
+    }
+
+    const flipOrder = shuffle([false, true]);
+    let candidateDockLayout = null;
+    let candidateDockFlipped = false;
+
+    for (const candidateFlip of flipOrder) {
+      candidateDockLayout = createDockPlacement(candidateBoardLayout.placements, pieceMap, candidateDockId, candidateFlip, {
+        alignedLayout: preferences.alignedLayout
+      });
+      if (candidateDockLayout) {
+        candidateDockFlipped = candidateFlip;
+        break;
+      }
+    }
+
+    if (!candidateDockLayout) {
+      continue;
+    }
+
+    dockPieceId = candidateDockId;
+    dockFlipped = candidateDockFlipped;
+    boardLayout = candidateBoardLayout;
+    dockLayout = candidateDockLayout;
+    break;
+  }
+
   if (!boardLayout) {
     throw new Error("Unable to create a valid board layout");
   }
 
-  const dockLayout = createDockPlacement(boardLayout.placements, pieceMap, dockPieceId, dockFlipped);
-  if (!dockLayout) {
-    throw new Error("Unable to place dock on assembled perimeter");
-  }
   const overlayPlacements = chooseOverlayPlacements(boardLayout.placements, dockLayout.dockPlacement, pieceMap, preferences, expansionIds);
 
   const placements = [
@@ -2813,15 +3074,21 @@ function createRandomCandidate(assets, preferences, attempt = 1) {
     ? placeRebootTokens(boardRects, pieceMap, tileMap, checkpoints, preferences.playerCount)
     : [];
   const goalTileMap = applyFlagOverrides(tileMap, checkpoints);
-  const sequence = analyzeFlagSequence(goalTileMap, starts, checkpoints, preferences.playerCount, {
+  const activeStarts = filterStartsForGoals(starts, checkpoints);
+  const sequence = analyzeFlagSequence(goalTileMap, activeStarts, checkpoints, preferences.playerCount, {
     recoveryRule,
     lessDeadlyGame,
+    moreDeadlyGame,
+    lighterGame,
+    lessForeshadowing,
     rebootTokens,
     boardRects
   });
   const metrics = classifyCandidate(sequence, {
     ...preferences,
-    flagCount
+    flagCount,
+    lighterGame,
+    lessForeshadowing
   }, {
     boardPlacements: boardLayout.placements,
     pieceMap,
@@ -2837,9 +3104,13 @@ function createRandomCandidate(assets, preferences, attempt = 1) {
     overlayPlacements,
     rebootTokens,
     goalTileMap,
+    activeStarts,
     playerCount: preferences.playerCount,
     recoveryRule,
     lessDeadlyGame,
+    moreDeadlyGame,
+    lighterGame,
+    lessForeshadowing,
     mainBoardIds: boardLayout.boardIds,
     mainRotations: boardLayout.placements.map((placement) => placement.rotation),
     boardCount: boardLayout.boardCount,
@@ -2861,6 +3132,9 @@ function serializeScenario(scenario) {
     preferences: scenario.preferences,
     recoveryRule: scenario.recoveryRule,
     lessDeadlyGame: scenario.lessDeadlyGame,
+    moreDeadlyGame: scenario.moreDeadlyGame,
+    lighterGame: scenario.lighterGame,
+    lessForeshadowing: scenario.lessForeshadowing,
     placements: scenario.placements,
     checkpoints: scenario.checkpoints,
     rebootTokens: scenario.rebootTokens,
@@ -2893,6 +3167,9 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
   const { pieceMap, imageMap } = assets;
   const recoveryRule = snapshot.recoveryRule ?? "reboot_tokens";
   const lessDeadlyGame = Boolean(snapshot.lessDeadlyGame);
+  const moreDeadlyGame = Boolean(snapshot.moreDeadlyGame);
+  const lighterGame = Boolean(snapshot.lighterGame);
+  const lessForeshadowing = Boolean(snapshot.lessForeshadowing);
   const placements = snapshot.placements;
   const checkpoints = snapshot.checkpoints;
   const rebootTokens = snapshot.rebootTokens || [];
@@ -2910,16 +3187,22 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
 
   const { tileMap, starts } = buildResolvedMap(placements, pieceMap);
   const goalTileMap = applyFlagOverrides(tileMap, checkpoints);
-  const sequence = analyzeFlagSequence(goalTileMap, starts, checkpoints, snapshot.preferences.playerCount, {
+  const activeStarts = filterStartsForGoals(starts, checkpoints);
+  const sequence = analyzeFlagSequence(goalTileMap, activeStarts, checkpoints, snapshot.preferences.playerCount, {
     recoveryRule,
     lessDeadlyGame,
+    moreDeadlyGame,
+    lighterGame,
+    lessForeshadowing,
     rebootTokens,
     boardRects
   });
   const metrics = classifyCandidate(sequence, {
     ...snapshot.preferences,
     recoveryRule,
-    flagCount: checkpoints.length
+    flagCount: checkpoints.length,
+    lighterGame,
+    lessForeshadowing
   }, {
     boardPlacements,
     pieceMap,
@@ -2934,9 +3217,13 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     checkpoints,
     rebootTokens,
     goalTileMap,
+    activeStarts,
     playerCount: snapshot.preferences.playerCount,
     recoveryRule,
     lessDeadlyGame,
+    moreDeadlyGame,
+    lighterGame,
+    lessForeshadowing,
     mainBoardIds: boardPlacements.map((placement) => placement.pieceId),
     mainRotations: boardPlacements.map((placement) => placement.rotation),
     boardCount: boardPlacements.length,
@@ -3046,6 +3333,18 @@ document.getElementById("variant-dynamic-archiving").addEventListener("click", (
 
 document.getElementById("variant-less-deadly-game").addEventListener("click", () => {
   cycleVariantControlState("lessDeadlyGame");
+});
+
+document.getElementById("variant-more-deadly-game").addEventListener("click", () => {
+  cycleVariantControlState("moreDeadlyGame");
+});
+
+document.getElementById("variant-lighter-game").addEventListener("click", () => {
+  cycleVariantControlState("lighterGame");
+});
+
+document.getElementById("variant-less-foreshadowing").addEventListener("click", () => {
+  cycleVariantControlState("lessForeshadowing");
 });
 
 document.getElementById("expansion-roborally").addEventListener("change", () => {

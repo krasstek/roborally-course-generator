@@ -32,6 +32,7 @@ const ACTIONS = [
 const ROTATION_ORDER = ["N", "E", "S", "W"];
 const EDGE_BEHAVIOR = "pit";
 const REBOOT_DAMAGE_PENALTY = 8;
+const MORE_DEADLY_REBOOT_DAMAGE_PENALTY = 12;
 const REBOOT_TEMPO_PENALTY = 34;
 const SCARCE_ACTIONS = new Map([
   ["WAIT", { shortWindow: 5, shortPenalty: 12, longWindow: 9, longPenalty: 4 }],
@@ -134,6 +135,25 @@ function hasRampForDir(tile, dir) {
   return getRamps(tile).some((feature) => feature.dir === dir);
 }
 
+function crossesLedgeBoundary(fromTile, toTile, dir) {
+  const fromLedges = getLedgeSides(fromTile);
+  const toLedges = getLedgeSides(toTile);
+  return fromLedges.has(dir) || toLedges.has(OPPOSITE[dir]);
+}
+
+function getLedgeElevationDelta(fromTile, toTile, dir) {
+  let delta = 0;
+
+  if (getLedgeSides(fromTile).has(dir)) {
+    delta += 1;
+  }
+  if (getLedgeSides(toTile).has(OPPOSITE[dir])) {
+    delta -= 1;
+  }
+
+  return delta;
+}
+
 function buildPortalMap(tileMap) {
   const portalMap = new Map();
 
@@ -171,30 +191,43 @@ function getRebootTokenForPoint(point, boardRects = [], rebootTokens = []) {
   return rebootTokens.find((token) => token.boardIndex === boardRect.index) ?? null;
 }
 
-function getTilePenalty(tile) {
+function getRebootDamagePenalty(options = {}) {
+  return options.moreDeadlyGame ? MORE_DEADLY_REBOOT_DAMAGE_PENALTY : REBOOT_DAMAGE_PENALTY;
+}
+
+function isBatteryActive(options = {}) {
+  return !options.lighterGame;
+}
+
+function getTimingWeight(feature) {
+  const timingCount = feature?.timing?.length ?? 0;
+  return timingCount > 0 ? timingCount / 5 : 1;
+}
+
+function getTilePenalty(tile, options = {}) {
   let penalty = 0;
 
   for (const feature of tile?.features || []) {
     if (feature.type === "laser") {
       penalty += 3 + (feature.damage || 1);
     } else if (feature.type === "flamethrower") {
-      penalty += 4;
+      penalty += 5 * getTimingWeight(feature);
     } else if (feature.type === "push") {
-      penalty += 2;
+      penalty += 2 * getTimingWeight(feature);
     } else if (feature.type === "gear") {
       penalty += 1.5;
     } else if (feature.type === "portal") {
       penalty += 1.2;
     } else if (feature.type === "oil") {
       penalty += 2.8;
-    } else if (feature.type === "battery") {
+    } else if (feature.type === "battery" && isBatteryActive(options)) {
       penalty -= 2;
     } else if (feature.type === "ledge") {
       penalty += 0.8;
     } else if (feature.type === "ramp") {
       penalty += 0.35;
     } else if (feature.type === "crusher") {
-      penalty += 6;
+      penalty += getRebootDamagePenalty(options) * getTimingWeight(feature);
     }
   }
 
@@ -231,6 +264,36 @@ function getPitPressurePenalty(tileMap, point, options = {}) {
     }
 
     penalty += 0.5;
+  }
+
+  return Number(penalty.toFixed(2));
+}
+
+function isExposedToLedge(tileMap, point, dir, options = {}) {
+  const fromTile = tileMap.get(tileKey(point.x, point.y));
+  const next = {
+    x: point.x + DIRS[dir].dx,
+    y: point.y + DIRS[dir].dy
+  };
+  const toTile = tileMap.get(tileKey(next.x, next.y));
+
+  if (!fromTile || !toTile) {
+    return false;
+  }
+
+  const move = canMoveBetween(tileMap, point, next, dir, options);
+  return move.ok && (move.ledgeDamage || 0) > 0;
+}
+
+function getLedgePressurePenalty(tileMap, point, options = {}) {
+  let penalty = 0;
+
+  for (const dir of ROTATION_ORDER) {
+    if (!isExposedToLedge(tileMap, point, dir, options)) {
+      continue;
+    }
+
+    penalty += 0.3;
   }
 
   return Number(penalty.toFixed(2));
@@ -280,7 +343,7 @@ function canMoveBetween(tileMap, from, to, dir, options = {}) {
     return { ok: false, crash: false, offBoard: false };
   }
 
-  if (toLedges.has(OPPOSITE[dir]) && !hasRampForDir(toTile, OPPOSITE[dir])) {
+  if (fromLedges.has(dir) && !hasRampForDir(fromTile, dir)) {
     return { ok: false, crash: false, offBoard: false };
   }
 
@@ -292,7 +355,10 @@ function canMoveBetween(tileMap, from, to, dir, options = {}) {
     ok: true,
     crash: false,
     offBoard: false,
-    ledgeDamage: fromLedges.has(dir) ? 1 : 0
+    ledgeDamage: toLedges.has(OPPOSITE[dir]) && !hasRampForDir(toTile, OPPOSITE[dir])
+      ? (isWater(toTile) ? 1 : 2)
+      : 0,
+    rampAscent: fromLedges.has(dir) && hasRampForDir(fromTile, dir)
   };
 }
 
@@ -445,17 +511,15 @@ function applyEndOfStepRotation(tileMap, state) {
   };
 }
 
-function applyRampCost(tileMap, state, dir, mode) {
-  if (mode !== "manual") {
-    return false;
-  }
+function moveOneStep(tileMap, state, dir, mode, options = {}, moveBudget = null) {
+  const delta = DIRS[dir];
+  const next = {
+    x: state.x + delta.dx,
+    y: state.y + delta.dy
+  };
+  const moveCheck = canMoveBetween(tileMap, state, next, dir, options);
 
-  const tile = tileMap.get(tileKey(state.x, state.y));
-  return hasRampForDir(tile, dir);
-}
-
-function moveOneStep(tileMap, state, dir, mode, options = {}) {
-  if (applyRampCost(tileMap, state, dir, mode)) {
+  if (mode === "manual" && moveCheck.ok && moveCheck.rampAscent && moveBudget !== null && moveBudget < 2) {
     return {
       state: cloneState(state),
       blocked: false,
@@ -467,16 +531,10 @@ function moveOneStep(tileMap, state, dir, mode, options = {}) {
       rebootPenalty: 0,
       distance: 0,
       forcedDistance: 0,
-      spentMove: true
+      spentMove: true,
+      rampAscent: true
     };
   }
-
-  const delta = DIRS[dir];
-  const next = {
-    x: state.x + delta.dx,
-    y: state.y + delta.dy
-  };
-  const moveCheck = canMoveBetween(tileMap, state, next, dir, options);
 
   if (!moveCheck.ok) {
     const rebootToken = moveCheck.crash && options.recoveryRule === "reboot_tokens"
@@ -504,11 +562,12 @@ function moveOneStep(tileMap, state, dir, mode, options = {}) {
         rebooted: true,
         traversed: [{ x: next.x, y: next.y }],
         conveyorSteps: [],
-        hazard: REBOOT_DAMAGE_PENALTY,
+        hazard: getRebootDamagePenalty(options),
         rebootPenalty: REBOOT_TEMPO_PENALTY,
         distance: 1,
         forcedDistance: mode === "belt" || mode === "push" ? 1 : 0,
-        spentMove: true
+        spentMove: true,
+        rampAscent: false
       };
     }
 
@@ -523,7 +582,8 @@ function moveOneStep(tileMap, state, dir, mode, options = {}) {
       rebootPenalty: 0,
       distance: moveCheck.crash ? 1 : 0,
       forcedDistance: (mode === "belt" || mode === "push") && moveCheck.crash ? 1 : 0,
-      spentMove: true
+      spentMove: true,
+      rampAscent: false
     };
   }
 
@@ -571,11 +631,15 @@ function moveOneStep(tileMap, state, dir, mode, options = {}) {
       speed: currentBelt?.speed ?? belt?.speed ?? 1,
       turned
     }] : [],
-    hazard: getTilePenalty(nextTile) + getPitPressurePenalty(tileMap, resolvedState, options) + (moveCheck.ledgeDamage || 0),
+    hazard: getTilePenalty(nextTile, options) +
+      getPitPressurePenalty(tileMap, resolvedState, options) +
+      getLedgePressurePenalty(tileMap, resolvedState, options) +
+      (moveCheck.ledgeDamage || 0),
     rebootPenalty: 0,
     distance: 1,
     forcedDistance: mode === "belt" || mode === "oil" || mode === "push" ? 1 : 0,
-    spentMove: true
+    spentMove: true,
+    rampAscent: Boolean(moveCheck.rampAscent)
   };
 
   if (mode !== "oil" && isOil(tileMap.get(tileKey(resolvedState.x, resolvedState.y)))) {
@@ -747,7 +811,7 @@ function resolveCrusherPhase(tileMap, state, options = {}) {
       })),
       traversed: [{ x: state.x, y: state.y }],
       conveyorSteps: [],
-      hazard: REBOOT_DAMAGE_PENALTY,
+      hazard: getRebootDamagePenalty(options),
       rebootPenalty: REBOOT_TEMPO_PENALTY,
       distance: 0,
       forcedDistance: 0,
@@ -773,7 +837,7 @@ function simulateAction(tileMap, startState, action, options = {}) {
   const state = cloneState(startState);
   const traversed = [];
   const conveyorSteps = [];
-  let hazard = getTilePenalty(tileMap.get(tileKey(state.x, state.y)));
+  let hazard = getTilePenalty(tileMap.get(tileKey(state.x, state.y)), options);
   let rebootPenalty = 0;
   let distance = 0;
   let forcedDistance = 0;
@@ -788,14 +852,14 @@ function simulateAction(tileMap, startState, action, options = {}) {
     const startTile = tileMap.get(tileKey(state.x, state.y));
     const onOil = isOil(startTile);
     const onWater = isWater(startTile);
-    const movementPenalty = action.relative === "forward"
-      ? (onOil ? 1 : 0) + (onWater ? 1 : 0)
-      : 0;
-    const reducedSteps = Math.max(0, (action.steps ?? 1) - movementPenalty);
-    const steps = reducedSteps;
+    let remainingSteps = Math.max(0, (action.steps ?? 1) - (
+      action.relative === "forward"
+        ? (onOil ? 1 : 0) + (onWater ? 1 : 0)
+        : 0
+    ));
 
-    for (let index = 0; index < steps; index += 1) {
-      const step = moveOneStep(tileMap, state, movementDir(state.facing, action.relative), "manual", options);
+    while (remainingSteps > 0) {
+      const step = moveOneStep(tileMap, state, movementDir(state.facing, action.relative), "manual", options, remainingSteps);
       traversed.push(...step.traversed);
       hazard += step.hazard;
       rebootPenalty += step.rebootPenalty || 0;
@@ -823,6 +887,7 @@ function simulateAction(tileMap, startState, action, options = {}) {
       state.x = step.state.x;
       state.y = step.state.y;
       state.facing = step.state.facing;
+      remainingSteps -= 1 + (step.rampAscent ? 1 : 0);
     }
   }
 
@@ -939,20 +1004,22 @@ function getActionPenalty(action) {
   return 5;
 }
 
-function getScarceActionReusePenalty(history, actionId) {
+function getScarceActionReusePenalty(history, actionId, options = {}) {
   const scarcity = SCARCE_ACTIONS.get(actionId);
   if (!scarcity) {
     return 0;
   }
 
+  const lessForeshadowingFactor = options.lessForeshadowing ? 0.72 : 1;
+
   const shortRecent = history.slice(-scarcity.shortWindow);
   if (shortRecent.includes(actionId)) {
-    return scarcity.shortPenalty;
+    return scarcity.shortPenalty * lessForeshadowingFactor;
   }
 
   const longRecent = history.slice(-scarcity.longWindow);
   if (longRecent.includes(actionId)) {
-    return scarcity.longPenalty;
+    return scarcity.longPenalty * lessForeshadowingFactor;
   }
 
   return 0;
@@ -1093,7 +1160,7 @@ function enumerateRoutes(tileMap, start, goal, options = {}) {
       const actionPenalty = getActionPenalty(action);
       const reversePenalty = action.id === "BACK" ? 2.5 : 0;
       const heavyMovePenalty = action.id === "FORWARD_2" ? 1.5 : action.id === "FORWARD_3" ? 3 : 0;
-      const scarceReusePenalty = getScarceActionReusePenalty(current.actionHistory, action.id);
+      const scarceReusePenalty = getScarceActionReusePenalty(current.actionHistory, action.id, options);
       const conveyorComplexity = scoreConveyorComplexity({
         transitions: [transition]
       }, goal);
@@ -1217,29 +1284,46 @@ function hasLineOfSight(tileMap, from, to) {
     return false;
   }
 
+  let elevation = 0;
+  let maxElevation = 0;
+
   if (from.x === to.x) {
     const dir = to.y > from.y ? "S" : "N";
     const step = to.y > from.y ? 1 : -1;
 
     for (let y = from.y; y !== to.y; y += step) {
+      const fromTile = tileMap.get(tileKey(from.x, y));
+      const toTile = tileMap.get(tileKey(from.x, y + step));
       if (!canMoveBetween(tileMap, { x: from.x, y }, { x: from.x, y: y + step }, dir).ok) {
         return false;
       }
+
+      if (crossesLedgeBoundary(fromTile, toTile, dir)) {
+        elevation += getLedgeElevationDelta(fromTile, toTile, dir);
+        maxElevation = Math.max(maxElevation, elevation);
+      }
     }
 
-    return true;
+    return elevation === 0 && maxElevation <= 0;
   }
 
   const dir = to.x > from.x ? "E" : "W";
   const step = to.x > from.x ? 1 : -1;
 
   for (let x = from.x; x !== to.x; x += step) {
+    const fromTile = tileMap.get(tileKey(x, from.y));
+    const toTile = tileMap.get(tileKey(x + step, from.y));
     if (!canMoveBetween(tileMap, { x, y: from.y }, { x: x + step, y: from.y }, dir).ok) {
       return false;
     }
+
+    if (crossesLedgeBoundary(fromTile, toTile, dir)) {
+      elevation += getLedgeElevationDelta(fromTile, toTile, dir);
+      maxElevation = Math.max(maxElevation, elevation);
+    }
   }
 
-  return true;
+  return elevation === 0 && maxElevation <= 0;
 }
 
 function lateralThreatPenalty(tileMap, routeA, routeB) {
@@ -1518,11 +1602,11 @@ function scoreFlagArea(tileMap, goal, options = {}) {
         } else if (feature.type === "laser") {
           score += (2 + (feature.damage || 1)) * proximityWeight;
         } else if (feature.type === "flamethrower") {
-          score += 4 * proximityWeight;
+          score += 4 * getTimingWeight(feature) * proximityWeight;
         } else if (feature.type === "push") {
-          score += 2.5 * proximityWeight;
+          score += 2.5 * getTimingWeight(feature) * proximityWeight;
         } else if (feature.type === "crusher") {
-          score += 3.25 * proximityWeight;
+          score += 4 * getTimingWeight(feature) * proximityWeight;
         } else if (feature.type === "belt") {
           score += (feature.speed === 2 ? 2 : 1.25) * proximityWeight;
         } else if (feature.type === "gear") {
@@ -1535,7 +1619,7 @@ function scoreFlagArea(tileMap, goal, options = {}) {
           score += 1.35 * proximityWeight;
         } else if (feature.type === "ramp") {
           score += 0.75 * proximityWeight;
-        } else if (feature.type === "battery") {
+        } else if (feature.type === "battery" && isBatteryActive(options)) {
           score -= 2 * proximityWeight;
         }
       }

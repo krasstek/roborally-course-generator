@@ -21,22 +21,15 @@
       ]
     },
     {
-      "x": 2,
+      "x": 3,
       "y": 0,
       "features": [
         {
           "type": "ledge",
           "sides": [
-            "E",
-            "S"
+            "W"
           ]
-        }
-      ]
-    },
-    {
-      "x": 3,
-      "y": 0,
-      "features": [
+        },
         {
           "type": "ramp",
           "dir": "N"
@@ -58,20 +51,14 @@
       "y": 0,
       "features": [
         {
-          "type": "ramp",
-          "dir": "N"
-        }
-      ]
-    },
-    {
-      "x": 6,
-      "y": 0,
-      "features": [
-        {
           "type": "ledge",
           "sides": [
-            "W"
+            "E"
           ]
+        },
+        {
+          "type": "ramp",
+          "dir": "N"
         }
       ]
     },
@@ -94,11 +81,18 @@
           "type": "belt",
           "dir": "W",
           "speed": 1
-        },
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 0,
+      "features": [
         {
           "type": "ledge",
           "sides": [
-            "E"
+            "N",
+            "W"
           ]
         }
       ]
@@ -111,17 +105,24 @@
           "type": "laser",
           "dir": "N",
           "damage": 1
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "N"
+          ]
         }
       ]
     },
     {
-      "x": 1,
-      "y": 1,
+      "x": 11,
+      "y": 0,
       "features": [
         {
           "type": "ledge",
           "sides": [
-            "E"
+            "E",
+            "N"
           ]
         }
       ]
@@ -134,6 +135,13 @@
           "type": "laser",
           "dir": "W",
           "damage": 1
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "N",
+            "W"
+          ]
         }
       ]
     },
@@ -167,17 +175,11 @@
           "type": "laser",
           "dir": "W",
           "damage": 1
-        }
-      ]
-    },
-    {
-      "x": 6,
-      "y": 1,
-      "features": [
+        },
         {
           "type": "ledge",
           "sides": [
-            "W"
+            "E"
           ]
         }
       ]
@@ -187,13 +189,6 @@
       "y": 1,
       "features": [
         {
-          "type": "ledge",
-          "sides": [
-            "E",
-            "S"
-          ]
-        },
-        {
           "type": "battery"
         }
       ]
@@ -202,6 +197,12 @@
       "x": 8,
       "y": 1,
       "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "W"
+          ]
+        },
         {
           "type": "ramp",
           "dir": "N"
@@ -247,6 +248,12 @@
       "y": 2,
       "features": [
         {
+          "type": "ledge",
+          "sides": [
+            "S"
+          ]
+        },
+        {
           "type": "ramp",
           "dir": "W"
         }
@@ -272,6 +279,18 @@
         {
           "type": "ramp",
           "dir": "N"
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 2,
+      "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "N"
+          ]
         }
       ]
     },
@@ -324,14 +343,19 @@
       "y": 3,
       "features": [
         {
+          "type": "battery"
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 3,
+      "features": [
+        {
           "type": "ledge",
           "sides": [
-            "E",
-            "N"
+            "W"
           ]
-        },
-        {
-          "type": "battery"
         }
       ]
     },
@@ -388,6 +412,12 @@
       "y": 3,
       "features": [
         {
+          "type": "ledge",
+          "sides": [
+            "S"
+          ]
+        },
+        {
           "type": "ramp",
           "dir": "E"
         }
@@ -416,14 +446,13 @@
       ]
     },
     {
-      "x": 2,
+      "x": 3,
       "y": 4,
       "features": [
         {
           "type": "ledge",
           "sides": [
-            "E",
-            "S"
+            "W"
           ]
         }
       ]
@@ -434,6 +463,42 @@
       "features": [
         {
           "type": "battery"
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 4,
+      "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 4,
+      "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 4,
+      "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "S"
+          ]
         }
       ]
     },
@@ -455,18 +520,12 @@
           "type": "laser",
           "dir": "N",
           "damage": 1
-        }
-      ]
-    },
-    {
-      "x": 11,
-      "y": 4,
-      "features": [
+        },
         {
           "type": "ledge",
           "sides": [
-            "N",
-            "W"
+            "E",
+            "S"
           ]
         }
       ]
@@ -483,21 +542,15 @@
       ]
     },
     {
-      "x": 1,
+      "x": 2,
       "y": 5,
       "features": [
         {
           "type": "ledge",
           "sides": [
-            "S"
+            "N"
           ]
-        }
-      ]
-    },
-    {
-      "x": 2,
-      "y": 5,
-      "features": [
+        },
         {
           "type": "ramp",
           "dir": "W"
@@ -518,6 +571,18 @@
       ]
     },
     {
+      "x": 5,
+      "y": 5,
+      "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "E"
+          ]
+        }
+      ]
+    },
+    {
       "x": 6,
       "y": 5,
       "features": [
@@ -525,13 +590,6 @@
           "type": "belt",
           "dir": "S",
           "speed": 1
-        },
-        {
-          "type": "ledge",
-          "sides": [
-            "N",
-            "W"
-          ]
         }
       ]
     },
@@ -543,12 +601,6 @@
           "type": "belt",
           "dir": "W",
           "speed": 1
-        },
-        {
-          "type": "ledge",
-          "sides": [
-            "N"
-          ]
         }
       ]
     },
@@ -560,12 +612,6 @@
           "type": "belt",
           "dir": "W",
           "speed": 1
-        },
-        {
-          "type": "ledge",
-          "sides": [
-            "N"
-          ]
         }
       ]
     },
@@ -588,12 +634,6 @@
           "type": "belt",
           "dir": "W",
           "speed": 1
-        },
-        {
-          "type": "ledge",
-          "sides": [
-            "N"
-          ]
         }
       ]
     },
@@ -616,13 +656,6 @@
           "type": "belt",
           "dir": "N",
           "speed": 1
-        },
-        {
-          "type": "ledge",
-          "sides": [
-            "E",
-            "S"
-          ]
         }
       ]
     },
@@ -634,6 +667,13 @@
           "type": "laser",
           "dir": "S",
           "damage": 1
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "N",
+            "W"
+          ]
         }
       ]
     },
@@ -643,6 +683,12 @@
       "features": [
         {
           "type": "pit"
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "E"
+          ]
         }
       ]
     },
@@ -651,38 +697,7 @@
       "y": 6,
       "features": [
         {
-          "type": "ledge",
-          "sides": [
-            "S",
-            "W"
-          ]
-        },
-        {
           "type": "battery"
-        }
-      ]
-    },
-    {
-      "x": 8,
-      "y": 6,
-      "features": [
-        {
-          "type": "ledge",
-          "sides": [
-            "S"
-          ]
-        }
-      ]
-    },
-    {
-      "x": 9,
-      "y": 6,
-      "features": [
-        {
-          "type": "ledge",
-          "sides": [
-            "S"
-          ]
         }
       ]
     },
@@ -690,6 +705,12 @@
       "x": 0,
       "y": 7,
       "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "N"
+          ]
+        },
         {
           "type": "ramp",
           "dir": "W"
@@ -714,7 +735,20 @@
         {
           "type": "wall",
           "sides": [
+            "N",
             "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 7,
+      "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "N"
           ]
         }
       ]
@@ -730,6 +764,18 @@
       ]
     },
     {
+      "x": 8,
+      "y": 7,
+      "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "N"
+          ]
+        }
+      ]
+    },
+    {
       "x": 9,
       "y": 7,
       "features": [
@@ -737,6 +783,13 @@
           "type": "laser",
           "dir": "N",
           "damage": 1
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "E",
+            "N"
+          ]
         }
       ]
     },
@@ -749,25 +802,6 @@
           "timing": [
             2,
             3
-          ]
-        },
-        {
-          "type": "ledge",
-          "sides": [
-            "S",
-            "W"
-          ]
-        }
-      ]
-    },
-    {
-      "x": 11,
-      "y": 7,
-      "features": [
-        {
-          "type": "ledge",
-          "sides": [
-            "S"
           ]
         }
       ]
@@ -852,9 +886,27 @@
       ]
     },
     {
+      "x": 10,
+      "y": 8,
+      "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "N"
+          ]
+        }
+      ]
+    },
+    {
       "x": 11,
       "y": 8,
       "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "N"
+          ]
+        },
         {
           "type": "ramp",
           "dir": "E"
@@ -865,6 +917,12 @@
       "x": 0,
       "y": 9,
       "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "S"
+          ]
+        },
         {
           "type": "ramp",
           "dir": "W"
@@ -879,6 +937,12 @@
           "type": "laser",
           "dir": "S",
           "damage": 1
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "S"
+          ]
         }
       ]
     },
@@ -889,6 +953,30 @@
         {
           "type": "ramp",
           "dir": "S"
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 9,
+      "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 9,
+      "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "S"
+          ]
         }
       ]
     },
@@ -926,18 +1014,6 @@
       ]
     },
     {
-      "x": 0,
-      "y": 10,
-      "features": [
-        {
-          "type": "ledge",
-          "sides": [
-            "N"
-          ]
-        }
-      ]
-    },
-    {
       "x": 1,
       "y": 10,
       "features": [
@@ -946,12 +1022,6 @@
           "timing": [
             2,
             5
-          ]
-        },
-        {
-          "type": "ledge",
-          "sides": [
-            "N"
           ]
         }
       ]
@@ -964,12 +1034,6 @@
           "type": "belt",
           "dir": "E",
           "speed": 1
-        },
-        {
-          "type": "ledge",
-          "sides": [
-            "N"
-          ]
         }
       ]
     },
@@ -977,13 +1041,6 @@
       "x": 4,
       "y": 10,
       "features": [
-        {
-          "type": "ledge",
-          "sides": [
-            "E",
-            "N"
-          ]
-        },
         {
           "type": "battery"
         }
@@ -993,6 +1050,12 @@
       "x": 5,
       "y": 10,
       "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "W"
+          ]
+        },
         {
           "type": "ramp",
           "dir": "S"
@@ -1020,6 +1083,18 @@
       ]
     },
     {
+      "x": 8,
+      "y": 10,
+      "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "S"
+          ]
+        }
+      ]
+    },
+    {
       "x": 9,
       "y": 10,
       "features": [
@@ -1027,6 +1102,12 @@
           "type": "laser",
           "dir": "N",
           "damage": 1
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "S"
+          ]
         }
       ]
     },
@@ -1045,6 +1126,12 @@
       "y": 10,
       "features": [
         {
+          "type": "ledge",
+          "sides": [
+            "S"
+          ]
+        },
+        {
           "type": "ramp",
           "dir": "E"
         }
@@ -1081,18 +1168,6 @@
           "type": "wall",
           "sides": [
             "E"
-          ]
-        }
-      ]
-    },
-    {
-      "x": 8,
-      "y": 11,
-      "features": [
-        {
-          "type": "ledge",
-          "sides": [
-            "N"
           ]
         }
       ]
@@ -1106,24 +1181,6 @@
           "timing": [
             1,
             2
-          ]
-        },
-        {
-          "type": "ledge",
-          "sides": [
-            "N"
-          ]
-        }
-      ]
-    },
-    {
-      "x": 11,
-      "y": 11,
-      "features": [
-        {
-          "type": "ledge",
-          "sides": [
-            "N"
           ]
         }
       ]

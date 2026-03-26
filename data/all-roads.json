@@ -1,6 +1,6 @@
 {
-  "id": "All Roads",
-  "name": "all-roads",
+  "id": "all-roads",
+  "name": "All Roads",
   "expansionId": "master-builder",
   "physicalBoardId": "all-roads-winding",
   "image": "./assets/boards/all-roads.PNG",

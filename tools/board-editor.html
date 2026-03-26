@@ -500,17 +500,108 @@
     }
 
     function parseTiming(text) {
-      const values = text
-        .split(",")
-        .map(s => s.trim())
-        .filter(Boolean)
-        .map(Number)
-        .filter(n => Number.isFinite(n));
-      return values;
+      return [...new Set(
+        text
+          .split(",")
+          .map(s => s.trim())
+          .filter(Boolean)
+          .map(Number)
+          .filter(n => Number.isInteger(n) && n >= 1 && n <= 5)
+      )].sort((a, b) => a - b);
+    }
+
+    function normalizeSides(sides) {
+      const validSides = new Set(["N", "E", "S", "W"]);
+      return [...new Set((sides || []).filter(side => validSides.has(side)))].sort();
+    }
+
+    function normalizeTiming(timing) {
+      return [...new Set((timing || []).filter(n => Number.isInteger(n) && n >= 1 && n <= 5))].sort((a, b) => a - b);
+    }
+
+    function normalizeFeature(feature) {
+      if (!feature || typeof feature !== "object" || typeof feature.type !== "string") {
+        return null;
+      }
+
+      switch (feature.type) {
+        case "pit":
+        case "oil":
+        case "battery":
+        case "randomizer":
+        case "water":
+          return { type: feature.type };
+        case "belt":
+          return {
+            type: "belt",
+            dir: feature.dir || "N",
+            speed: feature.speed === 2 ? 2 : 1
+          };
+        case "gear":
+          return {
+            type: "gear",
+            rotation: feature.rotation === "ccw" ? "ccw" : "cw"
+          };
+        case "laser":
+          return {
+            type: "laser",
+            dir: feature.dir || "N",
+            damage: Number.isFinite(feature.damage) && feature.damage > 0 ? Number(feature.damage) : 1
+          };
+        case "wall":
+          return {
+            type: "wall",
+            sides: normalizeSides(feature.sides)
+          };
+        case "push":
+          return {
+            type: "push",
+            dir: feature.dir || "N",
+            timing: normalizeTiming(feature.timing)
+          };
+        case "flamethrower":
+          return {
+            type: "flamethrower",
+            dir: feature.dir || "N",
+            timing: normalizeTiming(feature.timing)
+          };
+        case "crusher":
+          return {
+            type: "crusher",
+            timing: normalizeTiming(feature.timing)
+          };
+        case "portal":
+          return {
+            type: "portal",
+            id: String(feature.id || "1")
+          };
+        case "teleporter":
+          return {
+            type: "teleporter",
+            power: Number.isFinite(feature.power) && feature.power > 0 ? Number(feature.power) : 2
+          };
+        case "ledge":
+          return {
+            type: "ledge",
+            sides: normalizeSides(feature.sides)
+          };
+        case "ramp":
+          return {
+            type: "ramp",
+            dir: feature.dir || "N"
+          };
+        case "checkpoint":
+          return {
+            type: "checkpoint",
+            id: Number.isFinite(feature.id) ? Number(feature.id) : 1
+          };
+        default:
+          return JSON.parse(JSON.stringify(feature));
+      }
     }
 
     function cloneFeature(feature) {
-      return JSON.parse(JSON.stringify(feature));
+      return normalizeFeature(feature);
     }
 
     function clearBoardData() {
@@ -525,7 +616,9 @@
         .map(tile => ({
           x: Number(tile.x),
           y: Number(tile.y),
-          features: Array.isArray(tile.features) ? tile.features.map(cloneFeature) : []
+          features: Array.isArray(tile.features)
+            ? tile.features.map(cloneFeature).filter(Boolean)
+            : []
         }));
     }
 
@@ -589,9 +682,12 @@
         }
       }
 
-      const exists = tile.features.some(f => sameFeature(f, feature));
+      const normalizedFeature = normalizeFeature(feature);
+      if (!normalizedFeature) return;
+
+      const exists = tile.features.some(f => sameFeature(f, normalizedFeature));
       if (!exists) {
-        tile.features.push(feature);
+        tile.features.push(normalizedFeature);
       }
     }
 
@@ -663,39 +759,39 @@
 
       switch (currentTool) {
         case "pit":
-          return { type: "pit" };
+          return normalizeFeature({ type: "pit" });
         case "oil":
-          return { type: "oil" };
+          return normalizeFeature({ type: "oil" });
         case "belt":
-          return { type: "belt", dir, speed: beltSpeed };
+          return normalizeFeature({ type: "belt", dir, speed: beltSpeed });
         case "gear":
-          return { type: "gear", rotation: gearRotation };
+          return normalizeFeature({ type: "gear", rotation: gearRotation });
         case "laser":
-          return { type: "laser", dir, damage: laserDamage };
+          return normalizeFeature({ type: "laser", dir, damage: laserDamage });
         case "wall":
-          return { type: "wall", sides: [dir] };
+          return normalizeFeature({ type: "wall", sides: [dir] });
         case "push":
-          return { type: "push", dir, timing: pushTiming };
+          return normalizeFeature({ type: "push", dir, timing: pushTiming });
         case "flamethrower":
-          return { type: "flamethrower", dir, timing: pushTiming };
+          return normalizeFeature({ type: "flamethrower", dir, timing: pushTiming });
         case "crusher":
-          return { type: "crusher", timing: pushTiming };
+          return normalizeFeature({ type: "crusher", timing: pushTiming });
         case "portal":
-          return { type: "portal", id: featureId || "1" };
+          return normalizeFeature({ type: "portal", id: featureId || "1" });
         case "teleporter":
-          return { type: "teleporter", power: Number.isFinite(teleporterPower) && teleporterPower > 0 ? teleporterPower : 2 };
+          return normalizeFeature({ type: "teleporter", power: Number.isFinite(teleporterPower) && teleporterPower > 0 ? teleporterPower : 2 });
         case "randomizer":
-          return { type: "randomizer" };
+          return normalizeFeature({ type: "randomizer" });
         case "ledge":
-          return { type: "ledge", sides: [dir] };
+          return normalizeFeature({ type: "ledge", sides: [dir] });
         case "ramp":
-          return { type: "ramp", dir };
+          return normalizeFeature({ type: "ramp", dir });
         case "water":
-          return { type: "water" };
+          return normalizeFeature({ type: "water" });
         case "checkpoint":
-          return { type: "checkpoint", id: checkpointId };
+          return normalizeFeature({ type: "checkpoint", id: checkpointId });
         case "battery":
-          return { type: "battery" };
+          return normalizeFeature({ type: "battery" });
         default:
           return null;
       }
@@ -911,7 +1007,7 @@
           ctx.fillText(`P ${f.dir}`, left + 4, textY);
           textY += 12;
         } else if (f.type === "flamethrower") {
-          ctx.fillText(`F ${f.dir}`, left + 4, textY);
+          ctx.fillText(`F ${f.dir} ${(f.timing || []).join("/") || "-"}`, left + 4, textY);
           textY += 12;
         } else if (f.type === "crusher") {
           ctx.fillText(`Cr ${(f.timing || []).join("/") || "-"}`, left + 4, textY);

@@ -173,7 +173,8 @@ function drawFeatures(ctx, tileMap, bounds, tileSize, margin, showLabels = true,
       } else if (feature.type === "laser") {
         label = `laser${feature.dir ? " " + feature.dir : ""}`;
       } else if (feature.type === "flamethrower") {
-        label = `flame${feature.dir ? " " + feature.dir : ""}`;
+        const timing = feature.timing?.length ? ` [${feature.timing.join(",")}]` : "";
+        label = `flame${feature.dir ? " " + feature.dir : ""}${timing}`;
       } else if (feature.type === "gear") {
         label = `gear ${feature.rotation}`;
       } else if (feature.type === "checkpoint") {
@@ -427,7 +428,7 @@ export function render(canvas, pieces, imageMap = {}, options = {}) {
   ];
   const resolved = buildResolvedMap(placements, pieces);
   const tileMap = options.tileMap ?? resolved.tileMap;
-  const starts = resolved.starts;
+  const starts = options.starts ?? resolved.starts;
   const footprints = resolved.footprints;
   const overlayPlacements = placements.filter((placement) => placement.overlay);
   const boardCount = placements.filter((placement) => {

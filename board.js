@@ -378,12 +378,20 @@ export function groupBoundaryRuns(boundaryEdges) {
 }
 
 export function projectDockPlacement(run, offset, dockPiece, flipped = false) {
-  const baseRotationBySide = {
-    W: 0,
-    N: 90,
-    E: 180,
-    S: 270
-  };
+  const isWide = (dockPiece.width ?? 0) >= (dockPiece.height ?? 0);
+  const baseRotationBySide = isWide
+    ? {
+        W: 90,
+        N: 0,
+        E: 270,
+        S: 180
+      }
+    : {
+        W: 0,
+        N: 90,
+        E: 180,
+        S: 270
+      };
   const facingBySide = {
     W: "E",
     N: "S",
@@ -432,8 +440,12 @@ export function projectDockPlacement(run, offset, dockPiece, flipped = false) {
   };
 }
 
+export function getDockFrontageLength(dockPiece) {
+  return Math.max(dockPiece?.width ?? 0, dockPiece?.height ?? 0);
+}
+
 export function getValidDockRuns(boundaryRuns, dockPiece) {
-  return boundaryRuns.filter((run) => run.length >= dockPiece.height);
+  return boundaryRuns.filter((run) => run.length >= getDockFrontageLength(dockPiece));
 }
 
 export function validateDockPlacement(dockPlacement, structuralPlacements, pieces, footprintTiles) {
