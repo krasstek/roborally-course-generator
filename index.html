@@ -349,6 +349,23 @@
       display: none !important;
     }
 
+    .fit-note {
+      margin: 0 0 12px;
+      padding: 12px 14px;
+      border-radius: 12px;
+      background: linear-gradient(180deg, rgba(245, 239, 211, 0.98) 0%, rgba(231, 220, 178, 0.97) 100%);
+      border: 1px solid rgba(122, 100, 24, 0.26);
+      color: #4b3d10;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2);
+      font-size: 13px;
+      line-height: 1.45;
+      font-weight: 700;
+    }
+
+    .fit-note.hidden {
+      display: none !important;
+    }
+
     .setup-row {
       display: grid;
       grid-template-columns: 86px 1fr;
@@ -736,16 +753,18 @@
         <label>
           Difficulty
           <select id="difficulty">
+            <option value="any" selected>Any</option>
             <option value="easy">Beginner</option>
-            <option value="moderate" selected>Intermediate</option>
+            <option value="moderate">Intermediate</option>
             <option value="hard">Advanced</option>
           </select>
         </label>
         <label>
           Length
           <select id="length">
+            <option value="any" selected>Any</option>
             <option value="short">Short</option>
-            <option value="moderate" selected>Medium</option>
+            <option value="moderate">Medium</option>
             <option value="long">Long</option>
           </select>
         </label>
@@ -826,6 +845,7 @@
         <button id="about-button" class="secondary-button" type="button">About</button>
         <button id="reroll" type="button">Generate Course</button>
       </div>
+      <p id="fit-note" class="fit-note hidden"></p>
       <div id="setup-summary" class="setup-summary hidden">
         <div class="setup-row">
           <div class="setup-label">Boards</div>
@@ -846,6 +866,7 @@
         <span class="pill">Gold flag: checkpoint</span>
         <span id="legend-reboot-token" class="pill hidden">Green marker: reboot token</span>
       </div>
+      <p id="checkpoint-note" class="rules-note hidden"></p>
       <p id="rules-note" class="rules-note hidden">Special rules active. Reminder: on checkpoint spaces, only walls and lasers stay active; other board elements on that space do not (Game Guide p. 15).</p>
       <section id="board-audit-panel" class="audit-panel hidden">
         <div class="audit-header">

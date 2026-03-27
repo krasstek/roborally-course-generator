@@ -28,7 +28,7 @@ const [
 const ROTATIONS = [0, 90, 180, 270];
 const FACINGS = ["N", "E", "S", "W"];
 const DOCK_SIDES = ["left", "top", "right", "bottom"];
-const MAX_ATTEMPTS = 120;
+const MAX_ATTEMPTS = 40;
 const MIN_LENGTH_RAW = 28;
 const MIN_SHARED_EDGE = 5;
 const DOCK_BRIDGE_GAP = 3;
@@ -36,6 +36,14 @@ const DOCK_BRIDGE_PROBABILITY = 0.12;
 const OVERLAY_UPDATE_INTERVAL = 4;
 const SAVED_SCENARIO_KEY = "roborally-course-generator:last-scenario";
 const BOARD_AUDIT_NOTES_KEY = "roborally-course-generator:board-audit-notes";
+const VARIANT_COMPLEXITY = {
+  lighterGame: 1,
+  lessDeadlyGame: 1,
+  moreDeadlyGame: 1,
+  dynamicArchiving: 1,
+  hazardousFlags: 2,
+  lessForeshadowing: 1
+};
 const AUDIT_RENDER_TILE_SIZE = 40;
 const AUDIT_RENDER_MARGIN = 30;
 const AUDIT_FEATURE_TYPES = [
@@ -142,7 +150,8 @@ async function loadAssets() {
   }
 
   for (const piece of Object.values(pieceMap)) {
-    piece.derivedBias = deriveBoardBias(piece);
+    piece.boardProfile = deriveBoardProfile(piece);
+    piece.derivedBias = piece.boardProfile.bias;
   }
 
   const imageMap = {};
@@ -253,11 +262,15 @@ function titleCaseWords(value) {
 }
 
 function formatLengthLabel(lengthPreference) {
+  if (lengthPreference === "any") {
+    return "any";
+  }
   return lengthPreference === "moderate" ? "medium" : String(lengthPreference ?? "medium");
 }
 
 function formatDifficultyLabel(difficultyPreference) {
   const labels = {
+    any: "any",
     easy: "beginner",
     moderate: "intermediate",
     hard: "advanced"
@@ -282,6 +295,22 @@ function formatExpansionName(expansionId) {
   };
 
   return labels[expansionId] ?? titleCaseWords(expansionId);
+}
+
+function getDifficultyThresholds() {
+  return {
+    easy: [0, 70],
+    moderate: [70, 105],
+    hard: [105, Infinity]
+  };
+}
+
+function getLengthThresholds() {
+  return {
+    short: [MIN_LENGTH_RAW, 140],
+    moderate: [135, 205],
+    long: [180, Infinity]
+  };
 }
 
 function getReverseSideName(pieceId, pieceMap) {
@@ -694,6 +723,7 @@ function initializeBoardAudit(assets) {
 }
 
 function updateSetupSummary(scenario) {
+  const fitNoteEl = document.getElementById("fit-note");
   const summary = document.getElementById("setup-summary");
   const boardsEl = document.getElementById("setup-boards");
   const overlaysRowEl = document.getElementById("setup-overlays-row");
@@ -701,6 +731,8 @@ function updateSetupSummary(scenario) {
   const flagsEl = document.getElementById("setup-flags");
 
   if (!scenario) {
+    fitNoteEl.textContent = "";
+    fitNoteEl.classList.add("hidden");
     summary.classList.add("hidden");
     boardsEl.textContent = "";
     overlaysRowEl.classList.add("hidden");
@@ -725,6 +757,37 @@ function updateSetupSummary(scenario) {
     overlaysEl.textContent = "";
   }
   flagsEl.textContent = `${scenario.checkpoints.length} checkpoint${scenario.checkpoints.length === 1 ? "" : "s"}`;
+  const noteParts = [];
+  const difficultyFit = scenario.metrics.difficultyFit ?? 0;
+  const lengthFit = scenario.metrics.lengthFit ?? 0;
+  const difficultyStrength = difficultyFit >= 42 ? "a lot" : difficultyFit >= 14 ? "somewhat" : null;
+  const lengthStrength = lengthFit >= 24 ? "a lot" : lengthFit >= 14 ? "somewhat" : null;
+
+  if (scenario.preferences.difficulty !== "any" && difficultyStrength) {
+    noteParts.push(scenario.metrics.difficultyDirection === "low"
+      ? `${difficultyStrength} easier`
+      : `${difficultyStrength} harder`);
+  }
+
+  if (scenario.preferences.length !== "any" && lengthStrength) {
+    noteParts.push(scenario.metrics.lengthDirection === "low"
+      ? `${lengthStrength} shorter`
+      : `${lengthStrength} longer`);
+  }
+
+  const shouldSuggestReroll = (
+    noteParts.length >= 2 ||
+    difficultyFit >= 42 ||
+    lengthFit >= 24
+  );
+
+  if (noteParts.length) {
+    fitNoteEl.textContent = `Closest fit: this course is ${noteParts.join(" and ")} than requested.${shouldSuggestReroll ? " Rerolling may give a better match." : ""}`;
+    fitNoteEl.classList.remove("hidden");
+  } else {
+    fitNoteEl.textContent = "";
+    fitNoteEl.classList.add("hidden");
+  }
   summary.classList.remove("hidden");
 }
 
@@ -803,10 +866,14 @@ function hasCheckpointBoardFeatures(scenario, featureFilter = null) {
 }
 
 function updateRulesNote(scenario) {
+  const checkpointNoteEl = document.getElementById("checkpoint-note");
   const noteEl = document.getElementById("rules-note");
+  const checkpointNotes = [];
   const notes = [];
 
   if (!scenario) {
+    checkpointNoteEl.textContent = "";
+    checkpointNoteEl.classList.add("hidden");
     noteEl.textContent = "";
     noteEl.classList.add("hidden");
     return;
@@ -814,10 +881,10 @@ function updateRulesNote(scenario) {
 
   if (scenario.hazardousFlags) {
     if (hasCheckpointBoardFeatures(scenario, (feature) => feature.type !== "wall" && feature.type !== "laser")) {
-      notes.push("Hazardous Flags: board elements under checkpoints remain active, but do not move or affect the checkpoints.");
+      checkpointNotes.push("Hazardous Flags: board elements under checkpoints remain active, but do not move or affect the checkpoints.");
     }
   } else if (hasSuppressedCheckpointFeatures(scenario)) {
-    notes.push("Checkpoint spaces suppress non-wall, non-laser board elements (Game Guide p. 15).");
+    checkpointNotes.push("Checkpoint spaces suppress non-wall, non-laser board elements (Game Guide p. 15).");
   }
 
   if (scenario.recoveryRule === "dynamic_archiving") {
@@ -838,6 +905,14 @@ function updateRulesNote(scenario) {
 
   if (scenario.lessForeshadowing) {
     notes.push("Less Foreshadowing: decks reshuffle every turn, reducing card-draw consistency (Game Guide p. 32).");
+  }
+
+  if (checkpointNotes.length) {
+    checkpointNoteEl.textContent = checkpointNotes.join(" ");
+    checkpointNoteEl.classList.remove("hidden");
+  } else {
+    checkpointNoteEl.textContent = "";
+    checkpointNoteEl.classList.add("hidden");
   }
 
   if (!notes.length) {
@@ -956,6 +1031,86 @@ function chooseLessForeshadowing(preferences) {
   return chooseVariantEnabled(lessForeshadowingState, 0.22);
 }
 
+function sampleVariantComplexityBudget(preferences = {}) {
+  const difficulty = preferences.difficulty ?? "moderate";
+  const budgets = {
+    easy: [0, 0, 0, 1, 1, 1, 2],
+    moderate: [0, 0, 1, 1, 1, 2, 2, 3, 4],
+    hard: [0, 1, 2, 2, 3, 3, 4, 4, 5, 6]
+  };
+
+  return sample(budgets[difficulty] || budgets.moderate);
+}
+
+function getVariantBaseChance(variantId, preferences = {}) {
+  const difficulty = preferences.difficulty ?? "moderate";
+  const byVariant = {
+    lighterGame: { easy: 0.42, moderate: 0.28, hard: 0.18 },
+    lessDeadlyGame: { easy: 0.3, moderate: 0.2, hard: 0.14 },
+    moreDeadlyGame: { easy: 0.05, moderate: 0.14, hard: 0.26 },
+    dynamicArchiving: { easy: 0.46, moderate: 0.4, hard: 0.34 },
+    hazardousFlags: { easy: 0.08, moderate: 0.16, hard: 0.24 },
+    lessForeshadowing: { easy: 0.07, moderate: 0.16, hard: 0.24 }
+  };
+
+  return byVariant[variantId]?.[difficulty] ?? 0.2;
+}
+
+function chooseVariantBundle(preferences = {}) {
+  const variantStates = preferences.allowedVariantRules || {};
+  const definitions = [
+    { id: "lighterGame", cost: VARIANT_COMPLEXITY.lighterGame },
+    { id: "lessDeadlyGame", cost: VARIANT_COMPLEXITY.lessDeadlyGame },
+    { id: "moreDeadlyGame", cost: VARIANT_COMPLEXITY.moreDeadlyGame },
+    { id: "dynamicArchiving", cost: VARIANT_COMPLEXITY.dynamicArchiving },
+    { id: "hazardousFlags", cost: VARIANT_COMPLEXITY.hazardousFlags },
+    { id: "lessForeshadowing", cost: VARIANT_COMPLEXITY.lessForeshadowing }
+  ];
+  const active = Object.fromEntries(definitions.map((entry) => [entry.id, false]));
+  let usedBudget = 0;
+
+  const forcedEntries = definitions.filter((entry) => normalizeVariantState(variantStates[entry.id] ?? "off") === "forced");
+  forcedEntries.forEach((entry) => {
+    active[entry.id] = true;
+    usedBudget += entry.cost;
+  });
+
+  const sampledBudget = sampleVariantComplexityBudget(preferences);
+  const budget = Math.max(sampledBudget, usedBudget);
+  const allowedEntries = definitions
+    .filter((entry) => normalizeVariantState(variantStates[entry.id] ?? "off") === "allowed")
+    .map((entry) => ({
+      ...entry,
+      chance: getVariantBaseChance(entry.id, preferences)
+    }));
+  const orderedEntries = weightedOrder(
+    allowedEntries,
+    (entry) => Math.max(0.01, entry.chance + Math.random() * 0.08)
+  );
+
+  for (const entry of orderedEntries) {
+    if (usedBudget + entry.cost > budget) {
+      continue;
+    }
+
+    if (Math.random() < entry.chance) {
+      active[entry.id] = true;
+      usedBudget += entry.cost;
+    }
+  }
+
+  return {
+    recoveryRule: active.dynamicArchiving ? "dynamic_archiving" : "reboot_tokens",
+    lighterGame: active.lighterGame,
+    lessDeadlyGame: active.lessDeadlyGame,
+    moreDeadlyGame: active.moreDeadlyGame,
+    hazardousFlags: active.hazardousFlags,
+    lessForeshadowing: active.lessForeshadowing,
+    variantComplexityBudget: budget,
+    variantComplexityUsed: usedBudget
+  };
+}
+
 function getPreferencesFromControls() {
   return {
     playerCount: Number(document.getElementById("player-count").value),
@@ -985,8 +1140,8 @@ function applyPreferencesToControls(preferences) {
   }
 
   document.getElementById("player-count").value = String(preferences.playerCount ?? 4);
-  document.getElementById("difficulty").value = preferences.difficulty ?? "moderate";
-  document.getElementById("length").value = preferences.length ?? "moderate";
+  document.getElementById("difficulty").value = preferences.difficulty ?? "any";
+  document.getElementById("length").value = preferences.length ?? "any";
   document.getElementById("aligned-layout").checked = preferences.alignedLayout ?? false;
   document.getElementById("expansion-roborally").checked = preferences.selectedExpansions?.roborally ?? true;
   document.getElementById("expansion-master-builder").checked = preferences.selectedExpansions?.["master-builder"] ?? false;
@@ -1010,12 +1165,17 @@ function normalizeBias(raw) {
   return Number(clamp(1 + raw, 1, 3).toFixed(2));
 }
 
-function deriveBoardBias(piece) {
+function deriveBoardProfile(piece) {
   if (piece.kind !== "base" && piece.kind !== "small") {
     return {
-      hazard: 1,
-      congestion: 1,
-      complexity: 1
+      bias: {
+        hazard: 1,
+        congestion: 1,
+        complexity: 1
+      },
+      swinginess: 1,
+      overall: 1,
+      band: "neutral"
     };
   }
 
@@ -1024,6 +1184,13 @@ function deriveBoardBias(piece) {
   let hazardWeight = 0;
   let congestionWeight = 0;
   let complexityWeight = 0;
+  let swingWeight = 0;
+  let pitCount = 0;
+  let beltCount = 0;
+  let portalCount = 0;
+  let crusherCount = 0;
+  let pushCount = 0;
+  let hazardCount = 0;
   const getTimingWeight = (feature) => {
     const timingCount = feature?.timing?.length ?? 0;
     return timingCount > 0 ? timingCount / 5 : 1;
@@ -1033,31 +1200,50 @@ function deriveBoardBias(piece) {
     for (const feature of tile.features || []) {
       if (feature.type === "pit") {
         hazardWeight += 3;
+        swingWeight += 2.6;
+        pitCount += 1;
+        hazardCount += 1;
       } else if (feature.type === "laser") {
         hazardWeight += 2 + (feature.damage || 1) * 0.35;
+        swingWeight += 0.55 + (feature.damage || 1) * 0.15;
+        hazardCount += 1;
       } else if (feature.type === "flamethrower") {
         hazardWeight += 2.7 * getTimingWeight(feature);
+        swingWeight += 0.9 * getTimingWeight(feature);
+        hazardCount += 1;
       } else if (feature.type === "push") {
         const timingWeight = getTimingWeight(feature);
         hazardWeight += 1 * timingWeight;
         complexityWeight += 1.2 * timingWeight;
+        swingWeight += 0.75 * timingWeight;
+        pushCount += 1;
       } else if (feature.type === "crusher") {
         const timingWeight = getTimingWeight(feature);
         hazardWeight += 3 * timingWeight;
         complexityWeight += 0.8 * timingWeight;
+        swingWeight += 1.35 * timingWeight;
+        crusherCount += 1;
+        hazardCount += 1;
       } else if (feature.type === "belt") {
         complexityWeight += feature.speed === 2 ? 2 : 1.2;
+        congestionWeight += feature.speed === 2 ? 0.9 : 0.45;
+        beltCount += 1;
       } else if (feature.type === "gear") {
         complexityWeight += 1.4;
       } else if (feature.type === "portal") {
         hazardWeight += 0.7;
         complexityWeight += 1.3;
+        swingWeight += 1.25;
+        portalCount += 1;
       } else if (feature.type === "oil") {
         hazardWeight += 1.2;
         complexityWeight += 1.8;
+        swingWeight += 0.7;
       } else if (feature.type === "ledge") {
         hazardWeight += 0.8;
         congestionWeight += Math.max(1, (feature.sides || []).length) * 0.85;
+        swingWeight += 0.45;
+        hazardCount += 1;
       } else if (feature.type === "ramp") {
         complexityWeight += 0.7;
       } else if (feature.type === "wall") {
@@ -1068,10 +1254,44 @@ function deriveBoardBias(piece) {
     }
   }
 
-  return {
+  const bias = {
     hazard: normalizeBias(hazardWeight / area * 10),
     congestion: normalizeBias(congestionWeight / area * 9),
     complexity: normalizeBias(complexityWeight / area * 9)
+  };
+  const swinginess = normalizeBias(swingWeight / area * 10);
+  const density = (hazardCount + beltCount + portalCount + pushCount + crusherCount) / area;
+  const overall = Number(clamp(
+    bias.hazard * 0.4 +
+    bias.congestion * 0.22 +
+    bias.complexity * 0.24 +
+    swinginess * 0.14 +
+    density * 3.6,
+    1,
+    3.6
+  ).toFixed(2));
+  const band = overall <= 1.48
+    ? "intro"
+    : overall <= 2.08
+      ? "standard"
+      : overall <= 2.6
+        ? "challenging"
+        : "extreme";
+
+  return {
+    bias,
+    swinginess,
+    overall,
+    density: Number(density.toFixed(3)),
+    band,
+    signals: {
+      pitCount,
+      beltCount,
+      portalCount,
+      crusherCount,
+      pushCount,
+      hazardCount
+    }
   };
 }
 
@@ -1181,25 +1401,56 @@ function getAvailableOverlayIds(pieceMap, expansionIds = null) {
 }
 
 function boardPreferencePenalty(piece, preferences, guidanceLevel) {
-  const bias = piece.derivedBias ?? { hazard: 2, congestion: 2, complexity: 2 };
+  const profile = piece.boardProfile ?? {
+    bias: { hazard: 2, congestion: 2, complexity: 2 },
+    swinginess: 2,
+    overall: 2,
+    band: "standard"
+  };
+  const bias = profile.bias;
   const difficultyTargets = {
-    easy: { hazard: 1.15, congestion: preferences.playerCount >= 5 ? 1.1 : 1.25, complexity: 1.25 },
-    moderate: { hazard: 1.85, congestion: preferences.playerCount >= 5 ? 1.55 : 1.8, complexity: 1.8 },
-    hard: { hazard: 2.55, congestion: preferences.playerCount >= 5 ? 2.05 : 2.35, complexity: 2.4 }
+    easy: {
+      hazard: 1.12,
+      congestion: preferences.playerCount >= 5 ? 1.08 : 1.22,
+      complexity: 1.18,
+      swinginess: 1.15,
+      overall: 1.28
+    },
+    moderate: {
+      hazard: 1.72,
+      congestion: preferences.playerCount >= 5 ? 1.48 : 1.72,
+      complexity: 1.72,
+      swinginess: 1.65,
+      overall: 1.92
+    },
+    hard: {
+      hazard: 2.5,
+      congestion: preferences.playerCount >= 5 ? 2.05 : 2.3,
+      complexity: 2.35,
+      swinginess: 2.2,
+      overall: 2.45
+    }
   };
   const target = difficultyTargets[preferences.difficulty] || difficultyTargets.moderate;
   const mismatch = (
-    Math.abs(bias.hazard - target.hazard) * 1.2 +
-    Math.abs(bias.congestion - target.congestion) * 1.35 +
-    Math.abs(bias.complexity - target.complexity) * 1
+    Math.abs(bias.hazard - target.hazard) * 1.45 +
+    Math.abs(bias.congestion - target.congestion) * 1.4 +
+    Math.abs(bias.complexity - target.complexity) * 1.15 +
+    Math.abs((profile.swinginess ?? 2) - target.swinginess) * 1.2 +
+    Math.abs((profile.overall ?? 2) - target.overall) * 1.85
   );
+  const guidancePenalty = preferences.difficulty === "easy"
+    ? Math.max(0, (profile.overall ?? 2) - 1.6) * 8.5 + Math.max(0, (profile.swinginess ?? 2) - 1.5) * 4.5
+    : preferences.difficulty === "moderate"
+      ? Math.max(0, (profile.overall ?? 2) - 2.2) * 3.2 + Math.max(0, (profile.swinginess ?? 2) - 2.05) * 1.6
+      : Math.max(0, 1.3 - (profile.overall ?? 2)) * 0.35;
   const jitter = guidanceLevel === 0
     ? Math.random() * 2.4
     : guidanceLevel === 1
       ? Math.random() * 1.2
       : Math.random() * 0.45;
 
-  return mismatch + jitter;
+  return mismatch + guidancePenalty + jitter;
 }
 
 function getPhysicalBoardId(piece) {
@@ -2805,6 +3056,14 @@ function computeDifficultyRaw(sequence) {
   ).toFixed(2));
 }
 
+function computePlayerTimeLoad(playerCount = 4) {
+  const baseLoad = playerCount * 1.35;
+  const tableTalkLoad = Math.max(0, playerCount - 3) * 0.45;
+  const coordinationLoad = Math.max(0, playerCount - 4) ** 2 * 0.65;
+
+  return Number((baseLoad + tableTalkLoad + coordinationLoad).toFixed(2));
+}
+
 function applyVariantDifficultyModifiers(raw, preferences = {}) {
   let adjusted = raw;
 
@@ -2825,7 +3084,7 @@ function computeLengthMetrics(sequence, flagCount, playerCount, boardCount, pref
   const totalActionLoad = first.actionScore + later.reduce((sum, leg) => sum + (leg.analysis.summary.averageRouteActions || 0), 0);
   const totalCongestion = first.averageTrafficPenalty + later.reduce((sum, leg) => sum + (leg.analysis.summary.congestionScore || 0), 0);
   const checkpointLoad = flagCount * 2.2;
-  const playerLoad = (playerCount || 4) * 1.6;
+  const playerLoad = computePlayerTimeLoad(playerCount || 4);
   const actionLoad = totalActionLoad * 2.8;
   const distanceLoad = totalRouteDistance * 0.75;
   const congestionLoad = totalCongestion * 0.12;
@@ -2836,7 +3095,7 @@ function computeLengthMetrics(sequence, flagCount, playerCount, boardCount, pref
   let raw = Number((checkpointLoad + playerLoad + routeLoad + frictionLoad).toFixed(2));
 
   if (preferences.lighterGame) {
-    raw = Number((raw * 0.92).toFixed(2));
+    raw = Number((raw * 0.89).toFixed(2));
   }
   if (preferences.lessForeshadowing) {
     raw = Number((raw * 1.04).toFixed(2));
@@ -2869,6 +3128,9 @@ function computeLengthMetrics(sequence, flagCount, playerCount, boardCount, pref
 }
 
 function bandDistance(value, band, thresholds) {
+  if (band === "any") {
+    return 0;
+  }
   const [low, high] = thresholds[band];
   if (value < low) return low - value;
   if (value >= high) return value - high;
@@ -2888,16 +3150,8 @@ function classifyCandidate(sequence, preferences, context = {}) {
   const lengthRaw = lengthMetrics.raw;
   const fairnessStdDev = sequence.firstLeg.summary.scoreStdDev;
 
-  const difficultyThresholds = {
-    easy: [0, 70],
-    moderate: [70, 105],
-    hard: [105, Infinity]
-  };
-  const lengthThresholds = {
-    short: [MIN_LENGTH_RAW, 140],
-    moderate: [135, 205],
-    long: [180, Infinity]
-  };
+  const difficultyThresholds = getDifficultyThresholds();
+  const lengthThresholds = getLengthThresholds();
 
   const hardFailures = [];
   if (lengthRaw < MIN_LENGTH_RAW) {
@@ -2933,6 +3187,20 @@ function classifyCandidate(sequence, preferences, context = {}) {
 
   const difficultyFit = bandDistance(difficultyRaw, preferences.difficulty, difficultyThresholds);
   const lengthFit = bandDistance(lengthRaw, preferences.length, lengthThresholds);
+  const difficultyDirection = preferences.difficulty === "any"
+    ? "matched"
+    : difficultyRaw < difficultyThresholds[preferences.difficulty][0]
+      ? "low"
+      : difficultyRaw >= difficultyThresholds[preferences.difficulty][1]
+        ? "high"
+        : "matched";
+  const lengthDirection = preferences.length === "any"
+    ? "matched"
+    : lengthRaw < lengthThresholds[preferences.length][0]
+      ? "low"
+      : lengthRaw >= lengthThresholds[preferences.length][1]
+        ? "high"
+        : "matched";
   const fairnessPenalty = fairnessStdDev >= 14 ? fairnessStdDev - 14 : 0;
   const fitScore = difficultyFit * 1.2 + lengthFit + fairnessPenalty * 0.5 + Math.max(0, preferences.playerCount - usableStarts.length) * 20;
 
@@ -2940,7 +3208,11 @@ function classifyCandidate(sequence, preferences, context = {}) {
     usableStarts,
     difficultyRaw,
     lengthRaw,
+    difficultyFit,
+    difficultyDirection,
     lengthMetrics,
+    lengthFit,
+    lengthDirection,
     fairnessStdDev,
     acceptable: hardFailures.length === 0 && difficultyFit === 0 && lengthFit === 0,
     hardFailures,
@@ -2977,6 +3249,7 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     `Layout mode: ${scenario.preferences.alignedLayout ? "aligned" : "freeform"}`,
     `Sets: ${[...getSelectedExpansionIds(scenario.preferences)].map((id) => formatExpansionName(id)).join(", ") || "none"}`,
     `Allowed variants: ${describeAllowedVariants(scenario.preferences)}`,
+    `Variant complexity: ${scenario.variantComplexityUsed ?? 0}/${scenario.variantComplexityBudget ?? 0}`,
     `Recovery used: ${scenario.recoveryRule}`,
     `A Lighter Game used: ${scenario.lighterGame ? "yes" : "no"}`,
     `A Less Deadly Game used: ${scenario.lessDeadlyGame ? "yes" : "no"}`,
@@ -3172,16 +3445,48 @@ function validateSelectedInventory(assets, preferences) {
   return null;
 }
 
-function createRandomCandidate(assets, preferences, attempt = 1) {
+function getFlagRetryBudget(preferences = {}, remainingEvaluations = 1) {
+  const difficulty = preferences.difficulty ?? "moderate";
+  const lengthPreference = preferences.length ?? "moderate";
+  const table = {
+    easy: { short: 3, moderate: 6, long: 7 },
+    moderate: { short: 2, moderate: 4, long: 5 },
+    hard: { short: 1, moderate: 2, long: 3 }
+  };
+  const retries = table[difficulty]?.[lengthPreference] ?? table.moderate.moderate;
+  return Math.max(1, Math.min(remainingEvaluations, retries));
+}
+
+function getFlagRetryStallLimit(preferences = {}) {
+  const difficulty = preferences.difficulty ?? "moderate";
+  const lengthPreference = preferences.length ?? "moderate";
+
+  if (difficulty === "easy" && lengthPreference !== "short") {
+    return 3;
+  }
+
+  if (difficulty === "hard") {
+    return 2;
+  }
+
+  return lengthPreference === "long" ? 3 : 2;
+}
+
+async function createRandomCandidate(assets, preferences, attempt = 1, remainingEvaluations = 1, onEvaluation = null) {
   const { pieceMap } = assets;
   const expansionIds = getSelectedExpansionIds(preferences);
   const availableDockIds = getEligibleDockIds(pieceMap, expansionIds, preferences);
-  const recoveryRule = chooseRecoveryRule(preferences);
-  const lessDeadlyGame = chooseLessDeadlyGame(preferences);
-  const moreDeadlyGame = chooseMoreDeadlyGame(preferences);
-  const lighterGame = chooseLighterGame(preferences);
-  const hazardousFlags = chooseHazardousFlags(preferences);
-  const lessForeshadowing = chooseLessForeshadowing(preferences);
+  const variantBundle = chooseVariantBundle(preferences);
+  const {
+    recoveryRule,
+    lessDeadlyGame,
+    moreDeadlyGame,
+    lighterGame,
+    hazardousFlags,
+    lessForeshadowing,
+    variantComplexityBudget,
+    variantComplexityUsed
+  } = variantBundle;
   const guidanceLevel = guidanceLevelForAttempt(attempt);
   const orderedDockIds = weightedOrder(
     availableDockIds,
@@ -3239,77 +3544,111 @@ function createRandomCandidate(assets, preferences, attempt = 1) {
   const { tileMap, starts } = buildResolvedMap(placements, pieceMap);
   const flagCandidates = getFlagCandidates(placements, pieceMap);
   const flagCount = Math.min(weightedFlagCount(preferences.length, flagCandidates.length), flagCandidates.length);
-  const checkpoints = pickFlags(
-    flagCandidates,
-    flagCount,
-    boardLayout.placements,
-    dockLayout.dockPlacement,
-    pieceMap,
-    starts,
-    { ...preferences, hazardousFlags },
-    guidanceLevel
-  );
-  if (!checkpoints) {
-    throw new Error("Unable to choose a valid flag sequence");
-  }
-  const rebootTokens = recoveryRule === "reboot_tokens"
-    ? placeRebootTokens(boardRects, pieceMap, tileMap, checkpoints, preferences.playerCount)
-    : [];
-  const goalTileMap = applyFlagOverrides(tileMap, checkpoints, { hazardousFlags });
-  const activeStarts = filterStartsForGoals(starts, checkpoints);
-  const sequence = analyzeFlagSequence(goalTileMap, activeStarts, checkpoints, preferences.playerCount, {
-    recoveryRule,
-    lessDeadlyGame,
-    moreDeadlyGame,
-    lighterGame,
-    hazardousFlags,
-    lessForeshadowing,
-    rebootTokens,
-    boardRects
-  });
-  const metrics = classifyCandidate(sequence, {
-    ...preferences,
-    flagCount,
-    hazardousFlags,
-    lighterGame,
-    lessForeshadowing
-  }, {
-    boardPlacements: boardLayout.placements,
-    pieceMap,
-    checkpoints
-  });
+  const retryBudget = getFlagRetryBudget(preferences, remainingEvaluations);
+  const stallLimit = getFlagRetryStallLimit(preferences);
+  let evaluationsUsed = 0;
+  let bestScenario = null;
+  let staleRetries = 0;
 
-  return {
-    pieceMap: assets.pieceMap,
-    imageMap: assets.imageMap,
-    placements,
-    overlayPlacements,
-    checkpoints,
-    overlayPlacements,
-    rebootTokens,
-    goalTileMap,
-    activeStarts,
-    playerCount: preferences.playerCount,
-    recoveryRule,
-    lessDeadlyGame,
-    moreDeadlyGame,
-    lighterGame,
-    hazardousFlags,
-    lessForeshadowing,
-    mainBoardIds: boardLayout.boardIds,
-    mainRotations: boardLayout.placements.map((placement) => placement.rotation),
-    boardCount: boardLayout.boardCount,
-    boardRects,
-    guidanceLevel,
-    dockFlipped,
-    dockBoundaryRun: dockLayout.boundaryRun,
-    sequence,
-    metrics,
-    preferences: {
+  for (let retry = 0; retry < retryBudget; retry += 1) {
+    evaluationsUsed += 1;
+    if (onEvaluation) {
+      await onEvaluation(evaluationsUsed, retryBudget);
+    }
+    const checkpoints = pickFlags(
+      flagCandidates,
+      flagCount,
+      boardLayout.placements,
+      dockLayout.dockPlacement,
+      pieceMap,
+      starts,
+      { ...preferences, hazardousFlags },
+      guidanceLevel
+    );
+
+    if (!checkpoints) {
+      staleRetries += 1;
+      if (retry > 0 && staleRetries >= stallLimit) {
+        break;
+      }
+      continue;
+    }
+
+    const rebootTokens = recoveryRule === "reboot_tokens"
+      ? placeRebootTokens(boardRects, pieceMap, tileMap, checkpoints, preferences.playerCount)
+      : [];
+    const goalTileMap = applyFlagOverrides(tileMap, checkpoints, { hazardousFlags });
+    const activeStarts = filterStartsForGoals(starts, checkpoints);
+    const sequence = analyzeFlagSequence(goalTileMap, activeStarts, checkpoints, preferences.playerCount, {
+      recoveryRule,
+      lessDeadlyGame,
+      moreDeadlyGame,
+      lighterGame,
+      hazardousFlags,
+      lessForeshadowing,
+      rebootTokens,
+      boardRects
+    });
+    const metrics = classifyCandidate(sequence, {
       ...preferences,
       flagCount,
-      hazardousFlags
+      hazardousFlags,
+      lighterGame,
+      lessForeshadowing
+    }, {
+      boardPlacements: boardLayout.placements,
+      pieceMap,
+      checkpoints
+    });
+    const scenario = {
+      pieceMap: assets.pieceMap,
+      imageMap: assets.imageMap,
+      placements,
+      overlayPlacements,
+      checkpoints,
+      rebootTokens,
+      goalTileMap,
+      activeStarts,
+      playerCount: preferences.playerCount,
+      recoveryRule,
+      lessDeadlyGame,
+      moreDeadlyGame,
+      lighterGame,
+      hazardousFlags,
+      lessForeshadowing,
+      variantComplexityBudget,
+      variantComplexityUsed,
+      mainBoardIds: boardLayout.boardIds,
+      mainRotations: boardLayout.placements.map((placement) => placement.rotation),
+      boardCount: boardLayout.boardCount,
+      boardRects,
+      guidanceLevel,
+      dockFlipped,
+      dockBoundaryRun: dockLayout.boundaryRun,
+      sequence,
+      metrics,
+      preferences: {
+        ...preferences,
+        flagCount,
+        hazardousFlags
+      }
+    };
+
+    if (!bestScenario || scenario.metrics.fitScore < bestScenario.metrics.fitScore) {
+      bestScenario = scenario;
+      staleRetries = 0;
+    } else {
+      staleRetries += 1;
     }
+
+    if (scenario.metrics.acceptable || (retry > 0 && staleRetries >= stallLimit)) {
+      break;
+    }
+  }
+
+  return {
+    scenario: bestScenario,
+    evaluationsUsed: Math.max(1, evaluationsUsed)
   };
 }
 
@@ -3415,6 +3754,8 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     lighterGame,
     hazardousFlags,
     lessForeshadowing,
+    variantComplexityBudget: 0,
+    variantComplexityUsed: 0,
     mainBoardIds: boardPlacements.map((placement) => placement.pieceId),
     mainRotations: boardPlacements.map((placement) => placement.rotation),
     boardCount: boardPlacements.length,
@@ -3450,15 +3791,38 @@ async function start() {
   let bestScenario = null;
   let crashedAttempts = 0;
   let lastAttemptError = null;
+  let attempt = 0;
 
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
-    let scenario;
+  while (attempt < MAX_ATTEMPTS) {
+    const remainingAttempts = MAX_ATTEMPTS - attempt;
+    const attemptLabel = attempt + 1;
+    let result;
     try {
-      scenario = createRandomCandidate(assets, preferences, attempt);
+      result = await createRandomCandidate(
+        assets,
+        preferences,
+        attemptLabel,
+        remainingAttempts,
+        async (localEvaluations) => {
+          const visibleAttempt = Math.min(MAX_ATTEMPTS, attempt + localEvaluations);
+          setGeneratingOverlay(
+            true,
+            `Attempt ${visibleAttempt} of ${MAX_ATTEMPTS}: still looking for a ${formatLengthLabel(preferences.length)} ${formatDifficultyLabel(preferences.difficulty)} setup with ${preferences.playerCount} usable starts.`
+          );
+          await nextFrame();
+        }
+      );
     } catch (error) {
       crashedAttempts += 1;
       lastAttemptError = error;
-      console.warn(`Attempt ${attempt} failed during generation`, error);
+      attempt += 1;
+      console.warn(`Attempt ${attemptLabel} failed during generation`, error);
+      continue;
+    }
+
+    attempt += Math.max(1, result.evaluationsUsed ?? 1);
+    const scenario = result.scenario;
+    if (!scenario) {
       continue;
     }
 
