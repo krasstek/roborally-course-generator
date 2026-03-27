@@ -3,7 +3,7 @@
   "name": "Winding",
     "expansionId": "master-builder",
   "physicalBoardId": "all-roads-winding",
-  "image": "./assets/boards/winding.PNG",
+  "image": "./assets/boards/winding.jpeg",
   "kind": "small",
   "width": 6,
   "height": 6,

@@ -1,0 +1,1234 @@
+{
+  "id": "portal-palace",
+  "name": "Portal Palace",
+  "expansionId": "thrills-and-spills",
+  "physicalBoardId": "gauntlet-of-fire-portal-palace",
+  "image": "./assets/boards/portal-palace.jpeg",
+  "kind": "base",
+  "width": 12,
+  "height": 12,
+  "mergeMode": "base",
+  "starts": [],
+  "tiles": [
+    {
+      "x": 1,
+      "y": 0,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 0,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "cw"
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 0,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 0,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "N",
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 0,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "ccw"
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 0,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 1,
+      "features": [
+        {
+          "type": "portal",
+          "id": "2"
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 1,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "E",
+            "N"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 1,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 1,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 1,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 1,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "E"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 1,
+      "features": [
+        {
+          "type": "oil"
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 1,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 2,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "E"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 2,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 2
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 2,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 2
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 2,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 2
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 2,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "E",
+            "S"
+          ]
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 2,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 2,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 2,
+      "features": [
+        {
+          "type": "oil"
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 2,
+      "features": [
+        {
+          "type": "oil"
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 2,
+      "features": [
+        {
+          "type": "oil"
+        }
+      ]
+    },
+    {
+      "x": 11,
+      "y": 2,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "E",
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 3,
+      "features": [
+        {
+          "type": "battery"
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 3,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 3,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 3,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 3,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 3,
+      "features": [
+        {
+          "type": "battery"
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 3,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "E",
+            "N"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 3,
+      "features": [
+        {
+          "type": "oil"
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 4,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 4,
+      "features": [
+        {
+          "type": "oil"
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 4,
+      "features": [
+        {
+          "type": "oil"
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 4,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 4,
+      "features": [
+        {
+          "type": "portal",
+          "id": "2"
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 4,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 4,
+      "features": [
+        {
+          "type": "portal",
+          "id": "1"
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 4,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 4,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 4,
+      "features": [
+        {
+          "type": "portal",
+          "id": "4"
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 5,
+      "features": [
+        {
+          "type": "oil"
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 5,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "N",
+            "W"
+          ]
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "E"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 5,
+      "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "E"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 5,
+      "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "E"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 5,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 5,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 5,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 5,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 6,
+      "features": [
+        {
+          "type": "battery"
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 6,
+      "features": [
+        {
+          "type": "portal",
+          "id": "4"
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 6,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "E"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 6,
+      "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 6,
+      "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 6,
+      "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 6,
+      "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 6,
+      "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 6,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "N",
+            "W"
+          ]
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 6,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 11,
+      "y": 6,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 7,
+      "features": [
+        {
+          "type": "oil"
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 7,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 7,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 7,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 7,
+      "features": [
+        {
+          "type": "oil"
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 7,
+      "features": [
+        {
+          "type": "oil"
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 7,
+      "features": [
+        {
+          "type": "portal",
+          "id": "3"
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 7,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 7,
+      "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 11,
+      "y": 7,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 8,
+      "features": [
+        {
+          "type": "oil"
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 8,
+      "features": [
+        {
+          "type": "oil"
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 8,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 8,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 8,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 8,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 8,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 8,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 8,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 2
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 8,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 11,
+      "y": 8,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 9,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 9,
+      "features": [
+        {
+          "type": "oil"
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 9,
+      "features": [
+        {
+          "type": "oil"
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 9,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 9,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 9,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 9,
+      "features": [
+        {
+          "type": "battery"
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 9,
+      "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 9,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 11,
+      "y": 9,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "E"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 10,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 10,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 10,
+      "features": [
+        {
+          "type": "portal",
+          "id": "1"
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 10,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 10,
+      "features": [
+        {
+          "type": "pit"
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 10,
+      "features": [
+        {
+          "type": "pit"
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 10,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 10,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 10,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 10,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "S",
+            "W"
+          ]
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 10,
+      "features": [
+        {
+          "type": "portal",
+          "id": "3"
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 11,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 11,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 11,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 11,
+      "y": 11,
+      "features": [
+        {
+          "type": "pit"
+        }
+      ]
+    }
+  ]
+}

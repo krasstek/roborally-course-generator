@@ -72,6 +72,7 @@ const PIECE_DATA_FILES = [
   "black-gold",
   "blueprint",
   "cactus",
+  "circuit-trap",
   "coliseum",
   "coming-and-going",
   "docking-bay-a",
@@ -80,10 +81,14 @@ const PIECE_DATA_FILES = [
   "energize",
   "fireball-factory",
   "flood-zone",
+  "gauntlet-of-fire",
   "in-and-out",
+  "laser-maze",
+  "locked",
   "mb-docking-bay",
   "mb-docking-bay-a",
   "misdirection",
+  "portal-palace",
   "sidewinder",
   "steps",
   "tempest",
@@ -93,6 +98,7 @@ const PIECE_DATA_FILES = [
   "the-wave",
   "transition",
   "trench-run",
+  "water-park",
   "winding",
   "whirlpool"
 ];
@@ -293,7 +299,8 @@ function formatExpansionName(expansionId) {
     roborally: "RoboRally Base Game (2023)",
     "thrills-and-spills": "Thrills & Spills",
     "master-builder": "Master Builder",
-    "wet-and-wild": "Wet & Wild"
+    "wet-and-wild": "Wet & Wild",
+    "chaos-and-carnage": "Chaos & Carnage"
   };
 
   return labels[expansionId] ?? titleCaseWords(expansionId);
@@ -825,6 +832,9 @@ function updateExpansionSummary() {
   if (document.getElementById("expansion-thrills-and-spills").checked) {
     enabled.push(formatExpansionName("thrills-and-spills"));
   }
+    if (document.getElementById("expansion-chaos-and-carnage").checked) {
+    enabled.push(formatExpansionName("chaos-and-carnage"));
+  }
   if (document.getElementById("expansion-wet-and-wild").checked) {
     enabled.push(formatExpansionName("wet-and-wild"));
   }
@@ -1157,6 +1167,7 @@ function getPreferencesFromControls() {
       roborally: document.getElementById("expansion-roborally").checked,
       "master-builder": document.getElementById("expansion-master-builder").checked,
       "thrills-and-spills": document.getElementById("expansion-thrills-and-spills").checked,
+      "chaos-and-carnage": document.getElementById("expansion-chaos-and-carnage").checked,
       "wet-and-wild": document.getElementById("expansion-wet-and-wild").checked
     },
     allowedVariantRules: {
@@ -1183,6 +1194,7 @@ function applyPreferencesToControls(preferences) {
   document.getElementById("expansion-roborally").checked = preferences.selectedExpansions?.roborally ?? true;
   document.getElementById("expansion-master-builder").checked = preferences.selectedExpansions?.["master-builder"] ?? false;
   document.getElementById("expansion-thrills-and-spills").checked = preferences.selectedExpansions?.["thrills-and-spills"] ?? false;
+  document.getElementById("expansion-chaos-and-carnage").checked = preferences.selectedExpansions?.["chaos-and-carnage"] ?? false;
   document.getElementById("expansion-wet-and-wild").checked = preferences.selectedExpansions?.["wet-and-wild"] ?? false;
   setVariantControlState("lighterGame", preferences.allowedVariantRules?.lighterGame ?? "off");
   setVariantControlState("classicSharedDeck", preferences.allowedVariantRules?.classicSharedDeck ?? "off");
@@ -4078,6 +4090,10 @@ document.getElementById("expansion-master-builder").addEventListener("change", (
 });
 
 document.getElementById("expansion-thrills-and-spills").addEventListener("change", () => {
+  updateExpansionSummary();
+});
+
+document.getElementById("expansion-chaos-and-carnage").addEventListener("change", () => {
   updateExpansionSummary();
 });
 

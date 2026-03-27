@@ -1,0 +1,1558 @@
+{
+  "id": "gauntlet-of-fire",
+  "name": "Gauntlet of Fire",
+  "expansionId": "thrills-and-spills",
+  "physicalBoardId": "gauntlet-of-fire-portal-palace",
+  "image": "./assets/boards/gauntlet-of-fire.jpeg",
+  "kind": "base",
+  "width": 12,
+  "height": 12,
+  "mergeMode": "base",
+  "starts": [],
+  "tiles": [
+    {
+      "x": 1,
+      "y": 0,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 0,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
+        },
+        {
+          "type": "flamethrower",
+          "dir": "S",
+          "timing": [
+            3,
+            5
+          ]
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 0,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 0,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 0,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
+        },
+        {
+          "type": "flamethrower",
+          "dir": "S",
+          "timing": [
+            2,
+            4
+          ]
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 0,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 0,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 0,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 1,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 1,
+      "features": [
+        {
+          "type": "flamethrower",
+          "dir": "S",
+          "timing": [
+            3,
+            5
+          ]
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 1,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 1,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 1,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 1,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 1,
+      "features": [
+        {
+          "type": "flamethrower",
+          "dir": "S",
+          "timing": [
+            2,
+            4
+          ]
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 1,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 1,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 1,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 11,
+      "y": 1,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 2,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "W"
+          ]
+        },
+        {
+          "type": "flamethrower",
+          "dir": "E",
+          "timing": [
+            1,
+            2
+          ]
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 2,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 2
+        },
+        {
+          "type": "flamethrower",
+          "dir": "E",
+          "timing": [
+            1,
+            2
+          ]
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 2,
+      "features": [
+        {
+          "type": "portal",
+          "id": "2"
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 2,
+      "features": [
+        {
+          "type": "flamethrower",
+          "dir": "W",
+          "timing": [
+            2,
+            3
+          ]
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 2,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "E"
+          ]
+        },
+        {
+          "type": "flamethrower",
+          "dir": "W",
+          "timing": [
+            2,
+            3
+          ]
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 2,
+      "features": [
+        {
+          "type": "pit"
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 2,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 2,
+      "features": [
+        {
+          "type": "portal",
+          "id": "1"
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 2,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        },
+        {
+          "type": "flamethrower",
+          "dir": "W",
+          "timing": [
+            1,
+            3
+          ]
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 2,
+      "features": [
+        {
+          "type": "pit"
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "E"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 2,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 11,
+      "y": 2,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "E"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 3,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 3,
+      "features": [
+        {
+          "type": "flamethrower",
+          "dir": "N",
+          "timing": [
+            3,
+            4
+          ]
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 3,
+      "features": [
+        {
+          "type": "battery"
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 3,
+      "features": [
+        {
+          "type": "pit"
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 3,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 3,
+      "features": [
+        {
+          "type": "battery"
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 3,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 3,
+      "features": [
+        {
+          "type": "pit"
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 3,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 4,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 4,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 4,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "S"
+          ]
+        },
+        {
+          "type": "flamethrower",
+          "dir": "N",
+          "timing": [
+            3,
+            4
+          ]
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 4,
+      "features": [
+        {
+          "type": "pit"
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 4,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        },
+        {
+          "type": "flamethrower",
+          "dir": "E",
+          "timing": [
+            1,
+            3
+          ]
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 4,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 4,
+      "features": [
+        {
+          "type": "pit"
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 4,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 2
+        },
+        {
+          "type": "flamethrower",
+          "dir": "W",
+          "timing": [
+            1,
+            2
+          ]
+        }
+      ]
+    },
+    {
+      "x": 11,
+      "y": 4,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "E"
+          ]
+        },
+        {
+          "type": "flamethrower",
+          "dir": "W",
+          "timing": [
+            1,
+            2
+          ]
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 5,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 5,
+      "features": [
+        {
+          "type": "pit"
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 5,
+      "features": [
+        {
+          "type": "pit"
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 5,
+      "features": [
+        {
+          "type": "pit"
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
+        },
+        {
+          "type": "flamethrower",
+          "dir": "S",
+          "timing": [
+            1,
+            5
+          ]
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 5,
+      "features": [
+        {
+          "type": "pit"
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 5,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 5,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
+        },
+        {
+          "type": "flamethrower",
+          "dir": "S",
+          "timing": [
+            2,
+            5
+          ]
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 5,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 5,
+      "features": [
+        {
+          "type": "pit"
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 5,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 6,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 6,
+      "features": [
+        {
+          "type": "pit"
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 6,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 6,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        },
+        {
+          "type": "flamethrower",
+          "dir": "S",
+          "timing": [
+            1,
+            5
+          ]
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 6,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 6,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 6,
+      "features": [
+        {
+          "type": "flamethrower",
+          "dir": "S",
+          "timing": [
+            2,
+            5
+          ]
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 6,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 6,
+      "features": [
+        {
+          "type": "pit"
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 6,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 7,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "W"
+          ]
+        },
+        {
+          "type": "flamethrower",
+          "dir": "E",
+          "timing": [
+            1,
+            4
+          ]
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 7,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 2
+        },
+        {
+          "type": "flamethrower",
+          "dir": "E",
+          "timing": [
+            1,
+            4
+          ]
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 7,
+      "features": [
+        {
+          "type": "pit"
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 7,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 7,
+      "features": [
+        {
+          "type": "battery"
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 7,
+      "features": [
+        {
+          "type": "portal",
+          "id": "2"
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 7,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        },
+        {
+          "type": "flamethrower",
+          "dir": "W",
+          "timing": [
+            3,
+            4
+          ]
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 7,
+      "features": [
+        {
+          "type": "pit"
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "E"
+          ]
+        },
+        {
+          "type": "flamethrower",
+          "dir": "W",
+          "timing": [
+            3,
+            4
+          ]
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 7,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 11,
+      "y": 7,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "E"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 8,
+      "features": [
+        {
+          "type": "portal",
+          "id": "1"
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 8,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 8,
+      "features": [
+        {
+          "type": "pit"
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 8,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 8,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 8,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        },
+        {
+          "type": "flamethrower",
+          "dir": "N",
+          "timing": [
+            4,
+            5
+          ]
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 8,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 8,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 8,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 8,
+      "features": [
+        {
+          "type": "pit"
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 8,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 9,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "W"
+          ]
+        },
+        {
+          "type": "flamethrower",
+          "dir": "E",
+          "timing": [
+            2,
+            5
+          ]
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 9,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 2
+        },
+        {
+          "type": "flamethrower",
+          "dir": "E",
+          "timing": [
+            2,
+            5
+          ]
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 9,
+      "features": [
+        {
+          "type": "pit"
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 9,
+      "features": [
+        {
+          "type": "pit"
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 9,
+      "features": [
+        {
+          "type": "pit"
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 9,
+      "features": [
+        {
+          "type": "pit"
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 9,
+      "features": [
+        {
+          "type": "pit"
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 9,
+      "features": [
+        {
+          "type": "pit"
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 9,
+      "features": [
+        {
+          "type": "pit"
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 9,
+      "features": [
+        {
+          "type": "pit"
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 9,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 2
+        },
+        {
+          "type": "flamethrower",
+          "dir": "W",
+          "timing": [
+            1,
+            5
+          ]
+        }
+      ]
+    },
+    {
+      "x": 11,
+      "y": 9,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "E"
+          ]
+        },
+        {
+          "type": "flamethrower",
+          "dir": "W",
+          "timing": [
+            1,
+            5
+          ]
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 10,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 10,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 10,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 2
+        },
+        {
+          "type": "flamethrower",
+          "dir": "N",
+          "timing": [
+            4,
+            5
+          ]
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 10,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 10,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 10,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 10,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 10,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 2
+        },
+        {
+          "type": "flamethrower",
+          "dir": "N",
+          "timing": [
+            2,
+            5
+          ]
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 10,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 10,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 2
+        },
+        {
+          "type": "flamethrower",
+          "dir": "N",
+          "timing": [
+            3,
+            4
+          ]
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 10,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 11,
+      "features": [
+        {
+          "type": "battery"
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 11,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "S"
+          ]
+        },
+        {
+          "type": "flamethrower",
+          "dir": "N",
+          "timing": [
+            4,
+            5
+          ]
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 11,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 11,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "S"
+          ]
+        },
+        {
+          "type": "flamethrower",
+          "dir": "N",
+          "timing": [
+            2,
+            5
+          ]
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 11,
+      "features": [
+        {
+          "type": "battery"
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 11,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "S"
+          ]
+        },
+        {
+          "type": "flamethrower",
+          "dir": "N",
+          "timing": [
+            3,
+            4
+          ]
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 11,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 2
+        }
+      ]
+    }
+  ]
+}

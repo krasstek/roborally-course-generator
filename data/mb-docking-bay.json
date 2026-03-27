@@ -3,7 +3,7 @@
   "name": "Docking Bay B",
   "expansionId": "master-builder",
   "physicalBoardId": "master-builder-docking-bay",
-  "image": "./assets/boards/mb-docking-bay-b.PNG",
+  "image": "./assets/boards/mb-docking-bay-b.jpeg",
   "kind": "dock",
   "width": 6,
   "height": 2,
