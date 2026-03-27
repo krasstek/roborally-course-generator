@@ -301,9 +301,9 @@ function formatExpansionName(expansionId) {
 
 function getDifficultyThresholds() {
   return {
-    easy: [0, 76],
-    moderate: [76, 112],
-    hard: [112, Infinity]
+    easy: [0, 80],
+    moderate: [80, 118],
+    hard: [118, Infinity]
   };
 }
 
