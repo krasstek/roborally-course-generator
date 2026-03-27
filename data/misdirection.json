@@ -2,7 +2,7 @@
   "id": "misdirection",
   "name": "Misdirection",
   "kind": "base",
-  "expansionId": "roborally",
+    "expansionId": "roborally",
   "physicalBoardId": "energize-misdirection",
   "image": "./assets/boards/misdirection.jpeg",
   "width": 12,
@@ -872,8 +872,8 @@
         {
           "type": "wall",
           "sides": [
-            "E",
-            "S"
+            "S",
+            "W"
           ]
         }
       ]
