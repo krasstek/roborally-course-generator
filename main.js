@@ -40,6 +40,7 @@ const VARIANT_COMPLEXITY = {
   lighterGame: 1,
   lessDeadlyGame: 1,
   moreDeadlyGame: 1,
+  classicSharedDeck: 3,
   dynamicArchiving: 1,
   hazardousFlags: 2,
   lessForeshadowing: 1
@@ -104,6 +105,7 @@ const VARIANT_CONTROL_IDS = {
   lighterGame: "variant-lighter-game",
   lessDeadlyGame: "variant-less-deadly-game",
   moreDeadlyGame: "variant-more-deadly-game",
+  classicSharedDeck: "variant-classic-shared-deck",
   dynamicArchiving: "variant-dynamic-archiving",
   hazardousFlags: "variant-hazardous-flags",
   lessForeshadowing: "variant-less-foreshadowing"
@@ -797,6 +799,7 @@ function updateVariantSummary() {
     ["A Lighter Game", getVariantControlState("lighterGame")],
     ["A Less Deadly Game", getVariantControlState("lessDeadlyGame")],
     ["A More Deadly Game", getVariantControlState("moreDeadlyGame")],
+    ["Shared Deck", getVariantControlState("classicSharedDeck")],
     ["Dynamic Archiving", getVariantControlState("dynamicArchiving")],
     ["Hazardous Flags", getVariantControlState("hazardousFlags")],
     ["Less Foreshadowing", getVariantControlState("lessForeshadowing")]
@@ -866,12 +869,17 @@ function hasCheckpointBoardFeatures(scenario, featureFilter = null) {
 }
 
 function updateRulesNote(scenario) {
+  const rulesBlockEl = document.getElementById("rules-block");
+  const topAnchorEl = document.getElementById("rules-anchor-top");
+  const bottomAnchorEl = document.getElementById("rules-anchor-bottom");
   const checkpointNoteEl = document.getElementById("checkpoint-note");
   const noteEl = document.getElementById("rules-note");
   const checkpointNotes = [];
   const notes = [];
 
   if (!scenario) {
+    bottomAnchorEl?.appendChild(rulesBlockEl);
+    rulesBlockEl?.classList.add("hidden");
     checkpointNoteEl.textContent = "";
     checkpointNoteEl.classList.add("hidden");
     noteEl.textContent = "";
@@ -879,16 +887,16 @@ function updateRulesNote(scenario) {
     return;
   }
 
-  if (scenario.hazardousFlags) {
-    if (hasCheckpointBoardFeatures(scenario, (feature) => feature.type !== "wall" && feature.type !== "laser")) {
-      checkpointNotes.push("Hazardous Flags: board elements under checkpoints remain active, but do not move or affect the checkpoints.");
-    }
-  } else if (hasSuppressedCheckpointFeatures(scenario)) {
+  if (!scenario.hazardousFlags && hasSuppressedCheckpointFeatures(scenario)) {
     checkpointNotes.push("Checkpoint spaces suppress non-wall, non-laser board elements (Game Guide p. 15).");
   }
 
   if (scenario.recoveryRule === "dynamic_archiving") {
-    notes.push("Dynamic Archiving active (Game Guide p. 32).");
+    notes.push("Dynamic Archiving: instead of placing reboot tokens on each board, robots archive when they end a register on a checkpoint or battery space (Game Guide p. 32).");
+  }
+
+  if (scenario.hazardousFlags) {
+    notes.push("Hazardous Flags: board elements under checkpoints remain active, but do not move or affect the checkpoints (Previous Robo Rally editions).");
   }
 
   if (scenario.lessDeadlyGame) {
@@ -897,6 +905,10 @@ function updateRulesNote(scenario) {
 
   if (scenario.moreDeadlyGame) {
     notes.push("A More Deadly Game: rebooting deals 3 damage instead of 2 (Game Guide p. 28).");
+  }
+
+  if (scenario.classicSharedDeck) {
+    notes.push("Shared Deck: players use one combined programming deck, and spam cards go to hand instead of deck (Previous Robo Rally editions).");
   }
 
   if (scenario.lighterGame) {
@@ -916,12 +928,16 @@ function updateRulesNote(scenario) {
   }
 
   if (!notes.length) {
+    bottomAnchorEl?.appendChild(rulesBlockEl);
+    rulesBlockEl?.classList.toggle("hidden", !checkpointNotes.length);
     noteEl.textContent = "";
     noteEl.classList.add("hidden");
     return;
   }
 
-  noteEl.textContent = `Special rules active: ${notes.join(" ")}`;
+  topAnchorEl?.appendChild(rulesBlockEl);
+  rulesBlockEl?.classList.remove("hidden");
+  noteEl.textContent = `SPECIAL RULES: ${notes.join(" ")}`;
   noteEl.classList.remove("hidden");
 }
 
@@ -932,6 +948,7 @@ function describeAllowedVariants(preferences = {}) {
     ["A Lighter Game", states.lighterGame ?? "off"],
     ["A Less Deadly Game", states.lessDeadlyGame ?? "off"],
     ["A More Deadly Game", states.moreDeadlyGame ?? "off"],
+    ["Shared Deck", states.classicSharedDeck ?? "off"],
     ["Dynamic Archiving", states.dynamicArchiving ?? "allowed"],
     ["Hazardous Flags", states.hazardousFlags ?? "off"],
     ["Less Foreshadowing", states.lessForeshadowing ?? "off"]
@@ -1026,6 +1043,11 @@ function chooseHazardousFlags(preferences) {
   return chooseVariantEnabled(hazardousFlagsState, 0.2);
 }
 
+function chooseClassicSharedDeck(preferences) {
+  const classicSharedDeckState = preferences.allowedVariantRules?.classicSharedDeck ?? "off";
+  return chooseVariantEnabled(classicSharedDeckState, 0.08);
+}
+
 function chooseLessForeshadowing(preferences) {
   const lessForeshadowingState = preferences.allowedVariantRules?.lessForeshadowing ?? "off";
   return chooseVariantEnabled(lessForeshadowingState, 0.22);
@@ -1048,6 +1070,7 @@ function getVariantBaseChance(variantId, preferences = {}) {
     lighterGame: { easy: 0.42, moderate: 0.28, hard: 0.18 },
     lessDeadlyGame: { easy: 0.3, moderate: 0.2, hard: 0.14 },
     moreDeadlyGame: { easy: 0.05, moderate: 0.14, hard: 0.26 },
+    classicSharedDeck: { easy: 0.01, moderate: 0.07, hard: 0.2 },
     dynamicArchiving: { easy: 0.46, moderate: 0.4, hard: 0.34 },
     hazardousFlags: { easy: 0.08, moderate: 0.16, hard: 0.24 },
     lessForeshadowing: { easy: 0.07, moderate: 0.16, hard: 0.24 }
@@ -1062,6 +1085,7 @@ function chooseVariantBundle(preferences = {}) {
     { id: "lighterGame", cost: VARIANT_COMPLEXITY.lighterGame },
     { id: "lessDeadlyGame", cost: VARIANT_COMPLEXITY.lessDeadlyGame },
     { id: "moreDeadlyGame", cost: VARIANT_COMPLEXITY.moreDeadlyGame },
+    { id: "classicSharedDeck", cost: VARIANT_COMPLEXITY.classicSharedDeck },
     { id: "dynamicArchiving", cost: VARIANT_COMPLEXITY.dynamicArchiving },
     { id: "hazardousFlags", cost: VARIANT_COMPLEXITY.hazardousFlags },
     { id: "lessForeshadowing", cost: VARIANT_COMPLEXITY.lessForeshadowing }
@@ -1093,7 +1117,15 @@ function chooseVariantBundle(preferences = {}) {
       continue;
     }
 
-    if (Math.random() < entry.chance) {
+    let chance = entry.chance;
+    if (
+      (entry.id === "classicSharedDeck" && active.lessForeshadowing) ||
+      (entry.id === "lessForeshadowing" && active.classicSharedDeck)
+    ) {
+      chance *= 0.2;
+    }
+
+    if (Math.random() < chance) {
       active[entry.id] = true;
       usedBudget += entry.cost;
     }
@@ -1104,6 +1136,7 @@ function chooseVariantBundle(preferences = {}) {
     lighterGame: active.lighterGame,
     lessDeadlyGame: active.lessDeadlyGame,
     moreDeadlyGame: active.moreDeadlyGame,
+    classicSharedDeck: active.classicSharedDeck,
     hazardousFlags: active.hazardousFlags,
     lessForeshadowing: active.lessForeshadowing,
     variantComplexityBudget: budget,
@@ -1127,6 +1160,7 @@ function getPreferencesFromControls() {
       lighterGame: getVariantControlState("lighterGame"),
       lessDeadlyGame: getVariantControlState("lessDeadlyGame"),
       moreDeadlyGame: getVariantControlState("moreDeadlyGame"),
+      classicSharedDeck: getVariantControlState("classicSharedDeck"),
       dynamicArchiving: getVariantControlState("dynamicArchiving"),
       hazardousFlags: getVariantControlState("hazardousFlags"),
       lessForeshadowing: getVariantControlState("lessForeshadowing")
@@ -1148,6 +1182,7 @@ function applyPreferencesToControls(preferences) {
   document.getElementById("expansion-thrills-and-spills").checked = preferences.selectedExpansions?.["thrills-and-spills"] ?? false;
   document.getElementById("expansion-wet-and-wild").checked = preferences.selectedExpansions?.["wet-and-wild"] ?? false;
   setVariantControlState("lighterGame", preferences.allowedVariantRules?.lighterGame ?? "off");
+  setVariantControlState("classicSharedDeck", preferences.allowedVariantRules?.classicSharedDeck ?? "off");
   setVariantControlState("dynamicArchiving", preferences.allowedVariantRules?.dynamicArchiving ?? "allowed");
   setVariantControlState("lessDeadlyGame", preferences.allowedVariantRules?.lessDeadlyGame ?? "off");
   setVariantControlState("moreDeadlyGame", preferences.allowedVariantRules?.moreDeadlyGame ?? "off");
@@ -3064,8 +3099,52 @@ function computePlayerTimeLoad(playerCount = 4) {
   return Number((baseLoad + tableTalkLoad + coordinationLoad).toFixed(2));
 }
 
-function applyVariantDifficultyModifiers(raw, preferences = {}) {
+function computeBoardHarshness(boardPlacements = [], pieceMap = {}) {
+  const profiles = boardPlacements
+    .map((placement) => pieceMap?.[placement.pieceId]?.boardProfile)
+    .filter(Boolean);
+
+  if (!profiles.length) {
+    return {
+      overall: 1.7,
+      swinginess: 1.6,
+      hazard: 1.6,
+      normalized: 0.4
+    };
+  }
+
+  const totals = profiles.reduce((sum, profile) => ({
+    overall: sum.overall + (profile.overall ?? 1.7),
+    swinginess: sum.swinginess + (profile.swinginess ?? 1.6),
+    hazard: sum.hazard + (profile.bias?.hazard ?? 1.6)
+  }), {
+    overall: 0,
+    swinginess: 0,
+    hazard: 0
+  });
+  const count = profiles.length;
+  const overall = totals.overall / count;
+  const swinginess = totals.swinginess / count;
+  const hazard = totals.hazard / count;
+  const normalized = clamp(
+    ((overall - 1.35) / 1.55) * 0.5 +
+    ((swinginess - 1.25) / 1.65) * 0.3 +
+    ((hazard - 1.25) / 1.65) * 0.2,
+    0,
+    1
+  );
+
+  return {
+    overall: Number(overall.toFixed(2)),
+    swinginess: Number(swinginess.toFixed(2)),
+    hazard: Number(hazard.toFixed(2)),
+    normalized: Number(normalized.toFixed(3))
+  };
+}
+
+function applyVariantDifficultyModifiers(raw, preferences = {}, boardHarshness = null) {
   let adjusted = raw;
+  const harshness = boardHarshness ?? computeBoardHarshness();
 
   if (preferences.lighterGame) {
     adjusted *= 0.96;
@@ -3073,11 +3152,14 @@ function applyVariantDifficultyModifiers(raw, preferences = {}) {
   if (preferences.lessForeshadowing) {
     adjusted *= 1.1;
   }
+  if (preferences.classicSharedDeck) {
+    adjusted *= 1.11 + harshness.normalized * 0.11;
+  }
 
   return Number(adjusted.toFixed(2));
 }
 
-function computeLengthMetrics(sequence, flagCount, playerCount, boardCount, preferences = {}) {
+function computeLengthMetrics(sequence, flagCount, playerCount, boardCount, preferences = {}, boardHarshness = null) {
   const first = sequence.firstLeg.summary;
   const later = sequence.legs.slice(1);
   const totalRouteDistance = first.lengthScore + later.reduce((sum, leg) => sum + (leg.analysis.summary.averageRouteDistance || 0), 0);
@@ -3092,6 +3174,7 @@ function computeLengthMetrics(sequence, flagCount, playerCount, boardCount, pref
   const difficultyLoad = sequence.summary.totalDifficulty * 0.03;
   const routeLoad = actionLoad + distanceLoad;
   const frictionLoad = congestionLoad + flagAreaLoad + difficultyLoad;
+  const harshness = boardHarshness ?? computeBoardHarshness();
   let raw = Number((checkpointLoad + playerLoad + routeLoad + frictionLoad).toFixed(2));
 
   if (preferences.lighterGame) {
@@ -3099,6 +3182,9 @@ function computeLengthMetrics(sequence, flagCount, playerCount, boardCount, pref
   }
   if (preferences.lessForeshadowing) {
     raw = Number((raw * 1.04).toFixed(2));
+  }
+  if (preferences.classicSharedDeck) {
+    raw = Number((raw * (1.03 + harshness.normalized * 0.05)).toFixed(2));
   }
 
   return {
@@ -3139,13 +3225,15 @@ function bandDistance(value, band, thresholds) {
 
 function classifyCandidate(sequence, preferences, context = {}) {
   const usableStarts = computeUsableStarts(sequence.firstLeg);
-  const difficultyRaw = applyVariantDifficultyModifiers(computeDifficultyRaw(sequence), preferences);
+  const boardHarshness = computeBoardHarshness(context.boardPlacements, context.pieceMap);
+  const difficultyRaw = applyVariantDifficultyModifiers(computeDifficultyRaw(sequence), preferences, boardHarshness);
   const lengthMetrics = computeLengthMetrics(
     sequence,
     preferences.flagCount,
     preferences.playerCount,
     context.boardPlacements?.length ?? 1,
-    preferences
+    preferences,
+    boardHarshness
   );
   const lengthRaw = lengthMetrics.raw;
   const fairnessStdDev = sequence.firstLeg.summary.scoreStdDev;
@@ -3254,6 +3342,7 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     `A Lighter Game used: ${scenario.lighterGame ? "yes" : "no"}`,
     `A Less Deadly Game used: ${scenario.lessDeadlyGame ? "yes" : "no"}`,
     `A More Deadly Game used: ${scenario.moreDeadlyGame ? "yes" : "no"}`,
+    `Shared Deck used: ${scenario.classicSharedDeck ? "yes" : "no"}`,
     `Hazardous Flags used: ${scenario.hazardousFlags ? "yes" : "no"}`,
     `Less Foreshadowing used: ${scenario.lessForeshadowing ? "yes" : "no"}`,
     `Accepted after ${scenario.attempts} attempt(s)`,
@@ -3482,6 +3571,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     lessDeadlyGame,
     moreDeadlyGame,
     lighterGame,
+    classicSharedDeck,
     hazardousFlags,
     lessForeshadowing,
     variantComplexityBudget,
@@ -3592,6 +3682,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     const metrics = classifyCandidate(sequence, {
       ...preferences,
       flagCount,
+      classicSharedDeck,
       hazardousFlags,
       lighterGame,
       lessForeshadowing
@@ -3614,6 +3705,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       lessDeadlyGame,
       moreDeadlyGame,
       lighterGame,
+      classicSharedDeck,
       hazardousFlags,
       lessForeshadowing,
       variantComplexityBudget,
@@ -3630,6 +3722,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       preferences: {
         ...preferences,
         flagCount,
+        classicSharedDeck,
         hazardousFlags
       }
     };
@@ -3659,6 +3752,7 @@ function serializeScenario(scenario) {
     lessDeadlyGame: scenario.lessDeadlyGame,
     moreDeadlyGame: scenario.moreDeadlyGame,
     lighterGame: scenario.lighterGame,
+    classicSharedDeck: scenario.classicSharedDeck,
     hazardousFlags: scenario.hazardousFlags,
     lessForeshadowing: scenario.lessForeshadowing,
     placements: scenario.placements,
@@ -3695,6 +3789,7 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
   const lessDeadlyGame = Boolean(snapshot.lessDeadlyGame);
   const moreDeadlyGame = Boolean(snapshot.moreDeadlyGame);
   const lighterGame = Boolean(snapshot.lighterGame);
+  const classicSharedDeck = Boolean(snapshot.classicSharedDeck);
   const hazardousFlags = Boolean(snapshot.hazardousFlags);
   const lessForeshadowing = Boolean(snapshot.lessForeshadowing);
   const placements = snapshot.placements;
@@ -3729,6 +3824,7 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     ...snapshot.preferences,
     recoveryRule,
     flagCount: checkpoints.length,
+    classicSharedDeck,
     hazardousFlags,
     lighterGame,
     lessForeshadowing
@@ -3752,6 +3848,7 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     lessDeadlyGame,
     moreDeadlyGame,
     lighterGame,
+    classicSharedDeck,
     hazardousFlags,
     lessForeshadowing,
     variantComplexityBudget: 0,
@@ -3769,6 +3866,7 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
       ...snapshot.preferences,
       recoveryRule,
       flagCount: checkpoints.length,
+      classicSharedDeck,
       hazardousFlags
     },
     attempts: snapshot.attempts ?? 0
@@ -3916,6 +4014,10 @@ document.getElementById("variant-less-deadly-game").addEventListener("click", ()
 
 document.getElementById("variant-more-deadly-game").addEventListener("click", () => {
   cycleVariantControlState("moreDeadlyGame");
+});
+
+document.getElementById("variant-classic-shared-deck").addEventListener("click", () => {
+  cycleVariantControlState("classicSharedDeck");
 });
 
 document.getElementById("variant-lighter-game").addEventListener("click", () => {

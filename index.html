@@ -810,6 +810,10 @@
                 <button id="variant-more-deadly-game" class="variant-state" type="button" data-state="off">Not allowed</button>
               </div>
               <div class="variant-rule">
+                <div class="variant-rule-name">Shared Deck</div>
+                <button id="variant-classic-shared-deck" class="variant-state" type="button" data-state="off">Not allowed</button>
+              </div>
+              <div class="variant-rule">
                 <div class="variant-rule-name">Dynamic Archiving</div>
                 <button id="variant-dynamic-archiving" class="variant-state" type="button" data-state="allowed">Allowed</button>
               </div>
@@ -860,14 +864,18 @@
           <div id="setup-flags" class="setup-value"></div>
         </div>
       </div>
+      <div id="rules-anchor-top"></div>
       <canvas id="canvas"></canvas>
       <div class="meta-strip">
         <span class="pill">Orange square: prohibited starting space</span>
         <span class="pill">Gold flag: checkpoint</span>
         <span id="legend-reboot-token" class="pill hidden">Green marker: reboot token</span>
       </div>
-      <p id="checkpoint-note" class="rules-note hidden"></p>
-      <p id="rules-note" class="rules-note hidden">Special rules active. Reminder: on checkpoint spaces, only walls and lasers stay active; other board elements on that space do not (Game Guide p. 15).</p>
+      <div id="rules-anchor-bottom"></div>
+      <div id="rules-block" class="hidden">
+        <p id="checkpoint-note" class="rules-note hidden"></p>
+        <p id="rules-note" class="rules-note hidden">SPECIAL RULES:</p>
+      </div>
       <section id="board-audit-panel" class="audit-panel hidden">
         <div class="audit-header">
           <div>
