@@ -301,9 +301,9 @@ function formatExpansionName(expansionId) {
 
 function getDifficultyThresholds() {
   return {
-    easy: [0, 70],
-    moderate: [70, 105],
-    hard: [105, Infinity]
+    easy: [0, 76],
+    moderate: [76, 112],
+    hard: [112, Infinity]
   };
 }
 
@@ -762,7 +762,10 @@ function updateSetupSummary(scenario) {
   const noteParts = [];
   const difficultyFit = scenario.metrics.difficultyFit ?? 0;
   const lengthFit = scenario.metrics.lengthFit ?? 0;
-  const difficultyStrength = difficultyFit >= 42 ? "a lot" : difficultyFit >= 14 ? "somewhat" : null;
+  const requestedDifficulty = scenario.preferences.difficulty;
+  const moderateDifficultyThreshold = requestedDifficulty === "easy" ? 20 : 14;
+  const strongDifficultyThreshold = requestedDifficulty === "easy" ? 48 : 42;
+  const difficultyStrength = difficultyFit >= strongDifficultyThreshold ? "a lot" : difficultyFit >= moderateDifficultyThreshold ? "somewhat" : null;
   const lengthStrength = lengthFit >= 24 ? "a lot" : lengthFit >= 14 ? "somewhat" : null;
 
   if (scenario.preferences.difficulty !== "any" && difficultyStrength) {
@@ -779,7 +782,7 @@ function updateSetupSummary(scenario) {
 
   const shouldSuggestReroll = (
     noteParts.length >= 2 ||
-    difficultyFit >= 42 ||
+    difficultyFit >= strongDifficultyThreshold ||
     lengthFit >= 24
   );
 
@@ -1347,14 +1350,32 @@ function weightedFlagCount(lengthPreference, maxFlags) {
   return sample(candidates.length ? candidates : [Math.min(2, maxFlags)]);
 }
 
-function weightedBoardCount(lengthPreference, maxBoards) {
+function getMinimumSmallOnlyBoardCount(lengthPreference, preferences = {}) {
+  if (lengthPreference === "long") {
+    return 4;
+  }
+  if (lengthPreference === "moderate") {
+    return 3;
+  }
+  if (lengthPreference === "short") {
+    return preferences.difficulty === "hard" ? 1 : 2;
+  }
+  return 1;
+}
+
+function weightedBoardCount(lengthPreference, maxBoards, hasLargeBoards = true, preferences = {}) {
   const table = {
     short: [1, 1, 1, 2, 2],
     moderate: [1, 2, 2, 3, 3],
     long: [2, 2, 3, 3, 4]
   };
 
-  const candidates = (table[lengthPreference] || table.moderate).filter((count) => count <= maxBoards);
+  const minimumCount = hasLargeBoards
+    ? 1
+    : Math.min(maxBoards, getMinimumSmallOnlyBoardCount(lengthPreference, preferences));
+  const candidates = (table[lengthPreference] || table.moderate).filter((count) => (
+    count <= maxBoards && count >= minimumCount
+  ));
   return sample(candidates.length ? candidates : [1]);
 }
 
@@ -1479,13 +1500,20 @@ function boardPreferencePenalty(piece, preferences, guidanceLevel) {
     : preferences.difficulty === "moderate"
       ? Math.max(0, (profile.overall ?? 2) - 2.2) * 3.2 + Math.max(0, (profile.swinginess ?? 2) - 2.05) * 1.6
       : Math.max(0, 1.3 - (profile.overall ?? 2)) * 0.35;
+  const sparsePenalty = preferences.difficulty === "hard"
+    ? 0
+    : (profile.density ?? 0.08) <= 0.03
+      ? (preferences.difficulty === "moderate" ? 2.2 : 1.1)
+      : (profile.density ?? 0.08) <= 0.055
+        ? (preferences.difficulty === "moderate" ? 1.15 : 0.45)
+        : 0;
   const jitter = guidanceLevel === 0
     ? Math.random() * 2.4
     : guidanceLevel === 1
       ? Math.random() * 1.2
       : Math.random() * 0.45;
 
-  return mismatch + guidancePenalty + jitter;
+  return mismatch + guidancePenalty + sparsePenalty + jitter;
 }
 
 function getPhysicalBoardId(piece) {
@@ -1802,7 +1830,19 @@ function smallBoardCompositionPenalty(boardIds, pieceMap) {
   return 0;
 }
 
-function selectBoardIdsForCourse(boardIds, count, pieceMap, preferences, guidanceLevel) {
+function boardSelectionCompositionPenalty(boardIds, pieceMap, lengthPreference, preferences = {}) {
+  const smallCount = boardIds.filter((boardId) => pieceMap[boardId]?.kind === "small").length;
+  const largeCount = boardIds.length - smallCount;
+  let penalty = smallBoardCompositionPenalty(boardIds, pieceMap);
+
+  if (largeCount === 0 && smallCount < getMinimumSmallOnlyBoardCount(lengthPreference, preferences)) {
+    penalty += 250;
+  }
+
+  return penalty;
+}
+
+function selectBoardIdsForCourse(boardIds, count, pieceMap, preferences, guidanceLevel, lengthPreference) {
   const grouped = new Map();
 
   for (const boardId of boardIds) {
@@ -1831,7 +1871,7 @@ function selectBoardIdsForCourse(boardIds, count, pieceMap, preferences, guidanc
   let bestSelection = ranked.slice(0, count).map((entry) => entry.boardId);
   let bestScore = ranked
     .slice(0, count)
-    .reduce((sum, entry) => sum + entry.score, 0) + smallBoardCompositionPenalty(bestSelection, pieceMap);
+    .reduce((sum, entry) => sum + entry.score, 0) + boardSelectionCompositionPenalty(bestSelection, pieceMap, lengthPreference, preferences);
 
   const attemptCount = Math.min(24, Math.max(6, ranked.length * 2));
   for (let attempt = 0; attempt < attemptCount; attempt += 1) {
@@ -1842,7 +1882,7 @@ function selectBoardIdsForCourse(boardIds, count, pieceMap, preferences, guidanc
 
     const selectionScore = selection.reduce((sum, boardId) => (
       sum + boardPreferencePenalty(pieceMap[boardId], preferences, guidanceLevel)
-    ), 0) + smallBoardCompositionPenalty(selection, pieceMap);
+    ), 0) + boardSelectionCompositionPenalty(selection, pieceMap, lengthPreference, preferences);
 
     if (selectionScore < bestScore) {
       bestSelection = selection;
@@ -2620,11 +2660,12 @@ function tryExtendAlignedBoardLayout(existingPlacements, nextBoardId, pieceMap) 
 function createBoardPlacements(pieceMap, lengthPreference, preferences, guidanceLevel, expansionIds = null, dockPieceId = "docking-bay-a") {
   const mainBoardIds = getAvailableMainBoardIds(pieceMap, expansionIds);
   const maxBoards = Math.min(4, countPhysicalBoards(mainBoardIds, pieceMap));
-  const boardCount = weightedBoardCount(lengthPreference, maxBoards);
+  const hasLargeBoards = mainBoardIds.some((boardId) => pieceMap[boardId]?.kind !== "small");
+  const boardCount = weightedBoardCount(lengthPreference, maxBoards, hasLargeBoards, preferences);
   let boardIds = [];
 
   for (let attempt = 0; attempt < 24; attempt += 1) {
-    const candidateBoardIds = selectBoardIdsForCourse(mainBoardIds, boardCount, pieceMap, preferences, guidanceLevel);
+    const candidateBoardIds = selectBoardIdsForCourse(mainBoardIds, boardCount, pieceMap, preferences, guidanceLevel, lengthPreference);
     if (candidateBoardIds.length !== boardCount) {
       continue;
     }
