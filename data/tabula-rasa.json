@@ -1,0 +1,13 @@
+{
+  "id": "blueprint",
+  "name": "Blueprint",
+ "expansionId": "master-builder",
+  "physicalBoardId": "mergers-tabula-rasa",
+  "image": "./assets/boards/tabula-rasa.jpg",
+  "kind": "small",
+  "width": 6,
+  "height": 6,
+  "mergeMode": "base",
+  "starts": [],
+  "tiles": []
+}
