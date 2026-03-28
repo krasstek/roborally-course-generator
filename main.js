@@ -1305,9 +1305,9 @@ function deriveBoardProfile(piece) {
   }
 
   const bias = {
-    hazard: normalizeBias(hazardWeight / area * 10),
-    congestion: normalizeBias(congestionWeight / area * 9),
-    complexity: normalizeBias(complexityWeight / area * 9)
+    hazard: normalizeBias(hazardWeight / area * 6),
+    congestion: normalizeBias(congestionWeight / area * 5),
+    complexity: normalizeBias(complexityWeight / area * 5)
   };
   const swinginess = normalizeBias(swingWeight / area * 10);
   const density = (hazardCount + beltCount + portalCount + pushCount + crusherCount) / area;
@@ -1316,17 +1316,17 @@ function deriveBoardProfile(piece) {
     bias.congestion * 0.22 +
     bias.complexity * 0.24 +
     swinginess * 0.14 +
-    density * 3.6,
+    density * 1.6,
     1,
     3.6
   ).toFixed(2));
-  const band = overall <= 1.48
-    ? "intro"
-    : overall <= 2.08
-      ? "standard"
-      : overall <= 2.6
-        ? "challenging"
-        : "extreme";
+  const band = overall <= 1.6
+  ? "intro"
+  : overall <= 2.25
+    ? "standard"
+    : overall <= 3.0
+      ? "challenging"
+      : "extreme";
 
   return {
     bias,
@@ -1475,6 +1475,7 @@ function boardPreferencePenalty(piece, preferences, guidanceLevel) {
     overall: 2,
     band: "standard"
   };
+
   const bias = profile.bias;
   const difficultyTargets = {
     easy: {
@@ -1485,33 +1486,45 @@ function boardPreferencePenalty(piece, preferences, guidanceLevel) {
       overall: 1.28
     },
     moderate: {
-      hazard: 1.72,
-      congestion: preferences.playerCount >= 5 ? 1.48 : 1.72,
-      complexity: 1.72,
-      swinginess: 1.65,
-      overall: 1.92
+      hazard: 1.95,
+      congestion: preferences.playerCount >= 5 ? 1.7 : 1.9,
+      complexity: 1.95,
+      swinginess: 1.8,
+      overall: 2.15
     },
     hard: {
-      hazard: 2.5,
-      congestion: preferences.playerCount >= 5 ? 2.05 : 2.3,
-      complexity: 2.35,
-      swinginess: 2.2,
-      overall: 2.45
+      hazard: 2.75,
+      congestion: preferences.playerCount >= 5 ? 2.35 : 2.55,
+      complexity: 2.7,
+      swinginess: 2.35,
+      overall: 2.85
     }
   };
+
   const target = difficultyTargets[preferences.difficulty] || difficultyTargets.moderate;
-  const mismatch = (
-    Math.abs(bias.hazard - target.hazard) * 1.45 +
-    Math.abs(bias.congestion - target.congestion) * 1.4 +
-    Math.abs(bias.complexity - target.complexity) * 1.15 +
-    Math.abs((profile.swinginess ?? 2) - target.swinginess) * 1.2 +
-    Math.abs((profile.overall ?? 2) - target.overall) * 1.85
-  );
-  const guidancePenalty = preferences.difficulty === "easy"
-    ? Math.max(0, (profile.overall ?? 2) - 1.6) * 8.5 + Math.max(0, (profile.swinginess ?? 2) - 1.5) * 4.5
+
+  const mismatchWeights = preferences.difficulty === "easy"
+    ? { hazard: 1.45, congestion: 1.4, complexity: 1.15, swinginess: 1.2, overall: 1.85 }
     : preferences.difficulty === "moderate"
-      ? Math.max(0, (profile.overall ?? 2) - 2.2) * 3.2 + Math.max(0, (profile.swinginess ?? 2) - 2.05) * 1.6
-      : Math.max(0, 1.3 - (profile.overall ?? 2)) * 0.35;
+      ? { hazard: 1.2, congestion: 1.15, complexity: 1.0, swinginess: 0.95, overall: 1.35 }
+      : { hazard: 0.95, congestion: 0.9, complexity: 0.85, swinginess: 0.7, overall: 0.85 };
+
+  const mismatch = (
+    Math.abs(bias.hazard - target.hazard) * mismatchWeights.hazard +
+    Math.abs(bias.congestion - target.congestion) * mismatchWeights.congestion +
+    Math.abs(bias.complexity - target.complexity) * mismatchWeights.complexity +
+    Math.abs((profile.swinginess ?? 2) - target.swinginess) * mismatchWeights.swinginess +
+    Math.abs((profile.overall ?? 2) - target.overall) * mismatchWeights.overall
+  );
+
+  const guidancePenalty = preferences.difficulty === "easy"
+    ? Math.max(0, (profile.overall ?? 2) - 1.6) * 8.5 +
+      Math.max(0, (profile.swinginess ?? 2) - 1.5) * 4.5
+    : preferences.difficulty === "moderate"
+      ? (profile.band === "extreme" ? 3.5 : 0) +
+        Math.max(0, (profile.overall ?? 2) - 2.75) * 1.2
+      : 0;
+
   const sparsePenalty = preferences.difficulty === "hard"
     ? 0
     : (profile.density ?? 0.08) <= 0.03
@@ -1519,6 +1532,7 @@ function boardPreferencePenalty(piece, preferences, guidanceLevel) {
       : (profile.density ?? 0.08) <= 0.055
         ? (preferences.difficulty === "moderate" ? 1.15 : 0.45)
         : 0;
+
   const jitter = guidanceLevel === 0
     ? Math.random() * 2.4
     : guidanceLevel === 1
@@ -1868,26 +1882,38 @@ function selectBoardIdsForCourse(boardIds, count, pieceMap, preferences, guidanc
   const scoredGroups = [];
   for (const groupBoardIds of grouped.values()) {
     const rankedFaces = groupBoardIds
-      .map((boardId) => ({
-        boardId,
-        score: boardPreferencePenalty(pieceMap[boardId], preferences, guidanceLevel)
-      }))
-      .sort((a, b) => a.score - b.score);
+  .map((boardId) => {
+    const piece = pieceMap[boardId];
+    const score = boardPreferencePenalty(piece, preferences, guidanceLevel);
+    /*console.log("BOARD SCORE", boardId, {
+      score,
+      profile: piece.boardProfile
+    });*/
+    return { boardId, score };
+  })
+  .sort((a, b) => a.score - b.score);
 
     if (rankedFaces.length) {
       scoredGroups.push(rankedFaces[0]);
     }
   }
 
-  const ranked = scoredGroups.sort((a, b) => a.score - b.score);
-  let bestSelection = ranked.slice(0, count).map((entry) => entry.boardId);
-  let bestScore = ranked
-    .slice(0, count)
-    .reduce((sum, entry) => sum + entry.score, 0) + boardSelectionCompositionPenalty(bestSelection, pieceMap, lengthPreference, preferences);
+const ranked = scoredGroups.sort((a, b) => a.score - b.score);
+
+const candidatePoolSize = preferences.difficulty === "hard"
+  ? Math.min(ranked.length, Math.max(count + 6, Math.ceil(ranked.length * 1)))
+  : Math.min(ranked.length, Math.max(count + 3, Math.ceil(ranked.length * 0.35)));
+
+const candidatePool = ranked.slice(0, candidatePoolSize).map((entry) => entry.boardId);
+
+let bestSelection = sampleDistinctBoardFaces(candidatePool, count, pieceMap);
+let bestScore = bestSelection.reduce((sum, boardId) => (
+  sum + boardPreferencePenalty(pieceMap[boardId], preferences, guidanceLevel)
+), 0) + boardSelectionCompositionPenalty(bestSelection, pieceMap, lengthPreference, preferences);
 
   const attemptCount = Math.min(24, Math.max(6, ranked.length * 2));
   for (let attempt = 0; attempt < attemptCount; attempt += 1) {
-    const selection = sampleDistinctBoardFaces(boardIds, count, pieceMap);
+    const selection = sampleDistinctBoardFaces(candidatePool, count, pieceMap);
     if (selection.length !== count) {
       continue;
     }
