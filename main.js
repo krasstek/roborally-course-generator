@@ -309,8 +309,8 @@ function formatExpansionName(expansionId) {
 function getDifficultyThresholds() {
   return {
      easy: [0, 95],
-    moderate: [70, 135],
-    hard: [105, Infinity]
+    moderate: [90, 155],
+    hard: [150, Infinity]
   };
 }
 
@@ -1275,7 +1275,7 @@ function deriveBoardProfile(piece) {
         crusherCount += 1;
         hazardCount += 1;
       } else if (feature.type === "belt") {
-        complexityWeight += feature.speed === 2 ? 2 : 1.2;
+        complexityWeight += feature.speed === 2 ? 1.2 : 0.8;
         congestionWeight += feature.speed === 2 ? 0.9 : 0.45;
         beltCount += 1;
       } else if (feature.type === "gear") {
@@ -1296,6 +1296,8 @@ function deriveBoardProfile(piece) {
         hazardCount += 1;
       } else if (feature.type === "ramp") {
         complexityWeight += 0.7;
+      } else if (feature.type === "water") {
+        complexityWeight += 0.5;
       } else if (feature.type === "wall") {
         congestionWeight += Math.max(1, (feature.sides || []).length) * 1.25;
       } else if (feature.type === "battery") {
@@ -1305,11 +1307,11 @@ function deriveBoardProfile(piece) {
   }
 
   const bias = {
-    hazard: normalizeBias(hazardWeight / area * 6),
-    congestion: normalizeBias(congestionWeight / area * 5),
-    complexity: normalizeBias(complexityWeight / area * 5)
+    hazard: normalizeBias(hazardWeight / area * 1.4),
+    congestion: normalizeBias(congestionWeight / area * 1.2),
+    complexity: normalizeBias(complexityWeight / area * 1.2)
   };
-  const swinginess = normalizeBias(swingWeight / area * 10);
+  const swinginess = normalizeBias(swingWeight / area * 1.4);
   const density = (hazardCount + beltCount + portalCount + pushCount + crusherCount) / area;
   const overall = Number(clamp(
     bias.hazard * 0.4 +
@@ -1479,23 +1481,23 @@ function boardPreferencePenalty(piece, preferences, guidanceLevel) {
   const bias = profile.bias;
   const difficultyTargets = {
     easy: {
-      hazard: 1.12,
+      hazard: 1.22,
       congestion: preferences.playerCount >= 5 ? 1.08 : 1.22,
-      complexity: 1.18,
+      complexity: 1.95,
       swinginess: 1.15,
       overall: 1.28
     },
     moderate: {
-      hazard: 1.95,
+      hazard: 2.15,
       congestion: preferences.playerCount >= 5 ? 1.7 : 1.9,
-      complexity: 1.95,
+      complexity: 2.45,
       swinginess: 1.8,
       overall: 2.15
     },
     hard: {
-      hazard: 2.75,
+      hazard: 2.85,
       congestion: preferences.playerCount >= 5 ? 2.35 : 2.55,
-      complexity: 2.7,
+      complexity: 2.85,
       swinginess: 2.35,
       overall: 2.85
     }
@@ -1878,21 +1880,21 @@ function selectBoardIdsForCourse(boardIds, count, pieceMap, preferences, guidanc
     }
     grouped.get(physicalBoardId).push(boardId);
   }
-
+console.log("START")
   const scoredGroups = [];
   for (const groupBoardIds of grouped.values()) {
     const rankedFaces = groupBoardIds
   .map((boardId) => {
     const piece = pieceMap[boardId];
     const score = boardPreferencePenalty(piece, preferences, guidanceLevel);
-    /*console.log("BOARD SCORE", boardId, {
+    console.log("BOARD SCORE", boardId, {
       score,
-      profile: piece.boardProfile
-    });*/
+      profile: piece.boardProfile.bias,
+      band: piece.boardProfile.band
+    });
     return { boardId, score };
   })
   .sort((a, b) => a.score - b.score);
-
     if (rankedFaces.length) {
       scoredGroups.push(rankedFaces[0]);
     }
@@ -1927,6 +1929,7 @@ function getBoardPool(ranked, attempt, preferences, count) {
   }
 
   // easy
+  console.log(getTop(0.6, 6));
   if (attempt < 3) return getTop(0.6, 6);
   if (attempt < 15) return getTop(0.4, 4);
   return getTop(0.25, 2);
@@ -2738,7 +2741,9 @@ function createBoardPlacements(pieceMap, lengthPreference, preferences, guidance
   let boardIds = [];
 
   for (let attempt = 0; attempt < 24; attempt += 1) {
-    const candidateBoardIds = selectBoardIdsForCourse(mainBoardIds, boardCount, pieceMap, preferences, guidanceLevel, lengthPreference);
+    const candidateBoardIds = sampleMany(mainBoardIds, boardCount);
+    //selectBoardIdsForCourse(mainBoardIds, boardCount, pieceMap, preferences, guidanceLevel, lengthPreference);
+//    console.log(candidateBoardIds);
     if (candidateBoardIds.length !== boardCount) {
       continue;
     }

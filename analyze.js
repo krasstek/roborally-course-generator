@@ -226,6 +226,8 @@ function getTilePenalty(tile, options = {}) {
       penalty += 0.8;
     } else if (feature.type === "ramp") {
       penalty += 0.35;
+    } else if (feature.type === "water") {
+      penalty += 0.35;
     } else if (feature.type === "crusher") {
       penalty += getRebootDamagePenalty(options) * getTimingWeight(feature);
     }
@@ -1608,7 +1610,7 @@ function scoreFlagArea(tileMap, goal, options = {}) {
         } else if (feature.type === "crusher") {
           score += 4 * getTimingWeight(feature) * proximityWeight;
         } else if (feature.type === "belt") {
-          score += (feature.speed === 2 ? 2 : 1.25) * proximityWeight;
+          score += (feature.speed === 2 ? 1.8 : 1.05) * proximityWeight;
         } else if (feature.type === "gear") {
           score += 1.5 * proximityWeight;
         } else if (feature.type === "portal") {
@@ -1619,6 +1621,8 @@ function scoreFlagArea(tileMap, goal, options = {}) {
           score += 1.35 * proximityWeight;
         } else if (feature.type === "ramp") {
           score += 0.75 * proximityWeight;
+        } else if (feature.type === "water") {
+          score += 0.45 * proximityWeight;
         } else if (feature.type === "battery" && isBatteryActive(options)) {
           score -= 2 * proximityWeight;
         }
