@@ -308,9 +308,9 @@ function formatExpansionName(expansionId) {
 
 function getDifficultyThresholds() {
   return {
-    easy: [0, 80],
-    moderate: [80, 118],
-    hard: [118, Infinity]
+     easy: [0, 95],
+    moderate: [70, 135],
+    hard: [105, Infinity]
   };
 }
 
@@ -1906,6 +1906,32 @@ const candidatePoolSize = preferences.difficulty === "hard"
 
 const candidatePool = ranked.slice(0, candidatePoolSize).map((entry) => entry.boardId);
 
+function getBoardPool(ranked, attempt, preferences, count) {
+  const total = ranked.length;
+
+  const getTop = (ratio, extra = 0) =>
+    ranked.slice(0, Math.min(total, Math.max(count + extra, Math.ceil(total * ratio))));
+
+  if (preferences.difficulty === "hard") {
+    if (attempt < 10) return ranked; // no filtering
+    if (attempt < 25) return getTop(0.8, 8); // very broad
+    if (attempt < 35) return getTop(0.55, 5); // medium
+    return getTop(0.35, 3); // tight
+  }
+
+  if (preferences.difficulty === "moderate") {
+    if (attempt < 5) return ranked;
+    if (attempt < 20) return getTop(0.65, 6);
+    if (attempt < 35) return getTop(0.45, 4);
+    return getTop(0.3, 2);
+  }
+
+  // easy
+  if (attempt < 3) return getTop(0.6, 6);
+  if (attempt < 15) return getTop(0.4, 4);
+  return getTop(0.25, 2);
+}
+
 let bestSelection = sampleDistinctBoardFaces(candidatePool, count, pieceMap);
 let bestScore = bestSelection.reduce((sum, boardId) => (
   sum + boardPreferencePenalty(pieceMap[boardId], preferences, guidanceLevel)
@@ -1913,7 +1939,9 @@ let bestScore = bestSelection.reduce((sum, boardId) => (
 
   const attemptCount = Math.min(24, Math.max(6, ranked.length * 2));
   for (let attempt = 0; attempt < attemptCount; attempt += 1) {
-    const selection = sampleDistinctBoardFaces(candidatePool, count, pieceMap);
+    const pool = getBoardPool(ranked, attempt, preferences, count);
+    const poolIds = pool.map((entry) => entry.boardId);
+    const selection = sampleDistinctBoardFaces(poolIds, count, pieceMap);
     if (selection.length !== count) {
       continue;
     }
@@ -1922,10 +1950,17 @@ let bestScore = bestSelection.reduce((sum, boardId) => (
       sum + boardPreferencePenalty(pieceMap[boardId], preferences, guidanceLevel)
     ), 0) + boardSelectionCompositionPenalty(selection, pieceMap, lengthPreference, preferences);
 
-    if (selectionScore < bestScore) {
-      bestSelection = selection;
-      bestScore = selectionScore;
-    }
+    const tolerance =
+  preferences.difficulty === "hard"
+    ? (attempt < 10 ? 999 : attempt < 25 ? 4.0 : 1.5)
+    : preferences.difficulty === "moderate"
+      ? (attempt < 5 ? 999 : attempt < 20 ? 2.5 : 1.0)
+      : (attempt < 3 ? 999 : 0.5);
+
+if (selectionScore <= bestScore + tolerance) {
+  bestSelection = selection;
+  bestScore = Math.min(bestScore, selectionScore);
+}
   }
 
   return bestSelection;
