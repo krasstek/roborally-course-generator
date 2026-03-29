@@ -1,0 +1,1349 @@
+{
+  "id": "gear-box",
+  "name": "Gear Box",
+  "expansionId": "chaos-and-carnage",
+  "physicalBoardId": "labyrinth-gear-box",
+  "image": "./assets/boards/gear-box.jpg",
+  "kind": "base",
+  "width": 12,
+  "height": 12,
+  "mergeMode": "base",
+  "starts": [],
+  "tiles": [
+    {
+      "x": 0,
+      "y": 0,
+      "features": [
+        {
+          "type": "battery"
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 0,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 0,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 0,
+      "features": [
+        {
+          "type": "randomizer"
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 0,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "E",
+            "N"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 0,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 0,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 0,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 0,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "cw"
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 0,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 0,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 11,
+      "y": 0,
+      "features": [
+        {
+          "type": "teleporter",
+          "power": 2
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 1,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 1,
+      "features": [
+        {
+          "type": "randomizer"
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 1,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
+        },
+        {
+          "type": "randomizer"
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 1,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 1,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 1,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "cw"
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 1,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 1,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "cw"
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 1,
+      "features": [
+        {
+          "type": "randomizer"
+        }
+      ]
+    },
+    {
+      "x": 11,
+      "y": 1,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 2,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "ccw"
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 2,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "ccw"
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 2,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 2,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 2,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 2,
+      "features": [
+        {
+          "type": "battery"
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 2,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 2,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "S",
+          "damage": 2
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 11,
+      "y": 2,
+      "features": [
+        {
+          "type": "pit"
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "E"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 3,
+      "features": [
+        {
+          "type": "randomizer"
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 3,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "W"
+          ]
+        },
+        {
+          "type": "randomizer"
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 3,
+      "features": [
+        {
+          "type": "randomizer"
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 3,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 3,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 3,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "cw"
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 3,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 3,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "cw"
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 3,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "S",
+          "damage": 2
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 4,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 4,
+      "features": [
+        {
+          "type": "battery"
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 4,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "ccw"
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 4,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "cw"
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 4,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 4,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 4,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 4,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "S",
+          "damage": 2
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 11,
+      "y": 4,
+      "features": [
+        {
+          "type": "pit"
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "E"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 5,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 5,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 5,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 5,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 5,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "ccw"
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 5,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "cw"
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 5,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "ccw"
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 5,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "cw"
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 5,
+      "features": [
+        {
+          "type": "pit"
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "E"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 5,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 5,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 11,
+      "y": 5,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 6,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 6,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 6,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 6,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 6,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "cw"
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 6,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "ccw"
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 6,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "cw"
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 6,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "ccw"
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 6,
+      "features": [
+        {
+          "type": "pit"
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "E"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 6,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 6,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 11,
+      "y": 6,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 7,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "S",
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 7,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "ccw"
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 7,
+      "features": [
+        {
+          "type": "battery"
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 7,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "cw"
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 7,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "ccw"
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 7,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 7,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 7,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 11,
+      "y": 7,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "E"
+          ]
+        },
+        {
+          "type": "randomizer"
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 8,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "E"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 8,
+      "features": [
+        {
+          "type": "randomizer"
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 8,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "S",
+          "damage": 2
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "N",
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 8,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 8,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 8,
+      "features": [
+        {
+          "type": "pit"
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 8,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "S",
+          "damage": 1
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 8,
+      "features": [
+        {
+          "type": "pit"
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 9,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "N",
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 9,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 9,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 9,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "S",
+          "damage": 1
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "N",
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 9,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "S",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 9,
+      "features": [
+        {
+          "type": "randomizer"
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 9,
+      "features": [
+        {
+          "type": "battery"
+        }
+      ]
+    },
+    {
+      "x": 11,
+      "y": 9,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "E"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 10,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 10,
+      "features": [
+        {
+          "type": "teleporter",
+          "power": 2
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 10,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 10,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "S",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 10,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 10,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 10,
+      "features": [
+        {
+          "type": "pit"
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 10,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "S",
+          "damage": 1
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 10,
+      "features": [
+        {
+          "type": "pit"
+        }
+      ]
+    },
+    {
+      "x": 11,
+      "y": 10,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 11,
+      "features": [
+        {
+          "type": "randomizer"
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 11,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 11,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 11,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "S",
+          "damage": 1
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 11,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 11,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 11,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 11,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 11,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 11,
+      "y": 11,
+      "features": [
+        {
+          "type": "teleporter",
+          "power": 2
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,1412 @@
+{
+  "id": "pushy",
+  "name": "Pushy",
+  "expansionId": "chaos-and-carnage",
+  "physicalBoardId": "laser-maze-pushy",
+  "image": "./assets/boards/pushy.jpg",
+  "kind": "base",
+  "width": 12,
+  "height": 12,
+  "mergeMode": "base",
+  "starts": [],
+  "tiles": [
+    {
+      "x": 0,
+      "y": 0,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 0,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 0,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 0,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "E"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 0,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 0,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 0,
+      "features": [
+        {
+          "type": "teleporter",
+          "power": 2
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 1,
+      "features": [
+        {
+          "type": "randomizer"
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 1,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "S"
+          ]
+        },
+        {
+          "type": "push",
+          "dir": "N",
+          "timing": [
+            2,
+            4
+          ]
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 1,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "ccw"
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "E"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 1,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 1,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        },
+        {
+          "type": "randomizer"
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 1,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 1,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        },
+        {
+          "type": "randomizer"
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 1,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "S"
+          ]
+        },
+        {
+          "type": "push",
+          "dir": "N",
+          "timing": [
+            1,
+            3,
+            5
+          ]
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 1,
+      "features": [
+        {
+          "type": "push",
+          "dir": "E",
+          "timing": [
+            2,
+            4
+          ]
+        }
+      ]
+    },
+    {
+      "x": 11,
+      "y": 1,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 2,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 2,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 2,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 2,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 2,
+      "features": [
+        {
+          "type": "crusher",
+          "timing": [
+            2,
+            5
+          ]
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 2,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "E"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 2,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 2,
+      "features": [
+        {
+          "type": "battery"
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 2,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 11,
+      "y": 2,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 3,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 3,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 3,
+      "features": [
+        {
+          "type": "battery"
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 3,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "E",
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 3,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "W",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 3,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "W",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 3,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        },
+        {
+          "type": "laser",
+          "dir": "W",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 3,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "W",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 3,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "W",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 3,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "W",
+          "damage": 1
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "E"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 3,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        },
+        {
+          "type": "randomizer"
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 4,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "E"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 4,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 4,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 4,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 4,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        },
+        {
+          "type": "randomizer"
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 4,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 4,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 4,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 4,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 4,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 5,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "S"
+          ]
+        },
+        {
+          "type": "push",
+          "dir": "N",
+          "timing": [
+            2,
+            4
+          ]
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 5,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        },
+        {
+          "type": "crusher",
+          "timing": [
+            3,
+            4
+          ]
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 5,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
+        },
+        {
+          "type": "push",
+          "dir": "S",
+          "timing": [
+            2,
+            4
+          ]
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 5,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 5,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        },
+        {
+          "type": "crusher",
+          "timing": [
+            2,
+            5
+          ]
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 5,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "S"
+          ]
+        },
+        {
+          "type": "push",
+          "dir": "N",
+          "timing": [
+            1,
+            3,
+            5
+          ]
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 5,
+      "features": [
+        {
+          "type": "pit"
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "E"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 5,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "cw"
+        },
+        {
+          "type": "push",
+          "dir": "E",
+          "timing": [
+            2,
+            4
+          ]
+        }
+      ]
+    },
+    {
+      "x": 11,
+      "y": 5,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
+        },
+        {
+          "type": "push",
+          "dir": "S",
+          "timing": [
+            3
+          ]
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 6,
+      "features": [
+        {
+          "type": "pit"
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 6,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 6,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 6,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 6,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 6,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "N",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 6,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "ccw"
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 6,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 11,
+      "y": 6,
+      "features": [
+        {
+          "type": "pit"
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 7,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 7,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 7,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "S"
+          ]
+        },
+        {
+          "type": "push",
+          "dir": "N",
+          "timing": [
+            1,
+            3,
+            5
+          ]
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 7,
+      "features": [
+        {
+          "type": "pit"
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 7,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 7,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 7,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        },
+        {
+          "type": "laser",
+          "dir": "N",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 7,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "E"
+          ]
+        },
+        {
+          "type": "push",
+          "dir": "W",
+          "timing": [
+            1,
+            3,
+            5
+          ]
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 7,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        },
+        {
+          "type": "randomizer"
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 8,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 8,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 8,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 8,
+      "features": [
+        {
+          "type": "battery"
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 8,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 8,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        },
+        {
+          "type": "randomizer"
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 8,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 8,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 8,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        },
+        {
+          "type": "laser",
+          "dir": "N",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 8,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 11,
+      "y": 8,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 9,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 9,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "S"
+          ]
+        },
+        {
+          "type": "push",
+          "dir": "N",
+          "timing": [
+            2,
+            4
+          ]
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 9,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "E"
+          ]
+        },
+        {
+          "type": "push",
+          "dir": "W",
+          "timing": [
+            1,
+            3,
+            5
+          ]
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 9,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        },
+        {
+          "type": "crusher",
+          "timing": [
+            2,
+            4
+          ]
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 9,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
+        },
+        {
+          "type": "push",
+          "dir": "S",
+          "timing": [
+            2,
+            4
+          ]
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 9,
+      "features": [
+        {
+          "type": "battery"
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 9,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "N",
+          "damage": 1
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 9,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "W"
+          ]
+        },
+        {
+          "type": "push",
+          "dir": "E",
+          "timing": [
+            2,
+            4
+          ]
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 10,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 10,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 10,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 10,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 10,
+      "features": [
+        {
+          "type": "crusher",
+          "timing": [
+            1,
+            3
+          ]
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 10,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "E"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 10,
+      "features": [
+        {
+          "type": "teleporter",
+          "power": 2
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 10,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 11,
+      "features": [
+        {
+          "type": "teleporter",
+          "power": 2
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 11,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 11,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 11,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "cw"
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 11,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    }
+  ]
+}
