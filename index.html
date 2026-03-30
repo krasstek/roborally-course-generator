@@ -153,7 +153,7 @@
     }
 
     .variant-field {
-      min-width: 168px;
+      min-width: 152px;
     }
 
     .variant-picker {
@@ -165,15 +165,15 @@
     .variant-picker summary {
       list-style: none;
       cursor: pointer;
-      padding: 8px 10px;
+      padding: 6px 9px;
       border-radius: 8px;
       border: 1px solid rgba(76, 91, 102, 0.34);
       background: rgba(236, 240, 242, 0.98);
       color: #171d22;
-      font: 600 14px/1.2 "Trebuchet MS", Verdana, sans-serif;
+      font: 600 13px/1.2 "Trebuchet MS", Verdana, sans-serif;
       text-transform: none;
       letter-spacing: 0;
-      min-height: 40px;
+      min-height: 36px;
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -196,14 +196,18 @@
       top: calc(100% + 6px);
       left: 0;
       right: 0;
-      padding: 10px 12px;
+      padding: 7px 9px;
       border-radius: 10px;
       border: 1px solid rgba(76, 91, 102, 0.24);
       background: rgba(236, 240, 242, 0.98);
       color: #171d22;
       box-shadow: var(--inset);
       display: grid;
-      gap: 8px;
+      gap: 4px;
+      max-height: min(260px, 55vh);
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      scrollbar-gutter: stable;
       z-index: 20;
     }
 
@@ -221,22 +225,24 @@
 
     .variant-rule {
       display: grid;
-      grid-template-columns: 1fr auto;
-      gap: 10px;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
       align-items: center;
-      padding: 8px 0;
+      padding: 4px 0;
     }
 
     .variant-rule-name {
-      font-size: 13px;
-      line-height: 1.35;
+      font-size: 11px;
+      line-height: 1.25;
       color: #171d22;
+      min-width: 0;
+      overflow-wrap: anywhere;
     }
 
     button.variant-state {
-      min-width: 98px;
-      min-height: 30px;
-      padding: 4px 8px;
+      min-width: 48px;
+      min-height: 24px;
+      padding: 2px 6px;
       border-radius: 999px;
       border: 1px solid rgba(76, 91, 102, 0.28);
       background: linear-gradient(180deg, #8a949b 0%, #69747c 100%);
@@ -244,7 +250,10 @@
       box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14);
       text-transform: none;
       letter-spacing: 0;
-      font-size: 11px;
+      font-size: 10px;
+      line-height: 1;
+      white-space: nowrap;
+      flex: 0 0 auto;
     }
 
     button.variant-state[data-state="off"] {
@@ -799,42 +808,9 @@
         <label class="variant-field">
           Allowed variants
           <details class="variant-picker">
-            <summary id="variant-summary">1 selected</summary>
-            <div class="variant-menu">
-              <div class="variant-rule">
-                <div class="variant-rule-name">A Lighter Game</div>
-                <button id="variant-lighter-game" class="variant-state" type="button" data-state="off">Not allowed</button>
-              </div>
-              <div class="variant-rule">
-                <div class="variant-rule-name">A Less Deadly Game</div>
-                <button id="variant-less-deadly-game" class="variant-state" type="button" data-state="off">Not allowed</button>
-              </div>
-              <div class="variant-rule">
-                <div class="variant-rule-name">A More Deadly Game</div>
-                <button id="variant-more-deadly-game" class="variant-state" type="button" data-state="off">Not allowed</button>
-              </div>
-              <div class="variant-rule">
-                <div class="variant-rule-name">Shared Deck</div>
-                <button id="variant-classic-shared-deck" class="variant-state" type="button" data-state="off">Not allowed</button>
-              </div>
-              <div class="variant-rule">
-                <div class="variant-rule-name">Dynamic Archiving</div>
-                <button id="variant-dynamic-archiving" class="variant-state" type="button" data-state="allowed">Allowed</button>
-              </div>
-              <div class="variant-rule">
-                <div class="variant-rule-name">Hazardous Flags</div>
-                <button id="variant-hazardous-flags" class="variant-state" type="button" data-state="off">Not allowed</button>
-              </div>
-              <div class="variant-rule">
-                <div class="variant-rule-name">Less Foreshadowing</div>
-                <button id="variant-less-foreshadowing" class="variant-state" type="button" data-state="off">Not allowed</button>
-              </div>
-            </div>
+            <summary id="variant-summary">Loading…</summary>
+            <div id="variant-rules-menu" class="variant-menu"></div>
           </details>
-        </label>
-        <label class="toggle-label">
-          <input id="aligned-layout" type="checkbox" />
-          Aligned Layout
         </label>
         <label id="trace-leg-label" class="hidden">
           Trace leg

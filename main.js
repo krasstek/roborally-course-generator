@@ -18,11 +18,18 @@ const [
     rotatedDimensions,
     validateDockPlacement,
     validateMainBoardLayout
+  },
+  {
+    BOARD_PROFILE_DENSITY_COMPONENT_WEIGHTS,
+    BOARD_PROFILE_DENSITY_WEIGHT,
+    getBoardProfileDelta,
+    getTilePenaltyForFeature
   }
 ] = await Promise.all([
   import(versionedPath("./render.js")),
   import(versionedPath("./analyze.js")),
-  import(versionedPath("./board.js"))
+  import(versionedPath("./board.js")),
+  import(versionedPath("./feature-weights.js"))
 ]);
 
 const ROTATIONS = [0, 90, 180, 270];
@@ -34,6 +41,9 @@ const MIN_SHARED_EDGE = 5;
 const DOCK_BRIDGE_GAP = 3;
 const DOCK_BRIDGE_PROBABILITY = 0.12;
 const OVERLAY_UPDATE_INTERVAL = 4;
+const BOARD_SELECTION_FALLBACK_ATTEMPT = 12;
+const BOARD_PROFILE_HAZARD_DENSITY_THRESHOLD = 0.16;
+const BOARD_PROFILE_HAZARD_DENSITY_WEIGHT = 2.4;
 const SAVED_SCENARIO_KEY = "roborally-course-generator:last-scenario";
 const BOARD_AUDIT_NOTES_KEY = "roborally-course-generator:board-audit-notes";
 const VARIANT_COMPLEXITY = {
@@ -43,7 +53,8 @@ const VARIANT_COMPLEXITY = {
   classicSharedDeck: 3,
   dynamicArchiving: 1,
   hazardousFlags: 2,
-  lessForeshadowing: 1
+  lessForeshadowing: 1,
+  staggeredBoards: 1
 };
 const AUDIT_RENDER_TILE_SIZE = 40;
 const AUDIT_RENDER_MARGIN = 30;
@@ -86,6 +97,9 @@ const PIECE_DATA_FILES = [
   "flood-zone",
   "gauntlet-of-fire",
   "in-and-out",
+  "chasm",
+  "gear-box",
+  "labyrinth",
   "laser-maze",
   "locked",
   "mergers",
@@ -93,8 +107,10 @@ const PIECE_DATA_FILES = [
   "mb-docking-bay-a",
   "misdirection",
   "portal-palace",
+  "pushy",
   "sidewinder",
   "steps",
+  "stop-and-go",
   "tabula-rasa",
   "tempest",
   "the-h",
@@ -111,19 +127,81 @@ const PIECE_DATA_FILES = [
   "whirlpool"
 ];
 const VARIANT_STATES = {
-  off: { label: "Not allowed" },
-  allowed: { label: "Allowed" },
-  forced: { label: "Always on" }
+  off: { label: "Not allowed", shortLabel: "No" },
+  allowed: { label: "Allowed", shortLabel: "Yes" },
+  forced: { label: "Always on", shortLabel: "Must" }
 };
-const VARIANT_CONTROL_IDS = {
-  lighterGame: "variant-lighter-game",
-  lessDeadlyGame: "variant-less-deadly-game",
-  moreDeadlyGame: "variant-more-deadly-game",
-  classicSharedDeck: "variant-classic-shared-deck",
-  dynamicArchiving: "variant-dynamic-archiving",
-  hazardousFlags: "variant-hazardous-flags",
-  lessForeshadowing: "variant-less-foreshadowing"
-};
+const VARIANT_DEFINITIONS = [
+  {
+    id: "lighterGame",
+    label: "A Lighter Game",
+    controlId: "variant-lighter-game",
+    defaultState: "off",
+    description: "Removes upgrade cards and makes battery spaces inactive.",
+    cost: VARIANT_COMPLEXITY.lighterGame
+  },
+  {
+    id: "lessDeadlyGame",
+    label: "A Less Deadly Game",
+    controlId: "variant-less-deadly-game",
+    defaultState: "off",
+    description: "Treats board edges as walls while pit spaces remain pits.",
+    cost: VARIANT_COMPLEXITY.lessDeadlyGame
+  },
+  {
+    id: "moreDeadlyGame",
+    label: "A More Deadly Game",
+    controlId: "variant-more-deadly-game",
+    defaultState: "off",
+    description: "Rebooting deals 3 damage instead of 2.",
+    cost: VARIANT_COMPLEXITY.moreDeadlyGame
+  },
+  {
+    id: "dynamicArchiving",
+    label: "Dynamic Archiving",
+    controlId: "variant-dynamic-archiving",
+    defaultState: "allowed",
+    description: "Robots archive when they end a register on a checkpoint or battery space.",
+    cost: VARIANT_COMPLEXITY.dynamicArchiving
+  },
+  {
+    id: "hazardousFlags",
+    label: "Hazardous Flags",
+    controlId: "variant-hazardous-flags",
+    defaultState: "off",
+    description: "Board elements under checkpoints stay active without moving the checkpoints.",
+    cost: VARIANT_COMPLEXITY.hazardousFlags
+  },
+  {
+    id: "lessForeshadowing",
+    label: "Less Foreshadowing",
+    controlId: "variant-less-foreshadowing",
+    defaultState: "off",
+    description: "Decks reshuffle every turn, reducing card-draw consistency.",
+    cost: VARIANT_COMPLEXITY.lessForeshadowing
+  },
+  {
+    id: "classicSharedDeck",
+    label: "Shared Deck",
+    controlId: "variant-classic-shared-deck",
+    defaultState: "off",
+    description: "Players share one combined programming deck and spam cards go to hand.",
+    cost: VARIANT_COMPLEXITY.classicSharedDeck
+  },
+  {
+    id: "staggeredBoards",
+    label: "Staggered Boards",
+    controlId: "variant-staggered-boards",
+    defaultState: "off",
+    description: "Allows the main boards to be offset instead of forming a straight aligned block.",
+    cost: VARIANT_COMPLEXITY.staggeredBoards
+  }
+].sort((left, right) => left.label.localeCompare(right.label));
+const VARIANT_CONTROL_IDS = Object.fromEntries(
+  VARIANT_DEFINITIONS.map((variant) => [variant.id, variant.controlId])
+);
+
+const DEFAULT_CHECKPOINT_ACTIVE_FEATURE_TYPES = new Set(["wall", "laser", "flamethrower"]);
 
 let currentScenario = null;
 let cachedAssets = null;
@@ -133,6 +211,54 @@ let boardAuditState = {
   hoverTile: null,
   selectedFeatures: new Set(AUDIT_FEATURE_TYPES.map((feature) => feature.id))
 };
+
+function renderVariantControls() {
+  const menuEl = document.getElementById("variant-rules-menu");
+  if (!menuEl) {
+    return;
+  }
+
+  menuEl.replaceChildren();
+  const items = VARIANT_DEFINITIONS.map((variant) => {
+    const rowEl = document.createElement("div");
+    rowEl.className = "variant-rule";
+    rowEl.title = variant.description;
+
+    const nameEl = document.createElement("div");
+    nameEl.className = "variant-rule-name";
+    nameEl.textContent = variant.label;
+
+    const buttonEl = document.createElement("button");
+    buttonEl.id = variant.controlId;
+    buttonEl.className = "variant-state";
+    buttonEl.type = "button";
+    buttonEl.dataset.variantId = variant.id;
+
+    rowEl.append(nameEl, buttonEl);
+    setVariantControlState(variant.id, variant.defaultState, buttonEl);
+    return rowEl;
+  });
+  menuEl.append(...items);
+}
+
+function getVariantDefinitionLabel(variantId) {
+  return VARIANT_DEFINITIONS.find((variant) => variant.id === variantId)?.label ?? variantId;
+}
+
+function getVariantPreferenceState(preferences = {}, variantId) {
+  const directState = preferences.allowedVariantRules?.[variantId];
+  if (directState !== undefined) {
+    return normalizeVariantState(directState);
+  }
+
+  if (variantId === "staggeredBoards" && typeof preferences.alignedLayout === "boolean") {
+    return preferences.alignedLayout ? "off" : "forced";
+  }
+
+  return normalizeVariantState(
+    VARIANT_DEFINITIONS.find((variant) => variant.id === variantId)?.defaultState ?? "off"
+  );
+}
 
 async function loadJSON(path) {
   const res = await fetch(versionedPath(path), { cache: "no-store" });
@@ -813,15 +939,7 @@ function updateSetupSummary(scenario) {
 
 function updateVariantSummary() {
   const summaryEl = document.getElementById("variant-summary");
-  const states = [
-    ["A Lighter Game", getVariantControlState("lighterGame")],
-    ["A Less Deadly Game", getVariantControlState("lessDeadlyGame")],
-    ["A More Deadly Game", getVariantControlState("moreDeadlyGame")],
-    ["Shared Deck", getVariantControlState("classicSharedDeck")],
-    ["Dynamic Archiving", getVariantControlState("dynamicArchiving")],
-    ["Hazardous Flags", getVariantControlState("hazardousFlags")],
-    ["Less Foreshadowing", getVariantControlState("lessForeshadowing")]
-  ];
+  const states = VARIANT_DEFINITIONS.map((variant) => [variant.label, getVariantControlState(variant.id)]);
   const enabled = states.filter(([, state]) => state !== "off");
   summaryEl.textContent = `${enabled.length} selected`;
   summaryEl.title = states.map(([label, state]) => `${label}: ${VARIANT_STATES[state].label}`).join(", ");
@@ -867,11 +985,21 @@ function hasSuppressedCheckpointFeatures(scenario) {
   return scenario.checkpoints.some((checkpoint) => {
     const tile = tileMap.get(`${checkpoint.x},${checkpoint.y}`);
     return (tile?.features || []).some((feature) => (
-      feature.type !== "wall" &&
-      feature.type !== "laser" &&
+      !DEFAULT_CHECKPOINT_ACTIVE_FEATURE_TYPES.has(feature.type) &&
       feature.type !== "checkpoint"
     ));
   });
+}
+
+function hasHazardousFlagsEffect(scenario) {
+  if (!scenario?.hazardousFlags) {
+    return false;
+  }
+
+  return hasCheckpointBoardFeatures(
+    scenario,
+    (feature) => !DEFAULT_CHECKPOINT_ACTIVE_FEATURE_TYPES.has(feature.type)
+  );
 }
 
 function hasCheckpointBoardFeatures(scenario, featureFilter = null) {
@@ -909,14 +1037,14 @@ function updateRulesNote(scenario) {
   }
 
   if (!scenario.hazardousFlags && hasSuppressedCheckpointFeatures(scenario)) {
-    checkpointNotes.push("Checkpoint spaces suppress non-wall, non-laser board elements (Game Guide p. 15).");
+    checkpointNotes.push("Checkpoint spaces suppress board elements other than walls, lasers, and flamethrowers (Game Guide p. 15).");
   }
 
   if (scenario.recoveryRule === "dynamic_archiving") {
     notes.push("Dynamic Archiving: instead of placing reboot tokens on each board, robots archive when they end a register on a checkpoint or battery space (Game Guide p. 32).");
   }
 
-  if (scenario.hazardousFlags) {
+  if (hasHazardousFlagsEffect(scenario)) {
     notes.push("Hazardous Flags: board elements under checkpoints remain active, but do not move or affect the checkpoints (Previous Robo Rally editions).");
   }
 
@@ -964,16 +1092,10 @@ function updateRulesNote(scenario) {
 
 function describeAllowedVariants(preferences = {}) {
   const variants = [];
-  const states = preferences.allowedVariantRules || {};
-  const entries = [
-    ["A Lighter Game", states.lighterGame ?? "off"],
-    ["A Less Deadly Game", states.lessDeadlyGame ?? "off"],
-    ["A More Deadly Game", states.moreDeadlyGame ?? "off"],
-    ["Shared Deck", states.classicSharedDeck ?? "off"],
-    ["Dynamic Archiving", states.dynamicArchiving ?? "allowed"],
-    ["Hazardous Flags", states.hazardousFlags ?? "off"],
-    ["Less Foreshadowing", states.lessForeshadowing ?? "off"]
-  ];
+  const entries = VARIANT_DEFINITIONS.map((variant) => [
+    variant.label,
+    getVariantPreferenceState(preferences, variant.id)
+  ]);
 
   for (const [label, state] of entries) {
     const normalized = normalizeVariantState(state);
@@ -1002,15 +1124,17 @@ function getVariantControlState(variantId) {
   return normalizeVariantState(button?.dataset.state ?? "off");
 }
 
-function setVariantControlState(variantId, state) {
+function setVariantControlState(variantId, state, buttonEl = null) {
   const normalized = normalizeVariantState(state);
-  const button = document.getElementById(VARIANT_CONTROL_IDS[variantId]);
+  const button = buttonEl ?? document.getElementById(VARIANT_CONTROL_IDS[variantId]);
   if (!button) {
     return;
   }
 
   button.dataset.state = normalized;
-  button.textContent = VARIANT_STATES[normalized].label;
+  button.textContent = VARIANT_STATES[normalized].shortLabel;
+  button.title = VARIANT_STATES[normalized].label;
+  button.setAttribute("aria-label", `${getVariantDefinitionLabel(variantId)}: ${VARIANT_STATES[normalized].label}`);
 }
 
 function cycleVariantControlState(variantId) {
@@ -1036,7 +1160,7 @@ function chooseVariantEnabled(variantState, allowedChance = 0.5) {
 }
 
 function chooseRecoveryRule(preferences) {
-  const dynamicArchivingState = preferences.allowedVariantRules?.dynamicArchiving ?? "allowed";
+  const dynamicArchivingState = getVariantPreferenceState(preferences, "dynamicArchiving");
   if (chooseVariantEnabled(dynamicArchivingState, 0.5)) {
     return "dynamic_archiving";
   }
@@ -1045,32 +1169,32 @@ function chooseRecoveryRule(preferences) {
 }
 
 function chooseLessDeadlyGame(preferences) {
-  const lessDeadlyState = preferences.allowedVariantRules?.lessDeadlyGame ?? "off";
+  const lessDeadlyState = getVariantPreferenceState(preferences, "lessDeadlyGame");
   return chooseVariantEnabled(lessDeadlyState, 0.22);
 }
 
 function chooseMoreDeadlyGame(preferences) {
-  const moreDeadlyState = preferences.allowedVariantRules?.moreDeadlyGame ?? "off";
+  const moreDeadlyState = getVariantPreferenceState(preferences, "moreDeadlyGame");
   return chooseVariantEnabled(moreDeadlyState, 0.22);
 }
 
 function chooseLighterGame(preferences) {
-  const lighterState = preferences.allowedVariantRules?.lighterGame ?? "off";
+  const lighterState = getVariantPreferenceState(preferences, "lighterGame");
   return chooseVariantEnabled(lighterState, 0.24);
 }
 
 function chooseHazardousFlags(preferences) {
-  const hazardousFlagsState = preferences.allowedVariantRules?.hazardousFlags ?? "off";
+  const hazardousFlagsState = getVariantPreferenceState(preferences, "hazardousFlags");
   return chooseVariantEnabled(hazardousFlagsState, 0.2);
 }
 
 function chooseClassicSharedDeck(preferences) {
-  const classicSharedDeckState = preferences.allowedVariantRules?.classicSharedDeck ?? "off";
+  const classicSharedDeckState = getVariantPreferenceState(preferences, "classicSharedDeck");
   return chooseVariantEnabled(classicSharedDeckState, 0.08);
 }
 
 function chooseLessForeshadowing(preferences) {
-  const lessForeshadowingState = preferences.allowedVariantRules?.lessForeshadowing ?? "off";
+  const lessForeshadowingState = getVariantPreferenceState(preferences, "lessForeshadowing");
   return chooseVariantEnabled(lessForeshadowingState, 0.22);
 }
 
@@ -1094,27 +1218,23 @@ function getVariantBaseChance(variantId, preferences = {}) {
     classicSharedDeck: { easy: 0.01, moderate: 0.07, hard: 0.2 },
     dynamicArchiving: { easy: 0.46, moderate: 0.4, hard: 0.34 },
     hazardousFlags: { easy: 0.08, moderate: 0.16, hard: 0.24 },
-    lessForeshadowing: { easy: 0.07, moderate: 0.16, hard: 0.24 }
+    lessForeshadowing: { easy: 0.07, moderate: 0.16, hard: 0.24 },
+    staggeredBoards: { easy: 0.06, moderate: 0.12, hard: 0.18 }
   };
 
   return byVariant[variantId]?.[difficulty] ?? 0.2;
 }
 
 function chooseVariantBundle(preferences = {}) {
-  const variantStates = preferences.allowedVariantRules || {};
-  const definitions = [
-    { id: "lighterGame", cost: VARIANT_COMPLEXITY.lighterGame },
-    { id: "lessDeadlyGame", cost: VARIANT_COMPLEXITY.lessDeadlyGame },
-    { id: "moreDeadlyGame", cost: VARIANT_COMPLEXITY.moreDeadlyGame },
-    { id: "classicSharedDeck", cost: VARIANT_COMPLEXITY.classicSharedDeck },
-    { id: "dynamicArchiving", cost: VARIANT_COMPLEXITY.dynamicArchiving },
-    { id: "hazardousFlags", cost: VARIANT_COMPLEXITY.hazardousFlags },
-    { id: "lessForeshadowing", cost: VARIANT_COMPLEXITY.lessForeshadowing }
-  ];
+  const definitions = VARIANT_DEFINITIONS.map((variant) => ({
+    id: variant.id,
+    cost: variant.cost,
+    defaultState: variant.defaultState
+  }));
   const active = Object.fromEntries(definitions.map((entry) => [entry.id, false]));
   let usedBudget = 0;
 
-  const forcedEntries = definitions.filter((entry) => normalizeVariantState(variantStates[entry.id] ?? "off") === "forced");
+  const forcedEntries = definitions.filter((entry) => getVariantPreferenceState(preferences, entry.id) === "forced");
   forcedEntries.forEach((entry) => {
     active[entry.id] = true;
     usedBudget += entry.cost;
@@ -1123,7 +1243,7 @@ function chooseVariantBundle(preferences = {}) {
   const sampledBudget = sampleVariantComplexityBudget(preferences);
   const budget = Math.max(sampledBudget, usedBudget);
   const allowedEntries = definitions
-    .filter((entry) => normalizeVariantState(variantStates[entry.id] ?? "off") === "allowed")
+    .filter((entry) => getVariantPreferenceState(preferences, entry.id) === "allowed")
     .map((entry) => ({
       ...entry,
       chance: getVariantBaseChance(entry.id, preferences)
@@ -1153,12 +1273,14 @@ function chooseVariantBundle(preferences = {}) {
   }
 
   return {
+    alignedLayout: !active.staggeredBoards,
     recoveryRule: active.dynamicArchiving ? "dynamic_archiving" : "reboot_tokens",
     lighterGame: active.lighterGame,
     lessDeadlyGame: active.lessDeadlyGame,
     moreDeadlyGame: active.moreDeadlyGame,
     classicSharedDeck: active.classicSharedDeck,
     hazardousFlags: active.hazardousFlags,
+    staggeredBoards: active.staggeredBoards,
     lessForeshadowing: active.lessForeshadowing,
     variantComplexityBudget: budget,
     variantComplexityUsed: usedBudget
@@ -1170,7 +1292,6 @@ function getPreferencesFromControls() {
     playerCount: Number(document.getElementById("player-count").value),
     difficulty: document.getElementById("difficulty").value,
     length: document.getElementById("length").value,
-    alignedLayout: document.getElementById("aligned-layout").checked,
     selectedExpansions: {
       roborally: document.getElementById("expansion-roborally").checked,
       "master-builder": document.getElementById("expansion-master-builder").checked,
@@ -1178,15 +1299,9 @@ function getPreferencesFromControls() {
       "chaos-and-carnage": document.getElementById("expansion-chaos-and-carnage").checked,
       "wet-and-wild": document.getElementById("expansion-wet-and-wild").checked
     },
-    allowedVariantRules: {
-      lighterGame: getVariantControlState("lighterGame"),
-      lessDeadlyGame: getVariantControlState("lessDeadlyGame"),
-      moreDeadlyGame: getVariantControlState("moreDeadlyGame"),
-      classicSharedDeck: getVariantControlState("classicSharedDeck"),
-      dynamicArchiving: getVariantControlState("dynamicArchiving"),
-      hazardousFlags: getVariantControlState("hazardousFlags"),
-      lessForeshadowing: getVariantControlState("lessForeshadowing")
-    }
+    allowedVariantRules: Object.fromEntries(
+      VARIANT_DEFINITIONS.map((variant) => [variant.id, getVariantControlState(variant.id)])
+    )
   };
 }
 
@@ -1198,19 +1313,14 @@ function applyPreferencesToControls(preferences) {
   document.getElementById("player-count").value = String(preferences.playerCount ?? 4);
   document.getElementById("difficulty").value = preferences.difficulty ?? "any";
   document.getElementById("length").value = preferences.length ?? "any";
-  document.getElementById("aligned-layout").checked = preferences.alignedLayout ?? false;
   document.getElementById("expansion-roborally").checked = preferences.selectedExpansions?.roborally ?? true;
   document.getElementById("expansion-master-builder").checked = preferences.selectedExpansions?.["master-builder"] ?? false;
   document.getElementById("expansion-thrills-and-spills").checked = preferences.selectedExpansions?.["thrills-and-spills"] ?? false;
   document.getElementById("expansion-chaos-and-carnage").checked = preferences.selectedExpansions?.["chaos-and-carnage"] ?? false;
   document.getElementById("expansion-wet-and-wild").checked = preferences.selectedExpansions?.["wet-and-wild"] ?? false;
-  setVariantControlState("lighterGame", preferences.allowedVariantRules?.lighterGame ?? "off");
-  setVariantControlState("classicSharedDeck", preferences.allowedVariantRules?.classicSharedDeck ?? "off");
-  setVariantControlState("dynamicArchiving", preferences.allowedVariantRules?.dynamicArchiving ?? "allowed");
-  setVariantControlState("lessDeadlyGame", preferences.allowedVariantRules?.lessDeadlyGame ?? "off");
-  setVariantControlState("moreDeadlyGame", preferences.allowedVariantRules?.moreDeadlyGame ?? "off");
-  setVariantControlState("hazardousFlags", preferences.allowedVariantRules?.hazardousFlags ?? "off");
-  setVariantControlState("lessForeshadowing", preferences.allowedVariantRules?.lessForeshadowing ?? "off");
+  VARIANT_DEFINITIONS.forEach((variant) => {
+    setVariantControlState(variant.id, getVariantPreferenceState(preferences, variant.id));
+  });
   updateExpansionSummary();
   updateVariantSummary();
 }
@@ -1246,71 +1356,27 @@ function deriveBoardProfile(piece) {
   let pitCount = 0;
   let beltCount = 0;
   let portalCount = 0;
+  let teleporterCount = 0;
+  let randomizerCount = 0;
   let crusherCount = 0;
   let pushCount = 0;
   let hazardCount = 0;
-  const getTimingWeight = (feature) => {
-    const timingCount = feature?.timing?.length ?? 0;
-    return timingCount > 0 ? timingCount / 5 : 1;
-  };
 
   for (const tile of tiles) {
     for (const feature of tile.features || []) {
-      if (feature.type === "pit") {
-        hazardWeight += 3;
-        swingWeight += 2.6;
-        pitCount += 1;
-        hazardCount += 1;
-      } else if (feature.type === "laser") {
-        hazardWeight += 2 + (feature.damage || 1) * 0.35;
-        swingWeight += 0.55 + (feature.damage || 1) * 0.15;
-        hazardCount += 1;
-      } else if (feature.type === "flamethrower") {
-        hazardWeight += 2.7 * getTimingWeight(feature);
-        swingWeight += 0.9 * getTimingWeight(feature);
-        hazardCount += 1;
-      } else if (feature.type === "push") {
-        const timingWeight = getTimingWeight(feature);
-        hazardWeight += 1 * timingWeight;
-        complexityWeight += 1.2 * timingWeight;
-        swingWeight += 0.75 * timingWeight;
-        pushCount += 1;
-      } else if (feature.type === "crusher") {
-        const timingWeight = getTimingWeight(feature);
-        hazardWeight += 3 * timingWeight;
-        complexityWeight += 0.8 * timingWeight;
-        swingWeight += 1.35 * timingWeight;
-        crusherCount += 1;
-        hazardCount += 1;
-      } else if (feature.type === "belt") {
-        complexityWeight += feature.speed === 2 ? 1.2 : 0.8;
-        congestionWeight += feature.speed === 2 ? 0.9 : 0.45;
-        beltCount += 1;
-      } else if (feature.type === "gear") {
-        complexityWeight += 1.4;
-      } else if (feature.type === "portal") {
-        hazardWeight += 0.7;
-        complexityWeight += 1.3;
-        swingWeight += 1.25;
-        portalCount += 1;
-      } else if (feature.type === "oil") {
-        hazardWeight += 1.2;
-        complexityWeight += 1.8;
-        swingWeight += 0.7;
-      } else if (feature.type === "ledge") {
-        hazardWeight += 0.8;
-        congestionWeight += Math.max(1, (feature.sides || []).length) * 0.85;
-        swingWeight += 0.45;
-        hazardCount += 1;
-      } else if (feature.type === "ramp") {
-        complexityWeight += 0.7;
-      } else if (feature.type === "water") {
-        complexityWeight += 0.5;
-      } else if (feature.type === "wall") {
-        congestionWeight += Math.max(1, (feature.sides || []).length) * 1.25;
-      } else if (feature.type === "battery") {
-        hazardWeight -= 0.35;
-      }
+      const delta = getBoardProfileDelta(feature);
+      hazardWeight += delta.hazardWeight;
+      congestionWeight += delta.congestionWeight;
+      complexityWeight += delta.complexityWeight;
+      swingWeight += delta.swingWeight;
+      pitCount += delta.pitCount;
+      beltCount += delta.beltCount;
+      portalCount += delta.portalCount;
+      teleporterCount += delta.teleporterCount;
+      randomizerCount += delta.randomizerCount;
+      crusherCount += delta.crusherCount;
+      pushCount += delta.pushCount;
+      hazardCount += delta.hazardCount;
     }
   }
 
@@ -1320,17 +1386,28 @@ function deriveBoardProfile(piece) {
     complexity: normalizeBias(complexityWeight / area * 1.2)
   };
   const swinginess = normalizeBias(swingWeight / area * 1.4);
-  const density = (hazardCount + beltCount + portalCount + pushCount + crusherCount) / area;
+  const density = (
+    hazardCount * BOARD_PROFILE_DENSITY_COMPONENT_WEIGHTS.hazard +
+    beltCount * BOARD_PROFILE_DENSITY_COMPONENT_WEIGHTS.belt +
+    portalCount * BOARD_PROFILE_DENSITY_COMPONENT_WEIGHTS.portal +
+    pushCount * BOARD_PROFILE_DENSITY_COMPONENT_WEIGHTS.push
+  ) / area;
+  const hazardDensity = hazardCount / area;
+  const hazardPressure = Math.max(
+    0,
+    (hazardDensity - BOARD_PROFILE_HAZARD_DENSITY_THRESHOLD) * BOARD_PROFILE_HAZARD_DENSITY_WEIGHT
+  );
   const overall = Number(clamp(
     bias.hazard * 0.4 +
     bias.congestion * 0.22 +
     bias.complexity * 0.24 +
     swinginess * 0.14 +
-    density * 1.6,
+    density * BOARD_PROFILE_DENSITY_WEIGHT +
+    hazardPressure,
     1,
     3.6
   ).toFixed(2));
-  const band = overall <= 1.6
+  const band = overall <= 1.7
   ? "intro"
   : overall <= 2.25
     ? "standard"
@@ -1343,14 +1420,18 @@ function deriveBoardProfile(piece) {
     swinginess,
     overall,
     density: Number(density.toFixed(3)),
+    hazardDensity: Number(hazardDensity.toFixed(3)),
     band,
     signals: {
       pitCount,
       beltCount,
       portalCount,
+      teleporterCount,
+      randomizerCount,
       crusherCount,
       pushCount,
-      hazardCount
+      hazardCount,
+      hazardPressure: Number(hazardPressure.toFixed(3))
     }
   };
 }
@@ -1489,11 +1570,11 @@ function boardPreferencePenalty(piece, preferences, guidanceLevel) {
   const bias = profile.bias;
   const difficultyTargets = {
     easy: {
-      hazard: 1.22,
-      congestion: preferences.playerCount >= 5 ? 1.08 : 1.22,
-      complexity: 1.95,
-      swinginess: 1.15,
-      overall: 1.28
+      hazard: 1.18,
+      congestion: preferences.playerCount >= 5 ? 1.22 : 1.38,
+      complexity: 1.8,
+      swinginess: 1.12,
+      overall: 1.55
     },
     moderate: {
       hazard: 2.15,
@@ -1511,10 +1592,20 @@ function boardPreferencePenalty(piece, preferences, guidanceLevel) {
     }
   };
 
+  if (preferences.difficulty === "easy" && preferences.length === "short") {
+    difficultyTargets.easy = {
+      hazard: 1.12,
+      congestion: preferences.playerCount >= 5 ? 1.16 : 1.3,
+      complexity: 1.7,
+      swinginess: 1.06,
+      overall: 1.47
+    };
+  }
+
   const target = difficultyTargets[preferences.difficulty] || difficultyTargets.moderate;
 
   const mismatchWeights = preferences.difficulty === "easy"
-    ? { hazard: 1.45, congestion: 1.4, complexity: 1.15, swinginess: 1.2, overall: 1.85 }
+    ? { hazard: 1.35, congestion: 1.05, complexity: 1.0, swinginess: 1.1, overall: 1.35 }
     : preferences.difficulty === "moderate"
       ? { hazard: 1.2, congestion: 1.15, complexity: 1.0, swinginess: 0.95, overall: 1.35 }
       : { hazard: 0.95, congestion: 0.9, complexity: 0.85, swinginess: 0.7, overall: 0.85 };
@@ -1528,8 +1619,8 @@ function boardPreferencePenalty(piece, preferences, guidanceLevel) {
   );
 
   const guidancePenalty = preferences.difficulty === "easy"
-    ? Math.max(0, (profile.overall ?? 2) - 1.6) * 8.5 +
-      Math.max(0, (profile.swinginess ?? 2) - 1.5) * 4.5
+    ? Math.max(0, (profile.overall ?? 2) - 1.9) * 6.5 +
+      Math.max(0, (profile.swinginess ?? 2) - 1.6) * 3.5
     : preferences.difficulty === "moderate"
       ? (profile.band === "extreme" ? 3.5 : 0) +
         Math.max(0, (profile.overall ?? 2) - 2.75) * 1.2
@@ -1888,93 +1979,68 @@ function selectBoardIdsForCourse(boardIds, count, pieceMap, preferences, guidanc
     }
     grouped.get(physicalBoardId).push(boardId);
   }
-console.log("START")
+
   const scoredGroups = [];
   for (const groupBoardIds of grouped.values()) {
     const rankedFaces = groupBoardIds
-  .map((boardId) => {
-    const piece = pieceMap[boardId];
-    const score = boardPreferencePenalty(piece, preferences, guidanceLevel);
-    console.log("BOARD SCORE", boardId, {
-      score,
-      profile: piece.boardProfile.bias,
-      band: piece.boardProfile.band
-    });
-    return { boardId, score };
-  })
-  .sort((a, b) => a.score - b.score);
+      .map((boardId) => {
+        const piece = pieceMap[boardId];
+        const score = boardPreferencePenalty(piece, preferences, guidanceLevel);
+        return { boardId, score };
+      })
+      .sort((a, b) => a.score - b.score);
     if (rankedFaces.length) {
       scoredGroups.push(rankedFaces[0]);
     }
   }
 
-const ranked = scoredGroups.sort((a, b) => a.score - b.score);
+  const ranked = scoredGroups.sort((a, b) => a.score - b.score);
 
-const candidatePoolSize = preferences.difficulty === "hard"
-  ? Math.min(ranked.length, Math.max(count + 6, Math.ceil(ranked.length * 1)))
-  : Math.min(ranked.length, Math.max(count + 3, Math.ceil(ranked.length * 0.35)));
+  const candidatePoolSize = preferences.difficulty === "hard"
+    ? Math.min(ranked.length, Math.max(count + 6, Math.ceil(ranked.length * 1)))
+    : Math.min(ranked.length, Math.max(count + 4, Math.ceil(ranked.length * 0.45)));
 
-const candidatePool = ranked.slice(0, candidatePoolSize).map((entry) => entry.boardId);
+  const candidatePool = ranked.slice(0, candidatePoolSize).map((entry) => entry.boardId);
 
-function getBoardPool(ranked, attempt, preferences, count) {
-  const total = ranked.length;
+  function getBoardPool(rankedEntries, attempt, currentPreferences, boardCount) {
+    const total = rankedEntries.length;
 
-  const getTop = (ratio, extra = 0) =>
-    ranked.slice(0, Math.min(total, Math.max(count + extra, Math.ceil(total * ratio))));
+    const getTop = (ratio, extra = 0) =>
+      rankedEntries.slice(0, Math.min(total, Math.max(boardCount + extra, Math.ceil(total * ratio))));
 
-  if (preferences.difficulty === "hard") {
-    if (attempt < 10) return ranked; // no filtering
-    if (attempt < 25) return getTop(0.8, 8); // very broad
-    if (attempt < 35) return getTop(0.55, 5); // medium
-    return getTop(0.35, 3); // tight
+    if (currentPreferences.difficulty === "hard") {
+      if (attempt < 10) return rankedEntries;
+      if (attempt < 25) return getTop(0.8, 8);
+      if (attempt < 35) return getTop(0.55, 5);
+      return getTop(0.35, 3);
+    }
+
+    if (currentPreferences.difficulty === "moderate") {
+      if (attempt < 5) return rankedEntries;
+      if (attempt < 20) return getTop(0.65, 6);
+      if (attempt < 35) return getTop(0.45, 4);
+      return getTop(0.3, 2);
+    }
+
+    if (attempt < 3) return getTop(0.75, 8);
+    if (attempt < 15) return getTop(0.55, 6);
+    return getTop(0.4, 4);
   }
-
-  if (preferences.difficulty === "moderate") {
-    if (attempt < 5) return ranked;
-    if (attempt < 20) return getTop(0.65, 6);
-    if (attempt < 35) return getTop(0.45, 4);
-    return getTop(0.3, 2);
-  }
-
-  // easy
-  console.log(getTop(0.6, 6));
-  if (attempt < 3) return getTop(0.6, 6);
-  if (attempt < 15) return getTop(0.4, 4);
-  return getTop(0.25, 2);
-}
-
-let bestSelection = sampleDistinctBoardFaces(candidatePool, count, pieceMap);
-let bestScore = bestSelection.reduce((sum, boardId) => (
-  sum + boardPreferencePenalty(pieceMap[boardId], preferences, guidanceLevel)
-), 0) + boardSelectionCompositionPenalty(bestSelection, pieceMap, lengthPreference, preferences);
 
   const attemptCount = Math.min(24, Math.max(6, ranked.length * 2));
+  let bestPoolIds = candidatePool;
   for (let attempt = 0; attempt < attemptCount; attempt += 1) {
     const pool = getBoardPool(ranked, attempt, preferences, count);
     const poolIds = pool.map((entry) => entry.boardId);
-    const selection = sampleDistinctBoardFaces(poolIds, count, pieceMap);
-    if (selection.length !== count) {
-      continue;
+    if (sampleDistinctBoardFaces(poolIds, count, pieceMap).length === count) {
+      bestPoolIds = poolIds;
     }
-
-    const selectionScore = selection.reduce((sum, boardId) => (
-      sum + boardPreferencePenalty(pieceMap[boardId], preferences, guidanceLevel)
-    ), 0) + boardSelectionCompositionPenalty(selection, pieceMap, lengthPreference, preferences);
-
-    const tolerance =
-  preferences.difficulty === "hard"
-    ? (attempt < 10 ? 999 : attempt < 25 ? 4.0 : 1.5)
-    : preferences.difficulty === "moderate"
-      ? (attempt < 5 ? 999 : attempt < 20 ? 2.5 : 1.0)
-      : (attempt < 3 ? 999 : 0.5);
-
-if (selectionScore <= bestScore + tolerance) {
-  bestSelection = selection;
-  bestScore = Math.min(bestScore, selectionScore);
-}
   }
 
-  return bestSelection;
+  return {
+    subsetBoardIds: bestPoolIds,
+    selectedBoardIds: sampleDistinctBoardFaces(bestPoolIds, count, pieceMap)
+  };
 }
 
 function cloneTileMap(tileMap) {
@@ -2351,24 +2417,117 @@ function canUseCheckpointTile(candidate, tileMap, starts, preferences = {}) {
   return !(tile?.features || []).some((feature) => feature.type === "pit");
 }
 
+function getFlagCandidateTilePenalty(candidate, tileMap, difficulty, preferences = {}) {
+  const tile = tileMap.get(`${candidate.x},${candidate.y}`);
+  const features = tile?.features || [];
+  let penalty = 0;
+
+  for (const feature of features) {
+    if (feature.type === "checkpoint" || feature.type === "battery" || feature.type === "wall") {
+      continue;
+    }
+
+    let featurePenalty = getTilePenaltyForFeature(feature, {
+      batteryActive: !preferences.lighterGame
+    });
+
+    if (feature.type === "flamethrower") {
+      featurePenalty += 5.5;
+    } else if (feature.type === "laser") {
+      featurePenalty += 3.5 + (feature.damage || 1) * 0.5;
+    } else if (feature.type === "push") {
+      featurePenalty += 2.8;
+    } else if (feature.type === "belt") {
+      featurePenalty += feature.speed === 2 ? 1.6 : 0.7;
+    } else if (feature.type === "oil") {
+      featurePenalty += 2.2;
+    } else if (feature.type === "portal") {
+      featurePenalty += 3;
+    } else if (feature.type === "teleporter") {
+      featurePenalty += 3.6;
+    }
+
+    penalty += featurePenalty;
+  }
+
+  const scale = difficulty === "easy"
+    ? 0.72
+    : difficulty === "moderate"
+      ? 0.32
+      : 0;
+
+  return Number((penalty * scale).toFixed(2));
+}
+
+function getFlagCandidateAreaPenalty(candidate, tileMap, difficulty, preferences = {}) {
+  if (difficulty === "hard") {
+    return 0;
+  }
+
+  let penalty = 0;
+
+  for (let dy = -1; dy <= 1; dy += 1) {
+    for (let dx = -1; dx <= 1; dx += 1) {
+      const dist = Math.abs(dx) + Math.abs(dy);
+      if (dist === 0 || dist > 2) {
+        continue;
+      }
+
+      const tile = tileMap.get(`${candidate.x + dx},${candidate.y + dy}`);
+      if (!tile) {
+        penalty += difficulty === "easy" ? 0.7 : 0.25;
+        continue;
+      }
+
+      for (const feature of tile.features || []) {
+        if (feature.type === "checkpoint" || feature.type === "battery" || feature.type === "wall") {
+          continue;
+        }
+
+        let featurePenalty = getTilePenaltyForFeature(feature, {
+          batteryActive: !preferences.lighterGame
+        }) * (dist === 1 ? 0.32 : 0.16);
+
+        if (feature.type === "portal" || feature.type === "teleporter") {
+          featurePenalty += dist === 1 ? 1.2 : 0.5;
+        } else if (feature.type === "flamethrower") {
+          featurePenalty += dist === 1 ? 1.8 : 0.8;
+        } else if (feature.type === "laser") {
+          featurePenalty += dist === 1 ? 1.1 : 0.45;
+        } else if (feature.type === "belt" && feature.speed === 2) {
+          featurePenalty += dist === 1 ? 0.7 : 0.25;
+        }
+
+        penalty += featurePenalty;
+      }
+    }
+  }
+
+  const scale = difficulty === "easy" ? 0.85 : 0.35;
+  return Number((penalty * scale).toFixed(2));
+}
+
 function getFlagCandidateWeight(candidate, tileMap, starts, preferences, sequenceIndex, guidanceLevel, thresholds, previousFlag = null) {
   let weight = candidate.weight ?? 1;
   const approachStats = getFlagCandidateApproachStats(tileMap, candidate);
   const difficulty = preferences.difficulty ?? "moderate";
   const lengthPreference = preferences.length ?? "moderate";
+  const tilePenalty = getFlagCandidateTilePenalty(candidate, tileMap, difficulty, preferences);
+  const areaPenalty = getFlagCandidateAreaPenalty(candidate, tileMap, difficulty, preferences);
 
-  weight += approachStats.openCount * (difficulty === "easy" ? 1.5 : 1.1);
-  weight -= approachStats.pitCount * (difficulty === "easy" ? 1.3 : 0.9);
-  weight -= approachStats.voidCount * (difficulty === "easy" ? 1 : 0.7);
+  weight += approachStats.openCount * (difficulty === "easy" ? 2.6 : 1.1);
+  weight -= approachStats.pitCount * (difficulty === "easy" ? 2.2 : 0.9);
+  weight -= approachStats.voidCount * (difficulty === "easy" ? 1.7 : 0.7);
+  weight -= tilePenalty + areaPenalty;
 
   if (sequenceIndex === 0 && starts.length) {
     const distances = starts.map((start) => manhattanDistance(candidate, start));
     const nearest = Math.min(...distances);
     const averageDistance = distances.reduce((sum, value) => sum + value, 0) / distances.length;
     if (nearest >= thresholds.nearest && averageDistance >= thresholds.average) {
-      weight += difficulty === "easy" ? 3.5 : 2;
+      weight += difficulty === "easy" ? 4.2 : 2;
     } else {
-      weight -= difficulty === "easy" ? 2.5 : 1.4;
+      weight -= difficulty === "easy" ? 3.1 : 1.4;
     }
   }
 
@@ -2385,7 +2544,7 @@ function getFlagCandidateWeight(candidate, tileMap, starts, preferences, sequenc
 
   weight += Math.min(2, guidanceLevel * 0.35);
   if (difficulty === "easy" && lengthPreference === "short") {
-    weight += 1.4;
+    weight += 1.8;
   } else if (difficulty !== "hard" && lengthPreference !== "long") {
     weight += 0.6;
   }
@@ -2500,7 +2659,7 @@ function applyFlagOverrides(tileMap, goals, options = {}) {
 
     if (!hazardousFlags) {
       tile.features = tile.features.filter((feature) => (
-        feature.type === "laser" || feature.type === "wall"
+        DEFAULT_CHECKPOINT_ACTIVE_FEATURE_TYPES.has(feature.type)
       ));
     }
     tile.features = tile.features.filter((feature) => feature.type !== "checkpoint");
@@ -2741,25 +2900,42 @@ function tryExtendAlignedBoardLayout(existingPlacements, nextBoardId, pieceMap) 
   return null;
 }
 
-function createBoardPlacements(pieceMap, lengthPreference, preferences, guidanceLevel, expansionIds = null, dockPieceId = "docking-bay-a") {
+function createBoardPlacements(pieceMap, lengthPreference, preferences, guidanceLevel, expansionIds = null, dockPieceId = "docking-bay-a", generationAttempt = 1) {
   const mainBoardIds = getAvailableMainBoardIds(pieceMap, expansionIds);
   const maxBoards = Math.min(4, countPhysicalBoards(mainBoardIds, pieceMap));
   const hasLargeBoards = mainBoardIds.some((boardId) => pieceMap[boardId]?.kind !== "small");
   const boardCount = weightedBoardCount(lengthPreference, maxBoards, hasLargeBoards, preferences);
+  const shouldForceFilteredSubset = generationAttempt >= BOARD_SELECTION_FALLBACK_ATTEMPT;
   let boardIds = [];
 
-  for (let attempt = 0; attempt < 24; attempt += 1) {
-    const candidateBoardIds = sampleMany(mainBoardIds, boardCount);
-    //selectBoardIdsForCourse(mainBoardIds, boardCount, pieceMap, preferences, guidanceLevel, lengthPreference);
-//    console.log(candidateBoardIds);
-    if (candidateBoardIds.length !== boardCount) {
-      continue;
+  if (!shouldForceFilteredSubset) {
+    for (let attempt = 0; attempt < 24; attempt += 1) {
+      const candidateBoardIds = sampleMany(mainBoardIds, boardCount);
+      if (candidateBoardIds.length !== boardCount) {
+        continue;
+      }
+      if (!boardIdsCanSupportDock(candidateBoardIds, pieceMap, dockPieceId)) {
+        continue;
+      }
+      boardIds = candidateBoardIds;
+      break;
     }
-    if (!boardIdsCanSupportDock(candidateBoardIds, pieceMap, dockPieceId)) {
-      continue;
+  }
+
+  if (boardIds.length !== boardCount || shouldForceFilteredSubset) {
+    const fallbackSelection = selectBoardIdsForCourse(
+      mainBoardIds,
+      boardCount,
+      pieceMap,
+      preferences,
+      guidanceLevel,
+      lengthPreference
+    );
+    const fallbackBoardIds = fallbackSelection.selectedBoardIds ?? [];
+
+    if (fallbackBoardIds.length === boardCount && boardIdsCanSupportDock(fallbackBoardIds, pieceMap, dockPieceId)) {
+      boardIds = fallbackBoardIds;
     }
-    boardIds = candidateBoardIds;
-    break;
   }
 
   if (boardIds.length !== boardCount) {
@@ -3694,20 +3870,26 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
   const availableDockIds = getEligibleDockIds(pieceMap, expansionIds, preferences);
   const variantBundle = chooseVariantBundle(preferences);
   const {
+    alignedLayout,
     recoveryRule,
     lessDeadlyGame,
     moreDeadlyGame,
     lighterGame,
     classicSharedDeck,
     hazardousFlags,
+    staggeredBoards,
     lessForeshadowing,
     variantComplexityBudget,
     variantComplexityUsed
   } = variantBundle;
+  const generationPreferences = {
+    ...preferences,
+    alignedLayout
+  };
   const guidanceLevel = guidanceLevelForAttempt(attempt);
   const orderedDockIds = weightedOrder(
     availableDockIds,
-    (dockId) => getDockSelectionWeight(pieceMap[dockId], preferences)
+    (dockId) => getDockSelectionWeight(pieceMap[dockId], generationPreferences)
   );
   let boardLayout = null;
   let dockLayout = null;
@@ -3715,7 +3897,15 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
   let dockFlipped = false;
 
   for (const candidateDockId of orderedDockIds) {
-    const candidateBoardLayout = createBoardPlacements(pieceMap, preferences.length, preferences, guidanceLevel, expansionIds, candidateDockId);
+    const candidateBoardLayout = createBoardPlacements(
+      pieceMap,
+      generationPreferences.length,
+      generationPreferences,
+      guidanceLevel,
+      expansionIds,
+      candidateDockId,
+      attempt
+    );
     if (!candidateBoardLayout) {
       continue;
     }
@@ -3726,7 +3916,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
 
     for (const candidateFlip of flipOrder) {
       candidateDockLayout = createDockPlacement(candidateBoardLayout.placements, pieceMap, candidateDockId, candidateFlip, {
-        alignedLayout: preferences.alignedLayout
+        alignedLayout: generationPreferences.alignedLayout
       });
       if (candidateDockLayout) {
         candidateDockFlipped = candidateFlip;
@@ -3749,7 +3939,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     throw new Error("Unable to create a valid board layout");
   }
 
-  const overlayPlacements = chooseOverlayPlacements(boardLayout.placements, dockLayout.dockPlacement, pieceMap, preferences, expansionIds);
+  const overlayPlacements = chooseOverlayPlacements(boardLayout.placements, dockLayout.dockPlacement, pieceMap, generationPreferences, expansionIds);
 
   const placements = [
     ...boardLayout.placements,
@@ -3760,9 +3950,9 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
 
   const { tileMap, starts } = buildResolvedMap(placements, pieceMap);
   const flagCandidates = getFlagCandidates(placements, pieceMap);
-  const flagCount = Math.min(weightedFlagCount(preferences.length, flagCandidates.length), flagCandidates.length);
-  const retryBudget = getFlagRetryBudget(preferences, remainingEvaluations);
-  const stallLimit = getFlagRetryStallLimit(preferences);
+  const flagCount = Math.min(weightedFlagCount(generationPreferences.length, flagCandidates.length), flagCandidates.length);
+  const retryBudget = getFlagRetryBudget(generationPreferences, remainingEvaluations);
+  const stallLimit = getFlagRetryStallLimit(generationPreferences);
   let evaluationsUsed = 0;
   let bestScenario = null;
   let staleRetries = 0;
@@ -3779,7 +3969,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       dockLayout.dockPlacement,
       pieceMap,
       starts,
-      { ...preferences, hazardousFlags },
+      { ...generationPreferences, hazardousFlags },
       guidanceLevel
     );
 
@@ -3807,7 +3997,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       boardRects
     });
     const metrics = classifyCandidate(sequence, {
-      ...preferences,
+      ...generationPreferences,
       flagCount,
       classicSharedDeck,
       hazardousFlags,
@@ -3834,6 +4024,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       lighterGame,
       classicSharedDeck,
       hazardousFlags,
+      staggeredBoards,
       lessForeshadowing,
       variantComplexityBudget,
       variantComplexityUsed,
@@ -3847,10 +4038,11 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       sequence,
       metrics,
       preferences: {
-        ...preferences,
+        ...generationPreferences,
         flagCount,
         classicSharedDeck,
-        hazardousFlags
+        hazardousFlags,
+        staggeredBoards
       }
     };
 
@@ -4127,32 +4319,13 @@ document.getElementById("board-audit-toggle").addEventListener("change", () => {
   updateBoardAuditVisibility();
 });
 
-document.getElementById("variant-dynamic-archiving").addEventListener("click", () => {
-  cycleVariantControlState("dynamicArchiving");
-});
+document.getElementById("variant-rules-menu").addEventListener("click", (event) => {
+  const button = event.target.closest(".variant-state");
+  if (!button) {
+    return;
+  }
 
-document.getElementById("variant-hazardous-flags").addEventListener("click", () => {
-  cycleVariantControlState("hazardousFlags");
-});
-
-document.getElementById("variant-less-deadly-game").addEventListener("click", () => {
-  cycleVariantControlState("lessDeadlyGame");
-});
-
-document.getElementById("variant-more-deadly-game").addEventListener("click", () => {
-  cycleVariantControlState("moreDeadlyGame");
-});
-
-document.getElementById("variant-classic-shared-deck").addEventListener("click", () => {
-  cycleVariantControlState("classicSharedDeck");
-});
-
-document.getElementById("variant-lighter-game").addEventListener("click", () => {
-  cycleVariantControlState("lighterGame");
-});
-
-document.getElementById("variant-less-foreshadowing").addEventListener("click", () => {
-  cycleVariantControlState("lessForeshadowing");
+  cycleVariantControlState(button.dataset.variantId);
 });
 
 document.getElementById("expansion-roborally").addEventListener("change", () => {
@@ -4201,6 +4374,7 @@ document.addEventListener("keydown", (event) => {
 async function init() {
   const assets = await loadAssets();
   initializeBoardAudit(assets);
+  renderVariantControls();
   updateExpansionSummary();
   updateVariantSummary();
   updateDevView();

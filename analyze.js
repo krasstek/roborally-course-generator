@@ -2,7 +2,17 @@ const ASSET_VERSION = new URL(import.meta.url).searchParams.get("v") ?? "";
 const VERSION_SUFFIX = ASSET_VERSION ? `?v=${encodeURIComponent(ASSET_VERSION)}` : "";
 const versionedPath = (path) => `${path}${VERSION_SUFFIX}`;
 
-const { rotatedDimensions } = await import(versionedPath("./board.js"));
+const [
+  { rotatedDimensions },
+  {
+    FLAG_APPROACH_WEIGHTS,
+    getFlagAreaFeatureScore,
+    getTilePenaltyForFeature
+  }
+] = await Promise.all([
+  import(versionedPath("./board.js")),
+  import(versionedPath("./feature-weights.js"))
+]);
 
 const DIRS = {
   N: { dx: 0, dy: -1 },
@@ -106,6 +116,10 @@ function getPortal(tile) {
   return (tile?.features || []).find((feature) => feature.type === "portal") ?? null;
 }
 
+function getTeleporter(tile) {
+  return (tile?.features || []).find((feature) => feature.type === "teleporter") ?? null;
+}
+
 function isOil(tile) {
   return (tile?.features || []).some((feature) => feature.type === "oil");
 }
@@ -199,38 +213,14 @@ function isBatteryActive(options = {}) {
   return !options.lighterGame;
 }
 
-function getTimingWeight(feature) {
-  const timingCount = feature?.timing?.length ?? 0;
-  return timingCount > 0 ? timingCount / 5 : 1;
-}
-
 function getTilePenalty(tile, options = {}) {
   let penalty = 0;
 
   for (const feature of tile?.features || []) {
-    if (feature.type === "laser") {
-      penalty += 3 + (feature.damage || 1);
-    } else if (feature.type === "flamethrower") {
-      penalty += 5 * getTimingWeight(feature);
-    } else if (feature.type === "push") {
-      penalty += 2 * getTimingWeight(feature);
-    } else if (feature.type === "gear") {
-      penalty += 1.5;
-    } else if (feature.type === "portal") {
-      penalty += 1.2;
-    } else if (feature.type === "oil") {
-      penalty += 2.8;
-    } else if (feature.type === "battery" && isBatteryActive(options)) {
-      penalty -= 2;
-    } else if (feature.type === "ledge") {
-      penalty += 0.8;
-    } else if (feature.type === "ramp") {
-      penalty += 0.35;
-    } else if (feature.type === "water") {
-      penalty += 0.35;
-    } else if (feature.type === "crusher") {
-      penalty += getRebootDamagePenalty(options) * getTimingWeight(feature);
-    }
+    penalty += getTilePenaltyForFeature(feature, {
+      batteryActive: isBatteryActive(options),
+      rebootDamagePenalty: getRebootDamagePenalty(options)
+    });
   }
 
   return penalty;
@@ -651,6 +641,134 @@ function moveOneStep(tileMap, state, dir, mode, options = {}, moveBudget = null)
   return outcome;
 }
 
+function getSignedMoveDistance(action) {
+  if (action.type !== "move") {
+    return 0;
+  }
+
+  const steps = Math.max(1, action.steps ?? 1);
+  return action.relative === "back" ? -steps : steps;
+}
+
+function resolveCrashOrReboot(tileMap, state, destination, traversed, options = {}, distance = 0, mode = "manual") {
+  const rebootToken = options.recoveryRule === "reboot_tokens"
+    ? getRebootTokenForPoint(
+      tileMap.get(tileKey(destination.x, destination.y))
+        ? destination
+        : { x: state.x, y: state.y },
+      options.boardRects,
+      options.rebootTokens
+    )
+    : null;
+
+  if (rebootToken) {
+    return {
+      state: {
+        x: rebootToken.x,
+        y: rebootToken.y,
+        facing: state.facing
+      },
+      rebootChoices: ROTATION_ORDER.map((facing) => ({
+        x: rebootToken.x,
+        y: rebootToken.y,
+        facing
+      })),
+      blocked: false,
+      crashed: false,
+      rebooted: true,
+      traversed,
+      conveyorSteps: [],
+      hazard: getRebootDamagePenalty(options),
+      rebootPenalty: REBOOT_TEMPO_PENALTY,
+      distance,
+      forcedDistance: mode === "belt" || mode === "push" ? distance : 0,
+      spentMove: true,
+      rampAscent: false
+    };
+  }
+
+  return {
+    state: cloneState(state),
+    blocked: false,
+    crashed: true,
+    rebooted: false,
+    traversed,
+    conveyorSteps: [],
+    hazard: 25,
+    rebootPenalty: 0,
+    distance,
+    forcedDistance: (mode === "belt" || mode === "push") ? distance : 0,
+    spentMove: true,
+    rampAscent: false
+  };
+}
+
+function resolveTeleporterMove(tileMap, state, action, options = {}) {
+  const teleporter = getTeleporter(tileMap.get(tileKey(state.x, state.y)));
+  if (!teleporter || action.type !== "move") {
+    return null;
+  }
+
+  const signedDistance = getSignedMoveDistance(action) + (teleporter.power ?? 2);
+  if (signedDistance === 0) {
+    return {
+      state: cloneState(state),
+      traversed: [],
+      conveyorSteps: [],
+      hazard: 0,
+      rebootPenalty: 0,
+      distance: 0,
+      forcedDistance: 0,
+      crashed: false,
+      blocked: false,
+      rebooted: false
+    };
+  }
+
+  const dir = signedDistance > 0
+    ? movementDir(state.facing, "forward")
+    : movementDir(state.facing, "back");
+  const steps = Math.abs(signedDistance);
+  const destination = {
+    x: state.x + DIRS[dir].dx * steps,
+    y: state.y + DIRS[dir].dy * steps
+  };
+  const traversed = [{ x: destination.x, y: destination.y, jump: true }];
+  const destinationTile = tileMap.get(tileKey(destination.x, destination.y));
+
+  if (!destinationTile || isPit(destinationTile)) {
+    return resolveCrashOrReboot(tileMap, state, destination, traversed, options, steps);
+  }
+
+  const resolvedState = {
+    x: destination.x,
+    y: destination.y,
+    facing: state.facing
+  };
+  const outcome = {
+    state: resolvedState,
+    blocked: false,
+    crashed: false,
+    rebooted: false,
+    traversed,
+    conveyorSteps: [],
+    hazard: getTilePenalty(destinationTile, options) +
+      getPitPressurePenalty(tileMap, resolvedState, options) +
+      getLedgePressurePenalty(tileMap, resolvedState, options),
+    rebootPenalty: 0,
+    distance: steps,
+    forcedDistance: 0,
+    spentMove: true,
+    rampAscent: false
+  };
+
+  if (isOil(destinationTile)) {
+    return mergeStepOutcome(outcome, slideOnOil(tileMap, resolvedState, dir, options));
+  }
+
+  return outcome;
+}
+
 function resolveConveyorPhase(tileMap, state, eligibleSpeed, options = {}) {
   const workingState = cloneState(state);
   const traversed = [];
@@ -851,6 +969,36 @@ function simulateAction(tileMap, startState, action, options = {}) {
   if (action.type === "turn") {
     state.facing = rotateFacing(state.facing, action.rotation);
   } else if (action.type === "move") {
+    const teleported = resolveTeleporterMove(tileMap, state, action, options);
+    if (teleported) {
+      traversed.push(...teleported.traversed);
+      hazard += teleported.hazard;
+      rebootPenalty += teleported.rebootPenalty || 0;
+      distance += teleported.distance;
+      forcedDistance += teleported.forcedDistance || 0;
+
+      if (teleported.crashed || teleported.blocked || teleported.rebooted) {
+        return {
+          action: action.id,
+          from: cloneState(startState),
+          to: teleported.state,
+          rebootChoices: teleported.rebootChoices ?? null,
+          traversed,
+          conveyorSteps,
+          hazard,
+          rebootPenalty,
+          distance,
+          forcedDistance,
+          crashed: teleported.crashed,
+          blocked: teleported.blocked,
+          rebooted: teleported.rebooted
+        };
+      }
+
+      state.x = teleported.state.x;
+      state.y = teleported.state.y;
+      state.facing = teleported.state.facing;
+    } else {
     const startTile = tileMap.get(tileKey(state.x, state.y));
     const onOil = isOil(startTile);
     const onWater = isWater(startTile);
@@ -890,6 +1038,7 @@ function simulateAction(tileMap, startState, action, options = {}) {
       state.y = step.state.y;
       state.facing = step.state.facing;
       remainingSteps -= 1 + (step.rampAscent ? 1 : 0);
+    }
     }
   }
 
@@ -1564,7 +1713,7 @@ function analyzeGoalApproaches(tileMap, goal, options = {}) {
     blockedCount: blockedSides.length,
     trappedCorners,
     blockedByPit: approaches.filter((approach) => approach.pit).length,
-      blockedByVoid: lessDeadlyGame ? 0 : approaches.filter((approach) => !approach.exists).length
+    blockedByVoid: lessDeadlyGame ? 0 : approaches.filter((approach) => !approach.exists).length
   };
 }
 
@@ -1573,16 +1722,29 @@ function scoreFlagArea(tileMap, goal, options = {}) {
   const playerCount = options.playerCount ?? 1;
   const trafficScale = playerCount <= 1 ? 0 : Math.min(1, (playerCount - 1) / 3);
   const approaches = analyzeGoalApproaches(tileMap, goal, options);
+  const blockedApproachScore = approaches.blockedCount * (
+    FLAG_APPROACH_WEIGHTS.blockedSideBase +
+    trafficScale * FLAG_APPROACH_WEIGHTS.blockedSideTraffic
+  );
+  const approachCompression = Math.max(0, 3 - approaches.openCount);
 
   if (approaches.openCount <= 1) {
-    score += 26 + trafficScale * 14;
+    score += FLAG_APPROACH_WEIGHTS.singleOpenBase + trafficScale * FLAG_APPROACH_WEIGHTS.singleOpenTraffic;
   } else if (approaches.openCount === 2) {
-    score += 10 + trafficScale * 8;
+    score += FLAG_APPROACH_WEIGHTS.doubleOpenBase + trafficScale * FLAG_APPROACH_WEIGHTS.doubleOpenTraffic;
   }
 
-  score += approaches.trappedCorners * (8 + trafficScale * 6);
-  score += approaches.blockedByPit * 2.5;
-  score += approaches.blockedByVoid * 1.5;
+  score += blockedApproachScore;
+  score += approachCompression * approachCompression * (
+    FLAG_APPROACH_WEIGHTS.approachCompressionBase +
+    trafficScale * FLAG_APPROACH_WEIGHTS.approachCompressionTraffic
+  );
+  score += approaches.trappedCorners * (
+    FLAG_APPROACH_WEIGHTS.trappedCornerBase +
+    trafficScale * FLAG_APPROACH_WEIGHTS.trappedCornerTraffic
+  );
+  score += approaches.blockedByPit * FLAG_APPROACH_WEIGHTS.blockedByPit;
+  score += approaches.blockedByVoid * FLAG_APPROACH_WEIGHTS.blockedByVoid;
 
   for (let dy = -2; dy <= 2; dy += 1) {
     for (let dx = -2; dx <= 2; dx += 1) {
@@ -1594,38 +1756,10 @@ function scoreFlagArea(tileMap, goal, options = {}) {
       const tile = tileMap.get(tileKey(x, y));
       if (!tile) continue;
 
-      const proximityWeight = dist === 0 ? 2.5 : dist === 1 ? 2 : 1;
-
       for (const feature of tile.features || []) {
-        if (feature.type === "wall") {
-          score += (dist <= 1 ? 5 : 2.5) * proximityWeight * Math.max(1, (feature.sides || []).length);
-        } else if (feature.type === "pit") {
-          score += 4 * proximityWeight;
-        } else if (feature.type === "laser") {
-          score += (2 + (feature.damage || 1)) * proximityWeight;
-        } else if (feature.type === "flamethrower") {
-          score += 4 * getTimingWeight(feature) * proximityWeight;
-        } else if (feature.type === "push") {
-          score += 2.5 * getTimingWeight(feature) * proximityWeight;
-        } else if (feature.type === "crusher") {
-          score += 4 * getTimingWeight(feature) * proximityWeight;
-        } else if (feature.type === "belt") {
-          score += (feature.speed === 2 ? 1.8 : 1.05) * proximityWeight;
-        } else if (feature.type === "gear") {
-          score += 1.5 * proximityWeight;
-        } else if (feature.type === "portal") {
-          score += 0.75 * proximityWeight;
-        } else if (feature.type === "oil") {
-          score += 2.2 * proximityWeight;
-        } else if (feature.type === "ledge") {
-          score += 1.35 * proximityWeight;
-        } else if (feature.type === "ramp") {
-          score += 0.75 * proximityWeight;
-        } else if (feature.type === "water") {
-          score += 0.45 * proximityWeight;
-        } else if (feature.type === "battery" && isBatteryActive(options)) {
-          score -= 2 * proximityWeight;
-        }
+        score += getFlagAreaFeatureScore(feature, dist, {
+          batteryActive: isBatteryActive(options)
+        });
       }
     }
   }

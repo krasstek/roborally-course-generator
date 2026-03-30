@@ -1,6 +1,6 @@
 {
-  "id": "blueprint",
-  "name": "Blueprint",
+  "id": "tabula-rasa",
+  "name": "Tabula Rasa",
  "expansionId": "master-builder",
   "physicalBoardId": "mergers-tabula-rasa",
   "image": "./assets/boards/tabula-rasa.jpg",
