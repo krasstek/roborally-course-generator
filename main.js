@@ -35,11 +35,23 @@ const [
 const ROTATIONS = [0, 90, 180, 270];
 const FACINGS = ["N", "E", "S", "W"];
 const DOCK_SIDES = ["left", "top", "right", "bottom"];
+const CARDINAL_DIRS = {
+  N: { dx: 0, dy: -1 },
+  E: { dx: 1, dy: 0 },
+  S: { dx: 0, dy: 1 },
+  W: { dx: -1, dy: 0 }
+};
+const OPPOSITE_DIRS = {
+  N: "S",
+  E: "W",
+  S: "N",
+  W: "E"
+};
 const MAX_ATTEMPTS = 40;
 const MIN_LENGTH_RAW = 28;
 const MIN_SHARED_EDGE = 5;
 const DOCK_BRIDGE_GAP = 3;
-const DOCK_BRIDGE_PROBABILITY = 0.12;
+const MAX_DOCK_COUNT = 2;
 const OVERLAY_UPDATE_INTERVAL = 4;
 const BOARD_SELECTION_FALLBACK_ATTEMPT = 12;
 const BOARD_PROFILE_HAZARD_DENSITY_THRESHOLD = 0.16;
@@ -47,14 +59,20 @@ const BOARD_PROFILE_HAZARD_DENSITY_WEIGHT = 2.4;
 const SAVED_SCENARIO_KEY = "roborally-course-generator:last-scenario";
 const BOARD_AUDIT_NOTES_KEY = "roborally-course-generator:board-audit-notes";
 const VARIANT_COMPLEXITY = {
+  actFast: 1,
   lighterGame: 1,
+  lessSpammyGame: 1,
   lessDeadlyGame: 1,
   moreDeadlyGame: 1,
   classicSharedDeck: 3,
   dynamicArchiving: 1,
   hazardousFlags: 2,
+  movingTargets: 2,
   lessForeshadowing: 1,
-  staggeredBoards: 1
+  extraDocks: 0,
+  factoryRejects: 1,
+  competitiveMode: 0,
+  staggeredBoards: 0
 };
 const AUDIT_RENDER_TILE_SIZE = 40;
 const AUDIT_RENDER_MARGIN = 30;
@@ -133,12 +151,28 @@ const VARIANT_STATES = {
 };
 const VARIANT_DEFINITIONS = [
   {
+    id: "actFast",
+    label: "Act Fast",
+    controlId: "variant-act-fast",
+    defaultState: "off",
+    description: "Programming is timed.",
+    cost: VARIANT_COMPLEXITY.actFast
+  },
+  {
     id: "lighterGame",
     label: "A Lighter Game",
     controlId: "variant-lighter-game",
     defaultState: "off",
     description: "Removes upgrade cards and makes battery spaces inactive.",
     cost: VARIANT_COMPLEXITY.lighterGame
+  },
+  {
+    id: "lessSpammyGame",
+    label: "A Less SPAM-Y Game",
+    controlId: "variant-less-spammy-game",
+    defaultState: "off",
+    description: "Discard all SPAM cards from hand to your discard pile at the end of programming phase.",
+    cost: VARIANT_COMPLEXITY.lessSpammyGame
   },
   {
     id: "lessDeadlyGame",
@@ -173,6 +207,35 @@ const VARIANT_DEFINITIONS = [
     cost: VARIANT_COMPLEXITY.hazardousFlags
   },
   {
+    id: "movingTargets",
+    label: "Moving Targets",
+    controlId: "variant-moving-targets",
+    defaultState: "off",
+    description: "Checkpoints on conveyors are treated as moving targets for generation heuristics.",
+    cost: VARIANT_COMPLEXITY.movingTargets
+  },
+  {
+    id: "extraDocks",
+    label: "Extra Docks",
+    controlId: "variant-extra-docks",
+    defaultState: "off",
+    description: "Adds an extra docking bay if the selected sets have one and the layout has room.",
+    cost: VARIANT_COMPLEXITY.extraDocks,
+    stateLabels: {
+      off: { label: "No", shortLabel: "No" },
+      allowed: { label: "Yes", shortLabel: "Yes" },
+      forced: { label: "Must", shortLabel: "Must" }
+    }
+  },
+  {
+    id: "factoryRejects",
+    label: "Factory Rejects",
+    controlId: "variant-factory-rejects",
+    defaultState: "off",
+    description: "Hand size is 7 instead of 9 (Altered from previous Robo Rally editions).",
+    cost: VARIANT_COMPLEXITY.factoryRejects
+  },
+  {
     id: "lessForeshadowing",
     label: "Less Foreshadowing",
     controlId: "variant-less-foreshadowing",
@@ -189,12 +252,25 @@ const VARIANT_DEFINITIONS = [
     cost: VARIANT_COMPLEXITY.classicSharedDeck
   },
   {
+    id: "competitiveMode",
+    label: "Competitive Mode",
+    controlId: "variant-competitive-mode",
+    defaultState: "off",
+    description: "Before the game, players block starting spaces with energy cubes before choosing from the remaining starts.",
+    cost: VARIANT_COMPLEXITY.competitiveMode
+  },
+  {
     id: "staggeredBoards",
     label: "Staggered Boards",
     controlId: "variant-staggered-boards",
     defaultState: "off",
     description: "Allows the main boards to be offset instead of forming a straight aligned block.",
-    cost: VARIANT_COMPLEXITY.staggeredBoards
+    cost: VARIANT_COMPLEXITY.staggeredBoards,
+    stateLabels: {
+      off: { label: "Aligned", shortLabel: "Aligned" },
+      allowed: { label: "Random", shortLabel: "Random" },
+      forced: { label: "Staggered", shortLabel: "Offset" }
+    }
   }
 ].sort((left, right) => left.label.localeCompare(right.label));
 const VARIANT_CONTROL_IDS = Object.fromEntries(
@@ -245,6 +321,15 @@ function getVariantDefinitionLabel(variantId) {
   return VARIANT_DEFINITIONS.find((variant) => variant.id === variantId)?.label ?? variantId;
 }
 
+function getVariantDefinition(variantId) {
+  return VARIANT_DEFINITIONS.find((variant) => variant.id === variantId) ?? null;
+}
+
+function getVariantStateCopy(variantId, state) {
+  const normalized = normalizeVariantState(state);
+  return getVariantDefinition(variantId)?.stateLabels?.[normalized] ?? VARIANT_STATES[normalized];
+}
+
 function getVariantPreferenceState(preferences = {}, variantId) {
   const directState = preferences.allowedVariantRules?.[variantId];
   if (directState !== undefined) {
@@ -258,6 +343,16 @@ function getVariantPreferenceState(preferences = {}, variantId) {
   return normalizeVariantState(
     VARIANT_DEFINITIONS.find((variant) => variant.id === variantId)?.defaultState ?? "off"
   );
+}
+
+function getExtraDockModeState(preferences = {}) {
+  if (preferences.extraDocks === true) {
+    return "forced";
+  }
+  if (preferences.extraDocks === false) {
+    return "off";
+  }
+  return getVariantPreferenceState(preferences, "extraDocks");
 }
 
 async function loadJSON(path) {
@@ -939,10 +1034,14 @@ function updateSetupSummary(scenario) {
 
 function updateVariantSummary() {
   const summaryEl = document.getElementById("variant-summary");
-  const states = VARIANT_DEFINITIONS.map((variant) => [variant.label, getVariantControlState(variant.id)]);
-  const enabled = states.filter(([, state]) => state !== "off");
+  const states = VARIANT_DEFINITIONS.map((variant) => ({
+    id: variant.id,
+    label: variant.label,
+    state: getVariantControlState(variant.id)
+  }));
+  const enabled = states.filter((entry) => entry.state !== "off");
   summaryEl.textContent = `${enabled.length} selected`;
-  summaryEl.title = states.map(([label, state]) => `${label}: ${VARIANT_STATES[state].label}`).join(", ");
+  summaryEl.title = states.map((entry) => `${entry.label}: ${getVariantStateCopy(entry.id, entry.state).label}`).join(", ");
 }
 
 function updateExpansionSummary() {
@@ -967,6 +1066,7 @@ function updateExpansionSummary() {
 
   summaryEl.textContent = `${enabled.length} selected`;
   summaryEl.title = enabled.length ? enabled.join(", ") : "None";
+  updateVariantAvailability();
 }
 
 function closeVariantPicker() {
@@ -1000,6 +1100,27 @@ function hasHazardousFlagsEffect(scenario) {
     scenario,
     (feature) => !DEFAULT_CHECKPOINT_ACTIVE_FEATURE_TYPES.has(feature.type)
   );
+}
+
+function hasMovingTargetsEffect(scenario) {
+  return Boolean(scenario?.movingTargets && scenario?.movingTargetStats?.activeCount);
+}
+
+function getActFastRuleText(mode) {
+  switch (mode) {
+    case "countdown_3m":
+      return "Act Fast: use a 3-minute programming timer. Empty registers are filled randomly when time runs out (Game Guide p. 32).";
+    case "countdown_2m":
+      return "Act Fast: use a 2-minute programming timer. Empty registers are filled randomly when time runs out (Game Guide p. 32).";
+    case "countdown_1m":
+      return "Act Fast: use a 1-minute programming timer. Empty registers are filled randomly when time runs out (Altered from Game Guide p. 32).";
+    case "countdown_30s":
+      return "Act Fast: use a 30-second programming timer. Empty registers are filled randomly when time runs out (Altered from Game Guide p. 32).";
+    case "last_player_30s":
+      return "Act Fast: when only one player remains, that player has 30 seconds to finish programming (Altered from previous Robo Rally editions).";
+    default:
+      return null;
+  }
 }
 
 function hasCheckpointBoardFeatures(scenario, featureFilter = null) {
@@ -1037,19 +1158,40 @@ function updateRulesNote(scenario) {
   }
 
   if (!scenario.hazardousFlags && hasSuppressedCheckpointFeatures(scenario)) {
-    checkpointNotes.push("Checkpoint spaces suppress board elements other than walls, lasers, and flamethrowers (Game Guide p. 15).");
+    checkpointNotes.push("Checkpoint spaces suppress board elements other than walls and lasers (and flamethrowers) (Game Guide p. 15).");
   }
 
   if (scenario.recoveryRule === "dynamic_archiving") {
     notes.push("Dynamic Archiving: instead of placing reboot tokens on each board, robots archive when they end a register on a checkpoint or battery space (Game Guide p. 32).");
   }
 
+  const actFastRuleText = getActFastRuleText(scenario.actFastMode);
+  if (scenario.actFast && actFastRuleText) {
+    notes.push(actFastRuleText);
+  }
+
   if (hasHazardousFlagsEffect(scenario)) {
     notes.push("Hazardous Flags: board elements under checkpoints remain active, but do not move or affect the checkpoints (Previous Robo Rally editions).");
   }
 
+  if (hasMovingTargetsEffect(scenario)) {
+    notes.push("Moving Targets: during each register, checkpoints on conveyors move with the belts. If one would leave the conveyor or stop moving, return it to its marked re-entry space (R#) (Altered from previous Robo Rally editions).");
+  }
+
+  if (scenario.competitiveMode) {
+    notes.push("Competitive Mode: before the game, players take turns blocking starting spaces with energy cubes. Robots must start on the remaining starting spaces, then the cubes return to the energy tracks (Game Guide p. 32).");
+  }
+
+  if (scenario.factoryRejects) {
+    notes.push("Factory Rejects: hand size is 7 instead of 9 (Altered from previous Robo Rally editions).");
+  }
+
   if (scenario.lessDeadlyGame) {
     notes.push("A Less Deadly Game: board edges act as walls while pit spaces remain pits (Game Guide p. 32).");
+  }
+
+  if (scenario.lessSpammyGame) {
+    notes.push("A Less SPAM-Y Game: discard all SPAM cards from hand to your discard pile at the end of programming phase (Game Guide p. 32).");
   }
 
   if (scenario.moreDeadlyGame) {
@@ -1092,17 +1234,19 @@ function updateRulesNote(scenario) {
 
 function describeAllowedVariants(preferences = {}) {
   const variants = [];
-  const entries = VARIANT_DEFINITIONS.map((variant) => [
-    variant.label,
-    getVariantPreferenceState(preferences, variant.id)
-  ]);
+  const entries = VARIANT_DEFINITIONS.map((variant) => ({
+    id: variant.id,
+    label: variant.label,
+    state: getVariantPreferenceState(preferences, variant.id)
+  }));
 
-  for (const [label, state] of entries) {
+  for (const entry of entries) {
+    const { id, label, state } = entry;
     const normalized = normalizeVariantState(state);
     if (normalized === "off") {
       continue;
     }
-    variants.push(`${label} (${VARIANT_STATES[normalized].label})`);
+    variants.push(`${label} (${getVariantStateCopy(id, normalized).label})`);
   }
 
   return variants.length ? variants.join(", ") : "none";
@@ -1130,11 +1274,12 @@ function setVariantControlState(variantId, state, buttonEl = null) {
   if (!button) {
     return;
   }
+  const stateCopy = getVariantStateCopy(variantId, normalized);
 
   button.dataset.state = normalized;
-  button.textContent = VARIANT_STATES[normalized].shortLabel;
-  button.title = VARIANT_STATES[normalized].label;
-  button.setAttribute("aria-label", `${getVariantDefinitionLabel(variantId)}: ${VARIANT_STATES[normalized].label}`);
+  button.textContent = stateCopy.shortLabel;
+  button.title = stateCopy.label;
+  button.setAttribute("aria-label", `${getVariantDefinitionLabel(variantId)}: ${stateCopy.label}`);
 }
 
 function cycleVariantControlState(variantId) {
@@ -1188,6 +1333,16 @@ function chooseHazardousFlags(preferences) {
   return chooseVariantEnabled(hazardousFlagsState, 0.2);
 }
 
+function chooseExtraDocks(preferences) {
+  const extraDocksState = getVariantPreferenceState(preferences, "extraDocks");
+  return chooseVariantEnabled(extraDocksState, 0.5);
+}
+
+function chooseFactoryRejects(preferences) {
+  const factoryRejectsState = getVariantPreferenceState(preferences, "factoryRejects");
+  return chooseVariantEnabled(factoryRejectsState, 0.16);
+}
+
 function chooseClassicSharedDeck(preferences) {
   const classicSharedDeckState = getVariantPreferenceState(preferences, "classicSharedDeck");
   return chooseVariantEnabled(classicSharedDeckState, 0.08);
@@ -1212,14 +1367,20 @@ function sampleVariantComplexityBudget(preferences = {}) {
 function getVariantBaseChance(variantId, preferences = {}) {
   const difficulty = preferences.difficulty ?? "moderate";
   const byVariant = {
+    actFast: { easy: 0.08, moderate: 0.16, hard: 0.2 },
     lighterGame: { easy: 0.42, moderate: 0.28, hard: 0.18 },
+    lessSpammyGame: { easy: 0.32, moderate: 0.22, hard: 0.14 },
     lessDeadlyGame: { easy: 0.3, moderate: 0.2, hard: 0.14 },
     moreDeadlyGame: { easy: 0.05, moderate: 0.14, hard: 0.26 },
     classicSharedDeck: { easy: 0.01, moderate: 0.07, hard: 0.2 },
+    competitiveMode: { easy: 0.08, moderate: 0.16, hard: 0.22 },
     dynamicArchiving: { easy: 0.46, moderate: 0.4, hard: 0.34 },
+    extraDocks: { easy: 0.08, moderate: 0.2, hard: 0.26 },
+    factoryRejects: { easy: 0.06, moderate: 0.14, hard: 0.22 },
     hazardousFlags: { easy: 0.08, moderate: 0.16, hard: 0.24 },
+    movingTargets: { easy: 0.06, moderate: 0.14, hard: 0.22 },
     lessForeshadowing: { easy: 0.07, moderate: 0.16, hard: 0.24 },
-    staggeredBoards: { easy: 0.06, moderate: 0.12, hard: 0.18 }
+    staggeredBoards: { easy: 0.5, moderate: 0.5, hard: 0.5 }
   };
 
   return byVariant[variantId]?.[difficulty] ?? 0.2;
@@ -1261,9 +1422,11 @@ function chooseVariantBundle(preferences = {}) {
     let chance = entry.chance;
     if (
       (entry.id === "classicSharedDeck" && active.lessForeshadowing) ||
-      (entry.id === "lessForeshadowing" && active.classicSharedDeck)
+      (entry.id === "lessForeshadowing" && active.classicSharedDeck) ||
+      (entry.id === "classicSharedDeck" && active.lessSpammyGame) ||
+      (entry.id === "lessSpammyGame" && active.classicSharedDeck)
     ) {
-      chance *= 0.2;
+      chance = 0;
     }
 
     if (Math.random() < chance) {
@@ -1274,17 +1437,64 @@ function chooseVariantBundle(preferences = {}) {
 
   return {
     alignedLayout: !active.staggeredBoards,
+    actFast: active.actFast,
+    competitiveMode: active.competitiveMode,
+    extraDocks: active.extraDocks,
     recoveryRule: active.dynamicArchiving ? "dynamic_archiving" : "reboot_tokens",
     lighterGame: active.lighterGame,
+    lessSpammyGame: active.lessSpammyGame,
     lessDeadlyGame: active.lessDeadlyGame,
     moreDeadlyGame: active.moreDeadlyGame,
     classicSharedDeck: active.classicSharedDeck,
+    factoryRejects: active.factoryRejects,
     hazardousFlags: active.hazardousFlags,
+    movingTargets: active.movingTargets,
     staggeredBoards: active.staggeredBoards,
     lessForeshadowing: active.lessForeshadowing,
     variantComplexityBudget: budget,
     variantComplexityUsed: usedBudget
   };
+}
+
+function isVariantForced(preferences = {}, variantId) {
+  return getVariantPreferenceState(preferences, variantId) === "forced";
+}
+
+function chooseActFastMode(preferences = {}) {
+  const difficulty = preferences.difficulty ?? "moderate";
+  const table = {
+    easy: [
+      "countdown_3m",
+      "countdown_3m",
+      "last_player_30s",
+      "last_player_30s",
+      "countdown_2m",
+      "countdown_2m",
+      "countdown_1m"
+    ],
+    moderate: [
+      "last_player_30s",
+      "last_player_30s",
+      "last_player_30s",
+      "countdown_2m",
+      "countdown_2m",
+      "countdown_3m",
+      "countdown_1m",
+      "countdown_30s"
+    ],
+    hard: [
+      "last_player_30s",
+      "last_player_30s",
+      "countdown_2m",
+      "countdown_2m",
+      "countdown_1m",
+      "countdown_1m",
+      "countdown_30s",
+      "countdown_3m"
+    ]
+  };
+
+  return sample(table[difficulty] || table.moderate);
 }
 
 function getPreferencesFromControls() {
@@ -1322,7 +1532,6 @@ function applyPreferencesToControls(preferences) {
     setVariantControlState(variant.id, getVariantPreferenceState(preferences, variant.id));
   });
   updateExpansionSummary();
-  updateVariantSummary();
 }
 
 function clamp(value, min, max) {
@@ -1496,17 +1705,101 @@ function getAvailableDockIds(pieceMap, expansionIds = null) {
     .map((piece) => piece.id);
 }
 
-function getEligibleDockIds(pieceMap, expansionIds = null, preferences = {}) {
+function getRequiredDockStartCount(preferences = {}) {
   const playerCount = preferences.playerCount ?? 4;
+  const competitiveModeEnabled = typeof preferences.competitiveMode === "boolean"
+    ? preferences.competitiveMode
+    : getVariantPreferenceState(preferences, "competitiveMode") === "forced";
+  return competitiveModeEnabled ? playerCount * 2 : playerCount;
+}
 
+function getMaximumDockCount(preferences = {}, availableDockCount = 1) {
+  const mode = getExtraDockModeState(preferences);
+  const desired = mode === "off" ? 1 : MAX_DOCK_COUNT;
+  return Math.max(1, Math.min(desired, availableDockCount));
+}
+
+function getDockStartCapacity(dockIds, pieceMap) {
+  return dockIds.reduce((sum, dockId) => sum + (pieceMap[dockId]?.starts?.length ?? 0), 0);
+}
+
+function getDockFaceGroups(dockIds, pieceMap) {
+  const groups = new Map();
+
+  dockIds.forEach((dockId) => {
+    const physicalDockId = pieceMap[dockId]?.physicalBoardId ?? dockId;
+    if (!groups.has(physicalDockId)) {
+      groups.set(physicalDockId, []);
+    }
+    groups.get(physicalDockId).push(dockId);
+  });
+
+  return [...groups.values()];
+}
+
+function variantIsAvailable(variantId, preferences = {}, pieceMap = cachedAssets?.pieceMap ?? null) {
+  if (variantId === "extraDocks") {
+    if (!pieceMap) {
+      return true;
+    }
+    const expansionIds = getSelectedExpansionIds(preferences);
+    const physicalDockCount = getDockFaceGroups(
+      getAvailableDockIds(pieceMap, expansionIds),
+      pieceMap
+    ).length;
+    return physicalDockCount >= 2;
+  }
+
+  return true;
+}
+
+function updateVariantAvailability() {
+  const preferences = getPreferencesFromControls();
+
+  VARIANT_DEFINITIONS.forEach((variant) => {
+    const button = document.getElementById(variant.controlId);
+    if (!button) {
+      return;
+    }
+
+    const available = variantIsAvailable(variant.id, preferences);
+    button.disabled = !available;
+
+    if (!available) {
+      setVariantControlState(variant.id, "off", button);
+      button.title = variant.id === "extraDocks"
+        ? "Requires at least two physical docking bays in the selected sets."
+        : button.title;
+      button.setAttribute("aria-label", `${variant.label}: unavailable`);
+    } else {
+      button.title = getVariantStateCopy(variant.id, button.dataset.state ?? variant.defaultState).label;
+      button.setAttribute("aria-label", `${variant.label}: ${button.title}`);
+    }
+  });
+
+  updateVariantSummary();
+}
+
+function canSupportRequiredDockStarts(dockIds, pieceMap, preferences = {}) {
+  const dockFaceGroups = getDockFaceGroups(dockIds, pieceMap);
+  const maxDockCount = getMaximumDockCount(preferences, dockFaceGroups.length);
+  const bestPhysicalDocks = dockFaceGroups
+    .map((group) => Math.max(...group.map((dockId) => pieceMap[dockId]?.starts?.length ?? 0)))
+    .sort((left, right) => right - left)
+    .slice(0, maxDockCount);
+  return bestPhysicalDocks.reduce((sum, startCount) => sum + startCount, 0) >= getRequiredDockStartCount(preferences);
+}
+
+function getEligibleDockIds(pieceMap, expansionIds = null, preferences = {}) {
   return getAvailableDockIds(pieceMap, expansionIds)
-    .filter((dockId) => (pieceMap[dockId]?.starts?.length ?? 0) >= playerCount);
+    .filter((dockId) => (pieceMap[dockId]?.starts?.length ?? 0) > 0);
 }
 
 function getDockSelectionWeight(piece, preferences = {}) {
   const playerCount = preferences.playerCount ?? 4;
+  const startCount = piece?.starts?.length ?? 0;
 
-  if ((piece?.starts?.length ?? 0) < playerCount) {
+  if (startCount <= 0) {
     return 0;
   }
 
@@ -1519,7 +1812,7 @@ function getDockSelectionWeight(piece, preferences = {}) {
     }
   }
 
-  return 1;
+  return 1 + Math.min(0.6, startCount * 0.04);
 }
 
 function weightedOrder(items, getWeight) {
@@ -1550,6 +1843,42 @@ function weightedOrder(items, getWeight) {
   }
 
   return ordered;
+}
+
+function getDockConfigurations(availableDockIds, pieceMap, preferences = {}) {
+  const extraDockMode = getExtraDockModeState(preferences);
+  const allowExtraDock = extraDockMode !== "off";
+  const requireExtraDock = extraDockMode === "forced";
+  const dockFaceGroups = getDockFaceGroups(availableDockIds, pieceMap);
+  const configs = [];
+
+  dockFaceGroups.forEach((group) => {
+    group.forEach((dockId) => {
+      if ((pieceMap[dockId]?.starts?.length ?? 0) > 0) {
+        configs.push([dockId]);
+      }
+    });
+  });
+
+  if (allowExtraDock) {
+    for (let left = 0; left < dockFaceGroups.length; left += 1) {
+      for (let right = left + 1; right < dockFaceGroups.length; right += 1) {
+        for (const leftDockId of dockFaceGroups[left]) {
+          for (const rightDockId of dockFaceGroups[right]) {
+            const dockIds = [leftDockId, rightDockId];
+            if (getDockStartCapacity(dockIds, pieceMap) > 0) {
+              configs.push(dockIds);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return configs
+    .filter((dockIds) => (!requireExtraDock || dockIds.length > 1))
+    .filter((dockIds) => dockIds.length <= getMaximumDockCount(preferences, dockFaceGroups.length))
+    .filter((dockIds) => getDockStartCapacity(dockIds, pieceMap) >= getRequiredDockStartCount(preferences));
 }
 
 function getAvailableOverlayIds(pieceMap, expansionIds = null) {
@@ -1679,6 +2008,14 @@ function getDockTileKeys(dockPlacement, pieceMap) {
   return keys;
 }
 
+function getDockTileKeySet(dockPlacements = [], pieceMap) {
+  const keys = new Set();
+  dockPlacements.forEach((dockPlacement) => {
+    getDockTileKeys(dockPlacement, pieceMap).forEach((key) => keys.add(key));
+  });
+  return keys;
+}
+
 function getOverlayCount(preferences, largeBoardCount, maxAvailable) {
   if (preferences.difficulty === "easy") {
     return 0;
@@ -1705,9 +2042,9 @@ function getOverlayCount(preferences, largeBoardCount, maxAvailable) {
   return sample(choices);
 }
 
-function getLegalOverlayPlacements(overlayPiece, structuralPlacements, dockPlacement, pieceMap) {
+function getLegalOverlayPlacements(overlayPiece, structuralPlacements, dockPlacements, pieceMap) {
   const supportTiles = buildMainFootprintTiles(structuralPlacements, pieceMap);
-  const dockTiles = getDockTileKeys(dockPlacement, pieceMap);
+  const dockTiles = getDockTileKeySet(dockPlacements, pieceMap);
   const bounds = Array.from(supportTiles).map((key) => key.split(",").map(Number));
   if (!bounds.length) {
     return [];
@@ -1804,12 +2141,12 @@ function createAlignedAttachedBoardPlacements(anchorPlacement, anchorPiece, piec
   return placements;
 }
 
-function getAlignedOverlayPlacements(overlayPiece, structuralPlacements, dockPlacement, pieceMap) {
+function getAlignedOverlayPlacements(overlayPiece, structuralPlacements, dockPlacements, pieceMap) {
   if (overlayPiece.width !== 6 || overlayPiece.height !== 6) {
-    return getLegalOverlayPlacements(overlayPiece, structuralPlacements, dockPlacement, pieceMap);
+    return getLegalOverlayPlacements(overlayPiece, structuralPlacements, dockPlacements, pieceMap);
   }
 
-  const dockTiles = getDockTileKeys(dockPlacement, pieceMap);
+  const dockTiles = getDockTileKeySet(dockPlacements, pieceMap);
   const placements = [];
 
   for (const basePlacement of structuralPlacements) {
@@ -1857,7 +2194,7 @@ function getAlignedOverlayPlacements(overlayPiece, structuralPlacements, dockPla
   return placements;
 }
 
-function chooseOverlayPlacements(structuralPlacements, dockPlacement, pieceMap, preferences, expansionIds) {
+function chooseOverlayPlacements(structuralPlacements, dockPlacements, pieceMap, preferences, expansionIds) {
   const usedStructuralBoards = new Set(
     structuralPlacements.map((placement) => getPhysicalBoardId(pieceMap[placement.pieceId]))
   );
@@ -1892,11 +2229,11 @@ function chooseOverlayPlacements(structuralPlacements, dockPlacement, pieceMap, 
   for (const groupOverlayIds of chosenGroups) {
     const chosenOverlayId = sample(groupOverlayIds);
     const overlayPiece = pieceMap[chosenOverlayId];
-    const legalPlacements = (
+      const legalPlacements = (
       preferences.alignedLayout
-        ? getAlignedOverlayPlacements(overlayPiece, structuralPlacements, dockPlacement, pieceMap)
-        : getLegalOverlayPlacements(overlayPiece, structuralPlacements, dockPlacement, pieceMap)
-    )
+        ? getAlignedOverlayPlacements(overlayPiece, structuralPlacements, dockPlacements, pieceMap)
+        : getLegalOverlayPlacements(overlayPiece, structuralPlacements, dockPlacements, pieceMap)
+      )
       .filter((placement) => {
         const dims = rotatedDimensions(overlayPiece, placement.rotation);
         for (let dy = 0; dy < dims.height; dy += 1) {
@@ -2262,14 +2599,19 @@ function getPlacementCenter(placement, pieceMap) {
   };
 }
 
-function getMostDistantBoardIndex(boardPlacements, dockPlacement, pieceMap) {
-  const dockCenter = getPlacementCenter(dockPlacement, pieceMap);
+function getMostDistantBoardIndex(boardPlacements, dockPlacements, pieceMap) {
+  const dockCenters = (dockPlacements || []).map((dockPlacement) => getPlacementCenter(dockPlacement, pieceMap));
+  if (!dockCenters.length) {
+    return 0;
+  }
   let bestIndex = 0;
   let bestDistance = -Infinity;
 
   boardPlacements.forEach((placement, index) => {
     const center = getPlacementCenter(placement, pieceMap);
-    const distance = Math.abs(center.x - dockCenter.x) + Math.abs(center.y - dockCenter.y);
+    const distance = Math.min(...dockCenters.map((dockCenter) => (
+      Math.abs(center.x - dockCenter.x) + Math.abs(center.y - dockCenter.y)
+    )));
 
     if (distance > bestDistance) {
       bestDistance = distance;
@@ -2286,6 +2628,321 @@ function areFlagsTooClose(left, right, minDistance = 3) {
 
 function manhattanDistance(a, b) {
   return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
+}
+
+function getTileBelt(tile) {
+  return (tile?.features || []).find((feature) => feature.type === "belt") ?? null;
+}
+
+function getTileWalls(tile) {
+  const walls = new Set();
+
+  for (const feature of tile?.features || []) {
+    if (feature.type !== "wall") {
+      continue;
+    }
+    for (const side of feature.sides || []) {
+      walls.add(side);
+    }
+  }
+
+  return walls;
+}
+
+function isBlockedBetween(tileMap, from, to, dir) {
+  const fromTile = tileMap.get(`${from.x},${from.y}`);
+  const toTile = tileMap.get(`${to.x},${to.y}`);
+  const fromWalls = getTileWalls(fromTile);
+  const toWalls = getTileWalls(toTile);
+  return fromWalls.has(dir) || toWalls.has(OPPOSITE_DIRS[dir]);
+}
+
+function getConveyorSuccessor(tileMap, point) {
+  const tile = tileMap?.get(`${point.x},${point.y}`);
+  const belt = getTileBelt(tile);
+  if (!belt || !CARDINAL_DIRS[belt.dir]) {
+    return null;
+  }
+
+  const vector = CARDINAL_DIRS[belt.dir];
+  const next = {
+    x: point.x + vector.dx,
+    y: point.y + vector.dy
+  };
+  const nextTile = tileMap.get(`${next.x},${next.y}`);
+  if (!nextTile || isBlockedBetween(tileMap, point, next, belt.dir) || !getTileBelt(nextTile)) {
+    return null;
+  }
+
+  return next;
+}
+
+function getConveyorPredecessors(tileMap, point) {
+  if (!tileMap) {
+    return [];
+  }
+
+  const predecessors = [];
+  for (const vector of Object.values(CARDINAL_DIRS)) {
+    const previous = {
+      x: point.x - vector.dx,
+      y: point.y - vector.dy
+    };
+    const successor = getConveyorSuccessor(tileMap, previous);
+    if (successor && successor.x === point.x && successor.y === point.y) {
+      predecessors.push(previous);
+    }
+  }
+
+  return predecessors;
+}
+
+function getMovingCheckpointTrace(tileMap, point, cache = null) {
+  if (!tileMap) {
+    return {
+      moving: false,
+      wraps: false,
+      pathLength: 1,
+      turnCount: 0,
+      fastCount: 0,
+      hazardLoad: 0,
+      coverage: []
+    };
+  }
+
+  const cacheKey = `${point.x},${point.y}`;
+  if (cache?.has(cacheKey)) {
+    return cache.get(cacheKey);
+  }
+
+  const startTile = tileMap.get(cacheKey);
+  const startBelt = getTileBelt(startTile);
+  if (!startBelt || !CARDINAL_DIRS[startBelt.dir]) {
+    const result = {
+      moving: false,
+      wraps: false,
+      pathLength: 1,
+      turnCount: 0,
+      fastCount: 0,
+      hazardLoad: 0,
+      coverage: [{ x: point.x, y: point.y }]
+    };
+    cache?.set(cacheKey, result);
+    return result;
+  }
+
+  const coverage = [];
+  const visited = new Set();
+  const directions = [];
+  let current = { x: point.x, y: point.y };
+  let wraps = false;
+  let fastCount = 0;
+  let hazardLoad = 0;
+
+  for (let step = 0; step < 24; step += 1) {
+    const key = `${current.x},${current.y}`;
+    if (visited.has(key)) {
+      wraps = true;
+      break;
+    }
+
+    visited.add(key);
+    coverage.push({ x: current.x, y: current.y });
+    const tile = tileMap.get(key);
+    const belt = getTileBelt(tile);
+    if (!belt || !CARDINAL_DIRS[belt.dir]) {
+      break;
+    }
+
+    directions.push(belt.dir);
+    if (belt.speed === 2) {
+      fastCount += 1;
+    }
+
+    for (const feature of tile?.features || []) {
+      if (feature.type === "checkpoint" || feature.type === "wall" || feature.type === "belt" || feature.type === "battery") {
+        continue;
+      }
+      hazardLoad += getTilePenaltyForFeature(feature, { batteryActive: true });
+    }
+
+    const next = getConveyorSuccessor(tileMap, current);
+    if (!next) {
+      wraps = coverage.length > 0;
+      break;
+    }
+
+    current = next;
+  }
+
+  let turnCount = 0;
+  for (let index = 1; index < directions.length; index += 1) {
+    if (directions[index] !== directions[index - 1]) {
+      turnCount += 1;
+    }
+  }
+
+  const result = {
+    moving: coverage.length > 1,
+    wraps,
+    pathLength: coverage.length,
+    turnCount,
+    fastCount,
+    hazardLoad: Number(hazardLoad.toFixed(2)),
+    coverage
+  };
+  cache?.set(cacheKey, result);
+  return result;
+}
+
+function findMovingCheckpointReentryPoint(tileMap, point) {
+  if (!tileMap) {
+    return { x: point.x, y: point.y };
+  }
+
+  const queue = [{ x: point.x, y: point.y, depth: 0 }];
+  const visited = new Set([`${point.x},${point.y}`]);
+  let best = { x: point.x, y: point.y, depth: 0 };
+
+  while (queue.length) {
+    const current = queue.shift();
+    const predecessors = getConveyorPredecessors(tileMap, current);
+
+    if (!predecessors.length) {
+      if (
+        current.depth > best.depth ||
+        (current.depth === best.depth && `${current.x},${current.y}` < `${best.x},${best.y}`)
+      ) {
+        best = current;
+      }
+      continue;
+    }
+
+    for (const predecessor of predecessors) {
+      const key = `${predecessor.x},${predecessor.y}`;
+      if (visited.has(key)) {
+        continue;
+      }
+      visited.add(key);
+      queue.push({
+        x: predecessor.x,
+        y: predecessor.y,
+        depth: current.depth + 1
+      });
+    }
+  }
+
+  return { x: best.x, y: best.y };
+}
+
+function summarizeMovingTargets(tileMap, checkpoints = []) {
+  const traceCache = new Map();
+  const active = checkpoints
+    .map((checkpoint) => ({
+      checkpoint,
+      trace: getMovingCheckpointTrace(tileMap, checkpoint, traceCache)
+    }))
+    .filter((entry) => entry.trace.moving);
+
+  if (!active.length) {
+    return {
+      activeCount: 0,
+      totalPathLength: 0,
+      totalTurns: 0,
+      totalHazardLoad: 0,
+      fastSegments: 0,
+      coverageTiles: 0,
+      wrapCount: 0,
+      difficultyBonus: 0,
+      lengthBonus: 0
+    };
+  }
+
+  const coverageTiles = new Set();
+  let totalPathLength = 0;
+  let totalTurns = 0;
+  let totalHazardLoad = 0;
+  let fastSegments = 0;
+  let wrapCount = 0;
+
+  for (const { trace } of active) {
+    totalPathLength += trace.pathLength;
+    totalTurns += trace.turnCount;
+    totalHazardLoad += trace.hazardLoad;
+    fastSegments += trace.fastCount;
+    if (trace.wraps) {
+      wrapCount += 1;
+    }
+    trace.coverage.forEach((tile) => coverageTiles.add(`${tile.x},${tile.y}`));
+  }
+
+  const difficultyBonus = Number((
+    active.length * 3.8 +
+    Math.max(0, totalPathLength - active.length) * 1.15 +
+    totalTurns * 0.8 +
+    fastSegments * 0.55 +
+    totalHazardLoad * 0.16
+  ).toFixed(2));
+  const lengthBonus = Number((
+    active.length * 1.9 +
+    Math.max(0, totalPathLength - active.length) * 0.72 +
+    totalTurns * 0.35 +
+    wrapCount * 0.45
+  ).toFixed(2));
+
+  return {
+    activeCount: active.length,
+    totalPathLength,
+    totalTurns,
+    totalHazardLoad: Number(totalHazardLoad.toFixed(2)),
+    fastSegments,
+    coverageTiles: coverageTiles.size,
+    wrapCount,
+    difficultyBonus,
+    lengthBonus
+  };
+}
+
+function collectMovingTargetReentryMarkers(tileMap, checkpoints = [], enabled = false) {
+  if (!enabled || !tileMap || !checkpoints.length) {
+    return [];
+  }
+
+  const traceCache = new Map();
+  const markers = checkpoints
+    .map((checkpoint, index) => {
+      const trace = getMovingCheckpointTrace(tileMap, checkpoint, traceCache);
+      if (!trace.moving) {
+        return null;
+      }
+
+      const reentry = findMovingCheckpointReentryPoint(tileMap, checkpoint);
+      return {
+        id: index + 1,
+        label: `R${index + 1}`,
+        x: reentry.x,
+        y: reentry.y
+      };
+    })
+    .filter(Boolean);
+
+  const grouped = new Map();
+  markers.forEach((marker) => {
+    const key = `${marker.x},${marker.y}`;
+    const existing = grouped.get(key);
+    if (existing) {
+      existing.ids.push(marker.id);
+      existing.label = `R${existing.ids.join("/")}`;
+      return;
+    }
+
+    grouped.set(key, {
+      ...marker,
+      ids: [marker.id]
+    });
+  });
+
+  return [...grouped.values()];
 }
 
 function getConsecutiveFlagDistanceThreshold(preferences = {}, guidanceLevel = 0) {
@@ -2439,6 +3096,9 @@ function getFlagCandidateTilePenalty(candidate, tileMap, difficulty, preferences
       featurePenalty += 2.8;
     } else if (feature.type === "belt") {
       featurePenalty += feature.speed === 2 ? 1.6 : 0.7;
+      if (preferences.movingTargets) {
+        featurePenalty *= 0.25;
+      }
     } else if (feature.type === "oil") {
       featurePenalty += 2.2;
     } else if (feature.type === "portal") {
@@ -2507,7 +3167,7 @@ function getFlagCandidateAreaPenalty(candidate, tileMap, difficulty, preferences
   return Number((penalty * scale).toFixed(2));
 }
 
-function getFlagCandidateWeight(candidate, tileMap, starts, preferences, sequenceIndex, guidanceLevel, thresholds, previousFlag = null) {
+function getFlagCandidateWeight(candidate, tileMap, starts, preferences, sequenceIndex, guidanceLevel, thresholds, previousFlag = null, movingTargetTraceCache = null) {
   let weight = candidate.weight ?? 1;
   const approachStats = getFlagCandidateApproachStats(tileMap, candidate);
   const difficulty = preferences.difficulty ?? "moderate";
@@ -2542,6 +3202,21 @@ function getFlagCandidateWeight(candidate, tileMap, starts, preferences, sequenc
     }
   }
 
+  if (preferences.movingTargets) {
+    const trace = getMovingCheckpointTrace(tileMap, candidate, movingTargetTraceCache);
+    if (trace.moving) {
+      const baseBonus = difficulty === "easy"
+        ? 0.9
+        : difficulty === "moderate"
+          ? 2.8
+          : 4.4;
+      weight += baseBonus;
+      weight += Math.min(2.8, Math.max(0, trace.pathLength - 1) * 0.55);
+      weight += trace.turnCount * 0.4;
+      weight += trace.fastCount * 0.3;
+    }
+  }
+
   weight += Math.min(2, guidanceLevel * 0.35);
   if (difficulty === "easy" && lengthPreference === "short") {
     weight += 1.8;
@@ -2551,7 +3226,7 @@ function getFlagCandidateWeight(candidate, tileMap, starts, preferences, sequenc
   return Math.max(0.05, Number(weight.toFixed(2)));
 }
 
-function sampleFlagSequence(flagCandidates, flagCount, tileMap, starts, preferences, guidanceLevel, thresholds) {
+function sampleFlagSequence(flagCandidates, flagCount, tileMap, starts, preferences, guidanceLevel, thresholds, movingTargetTraceCache = null) {
   const difficulty = preferences.difficulty ?? "moderate";
   const weighted = difficulty === "easy" || difficulty === "moderate";
   const pool = [...flagCandidates];
@@ -2581,7 +3256,8 @@ function sampleFlagSequence(flagCandidates, flagCount, tileMap, starts, preferen
             sequenceIndex,
             guidanceLevel,
             thresholds,
-            previousFlag
+            previousFlag,
+            movingTargetTraceCache
           )
           : (candidate.weight ?? 1)
       }));
@@ -2609,12 +3285,19 @@ function sampleFlagSequence(flagCandidates, flagCount, tileMap, starts, preferen
   return picked;
 }
 
-function pickFlags(flagCandidates, flagCount, boardPlacements, dockPlacement, pieceMap, starts = [], preferences = {}, guidanceLevel = 0) {
-  const farthestBoardIndex = getMostDistantBoardIndex(boardPlacements, dockPlacement, pieceMap);
+function pickFlags(flagCandidates, flagCount, boardPlacements, dockPlacements, pieceMap, starts = [], preferences = {}, guidanceLevel = 0) {
+  const farthestBoardIndex = getMostDistantBoardIndex(boardPlacements, dockPlacements, pieceMap);
   const farthestBoardPieceId = boardPlacements[farthestBoardIndex]?.pieceId;
   const mustUseFarthestBoard = boardPlacements.length > 1 && farthestBoardPieceId;
   const firstFlagThresholds = getFirstFlagDistanceThresholds(preferences.length, guidanceLevel);
-  const { tileMap } = buildResolvedMap([...boardPlacements, dockPlacement], pieceMap);
+  const { tileMap } = buildResolvedMap([...boardPlacements, ...(dockPlacements || [])], pieceMap);
+  const movingTargetTraceCache = preferences.movingTargets ? new Map() : null;
+  const movingCandidates = preferences.movingTargets
+    ? new Set(flagCandidates
+      .filter((candidate) => getMovingCheckpointTrace(tileMap, candidate, movingTargetTraceCache).moving)
+      .map((candidate) => `${candidate.x},${candidate.y}`))
+    : null;
+  const requiresMovingTarget = Boolean(movingCandidates?.size);
 
   for (let attempt = 0; attempt < 250; attempt += 1) {
     const sampled = sampleFlagSequence(
@@ -2624,7 +3307,8 @@ function pickFlags(flagCandidates, flagCount, boardPlacements, dockPlacement, pi
       starts,
       preferences,
       guidanceLevel,
-      firstFlagThresholds
+      firstFlagThresholds,
+      movingTargetTraceCache
     );
 
     if (sampled.length !== flagCount) {
@@ -2640,6 +3324,10 @@ function pickFlags(flagCandidates, flagCount, boardPlacements, dockPlacement, pi
     }
 
     if (!isFirstFlagFarEnough(sampled[0], starts, firstFlagThresholds)) {
+      continue;
+    }
+
+    if (requiresMovingTarget && !sampled.some((flag) => movingCandidates.has(`${flag.x},${flag.y}`))) {
       continue;
     }
 
@@ -2954,7 +3642,7 @@ function createBoardPlacements(pieceMap, lengthPreference, preferences, guidance
   });
 
   for (const [index, nextBoardId] of boardIds.slice(1).entries()) {
-    const allowDockBridge = !preferences.alignedLayout && index === boardIds.length - 2 && Math.random() < DOCK_BRIDGE_PROBABILITY;
+    const allowDockBridge = !preferences.alignedLayout && index === boardIds.length - 2;
     const extension = preferences.alignedLayout
       ? tryExtendAlignedBoardLayout(placements, nextBoardId, pieceMap)
       : tryExtendBoardLayout(placements, nextBoardId, pieceMap, dockPieceId, allowDockBridge);
@@ -3109,6 +3797,7 @@ function createDockPlacement(structuralPlacements, pieceMap, dockPieceId, dockFl
   const boundaryRuns = groupBoundaryRuns(getBoundaryEdges(footprintTiles));
   const validRuns = getValidDockRuns(boundaryRuns, dock);
   const dockFrontageLength = getDockFrontageLength(dock);
+  const candidates = [];
 
   for (const run of shuffle(validRuns)) {
     const availableOffsets = run.length - dockFrontageLength;
@@ -3122,16 +3811,23 @@ function createDockPlacement(structuralPlacements, pieceMap, dockPieceId, dockFl
       const dockValidation = validateDockPlacement(dockPlacement, structuralPlacements, pieceMap, footprintTiles);
 
       if (dockValidation.valid && (!options.alignedLayout || hasAlignedDockFrontage(structuralPlacements, pieceMap, dockPlacement))) {
-        return {
+        candidates.push({
           dockPlacement,
           dockValidation,
           boundaryRun: run
-        };
+        });
       }
     }
   }
 
-  return null;
+  if (!options.alignedLayout && options.allowBridgePlacement) {
+    const bridgeCandidate = findBridgeDockPlacement(structuralPlacements, pieceMap, dockPieceId, dockFlipped);
+    if (bridgeCandidate) {
+      candidates.push(bridgeCandidate);
+    }
+  }
+
+  return candidates.length ? sample(candidates) : null;
 }
 
 function getDockBoundaryRun(structuralPlacements, dockPlacement, pieceMap) {
@@ -3165,6 +3861,26 @@ function getDockBoundaryRun(structuralPlacements, dockPlacement, pieceMap) {
       return projected.y === dockPlacement.y && dockPlacement.x >= projected.x && dockPlacement.x + dockDims.width <= projected.x + run.length;
     });
   }) ?? null;
+}
+
+function getDockPlacementsFromScenarioPlacements(placements = [], pieceMap = {}) {
+  return placements.filter((placement) => pieceMap[placement.pieceId]?.kind === "dock");
+}
+
+function buildDockSummaries(boardPlacements, dockPlacements, pieceMap) {
+  return dockPlacements.map((dockPlacement) => ({
+    pieceId: dockPlacement.pieceId,
+    flipped: Boolean((dockPlacement.rotation ?? 0) % 180),
+    boundaryRun: getDockBoundaryRun(boardPlacements, dockPlacement, pieceMap)
+  }));
+}
+
+function filterDockPlacementsWithReachableStarts(dockPlacements, startAnalyses, pieceMap) {
+  return dockPlacements.filter((dockPlacement) => (
+    (startAnalyses || []).some((startAnalysis) => (
+      startAnalysis.reachable && pointOnPlacement(startAnalysis.start, dockPlacement, pieceMap)
+    ))
+  ));
 }
 
 function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) {
@@ -3235,7 +3951,15 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
 
     return sum + leg.analysis.summary.averageRouteDistance;
   }, 0);
-  const courseAdjustedFirstLeg = adjustStartOutliersForCourseLength(firstLeg, totalLength);
+  const courseAdjustedFirstLeg = options.competitiveMode
+    ? {
+      ...firstLeg,
+      summary: {
+        ...firstLeg.summary,
+        outliers: []
+      }
+    }
+    : adjustStartOutliersForCourseLength(firstLeg, totalLength);
 
   return {
     starts,
@@ -3317,7 +4041,11 @@ function adjustStartOutliersForCourseLength(firstLeg, totalLength) {
   };
 }
 
-function computeUsableStarts(firstLeg) {
+function computeUsableStarts(firstLeg, preferences = {}) {
+  if (preferences.competitiveMode) {
+    return firstLeg.starts.filter((startAnalysis) => startAnalysis.reachable);
+  }
+
   const outlierSet = new Set(firstLeg.summary.outliers.map((item) => item.index));
   return firstLeg.starts.filter((startAnalysis) => startAnalysis.reachable && !outlierSet.has(startAnalysis.index));
 }
@@ -3452,14 +4180,50 @@ function applyVariantDifficultyModifiers(raw, preferences = {}, boardHarshness =
   if (preferences.lighterGame) {
     adjusted *= 0.96;
   }
+  if (preferences.lessSpammyGame) {
+    adjusted *= 0.93;
+  }
   if (preferences.lessForeshadowing) {
     adjusted *= 1.1;
   }
   if (preferences.classicSharedDeck) {
     adjusted *= 1.11 + harshness.normalized * 0.11;
   }
+  if (preferences.factoryRejects) {
+    adjusted *= 1.06;
+  }
+  if (preferences.actFastMode) {
+    const actFastBase = {
+      countdown_3m: 0.7,
+      countdown_2m: 1.6,
+      countdown_1m: 3.1,
+      countdown_30s: 5.1,
+      last_player_30s: 1.9
+    }[preferences.actFastMode] ?? 0;
+    adjusted += Number((actFastBase * (0.9 + harshness.normalized * 0.95)).toFixed(2));
+  }
+  if (preferences.movingTargetStats?.activeCount) {
+    adjusted += preferences.movingTargetStats.difficultyBonus;
+  }
 
   return Number(adjusted.toFixed(2));
+}
+
+function getCompetitiveModeDifficultyBonus(fairnessStdDev = 0) {
+  if (fairnessStdDev <= 2) {
+    return 0;
+  }
+  if (fairnessStdDev <= 6) {
+    return Number((((fairnessStdDev - 2) / 4) * 3.5).toFixed(2));
+  }
+  if (fairnessStdDev <= 10) {
+    return Number((3.5 + ((fairnessStdDev - 6) / 4) * 2.5).toFixed(2));
+  }
+  if (fairnessStdDev <= 16) {
+    return Number((6 - ((fairnessStdDev - 10) / 6) * 3).toFixed(2));
+  }
+
+  return Number(Math.max(0.5, 3 - (fairnessStdDev - 16) * 0.3).toFixed(2));
 }
 
 function computeLengthMetrics(sequence, flagCount, playerCount, boardCount, preferences = {}, boardHarshness = null) {
@@ -3475,13 +4239,17 @@ function computeLengthMetrics(sequence, flagCount, playerCount, boardCount, pref
   const congestionLoad = totalCongestion * 0.12;
   const flagAreaLoad = first.flagAreaScore * 0.08;
   const difficultyLoad = sequence.summary.totalDifficulty * 0.03;
+  const movingTargetLoad = preferences.movingTargetStats?.lengthBonus ?? 0;
   const routeLoad = actionLoad + distanceLoad;
-  const frictionLoad = congestionLoad + flagAreaLoad + difficultyLoad;
+  const frictionLoad = congestionLoad + flagAreaLoad + difficultyLoad + movingTargetLoad;
   const harshness = boardHarshness ?? computeBoardHarshness();
   let raw = Number((checkpointLoad + playerLoad + routeLoad + frictionLoad).toFixed(2));
 
   if (preferences.lighterGame) {
     raw = Number((raw * 0.89).toFixed(2));
+  }
+  if (preferences.lessSpammyGame) {
+    raw = Number((raw * 0.95).toFixed(2));
   }
   if (preferences.lessForeshadowing) {
     raw = Number((raw * 1.04).toFixed(2));
@@ -3510,6 +4278,7 @@ function computeLengthMetrics(sequence, flagCount, playerCount, boardCount, pref
       congestionLoad: Number(congestionLoad.toFixed(2)),
       flagAreaLoad: Number(flagAreaLoad.toFixed(2)),
       difficultyLoad: Number(difficultyLoad.toFixed(2)),
+      movingTargetLoad: Number(movingTargetLoad.toFixed(2)),
       routeLoad: Number(routeLoad.toFixed(2)),
       frictionLoad: Number(frictionLoad.toFixed(2))
     }
@@ -3526,20 +4295,47 @@ function bandDistance(value, band, thresholds) {
   return 0;
 }
 
+function getMovingTargetVolatilityPenalty(stats = {}, fairnessStdDev = 0, preferences = {}) {
+  if (!stats?.activeCount) {
+    return 0;
+  }
+
+  const playerScale = Math.max(1, (preferences.playerCount ?? 4) / 4);
+  const raw = (
+    stats.activeCount * 4.5 +
+    Math.max(0, stats.totalPathLength - stats.activeCount) * 0.95 +
+    stats.totalTurns * 0.8 +
+    stats.fastSegments * 0.7 +
+    stats.wrapCount * 1.2 +
+    Math.max(0, fairnessStdDev - 6) * 0.35
+  ) * playerScale;
+
+  return Number(raw.toFixed(2));
+}
+
 function classifyCandidate(sequence, preferences, context = {}) {
-  const usableStarts = computeUsableStarts(sequence.firstLeg);
+  const usableStarts = computeUsableStarts(sequence.firstLeg, preferences);
   const boardHarshness = computeBoardHarshness(context.boardPlacements, context.pieceMap);
-  const difficultyRaw = applyVariantDifficultyModifiers(computeDifficultyRaw(sequence), preferences, boardHarshness);
+  const fairnessStdDev = sequence.firstLeg.summary.scoreStdDev;
+  const movingTargetStats = preferences.movingTargets
+    ? summarizeMovingTargets(context.tileMap, context.checkpoints)
+    : summarizeMovingTargets(null, []);
+  let difficultyRaw = applyVariantDifficultyModifiers(computeDifficultyRaw(sequence), {
+    ...preferences,
+    movingTargetStats
+  }, boardHarshness);
+  if (preferences.competitiveMode) {
+    difficultyRaw = Number((difficultyRaw + getCompetitiveModeDifficultyBonus(fairnessStdDev)).toFixed(2));
+  }
   const lengthMetrics = computeLengthMetrics(
     sequence,
     preferences.flagCount,
     preferences.playerCount,
     context.boardPlacements?.length ?? 1,
-    preferences,
+    { ...preferences, movingTargetStats },
     boardHarshness
   );
   const lengthRaw = lengthMetrics.raw;
-  const fairnessStdDev = sequence.firstLeg.summary.scoreStdDev;
 
   const difficultyThresholds = getDifficultyThresholds();
   const lengthThresholds = getLengthThresholds();
@@ -3592,8 +4388,21 @@ function classifyCandidate(sequence, preferences, context = {}) {
       : lengthRaw >= lengthThresholds[preferences.length][1]
         ? "high"
         : "matched";
-  const fairnessPenalty = fairnessStdDev >= 14 ? fairnessStdDev - 14 : 0;
-  const fitScore = difficultyFit * 1.2 + lengthFit + fairnessPenalty * 0.5 + Math.max(0, preferences.playerCount - usableStarts.length) * 20;
+  const fairnessPenalty = preferences.competitiveMode
+    ? 0
+    : fairnessStdDev >= 14 ? fairnessStdDev - 14 : 0;
+  const movingTargetVolatilityPenalty = getMovingTargetVolatilityPenalty(
+    movingTargetStats,
+    fairnessStdDev,
+    preferences
+  );
+  const fitScore = (
+    difficultyFit * 1.2 +
+    lengthFit +
+    fairnessPenalty * 0.5 +
+    movingTargetVolatilityPenalty +
+    Math.max(0, preferences.playerCount - usableStarts.length) * 20
+  );
 
   return {
     usableStarts,
@@ -3605,6 +4414,8 @@ function classifyCandidate(sequence, preferences, context = {}) {
     lengthFit,
     lengthDirection,
     fairnessStdDev,
+    movingTargetStats,
+    movingTargetVolatilityPenalty,
     acceptable: hardFailures.length === 0 && difficultyFit === 0 && lengthFit === 0,
     hardFailures,
     fitScore: Number(fitScore.toFixed(2))
@@ -3641,13 +4452,20 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     `Sets: ${[...getSelectedExpansionIds(scenario.preferences)].map((id) => formatExpansionName(id)).join(", ") || "none"}`,
     `Allowed variants: ${describeAllowedVariants(scenario.preferences)}`,
     `Variant complexity: ${scenario.variantComplexityUsed ?? 0}/${scenario.variantComplexityBudget ?? 0}`,
+    `Act Fast used: ${scenario.actFast ? scenario.actFastMode ?? "yes" : "no"}`,
+    `Competitive Mode used: ${scenario.competitiveMode ? "yes" : "no"}`,
+    `Extra Docks used: ${scenario.extraDocks ? "yes" : "no"}`,
+    `Factory Rejects used: ${scenario.factoryRejects ? "yes" : "no"}`,
     `Recovery used: ${scenario.recoveryRule}`,
     `A Lighter Game used: ${scenario.lighterGame ? "yes" : "no"}`,
+    `A Less SPAM-Y Game used: ${scenario.lessSpammyGame ? "yes" : "no"}`,
     `A Less Deadly Game used: ${scenario.lessDeadlyGame ? "yes" : "no"}`,
     `A More Deadly Game used: ${scenario.moreDeadlyGame ? "yes" : "no"}`,
     `Shared Deck used: ${scenario.classicSharedDeck ? "yes" : "no"}`,
     `Hazardous Flags used: ${scenario.hazardousFlags ? "yes" : "no"}`,
+    `Moving Targets used: ${scenario.movingTargets ? "yes" : "no"}`,
     `Less Foreshadowing used: ${scenario.lessForeshadowing ? "yes" : "no"}`,
+    `Staggered Boards used: ${scenario.staggeredBoards ? "yes" : "no"}`,
     `Accepted after ${scenario.attempts} attempt(s)`,
     `Board count: ${scenario.boardCount}`,
     `Boards: ${scenario.mainBoardIds.map((pieceId, index) => `${pieceId}@${scenario.mainRotations[index]}`).join(", ")}`,
@@ -3655,15 +4473,21 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     scenario.rebootTokens?.length
       ? `Reboot tokens: ${scenario.rebootTokens.map((token) => `${token.pieceId}(${token.x},${token.y},${token.dir})`).join(", ")}`
       : "Reboot tokens: none",
-    `Dock side: ${scenario.dockBoundaryRun?.side ?? "n/a"}`,
-    `Dock flipped: ${scenario.dockFlipped ? "yes" : "no"}`,
+    scenario.dockSummaries?.length
+      ? `Docks: ${scenario.dockSummaries.map((dock, index) => `${index + 1}:${dock.pieceId}:${dock.boundaryRun?.side ?? "n/a"}:${dock.flipped ? "flipped" : "normal"}`).join(", ")}`
+      : "Docks: none",
     `Showing leg: ${legOptions[selectedLegIndex]}`,
     `Goal flag: (${goal.x}, ${goal.y})`,
     `Usable starts: ${scenario.metrics.usableStarts.length}/${scenario.sequence.starts.length}`,
     `Difficulty raw: ${scenario.metrics.difficultyRaw}`,
     `Length raw: ${scenario.metrics.lengthRaw}`,
     `Length inputs: flags ${scenario.metrics.lengthMetrics.inputs.flagCount}, players ${scenario.metrics.lengthMetrics.inputs.playerCount}, actionScore ${scenario.metrics.lengthMetrics.inputs.totalActionLoad}, distanceScore ${scenario.metrics.lengthMetrics.inputs.totalRouteDistance}, congestion ${scenario.metrics.lengthMetrics.inputs.totalCongestion}, flagArea ${scenario.metrics.lengthMetrics.inputs.flagAreaScore}, totalDifficulty ${scenario.metrics.lengthMetrics.inputs.totalDifficulty}`,
-    `Length contributions: flags ${scenario.metrics.lengthMetrics.contributions.checkpointLoad}, players ${scenario.metrics.lengthMetrics.contributions.playerLoad}, actions ${scenario.metrics.lengthMetrics.contributions.actionLoad}, distance ${scenario.metrics.lengthMetrics.contributions.distanceLoad}, congestion ${scenario.metrics.lengthMetrics.contributions.congestionLoad}, flagArea ${scenario.metrics.lengthMetrics.contributions.flagAreaLoad}, difficulty ${scenario.metrics.lengthMetrics.contributions.difficultyLoad}`,
+    `Length contributions: flags ${scenario.metrics.lengthMetrics.contributions.checkpointLoad}, players ${scenario.metrics.lengthMetrics.contributions.playerLoad}, actions ${scenario.metrics.lengthMetrics.contributions.actionLoad}, distance ${scenario.metrics.lengthMetrics.contributions.distanceLoad}, congestion ${scenario.metrics.lengthMetrics.contributions.congestionLoad}, flagArea ${scenario.metrics.lengthMetrics.contributions.flagAreaLoad}, difficulty ${scenario.metrics.lengthMetrics.contributions.difficultyLoad}, moving-targets ${scenario.metrics.lengthMetrics.contributions.movingTargetLoad}`,
+    `Moving target profile: active ${scenario.movingTargetStats?.activeCount ?? 0}, pathTiles ${scenario.movingTargetStats?.totalPathLength ?? 0}, uniqueCoverage ${scenario.movingTargetStats?.coverageTiles ?? 0}, turns ${scenario.movingTargetStats?.totalTurns ?? 0}, fastSegments ${scenario.movingTargetStats?.fastSegments ?? 0}, difficultyBonus ${scenario.movingTargetStats?.difficultyBonus ?? 0}, lengthBonus ${scenario.movingTargetStats?.lengthBonus ?? 0}`,
+    `Moving target volatility penalty: ${scenario.metrics.movingTargetVolatilityPenalty ?? 0}`,
+    scenario.movingTargetReentryMarkers?.length
+      ? `Moving target re-entry: ${scenario.movingTargetReentryMarkers.map((marker) => `${marker.label}(${marker.x},${marker.y})`).join(", ")}`
+      : "Moving target re-entry: none",
     `Fairness stddev: ${scenario.metrics.fairnessStdDev}`,
     `Course difficulty score: ${summary.difficultyScore}`,
     `Course length score: ${summary.lengthScore}`,
@@ -3807,6 +4631,7 @@ function renderScenario(scenario) {
     goal,
     analysis: renderAnalysis,
     goals: scenario.checkpoints,
+    reentryMarkers: hasMovingTargetsEffect(scenario) ? scenario.movingTargetReentryMarkers : [],
     starts: scenario.activeStarts,
     rebootTokens: scenario.rebootTokens,
     tileMap: scenario.goalTileMap,
@@ -3827,6 +4652,15 @@ function validateSelectedInventory(assets, preferences) {
   const availableDockIds = getEligibleDockIds(assets.pieceMap, expansionIds, preferences);
   if (!availableDockIds.length) {
     return "The selected sets contain no docking bay. Enable a set with a docking bay to generate a course.";
+  }
+  if (!canSupportRequiredDockStarts(availableDockIds, assets.pieceMap, preferences)) {
+    const requiredStarts = getRequiredDockStartCount(preferences);
+    return `The selected sets do not provide enough dock starting spaces for this setup (${requiredStarts} needed).`;
+  }
+  if (!getDockConfigurations(availableDockIds, assets.pieceMap, preferences).length) {
+    return getExtraDockModeState(preferences) === "forced"
+      ? "Extra Docks is required, but the selected sets do not provide a valid two-dock combination."
+      : "The selected sets do not provide a valid docking bay setup for these rules.";
   }
 
   const availableMainBoardIds = getAvailableMainBoardIds(assets.pieceMap, expansionIds);
@@ -3871,32 +4705,49 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
   const variantBundle = chooseVariantBundle(preferences);
   const {
     alignedLayout,
+    actFast,
+    competitiveMode,
+    extraDocks,
+    factoryRejects,
     recoveryRule,
     lessDeadlyGame,
+    lessSpammyGame,
     moreDeadlyGame,
     lighterGame,
     classicSharedDeck,
     hazardousFlags,
+    movingTargets,
     staggeredBoards,
     lessForeshadowing,
     variantComplexityBudget,
     variantComplexityUsed
   } = variantBundle;
+  const actFastMode = actFast ? chooseActFastMode(preferences) : null;
   const generationPreferences = {
     ...preferences,
-    alignedLayout
+    alignedLayout,
+    actFast,
+    actFastMode,
+    competitiveMode,
+    extraDocks
   };
+  const dockConfigurations = weightedOrder(
+    getDockConfigurations(availableDockIds, pieceMap, generationPreferences).map((dockIds) => (
+      [...dockIds].sort((left, right) => getDockSelectionWeight(pieceMap[right], generationPreferences) - getDockSelectionWeight(pieceMap[left], generationPreferences))
+    )),
+    (dockIds) => dockIds.reduce((sum, dockId) => sum + getDockSelectionWeight(pieceMap[dockId], generationPreferences), 0)
+  );
   const guidanceLevel = guidanceLevelForAttempt(attempt);
   const orderedDockIds = weightedOrder(
     availableDockIds,
     (dockId) => getDockSelectionWeight(pieceMap[dockId], generationPreferences)
   );
   let boardLayout = null;
-  let dockLayout = null;
-  let dockPieceId = null;
-  let dockFlipped = false;
+  let dockPlacements = [];
+  let dockSummaries = [];
 
-  for (const candidateDockId of orderedDockIds) {
+  for (const dockConfiguration of dockConfigurations.length ? dockConfigurations : orderedDockIds.map((dockId) => [dockId])) {
+    const candidateDockId = dockConfiguration[0];
     const candidateBoardLayout = createBoardPlacements(
       pieceMap,
       generationPreferences.length,
@@ -3910,28 +4761,42 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       continue;
     }
 
-    const flipOrder = shuffle([false, true]);
-    let candidateDockLayout = null;
-    let candidateDockFlipped = false;
+    const candidateDockPlacements = [];
+    let validDockSet = true;
 
-    for (const candidateFlip of flipOrder) {
-      candidateDockLayout = createDockPlacement(candidateBoardLayout.placements, pieceMap, candidateDockId, candidateFlip, {
-        alignedLayout: generationPreferences.alignedLayout
-      });
-      if (candidateDockLayout) {
-        candidateDockFlipped = candidateFlip;
+    for (const dockId of dockConfiguration) {
+      const flipOrder = shuffle([false, true]);
+      let placedDock = null;
+      for (const candidateFlip of flipOrder) {
+        placedDock = createDockPlacement(
+          [...candidateBoardLayout.placements, ...candidateDockPlacements],
+          pieceMap,
+          dockId,
+          candidateFlip,
+          {
+            alignedLayout: generationPreferences.alignedLayout,
+            allowBridgePlacement: true
+          }
+        );
+        if (placedDock) {
+          candidateDockPlacements.push(placedDock.dockPlacement);
+          break;
+        }
+      }
+
+      if (!placedDock) {
+        validDockSet = false;
         break;
       }
     }
 
-    if (!candidateDockLayout) {
+    if (!validDockSet || !candidateDockPlacements.length) {
       continue;
     }
 
-    dockPieceId = candidateDockId;
-    dockFlipped = candidateDockFlipped;
     boardLayout = candidateBoardLayout;
-    dockLayout = candidateDockLayout;
+    dockPlacements = candidateDockPlacements;
+    dockSummaries = buildDockSummaries(boardLayout.placements, dockPlacements, pieceMap);
     break;
   }
 
@@ -3939,17 +4804,30 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     throw new Error("Unable to create a valid board layout");
   }
 
-  const overlayPlacements = chooseOverlayPlacements(boardLayout.placements, dockLayout.dockPlacement, pieceMap, generationPreferences, expansionIds);
+  const overlayPlacements = chooseOverlayPlacements(boardLayout.placements, dockPlacements, pieceMap, generationPreferences, expansionIds);
 
   const placements = [
     ...boardLayout.placements,
-    dockLayout.dockPlacement,
+    ...dockPlacements,
     ...overlayPlacements
   ];
   const boardRects = buildBoardRects(boardLayout.placements, pieceMap);
 
   const { tileMap, starts } = buildResolvedMap(placements, pieceMap);
   const flagCandidates = getFlagCandidates(placements, pieceMap);
+  const movingTargetsForced = isVariantForced(preferences, "movingTargets");
+  const movingTargetTraceCache = movingTargets ? new Map() : null;
+  const movingCheckpointCandidateCount = movingTargets
+    ? flagCandidates.filter((candidate) => getMovingCheckpointTrace(tileMap, candidate, movingTargetTraceCache).moving).length
+    : 0;
+
+  if (movingTargetsForced && movingCheckpointCandidateCount === 0) {
+    return {
+      scenario: null,
+      evaluationsUsed: 1
+    };
+  }
+
   const flagCount = Math.min(weightedFlagCount(generationPreferences.length, flagCandidates.length), flagCandidates.length);
   const retryBudget = getFlagRetryBudget(generationPreferences, remainingEvaluations);
   const stallLimit = getFlagRetryStallLimit(generationPreferences);
@@ -3966,10 +4844,10 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       flagCandidates,
       flagCount,
       boardLayout.placements,
-      dockLayout.dockPlacement,
+      dockPlacements,
       pieceMap,
       starts,
-      { ...generationPreferences, hazardousFlags },
+      { ...generationPreferences, hazardousFlags, movingTargets },
       guidanceLevel
     );
 
@@ -3984,11 +4862,16 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     const rebootTokens = recoveryRule === "reboot_tokens"
       ? placeRebootTokens(boardRects, pieceMap, tileMap, checkpoints, preferences.playerCount)
       : [];
-    const goalTileMap = applyFlagOverrides(tileMap, checkpoints, { hazardousFlags });
-    const activeStarts = filterStartsForGoals(starts, checkpoints);
-    const sequence = analyzeFlagSequence(goalTileMap, activeStarts, checkpoints, preferences.playerCount, {
+    let scenarioDockPlacements = dockPlacements;
+    let scenarioPlacements = placements;
+    let scenarioTileMap = tileMap;
+    let goalTileMap = applyFlagOverrides(scenarioTileMap, checkpoints, { hazardousFlags });
+    let activeStarts = filterStartsForGoals(starts, checkpoints);
+    let sequence = analyzeFlagSequence(goalTileMap, activeStarts, checkpoints, preferences.playerCount, {
+      competitiveMode,
       recoveryRule,
       lessDeadlyGame,
+      lessSpammyGame,
       moreDeadlyGame,
       lighterGame,
       hazardousFlags,
@@ -3996,34 +4879,75 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       rebootTokens,
       boardRects
     });
+    const prunedDockPlacements = filterDockPlacementsWithReachableStarts(scenarioDockPlacements, sequence.firstLeg.starts, pieceMap);
+    if (prunedDockPlacements.length && prunedDockPlacements.length !== scenarioDockPlacements.length) {
+      scenarioDockPlacements = prunedDockPlacements;
+      scenarioPlacements = [
+        ...boardLayout.placements,
+        ...scenarioDockPlacements,
+        ...overlayPlacements
+      ];
+      const resolved = buildResolvedMap(scenarioPlacements, pieceMap);
+      scenarioTileMap = resolved.tileMap;
+      goalTileMap = applyFlagOverrides(scenarioTileMap, checkpoints, { hazardousFlags });
+      activeStarts = filterStartsForGoals(resolved.starts, checkpoints);
+      sequence = analyzeFlagSequence(goalTileMap, activeStarts, checkpoints, preferences.playerCount, {
+        competitiveMode,
+        recoveryRule,
+        lessDeadlyGame,
+        lessSpammyGame,
+        moreDeadlyGame,
+        lighterGame,
+        hazardousFlags,
+        lessForeshadowing,
+        rebootTokens,
+        boardRects
+      });
+    }
     const metrics = classifyCandidate(sequence, {
       ...generationPreferences,
+      actFast,
+      actFastMode,
       flagCount,
       classicSharedDeck,
+      factoryRejects,
       hazardousFlags,
+      movingTargets,
       lighterGame,
+      lessSpammyGame,
       lessForeshadowing
     }, {
       boardPlacements: boardLayout.placements,
       pieceMap,
-      checkpoints
+      checkpoints,
+      tileMap: scenarioTileMap
     });
+    const movingTargetReentryMarkers = collectMovingTargetReentryMarkers(scenarioTileMap, checkpoints, movingTargets);
     const scenario = {
       pieceMap: assets.pieceMap,
       imageMap: assets.imageMap,
-      placements,
+      placements: scenarioPlacements,
       overlayPlacements,
+      dockPlacements: scenarioDockPlacements,
+      dockSummaries: buildDockSummaries(boardLayout.placements, scenarioDockPlacements, pieceMap),
       checkpoints,
       rebootTokens,
       goalTileMap,
       activeStarts,
       playerCount: preferences.playerCount,
+      actFast,
+      actFastMode,
+      competitiveMode,
+      extraDocks: scenarioDockPlacements.length > 1,
+      factoryRejects,
       recoveryRule,
       lessDeadlyGame,
+      lessSpammyGame,
       moreDeadlyGame,
       lighterGame,
       classicSharedDeck,
       hazardousFlags,
+      movingTargets,
       staggeredBoards,
       lessForeshadowing,
       variantComplexityBudget,
@@ -4033,15 +4957,22 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       boardCount: boardLayout.boardCount,
       boardRects,
       guidanceLevel,
-      dockFlipped,
-      dockBoundaryRun: dockLayout.boundaryRun,
       sequence,
       metrics,
+      movingTargetStats: metrics.movingTargetStats,
+      movingTargetReentryMarkers,
       preferences: {
         ...generationPreferences,
+        actFast,
+        actFastMode,
+        competitiveMode,
+        extraDocks: scenarioDockPlacements.length > 1,
+        factoryRejects,
         flagCount,
         classicSharedDeck,
         hazardousFlags,
+        movingTargets,
+        lessSpammyGame,
         staggeredBoards
       }
     };
@@ -4067,12 +4998,20 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
 function serializeScenario(scenario) {
   return {
     preferences: scenario.preferences,
+    actFast: scenario.actFast,
+    actFastMode: scenario.actFastMode,
+    competitiveMode: scenario.competitiveMode,
+    extraDocks: scenario.extraDocks,
+    factoryRejects: scenario.factoryRejects,
     recoveryRule: scenario.recoveryRule,
     lessDeadlyGame: scenario.lessDeadlyGame,
+    lessSpammyGame: scenario.lessSpammyGame,
     moreDeadlyGame: scenario.moreDeadlyGame,
     lighterGame: scenario.lighterGame,
     classicSharedDeck: scenario.classicSharedDeck,
     hazardousFlags: scenario.hazardousFlags,
+    movingTargets: scenario.movingTargets,
+    staggeredBoards: scenario.staggeredBoards,
     lessForeshadowing: scenario.lessForeshadowing,
     placements: scenario.placements,
     checkpoints: scenario.checkpoints,
@@ -4104,12 +5043,19 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
   }
 
   const { pieceMap, imageMap } = assets;
+  const actFast = Boolean(snapshot.actFast);
+  const actFastMode = snapshot.actFastMode ?? null;
   const recoveryRule = snapshot.recoveryRule ?? "reboot_tokens";
+  const competitiveMode = Boolean(snapshot.competitiveMode);
+  const factoryRejects = Boolean(snapshot.factoryRejects);
   const lessDeadlyGame = Boolean(snapshot.lessDeadlyGame);
+  const lessSpammyGame = Boolean(snapshot.lessSpammyGame);
   const moreDeadlyGame = Boolean(snapshot.moreDeadlyGame);
   const lighterGame = Boolean(snapshot.lighterGame);
   const classicSharedDeck = Boolean(snapshot.classicSharedDeck);
   const hazardousFlags = Boolean(snapshot.hazardousFlags);
+  const movingTargets = Boolean(snapshot.movingTargets);
+  const staggeredBoards = Boolean(snapshot.staggeredBoards);
   const lessForeshadowing = Boolean(snapshot.lessForeshadowing);
   const placements = snapshot.placements;
   const checkpoints = snapshot.checkpoints;
@@ -4119,10 +5065,11 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     return kind !== "dock" && !placement.overlay;
   });
   const overlayPlacements = placements.filter((placement) => placement.overlay);
-  const dockPlacement = placements.find((placement) => assets.pieceMap[placement.pieceId]?.kind === "dock");
+  const dockPlacements = getDockPlacementsFromScenarioPlacements(placements, assets.pieceMap);
+  const extraDocks = dockPlacements.length > 1;
   const boardRects = buildBoardRects(boardPlacements, pieceMap);
 
-  if (!dockPlacement || !boardPlacements.length) {
+  if (!dockPlacements.length || !boardPlacements.length) {
     return null;
   }
 
@@ -4130,8 +5077,10 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
   const goalTileMap = applyFlagOverrides(tileMap, checkpoints, { hazardousFlags });
   const activeStarts = filterStartsForGoals(starts, checkpoints);
   const sequence = analyzeFlagSequence(goalTileMap, activeStarts, checkpoints, snapshot.preferences.playerCount, {
+    competitiveMode,
     recoveryRule,
     lessDeadlyGame,
+    lessSpammyGame,
     moreDeadlyGame,
     lighterGame,
     hazardousFlags,
@@ -4141,34 +5090,51 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
   });
   const metrics = classifyCandidate(sequence, {
     ...snapshot.preferences,
+    actFast,
+    actFastMode,
     recoveryRule,
     flagCount: checkpoints.length,
     classicSharedDeck,
+    factoryRejects,
     hazardousFlags,
+    movingTargets,
     lighterGame,
+    lessSpammyGame,
     lessForeshadowing
   }, {
     boardPlacements,
     pieceMap,
-    checkpoints
+    checkpoints,
+    tileMap
   });
+  const movingTargetReentryMarkers = collectMovingTargetReentryMarkers(tileMap, checkpoints, movingTargets);
 
   return {
     pieceMap,
     imageMap,
     placements,
     overlayPlacements,
+    dockPlacements,
+    dockSummaries: buildDockSummaries(boardPlacements, dockPlacements, pieceMap),
     checkpoints,
     rebootTokens,
     goalTileMap,
     activeStarts,
     playerCount: snapshot.preferences.playerCount,
+    actFast,
+    actFastMode,
+    competitiveMode,
+    extraDocks,
+    factoryRejects,
     recoveryRule,
     lessDeadlyGame,
+    lessSpammyGame,
     moreDeadlyGame,
     lighterGame,
     classicSharedDeck,
     hazardousFlags,
+    movingTargets,
+    staggeredBoards,
     lessForeshadowing,
     variantComplexityBudget: 0,
     variantComplexityUsed: 0,
@@ -4177,16 +5143,24 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     boardCount: boardPlacements.length,
     boardRects,
     guidanceLevel: 0,
-    dockFlipped: Boolean(dockPlacement.rotation % 180),
-    dockBoundaryRun: getDockBoundaryRun(boardPlacements, dockPlacement, pieceMap),
     sequence,
     metrics,
+    movingTargetStats: metrics.movingTargetStats,
+    movingTargetReentryMarkers,
     preferences: {
       ...snapshot.preferences,
+      actFast,
+      actFastMode,
+      competitiveMode,
+      extraDocks,
+      factoryRejects,
       recoveryRule,
       flagCount: checkpoints.length,
       classicSharedDeck,
-      hazardousFlags
+      hazardousFlags,
+      movingTargets,
+      lessSpammyGame,
+      staggeredBoards
     },
     attempts: snapshot.attempts ?? 0
   };
@@ -4376,7 +5350,6 @@ async function init() {
   initializeBoardAudit(assets);
   renderVariantControls();
   updateExpansionSummary();
-  updateVariantSummary();
   updateDevView();
   const snapshot = loadScenarioSnapshot();
 

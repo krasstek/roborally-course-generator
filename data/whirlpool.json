@@ -338,7 +338,7 @@
       "features": [
         {
           "type": "belt",
-          "dir": "W",
+          "dir": "N",
           "speed": 1
         }
       ]

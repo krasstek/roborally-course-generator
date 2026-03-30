@@ -309,6 +309,35 @@ function drawGoals(ctx, goals, bounds, tileSize, margin) {
   }
 }
 
+function drawReentryMarkers(ctx, markers, bounds, tileSize, margin) {
+  for (const marker of markers || []) {
+    const left = margin + (marker.x - bounds.minX) * tileSize;
+    const top = margin + (marker.y - bounds.minY) * tileSize;
+    const badgeHeight = tileSize * 0.34;
+    const label = marker.label ?? "R";
+
+    ctx.save();
+    ctx.font = "bold 9px sans-serif";
+    const textWidth = ctx.measureText(label).width;
+    const badgeWidth = Math.max(tileSize * 0.5, textWidth + 8);
+    ctx.fillStyle = "rgba(43, 122, 214, 0.96)";
+    ctx.strokeStyle = "#123f7a";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.roundRect(left + tileSize - badgeWidth - 3, top + 3, badgeWidth, badgeHeight, 7);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText(
+      label,
+      left + tileSize - badgeWidth + 2,
+      top + 3 + badgeHeight * 0.72
+    );
+    ctx.restore();
+  }
+}
+
 function drawRebootTokens(ctx, rebootTokens, bounds, tileSize, margin) {
   for (const token of rebootTokens || []) {
     const left = margin + (token.x - bounds.minX) * tileSize;
@@ -530,6 +559,7 @@ export function render(canvas, pieces, imageMap = {}, options = {}) {
   drawRebootTokens(ctx, options.rebootTokens || [], bounds, tileSize, margin);
   drawRoutes(ctx, options.analysis, bounds, tileSize, margin);
   drawGoals(ctx, options.goals || (options.goal ? [options.goal] : []), bounds, tileSize, margin);
+  drawReentryMarkers(ctx, options.reentryMarkers || [], bounds, tileSize, margin);
   if (edgeOutlineColor) {
     drawBoardEdgeOutline(ctx, footprints, bounds, tileSize, margin, edgeOutlineColor);
   }
