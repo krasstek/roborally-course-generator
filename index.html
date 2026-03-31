@@ -397,6 +397,74 @@
       font-weight: 600;
     }
 
+    .setup-value-wrap {
+      display: flex;
+      align-items: start;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .setup-value-wrap .setup-value {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+
+    .setup-help-button {
+      width: 24px;
+      min-width: 24px;
+      height: 24px;
+      min-height: 24px;
+      padding: 0;
+      border-radius: 999px;
+      border: 1px solid rgba(244, 247, 248, 0.32);
+      background: rgba(244, 247, 248, 0.08);
+      color: #f4f7f8;
+      font: 700 13px/1 "Trebuchet MS", Verdana, sans-serif;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+    }
+
+    .setup-help-button:hover {
+      background: rgba(244, 247, 248, 0.16);
+    }
+
+    .setup-help-button[aria-expanded="true"] {
+      background: rgba(242, 194, 48, 0.18);
+      border-color: rgba(242, 194, 48, 0.42);
+      color: #fff6d1;
+    }
+
+    .course-explanation {
+      display: grid;
+      gap: 8px;
+      margin-top: 2px;
+      padding: 12px 14px;
+      border-radius: 12px;
+      background: rgba(244, 247, 248, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .course-explanation.hidden {
+      display: none !important;
+    }
+
+    .course-explanation-title {
+      color: rgba(232, 237, 240, 0.72);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .course-explanation-copy {
+      color: #f4f7f8;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .course-explanation-copy strong {
+      color: #fff6d1;
+    }
+
     .pill {
       padding: 6px 10px;
       border-radius: 999px;
@@ -854,7 +922,10 @@
       <div id="setup-summary" class="setup-summary hidden">
         <div class="setup-row">
           <div class="setup-label">Boards</div>
-          <div id="setup-boards" class="setup-value"></div>
+          <div class="setup-value-wrap">
+            <div id="setup-boards" class="setup-value"></div>
+            <button id="course-explanation-toggle" class="setup-help-button" type="button" aria-expanded="false" aria-controls="course-explanation-panel" title="Why this course plays the way it does">?</button>
+          </div>
         </div>
         <div id="setup-overlays-row" class="setup-row hidden">
           <div class="setup-label">Overlays</div>
@@ -863,6 +934,10 @@
         <div class="setup-row">
           <div class="setup-label">Flags</div>
           <div id="setup-flags" class="setup-value"></div>
+        </div>
+        <div id="course-explanation-panel" class="course-explanation hidden">
+          <div class="course-explanation-title">Course Notes</div>
+          <div id="course-explanation-copy" class="course-explanation-copy"></div>
         </div>
       </div>
       <div id="rules-anchor-top"></div>

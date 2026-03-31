@@ -291,6 +291,10 @@ let boardAuditState = {
   hoverTile: null,
   selectedFeatures: new Set(AUDIT_FEATURE_TYPES.map((feature) => feature.id))
 };
+let courseExplanationState = {
+  scenarioRef: null,
+  manualOpen: null
+};
 
 function renderVariantControls() {
   const menuEl = document.getElementById("variant-rules-menu");
@@ -1029,6 +1033,9 @@ function updateSetupSummary(scenario) {
   const overlaysRowEl = document.getElementById("setup-overlays-row");
   const overlaysEl = document.getElementById("setup-overlays");
   const flagsEl = document.getElementById("setup-flags");
+  const explanationToggleEl = document.getElementById("course-explanation-toggle");
+  const explanationPanelEl = document.getElementById("course-explanation-panel");
+  const explanationCopyEl = document.getElementById("course-explanation-copy");
 
   if (!scenario) {
     fitNoteEl.textContent = "";
@@ -1038,7 +1045,21 @@ function updateSetupSummary(scenario) {
     overlaysRowEl.classList.add("hidden");
     overlaysEl.textContent = "";
     flagsEl.textContent = "";
+    explanationCopyEl.innerHTML = "";
+    explanationPanelEl.classList.add("hidden");
+    explanationToggleEl.setAttribute("aria-expanded", "false");
+    courseExplanationState = {
+      scenarioRef: null,
+      manualOpen: null
+    };
     return;
+  }
+
+  if (courseExplanationState.scenarioRef !== scenario) {
+    courseExplanationState = {
+      scenarioRef: scenario,
+      manualOpen: null
+    };
   }
 
   const boardLabels = scenario.mainBoardIds.map((pieceId) => (
@@ -1091,7 +1112,327 @@ function updateSetupSummary(scenario) {
     fitNoteEl.textContent = "";
     fitNoteEl.classList.add("hidden");
   }
+
+  const explanationHtml = buildCourseExplanationHtml(scenario, noteParts);
+  const autoOpenExplanation = noteParts.length > 0;
+  const explanationVisible = courseExplanationState.manualOpen ?? autoOpenExplanation;
+  explanationCopyEl.innerHTML = explanationHtml;
+  explanationPanelEl.classList.toggle("hidden", !explanationVisible);
+  explanationToggleEl.setAttribute("aria-expanded", explanationVisible ? "true" : "false");
   summary.classList.remove("hidden");
+}
+
+function describeCourseDifficultyBand(rawDifficulty) {
+  const thresholds = getDifficultyThresholds();
+  if (rawDifficulty < thresholds.easy[1]) {
+    return "easy";
+  }
+  if (rawDifficulty < thresholds.moderate[1]) {
+    return "moderate";
+  }
+  return "hard";
+}
+
+function describeCourseLengthBand(rawLength) {
+  const thresholds = getLengthThresholds();
+  if (rawLength < thresholds.short[1]) {
+    return "short";
+  }
+  if (rawLength < thresholds.moderate[1]) {
+    return "moderate";
+  }
+  return "long";
+}
+
+function describeCourseDifficultyText(rawDifficulty) {
+  return {
+    easy: "on the easier side",
+    moderate: "moderate",
+    hard: "on the hard side"
+  }[describeCourseDifficultyBand(rawDifficulty)] ?? "moderate";
+}
+
+function describeCourseLengthText(rawLength) {
+  return {
+    short: "short",
+    moderate: "medium-length",
+    long: "long"
+  }[describeCourseLengthBand(rawLength)] ?? "medium-length";
+}
+
+function describeDifficultyLead(scenario) {
+  if (scenario.preferences.difficulty !== "any" && scenario.metrics.difficultyDirection !== "matched") {
+    return scenario.metrics.difficultyDirection === "low"
+      ? "It comes out easier than requested"
+      : "It comes out harder than requested";
+  }
+
+  return `It plays ${describeCourseDifficultyText(scenario.metrics.difficultyRaw)}`;
+}
+
+function describeLengthLead(scenario) {
+  if (scenario.preferences.length !== "any" && scenario.metrics.lengthDirection !== "matched") {
+    return scenario.metrics.lengthDirection === "low"
+      ? "It comes out shorter than requested"
+      : "It comes out longer than requested";
+  }
+
+  return `It plays ${describeCourseLengthText(scenario.metrics.lengthRaw)}`;
+}
+
+function formatContributionLabel(id) {
+  switch (id) {
+    case "checkpointLoad":
+      return "it uses many checkpoints";
+    case "playerLoad":
+      return "the player count adds turn overhead";
+    case "actionLoad":
+      return "routes need a lot of programmed actions";
+    case "distanceLoad":
+      return "checkpoints are spaced far apart";
+    case "congestionLoad":
+      return "traffic and blocking slow things down";
+    case "flagAreaLoad":
+      return "checkpoint areas are busy and awkward";
+    case "movingTargetLoad":
+      return "moving targets keep players repositioning";
+    default:
+      return null;
+  }
+}
+
+function formatShortLengthReliefLabel(id) {
+  switch (id) {
+    case "checkpointLoad":
+      return "it keeps the checkpoint count down";
+    case "playerLoad":
+      return "there is limited player overhead";
+    case "actionLoad":
+      return "routes do not need many programmed actions";
+    case "distanceLoad":
+      return "checkpoints stay relatively close together";
+    case "congestionLoad":
+      return "traffic stays fairly manageable";
+    case "flagAreaLoad":
+      return "checkpoint areas are not too sticky";
+    case "movingTargetLoad":
+      return "there is little moving-target overhead";
+    default:
+      return null;
+  }
+}
+
+function joinReasonParts(parts = []) {
+  if (!parts.length) {
+    return "";
+  }
+  if (parts.length === 1) {
+    return parts[0];
+  }
+  if (parts.length === 2) {
+    return `${parts[0]} and ${parts[1]}`;
+  }
+  return `${parts[0]}, ${parts[1]}, and ${parts[2]}`;
+}
+
+function getMeaningfulVariantReasons(scenario) {
+  const difficultyReasons = [];
+  const lengthReasons = [];
+  const lengthContributions = scenario.metrics.lengthMetrics?.contributions ?? {};
+  const movingTargetStats = scenario.movingTargetStats ?? {};
+
+  if (scenario.movingTargets && (movingTargetStats.activeCount ?? 0) > 0) {
+    if ((movingTargetStats.difficultyBonus ?? 0) >= 6) {
+      difficultyReasons.push("moving targets add extra uncertainty");
+    }
+    if ((lengthContributions.movingTargetLoad ?? 0) >= 3) {
+      lengthReasons.push("moving targets add extra repositioning");
+    }
+  }
+
+  if (scenario.actFast && scenario.actFastMode && (
+    scenario.actFastMode === "countdown_1m" ||
+    scenario.actFastMode === "countdown_30s" ||
+    scenario.actFastMode === "countdown_2m"
+  )) {
+    difficultyReasons.push("Act Fast makes planning more demanding");
+  }
+
+  if (scenario.classicSharedDeck) {
+    difficultyReasons.push("the shared deck makes card planning less forgiving");
+  }
+
+  if (scenario.lessForeshadowing) {
+    difficultyReasons.push("less foreshadowing makes the route harder to plan ahead");
+  }
+
+  if (scenario.factoryRejects) {
+    difficultyReasons.push("Factory Rejects reduces planning flexibility");
+  }
+
+  if (scenario.competitiveMode && (scenario.metrics.fairnessStdDev ?? 0) >= 6) {
+    difficultyReasons.push("Competitive Mode increases pressure on weaker starts");
+  }
+
+  if (scenario.lighterGame) {
+    difficultyReasons.push("A Lighter Game softens the board pressure");
+    lengthReasons.push("A Lighter Game trims some board friction");
+  }
+
+  if (scenario.lessSpammyGame) {
+    difficultyReasons.push("A Less SPAM-Y Game makes recovery cleaner");
+    lengthReasons.push("A Less SPAM-Y Game keeps turns moving");
+  }
+
+  return {
+    difficulty: difficultyReasons,
+    length: lengthReasons
+  };
+}
+
+function buildCourseExplanationHtml(scenario, noteParts = []) {
+  const parts = [];
+  const firstLeg = scenario.sequence.firstLeg.summary;
+  const laterLegs = scenario.sequence.legs.slice(1);
+  const difficultyBand = describeCourseDifficultyBand(scenario.metrics.difficultyRaw);
+  const lengthBand = describeCourseLengthBand(scenario.metrics.lengthRaw);
+  const avgCongestion = laterLegs.length
+    ? laterLegs.reduce((sum, leg) => sum + (leg.analysis.summary.congestionScore || 0), 0) / laterLegs.length
+    : 0;
+  const avgBacktrack = laterLegs.length
+    ? laterLegs.reduce((sum, leg) => sum + (leg.analysis.summary.crossLegOverlap || 0), 0) / laterLegs.length
+    : 0;
+  const boardPlacements = (scenario.placements || []).filter((placement) => (
+    scenario.pieceMap?.[placement.pieceId]?.kind !== "dock" && !placement.overlay
+  ));
+  const boardHarshness = computeBoardHarshness(boardPlacements, scenario.pieceMap);
+  const difficultyReasons = [];
+  const variantReasons = getMeaningfulVariantReasons(scenario);
+
+  if (difficultyBand === "hard") {
+    if (firstLeg.difficultyScore >= 72) {
+      difficultyReasons.push("the opening run to the first checkpoint is punishing");
+    }
+    if (firstLeg.averageTrafficPenalty >= 18 || avgCongestion >= 18) {
+      difficultyReasons.push("traffic builds up around key routes");
+    }
+    if (firstLeg.flagAreaScore >= 24) {
+      difficultyReasons.push("checkpoint areas are packed with active board elements");
+    }
+    if (boardHarshness.normalized >= 0.58) {
+      difficultyReasons.push("the selected boards are hazard-heavy");
+    }
+    if (avgBacktrack >= 1.2) {
+      difficultyReasons.push("later legs force route overlap and backtracking");
+    }
+    difficultyReasons.push(...variantReasons.difficulty);
+    if (!difficultyReasons.length) {
+      difficultyReasons.push("multiple route and hazard pressures stack up across the course");
+    }
+  } else if (difficultyBand === "easy") {
+    if (boardHarshness.normalized <= 0.36) {
+      difficultyReasons.push("the selected boards are relatively forgiving");
+    }
+    if (firstLeg.flagAreaScore <= 18) {
+      difficultyReasons.push("checkpoint areas are not overly busy");
+    }
+    if (firstLeg.averageTrafficPenalty <= 12 && avgCongestion <= 12) {
+      difficultyReasons.push("traffic stays under control");
+    }
+    if (avgBacktrack <= 0.6) {
+      difficultyReasons.push("later legs do not force much backtracking");
+    }
+    if (!scenario.movingTargets) {
+      difficultyReasons.push("the route stays stable from turn to turn");
+    }
+    if (!difficultyReasons.length) {
+      difficultyReasons.push("its hazards and route pressure stay fairly controlled");
+    }
+    difficultyReasons.push(...variantReasons.difficulty.filter((reason) => (
+      reason.includes("softens") || reason.includes("cleaner")
+    )));
+  } else {
+    if (firstLeg.difficultyScore >= 60) {
+      difficultyReasons.push("the opening run asks for some careful programming");
+    }
+    if (firstLeg.averageTrafficPenalty >= 14 || avgCongestion >= 14) {
+      difficultyReasons.push("there is some route congestion around important lines");
+    }
+    if (boardHarshness.normalized >= 0.45 && boardHarshness.normalized < 0.62) {
+      difficultyReasons.push("the selected boards add some hazard pressure without becoming brutal");
+    }
+    if (avgBacktrack >= 0.8 && avgBacktrack < 1.6) {
+      difficultyReasons.push("later legs create some overlap and repositioning");
+    }
+    if (!difficultyReasons.length) {
+      difficultyReasons.push("it mixes manageable hazards with a few spots that still need planning");
+    }
+    difficultyReasons.push(...variantReasons.difficulty);
+  }
+
+  const uniqueDifficultyReasons = difficultyReasons.filter((reason, index, list) => list.indexOf(reason) === index);
+
+  const contributionEntries = Object.entries(scenario.metrics.lengthMetrics?.contributions || {})
+    .filter(([id, value]) => value > 0 && (formatContributionLabel(id) || formatShortLengthReliefLabel(id)))
+    .sort((left, right) => right[1] - left[1]);
+  let lengthReasons = [];
+
+  if (lengthBand === "long") {
+    lengthReasons = contributionEntries
+      .map(([id]) => formatContributionLabel(id))
+      .filter(Boolean)
+      .filter((reason, index, list) => list.indexOf(reason) === index)
+      .slice(0, 3);
+    lengthReasons.push(...variantReasons.length);
+    if (!lengthReasons.length) {
+      lengthReasons.push("routes take time to resolve");
+    }
+  } else if (lengthBand === "short") {
+    lengthReasons = contributionEntries
+      .slice()
+      .reverse()
+      .map(([id]) => formatShortLengthReliefLabel(id))
+      .filter(Boolean)
+      .filter((reason, index, list) => list.indexOf(reason) === index)
+      .slice(0, 3);
+    lengthReasons.push(...variantReasons.length.filter((reason) => (
+      reason.includes("keeps turns moving") || reason.includes("trims")
+    )));
+    if (!lengthReasons.length) {
+      lengthReasons.push("routes resolve fairly quickly");
+    }
+  } else {
+    if (scenario.preferences.flagCount >= 3 || scenario.checkpoints.length >= 3) {
+      lengthReasons.push("it has enough checkpoints to feel like a full course");
+    }
+    if ((scenario.metrics.lengthMetrics?.contributions?.actionLoad ?? 0) >= 35) {
+      lengthReasons.push("routes need a fair amount of programmed movement");
+    }
+    if ((scenario.metrics.lengthMetrics?.contributions?.distanceLoad ?? 0) >= 18) {
+      lengthReasons.push("checkpoints are spread out enough to create some travel");
+    }
+    if ((scenario.metrics.lengthMetrics?.contributions?.congestionLoad ?? 0) >= 2.2) {
+      lengthReasons.push("some congestion slows the course down");
+    }
+    if (!lengthReasons.length) {
+      lengthReasons.push("it balances travel and action load without stretching into a long slog");
+    }
+    lengthReasons.push(...variantReasons.length);
+  }
+  const uniqueLengthReasons = lengthReasons.filter((reason, index, list) => list.indexOf(reason) === index).slice(0, 3);
+
+  if (noteParts.length) {
+    parts.push(`<div><strong>Fit:</strong> This course is ${noteParts.join(" and ")} than requested.</div>`);
+  }
+
+  parts.push(
+    `<div><strong>Difficulty:</strong> ${describeDifficultyLead(scenario)} because ${joinReasonParts(uniqueDifficultyReasons.slice(0, 3))}.</div>`
+  );
+  parts.push(
+    `<div><strong>Length:</strong> ${describeLengthLead(scenario)} because ${joinReasonParts(uniqueLengthReasons)}.</div>`
+  );
+
+  return parts.join("");
 }
 
 function updateVariantSummary() {
@@ -4709,7 +5050,7 @@ function renderScenario(scenario) {
     showStartFacing: devViewEnabled && selectedLegIndex !== null,
     showWalls: iconBoardView || (devViewEnabled && selectedLegIndex !== null),
     showPieceImages: !iconBoardView,
-    showFootprints: iconBoardView,
+    showFootprints: true,
     showFeatureIcons: iconBoardView
   });
 
@@ -5357,6 +5698,24 @@ document.getElementById("board-view-mode").addEventListener("change", () => {
   if (currentScenario) {
     renderScenario(currentScenario);
   }
+});
+
+document.getElementById("course-explanation-toggle").addEventListener("click", () => {
+  if (!currentScenario) {
+    return;
+  }
+
+  const requestedDifficulty = currentScenario.preferences.difficulty;
+  const difficultyFit = currentScenario.metrics.difficultyFit ?? 0;
+  const lengthFit = currentScenario.metrics.lengthFit ?? 0;
+  const moderateDifficultyThreshold = requestedDifficulty === "easy" ? 20 : 14;
+  const autoOpen = (
+    (currentScenario.preferences.difficulty !== "any" && difficultyFit >= moderateDifficultyThreshold) ||
+    (currentScenario.preferences.length !== "any" && lengthFit >= 14)
+  );
+  const currentlyVisible = courseExplanationState.manualOpen ?? autoOpen;
+  courseExplanationState.manualOpen = !currentlyVisible;
+  renderScenario(currentScenario);
 });
 
 document.getElementById("dev-view").addEventListener("change", () => {
