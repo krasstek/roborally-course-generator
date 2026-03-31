@@ -1235,6 +1235,14 @@ function joinReasonParts(parts = []) {
   return `${parts[0]}, ${parts[1]}, and ${parts[2]}`;
 }
 
+function averageValues(values = []) {
+  if (!values.length) {
+    return 0;
+  }
+
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
 function getMeaningfulVariantReasons(scenario) {
   const difficultyReasons = [];
   const lengthReasons = [];
@@ -1300,13 +1308,13 @@ function buildCourseExplanationHtml(scenario, noteParts = []) {
   const difficultyBand = describeCourseDifficultyBand(scenario.metrics.difficultyRaw);
   const lengthBand = describeCourseLengthBand(scenario.metrics.lengthRaw);
   const openingForcedDistance = openingRoutes.length
-    ? average(openingRoutes.map((route) => route.forcedDistance || 0))
+    ? averageValues(openingRoutes.map((route) => route.forcedDistance || 0))
     : 0;
   const openingActionLoad = openingRoutes.length
-    ? average(openingRoutes.map((route) => route.actions || 0))
+    ? averageValues(openingRoutes.map((route) => route.actions || 0))
     : 0;
   const openingFacingChanges = openingRoutes.length
-    ? average(openingRoutes.map((route) => {
+    ? averageValues(openingRoutes.map((route) => {
       const manualTurns = (route.transitions || []).filter((transition) => transition.action?.type === "turn").length;
       const conveyorTurns = (route.transitions || []).reduce((sum, transition) => (
         sum + (transition.conveyorSteps || []).filter((step) => step.turned).length
