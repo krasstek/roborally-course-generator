@@ -1293,9 +1293,27 @@ function getMeaningfulVariantReasons(scenario) {
 function buildCourseExplanationHtml(scenario, noteParts = []) {
   const parts = [];
   const firstLeg = scenario.sequence.firstLeg.summary;
+  const openingRoutes = scenario.sequence.firstLeg.starts
+    .filter((item) => item.reachable && item.selectedRoute)
+    .map((item) => item.selectedRoute);
   const laterLegs = scenario.sequence.legs.slice(1);
   const difficultyBand = describeCourseDifficultyBand(scenario.metrics.difficultyRaw);
   const lengthBand = describeCourseLengthBand(scenario.metrics.lengthRaw);
+  const openingForcedDistance = openingRoutes.length
+    ? average(openingRoutes.map((route) => route.forcedDistance || 0))
+    : 0;
+  const openingActionLoad = openingRoutes.length
+    ? average(openingRoutes.map((route) => route.actions || 0))
+    : 0;
+  const openingFacingChanges = openingRoutes.length
+    ? average(openingRoutes.map((route) => {
+      const manualTurns = (route.transitions || []).filter((transition) => transition.action?.type === "turn").length;
+      const conveyorTurns = (route.transitions || []).reduce((sum, transition) => (
+        sum + (transition.conveyorSteps || []).filter((step) => step.turned).length
+      ), 0);
+      return manualTurns + conveyorTurns;
+    }))
+    : 0;
   const avgCongestion = laterLegs.length
     ? laterLegs.reduce((sum, leg) => sum + (leg.analysis.summary.congestionScore || 0), 0) / laterLegs.length
     : 0;
@@ -1311,7 +1329,13 @@ function buildCourseExplanationHtml(scenario, noteParts = []) {
 
   if (difficultyBand === "hard") {
     if (firstLeg.difficultyScore >= 72) {
-      difficultyReasons.push("the opening run to the first checkpoint is punishing");
+      if (openingForcedDistance >= 3.5 || openingFacingChanges >= 2.2) {
+        difficultyReasons.push("the opening run includes several forced moves and facing changes");
+      } else if (openingActionLoad >= 7.5) {
+        difficultyReasons.push("the opening run asks for a long programmed sequence");
+      } else {
+        difficultyReasons.push("the opening run to the first checkpoint is punishing");
+      }
     }
     if (firstLeg.averageTrafficPenalty >= 18 || avgCongestion >= 18) {
       difficultyReasons.push("traffic builds up around key routes");
@@ -1353,7 +1377,11 @@ function buildCourseExplanationHtml(scenario, noteParts = []) {
     )));
   } else {
     if (firstLeg.difficultyScore >= 60) {
-      difficultyReasons.push("the opening run asks for some careful programming");
+      if (openingForcedDistance >= 2.5 || openingFacingChanges >= 1.4) {
+        difficultyReasons.push("the opening run includes a few forced moves and facing changes");
+      } else {
+        difficultyReasons.push("the opening run asks for some careful programming");
+      }
     }
     if (firstLeg.averageTrafficPenalty >= 14 || avgCongestion >= 14) {
       difficultyReasons.push("there is some route congestion around important lines");
