@@ -1179,7 +1179,7 @@ function getActFastRuleText(mode) {
     case "countdown_30s":
       return "Act Fast: use a 30-second programming timer. Empty registers are filled randomly when time runs out (Altered from Game Guide p. 32).";
     case "last_player_30s":
-      return "Act Fast: when only one player remains, that player has 30 seconds to finish programming (Altered from previous Robo Rally editions).";
+      return "Act Fast: when only one player remains, that player has 30 seconds to finish programming (Previous Robo Rally editions).";
     default:
       return null;
   }
@@ -1249,7 +1249,7 @@ function updateRulesNote(scenario) {
   }
 
   if (scenario.lessDeadlyGame) {
-    notes.push("A Less Deadly Game: board edges act as walls while pit spaces remain pits (Game Guide p. 32).");
+    notes.push("A Less Deadly Game: board edges act as walls (Game Guide p. 32).");
   }
 
   if (scenario.lessSpammyGame) {
@@ -1261,7 +1261,7 @@ function updateRulesNote(scenario) {
   }
 
   if (scenario.classicSharedDeck) {
-    notes.push("Shared Deck: players use one combined programming deck, and spam cards go to hand instead of deck (Previous Robo Rally editions).");
+    notes.push("Shared Deck: shuffle all players' decks as a combined programming deck, and spam cards go to hand instead of deck (Altered from previous Robo Rally editions).");
   }
 
   if (scenario.lighterGame) {
@@ -1269,7 +1269,7 @@ function updateRulesNote(scenario) {
   }
 
   if (scenario.lessForeshadowing) {
-    notes.push("Less Foreshadowing: decks reshuffle every turn, reducing card-draw consistency (Game Guide p. 32).");
+    notes.push("Less Foreshadowing: decks reshuffle every turn (Game Guide p. 32).");
   }
 
   if (checkpointNotes.length) {
