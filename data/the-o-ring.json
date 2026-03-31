@@ -2,9 +2,6 @@
   "id": "the-o-ring",
   "name": "The \"O\" Ring",
   "kind": "base",
-  "expansionId": "thrills-and-spills",
-  "physicalBoardId": "the-o-ring-locked",
-  "image": "./assets/boards/the-o-ring.jpg",
   "width": 12,
   "height": 12,
   "mergeMode": "base",
@@ -164,6 +161,15 @@
           "type": "belt",
           "dir": "W",
           "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 1,
+      "features": [
+        {
+          "type": "pit"
         }
       ]
     },
@@ -1057,6 +1063,17 @@
       ]
     },
     {
+      "x": 6,
+      "y": 10,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 2
+        }
+      ]
+    },
+    {
       "x": 7,
       "y": 10,
       "features": [
@@ -1134,6 +1151,17 @@
       ]
     },
     {
+      "x": 6,
+      "y": 11,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 2
+        }
+      ]
+    },
+    {
       "x": 7,
       "y": 11,
       "features": [
@@ -1168,5 +1196,8 @@
         }
       ]
     }
-  ]
+  ],
+  "expansionId": "thrills-and-spills",
+  "physicalBoardId": "the-o-ring-locked",
+  "image": "./assets/boards/the-o-ring.jpg"
 }

@@ -240,6 +240,21 @@
           </select>
         </div>
 
+        <div class="field">
+          <label for="pieceExpansionId">Expansion ID</label>
+          <input id="pieceExpansionId" type="text" placeholder="wet-and-wild" />
+        </div>
+
+        <div class="field">
+          <label for="piecePhysicalBoardId">Physical board ID</label>
+          <input id="piecePhysicalBoardId" type="text" placeholder="circuit-trap-water-park" />
+        </div>
+
+        <div class="field">
+          <label for="pieceImagePath">Image path</label>
+          <input id="pieceImagePath" type="text" placeholder="./assets/boards/water-park.jpeg" />
+        </div>
+
         <div class="inline-row">
           <div class="field">
             <label for="gridWidth">Grid width</label>
@@ -447,6 +462,9 @@
     const pieceIdInput = document.getElementById("pieceId");
     const pieceNameInput = document.getElementById("pieceName");
     const pieceKindInput = document.getElementById("pieceKind");
+    const pieceExpansionIdInput = document.getElementById("pieceExpansionId");
+    const piecePhysicalBoardIdInput = document.getElementById("piecePhysicalBoardId");
+    const pieceImagePathInput = document.getElementById("pieceImagePath");
 
     const directionInput = document.getElementById("direction");
     const beltSpeedInput = document.getElementById("beltSpeed");
@@ -859,6 +877,9 @@
         pieceIdInput.value = piece.id || "";
         pieceNameInput.value = piece.name || "";
         pieceKindInput.value = piece.kind || "base";
+        pieceExpansionIdInput.value = piece.expansionId || "";
+        piecePhysicalBoardIdInput.value = piece.physicalBoardId || "";
+        pieceImagePathInput.value = piece.image || "";
         gridWidthInput.value = Number.isFinite(piece.width) ? Number(piece.width) : gridWidthInput.value;
         gridHeightInput.value = Number.isFinite(piece.height) ? Number(piece.height) : gridHeightInput.value;
       }
@@ -1250,6 +1271,20 @@
         starts: [...starts].sort((a, b) => (a.y - b.y) || (a.x - b.x)),
         tiles: exportedTiles
       };
+
+      const expansionId = pieceExpansionIdInput.value.trim();
+      const physicalBoardId = piecePhysicalBoardIdInput.value.trim();
+      const imagePath = pieceImagePathInput.value.trim();
+
+      if (expansionId) {
+        piece.expansionId = expansionId;
+      }
+      if (physicalBoardId) {
+        piece.physicalBoardId = physicalBoardId;
+      }
+      if (imagePath) {
+        piece.image = imagePath;
+      }
 
       output.value = JSON.stringify(piece, null, 2);
       updateStatus("Exported piece JSON.");

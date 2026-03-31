@@ -1,9 +1,6 @@
 {
   "id": "gear-box",
   "name": "Gear Box",
-  "expansionId": "chaos-and-carnage",
-  "physicalBoardId": "labyrinth-gear-box",
-  "image": "./assets/boards/gear-box.jpg",
   "kind": "base",
   "width": 12,
   "height": 12,
@@ -266,12 +263,30 @@
       ]
     },
     {
+      "x": 2,
+      "y": 2,
+      "features": [
+        {
+          "type": "pit"
+        }
+      ]
+    },
+    {
       "x": 3,
       "y": 2,
       "features": [
         {
           "type": "gear",
           "rotation": "ccw"
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 2,
+      "features": [
+        {
+          "type": "pit"
         }
       ]
     },
@@ -470,11 +485,29 @@
       ]
     },
     {
+      "x": 2,
+      "y": 4,
+      "features": [
+        {
+          "type": "pit"
+        }
+      ]
+    },
+    {
       "x": 3,
       "y": 4,
       "features": [
         {
           "type": "battery"
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 4,
+      "features": [
+        {
+          "type": "pit"
         }
       ]
     },
@@ -1158,6 +1191,12 @@
           "type": "laser",
           "dir": "S",
           "damage": 1
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
         }
       ]
     },
@@ -1345,5 +1384,8 @@
         }
       ]
     }
-  ]
+  ],
+  "expansionId": "chaos-and-carnage",
+  "physicalBoardId": "labyrinth-gear-box",
+  "image": "./assets/boards/gear-box.jpg"
 }

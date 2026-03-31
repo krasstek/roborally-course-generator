@@ -2,9 +2,6 @@
   "id": "laser-maze",
   "name": "Laser Maze",
   "kind": "base",
-  "expansionId": "chaos-and-carnage",
-  "physicalBoardId": "laser-maze-pushy",
-  "image": "./assets/boards/laser-maze.jpeg",
   "width": 12,
   "height": 12,
   "mergeMode": "base",
@@ -1072,6 +1069,12 @@
           "type": "laser",
           "dir": "W",
           "damage": 2
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "W"
+          ]
         }
       ]
     },
@@ -1674,5 +1677,8 @@
         }
       ]
     }
-  ]
+  ],
+  "expansionId": "chaos-and-carnage",
+  "physicalBoardId": "laser-maze-pushy",
+  "image": "./assets/boards/laser-maze.jpeg"
 }

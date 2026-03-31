@@ -1,10 +1,10 @@
 {
   "id": "water-park",
   "name": "Water Park",
+  "kind": "base",
   "expansionId": "wet-and-wild",
   "physicalBoardId": "circuit-trap-water-park",
   "image": "./assets/boards/water-park.jpeg",
-  "kind": "base",
   "width": 12,
   "height": 12,
   "mergeMode": "base",
@@ -1160,6 +1160,10 @@
           "sides": [
             "W"
           ]
+        },
+        {
+          "type": "ramp",
+          "dir": "N"
         }
       ]
     },
@@ -1225,6 +1229,12 @@
           "type": "belt",
           "dir": "W",
           "speed": 1
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "N"
+          ]
         },
         {
           "type": "water"
@@ -1293,6 +1303,12 @@
           "type": "laser",
           "dir": "S",
           "damage": 1
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "S"
+          ]
         }
       ]
     },

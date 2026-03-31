@@ -76,26 +76,30 @@ const VARIANT_COMPLEXITY = {
 };
 const AUDIT_RENDER_TILE_SIZE = 40;
 const AUDIT_RENDER_MARGIN = 30;
+const BOARD_VIEW_MODES = {
+  photos: "photos",
+  icons: "icons"
+};
 const AUDIT_FEATURE_TYPES = [
-  { id: "wall", label: "Walls" },
-  { id: "belt", label: "Belts" },
-  { id: "laser", label: "Lasers" },
-  { id: "pit", label: "Pits" },
-  { id: "gear", label: "Gears" },
-  { id: "push", label: "Push Panels" },
-  { id: "flamethrower", label: "Flamethrowers" },
-  { id: "crusher", label: "Crushers" },
-  { id: "portal", label: "Portals" },
-  { id: "teleporter", label: "Teleporters" },
-  { id: "randomizer", label: "Randomizers" },
-  { id: "water", label: "Water" },
-  { id: "oil", label: "Oil" },
-  { id: "ledge", label: "Ledges" },
-  { id: "ramp", label: "Ramps" },
-  { id: "checkpoint", label: "Checkpoints" },
   { id: "battery", label: "Batteries" },
-  { id: "start", label: "Starts" }
-];
+  { id: "belt", label: "Belts" },
+  { id: "checkpoint", label: "Checkpoints" },
+  { id: "crusher", label: "Crushers" },
+  { id: "flamethrower", label: "Flamethrowers" },
+  { id: "gear", label: "Gears" },
+  { id: "laser", label: "Lasers" },
+  { id: "ledge", label: "Ledges" },
+  { id: "oil", label: "Oil" },
+  { id: "pit", label: "Pits" },
+  { id: "portal", label: "Portals" },
+  { id: "push", label: "Push Panels" },
+  { id: "randomizer", label: "Randomizers" },
+  { id: "ramp", label: "Ramps" },
+  { id: "start", label: "Starts" },
+  { id: "teleporter", label: "Teleporters" },
+  { id: "wall", label: "Walls" },
+  { id: "water", label: "Water" }
+].sort((left, right) => left.label.localeCompare(right.label));
 const PIECE_DATA_FILES = [
   "all-roads",
   "assembly",
@@ -645,6 +649,63 @@ function summarizeFeature(feature) {
   }
 }
 
+function getFeatureTypeSymbol(featureType) {
+  switch (featureType) {
+    case "wall":
+      return "[]";
+    case "belt":
+      return "->";
+    case "laser":
+      return "*>";
+    case "pit":
+      return "O";
+    case "gear":
+      return "@";
+    case "push":
+      return ">>";
+    case "flamethrower":
+      return "~*";
+    case "crusher":
+      return "||";
+    case "portal":
+      return "OO";
+    case "teleporter":
+      return "()";
+    case "randomizer":
+      return "?";
+    case "water":
+      return "~~";
+    case "oil":
+      return "o";
+    case "ledge":
+      return "_|";
+    case "ramp":
+      return "/_";
+    case "checkpoint":
+      return "F";
+    case "battery":
+      return "+|";
+    case "start":
+      return "S>";
+    default:
+      return featureType.slice(0, 2).toUpperCase();
+  }
+}
+
+function buildAuditFeatureFilterLabel(feature) {
+  const fragment = document.createDocumentFragment();
+  const symbol = document.createElement("span");
+  symbol.className = "audit-filter-symbol";
+  symbol.textContent = getFeatureTypeSymbol(feature.id);
+  symbol.setAttribute("aria-hidden", "true");
+
+  const text = document.createElement("span");
+  text.textContent = feature.label;
+
+  fragment.append(symbol, text);
+  return fragment;
+}
+
 function getAuditBoardOptions(pieceMap) {
   return Object.values(pieceMap)
     .filter((piece) => piece.image && piece.width > 0 && piece.height > 0)
@@ -829,11 +890,12 @@ function renderBoardAudit(assets) {
   drawAuditImageCanvas(imageCanvas, piece, assets.imageMap[piece.id], boardAuditState.hoverTile);
   render(jsonCanvas, assets.pieceMap, assets.imageMap, {
     placements: [{ pieceId: piece.id, x: 0, y: 0, rotation: 0 }],
-    showBoardLabels: true,
+    showBoardLabels: false,
     showStartFacing: true,
     showWalls: true,
     showPieceImages: false,
     showFootprints: false,
+    showFeatureIcons: true,
     visibleFeatureTypes: boardAuditState.selectedFeatures
   });
   drawAuditRenderHover(jsonCanvas, piece, boardAuditState.hoverTile);
@@ -895,7 +957,7 @@ function initializeBoardAudit(assets) {
       renderBoardAudit(assets);
     });
 
-    label.append(input, document.createTextNode(feature.label));
+    label.append(input, buildAuditFeatureFilterLabel(feature));
     featureFilters.appendChild(label);
   });
 
@@ -4570,6 +4632,10 @@ function isBoardAuditEnabled() {
   return document.getElementById("board-audit-toggle")?.checked ?? false;
 }
 
+function getBoardViewMode() {
+  return document.getElementById("board-view-mode")?.value ?? BOARD_VIEW_MODES.photos;
+}
+
 function updateDevView() {
   const enabled = isDevViewEnabled();
   document.getElementById("trace-leg-label")?.classList.toggle("hidden", !enabled);
@@ -4622,6 +4688,8 @@ function renderScenario(scenario) {
     : selectedLegIndex === 0
       ? scenario.sequence.firstLeg
       : { routes: displayedLeg.analysis.distinctRoutes };
+  const boardViewMode = getBoardViewMode();
+  const iconBoardView = boardViewMode === BOARD_VIEW_MODES.icons;
   const unusableStartIndices = scenario.sequence.firstLeg.starts
     .filter((startAnalysis) => !scenario.metrics.usableStarts.some((item) => item.index === startAnalysis.index))
     .map((startAnalysis) => startAnalysis.index);
@@ -4637,9 +4705,12 @@ function renderScenario(scenario) {
     tileMap: scenario.goalTileMap,
     unusableStartIndices,
     edgeOutlineColor: scenario.lessDeadlyGame ? "#f2c230" : null,
-    showBoardLabels: devViewEnabled && selectedLegIndex !== null,
+    showBoardLabels: devViewEnabled && selectedLegIndex !== null && !iconBoardView,
     showStartFacing: devViewEnabled && selectedLegIndex !== null,
-    showWalls: devViewEnabled && selectedLegIndex !== null
+    showWalls: iconBoardView || (devViewEnabled && selectedLegIndex !== null),
+    showPieceImages: !iconBoardView,
+    showFootprints: iconBoardView,
+    showFeatureIcons: iconBoardView
   });
 
   if (devViewEnabled) {
@@ -5277,6 +5348,12 @@ document.getElementById("about-dialog").addEventListener("click", (event) => {
 });
 
 document.getElementById("leg-select").addEventListener("change", () => {
+  if (currentScenario) {
+    renderScenario(currentScenario);
+  }
+});
+
+document.getElementById("board-view-mode").addEventListener("change", () => {
   if (currentScenario) {
     renderScenario(currentScenario);
   }

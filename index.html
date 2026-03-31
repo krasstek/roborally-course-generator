@@ -499,6 +499,20 @@
       flex: 0 0 auto;
     }
 
+    .audit-filter-symbol {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 28px;
+      padding: 3px 6px;
+      border-radius: 999px;
+      background: rgba(16, 23, 30, 0.36);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      color: #f6f8f9;
+      font: 700 11px/1 "Courier New", monospace;
+      letter-spacing: 0.02em;
+    }
+
     .audit-boards {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -777,6 +791,13 @@
             <option value="long">Long</option>
           </select>
         </label>
+        <label>
+          Board View
+          <select id="board-view-mode">
+            <option value="photos" selected>Board Photos</option>
+            <option value="icons">Icon View</option>
+          </select>
+        </label>
         <label class="variant-field">
           Sets
           <details class="variant-picker">
@@ -860,7 +881,7 @@
         <div class="audit-header">
           <div>
             <h2 class="audit-title">Board Audit</h2>
-            <p class="audit-copy">Compare a source board image against its encoded JSON. Hover either pane to inspect the same tile on both sides and leave local feedback notes.</p>
+            <p class="audit-copy">Compare a source board image against its encoded icon view. Hover either pane to inspect the same tile on both sides and leave local feedback notes.</p>
           </div>
         </div>
         <div class="audit-controls">
@@ -880,7 +901,7 @@
             <canvas id="audit-image-canvas" class="audit-canvas"></canvas>
           </div>
           <div class="audit-card">
-            <h3>Encoded JSON</h3>
+            <h3>Encoded Icons</h3>
             <canvas id="audit-json-canvas" class="audit-canvas"></canvas>
           </div>
         </div>

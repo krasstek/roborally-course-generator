@@ -1,9 +1,6 @@
 {
   "id": "portal-palace",
   "name": "Portal Palace",
-  "expansionId": "thrills-and-spills",
-  "physicalBoardId": "gauntlet-of-fire-portal-palace",
-  "image": "./assets/boards/portal-palace.jpeg",
   "kind": "base",
   "width": 12,
   "height": 12,
@@ -189,10 +186,9 @@
           "speed": 2
         },
         {
-          "type": "ledge",
-          "sides": [
-            "W"
-          ]
+          "type": "laser",
+          "dir": "W",
+          "damage": 1
         }
       ]
     },
@@ -206,10 +202,9 @@
           "speed": 2
         },
         {
-          "type": "ledge",
-          "sides": [
-            "W"
-          ]
+          "type": "laser",
+          "dir": "W",
+          "damage": 1
         }
       ]
     },
@@ -223,10 +218,9 @@
           "speed": 2
         },
         {
-          "type": "ledge",
-          "sides": [
-            "W"
-          ]
+          "type": "laser",
+          "dir": "W",
+          "damage": 1
         }
       ]
     },
@@ -235,16 +229,15 @@
       "y": 2,
       "features": [
         {
+          "type": "laser",
+          "dir": "W",
+          "damage": 1
+        },
+        {
           "type": "wall",
           "sides": [
             "E",
             "S"
-          ]
-        },
-        {
-          "type": "ledge",
-          "sides": [
-            "W"
           ]
         }
       ]
@@ -500,6 +493,15 @@
       ]
     },
     {
+      "x": 10,
+      "y": 4,
+      "features": [
+        {
+          "type": "oil"
+        }
+      ]
+    },
+    {
       "x": 1,
       "y": 5,
       "features": [
@@ -512,6 +514,11 @@
       "x": 2,
       "y": 5,
       "features": [
+        {
+          "type": "laser",
+          "dir": "E",
+          "damage": 1
+        },
         {
           "type": "wall",
           "sides": [
@@ -532,6 +539,11 @@
       "y": 5,
       "features": [
         {
+          "type": "laser",
+          "dir": "E",
+          "damage": 1
+        },
+        {
           "type": "ledge",
           "sides": [
             "E"
@@ -543,6 +555,11 @@
       "x": 4,
       "y": 5,
       "features": [
+        {
+          "type": "laser",
+          "dir": "E",
+          "damage": 1
+        },
         {
           "type": "ledge",
           "sides": [
@@ -632,10 +649,9 @@
       "y": 6,
       "features": [
         {
-          "type": "ledge",
-          "sides": [
-            "W"
-          ]
+          "type": "laser",
+          "dir": "W",
+          "damage": 1
         }
       ]
     },
@@ -644,10 +660,9 @@
       "y": 6,
       "features": [
         {
-          "type": "ledge",
-          "sides": [
-            "W"
-          ]
+          "type": "laser",
+          "dir": "W",
+          "damage": 1
         }
       ]
     },
@@ -656,10 +671,9 @@
       "y": 6,
       "features": [
         {
-          "type": "ledge",
-          "sides": [
-            "W"
-          ]
+          "type": "laser",
+          "dir": "W",
+          "damage": 1
         }
       ]
     },
@@ -668,10 +682,9 @@
       "y": 6,
       "features": [
         {
-          "type": "ledge",
-          "sides": [
-            "W"
-          ]
+          "type": "laser",
+          "dir": "W",
+          "damage": 1
         }
       ]
     },
@@ -680,10 +693,9 @@
       "y": 6,
       "features": [
         {
-          "type": "ledge",
-          "sides": [
-            "W"
-          ]
+          "type": "laser",
+          "dir": "W",
+          "damage": 1
         }
       ]
     },
@@ -692,16 +704,15 @@
       "y": 6,
       "features": [
         {
+          "type": "laser",
+          "dir": "S",
+          "damage": 1
+        },
+        {
           "type": "wall",
           "sides": [
             "N",
             "W"
-          ]
-        },
-        {
-          "type": "ledge",
-          "sides": [
-            "S"
           ]
         }
       ]
@@ -814,10 +825,9 @@
       "y": 7,
       "features": [
         {
-          "type": "ledge",
-          "sides": [
-            "S"
-          ]
+          "type": "laser",
+          "dir": "S",
+          "damage": 1
         }
       ]
     },
@@ -927,10 +937,9 @@
           "speed": 2
         },
         {
-          "type": "ledge",
-          "sides": [
-            "S"
-          ]
+          "type": "laser",
+          "dir": "S",
+          "damage": 1
         }
       ]
     },
@@ -1033,10 +1042,9 @@
       "y": 9,
       "features": [
         {
-          "type": "ledge",
-          "sides": [
-            "S"
-          ]
+          "type": "laser",
+          "dir": "S",
+          "damage": 1
         }
       ]
     },
@@ -1163,15 +1171,14 @@
       "y": 10,
       "features": [
         {
-          "type": "wall",
-          "sides": [
-            "S",
-            "W"
-          ]
+          "type": "laser",
+          "dir": "S",
+          "damage": 1
         },
         {
-          "type": "ledge",
+          "type": "wall",
           "sides": [
+            "E",
             "S"
           ]
         }
@@ -1230,5 +1237,8 @@
         }
       ]
     }
-  ]
+  ],
+  "expansionId": "thrills-and-spills",
+  "physicalBoardId": "gauntlet-of-fire-portal-palace",
+  "image": "./assets/boards/portal-palace.jpeg"
 }

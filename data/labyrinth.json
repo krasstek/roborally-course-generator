@@ -1,9 +1,6 @@
 {
   "id": "labyrinth",
   "name": "Labyrinth",
-  "expansionId": "chaos-and-carnage",
-  "physicalBoardId": "labyrinth-gear-box",
-  "image": "./assets/boards/labyrinth.jpg",
   "kind": "base",
   "width": 12,
   "height": 12,
@@ -53,6 +50,12 @@
       "x": 6,
       "y": 0,
       "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "W"
+          ]
+        },
         {
           "type": "teleporter",
           "power": 2
@@ -148,6 +151,18 @@
           "type": "laser",
           "dir": "E",
           "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 1,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "W"
+          ]
         }
       ]
     },
@@ -311,6 +326,13 @@
           "type": "belt",
           "dir": "N",
           "speed": 1
+        },
+        {
+          "type": "crusher",
+          "timing": [
+            3,
+            5
+          ]
         }
       ]
     },
@@ -1699,5 +1721,8 @@
         }
       ]
     }
-  ]
+  ],
+  "expansionId": "chaos-and-carnage",
+  "physicalBoardId": "labyrinth-gear-box",
+  "image": "./assets/boards/labyrinth.jpg"
 }

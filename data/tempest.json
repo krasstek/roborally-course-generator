@@ -1,9 +1,6 @@
 {
   "id": "tempest",
   "name": "Tempest",
-  "expansionId": "roborally",
-  "physicalBoardId": "the-keep-tempest",
-  "image": "./assets/boards/tempest.jpeg",
   "kind": "base",
   "width": 12,
   "height": 12,
@@ -124,7 +121,7 @@
       "features": [
         {
           "type": "belt",
-          "dir": "E",
+          "dir": "W",
           "speed": 2
         }
       ]
@@ -231,7 +228,7 @@
       "features": [
         {
           "type": "belt",
-          "dir": "W",
+          "dir": "E",
           "speed": 2
         }
       ]
@@ -335,7 +332,7 @@
       "features": [
         {
           "type": "belt",
-          "dir": "W",
+          "dir": "E",
           "speed": 2
         }
       ]
@@ -1366,5 +1363,8 @@
         }
       ]
     }
-  ]
+  ],
+  "expansionId": "roborally",
+  "physicalBoardId": "the-keep-tempest",
+  "image": "./assets/boards/tempest.jpeg"
 }

@@ -1,9 +1,6 @@
 {
   "id": "transition",
   "name": "Transition",
-  "expansionId": "wet-and-wild",
-  "physicalBoardId": "transition-coliseum",
-  "image": "./assets/boards/transition.jpg",
   "kind": "base",
   "width": 12,
   "height": 12,
@@ -833,12 +830,17 @@
           "sides": [
             "E"
           ]
-        },
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 6,
+      "features": [
         {
-          "type": "crusher",
-          "timing": [
-            3
-          ]
+          "type": "belt",
+          "dir": "E",
+          "speed": 2
         }
       ]
     },
@@ -847,9 +849,25 @@
       "y": 6,
       "features": [
         {
+          "type": "belt",
+          "dir": "E",
+          "speed": 2
+        },
+        {
           "type": "laser",
           "dir": "N",
           "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 6,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 2
         }
       ]
     },
@@ -1616,5 +1634,8 @@
         }
       ]
     }
-  ]
+  ],
+  "expansionId": "wet-and-wild",
+  "physicalBoardId": "transition-coliseum",
+  "image": "./assets/boards/transition.jpg"
 }

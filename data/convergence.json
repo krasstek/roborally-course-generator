@@ -1,9 +1,6 @@
 {
   "id": "convergence",
   "name": "Convergence",
-  "expansionId": "master-builder",
-  "physicalBoardId": "convergence-the-oval",
-  "image": "./assets/boards/convergence.jpg",
   "kind": "small",
   "width": 6,
   "height": 6,
@@ -29,6 +26,12 @@
           "type": "laser",
           "dir": "N",
           "damage": 1
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
         }
       ]
     },
@@ -237,5 +240,8 @@
         }
       ]
     }
-  ]
+  ],
+  "expansionId": "master-builder",
+  "physicalBoardId": "convergence-the-oval",
+  "image": "./assets/boards/convergence.jpg"
 }
