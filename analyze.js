@@ -1678,7 +1678,7 @@ function averageCrossLegThreat(tileMap, routes, previousLegRoutes) {
   return average(values);
 }
 
-function analyzeGoalApproaches(tileMap, goal, options = {}) {
+export function analyzeGoalApproaches(tileMap, goal, options = {}) {
   const lessDeadlyGame = options.lessDeadlyGame ?? false;
   const approaches = [
     { side: "N", from: { x: goal.x, y: goal.y - 1 }, dir: "S" },
@@ -1717,7 +1717,7 @@ function analyzeGoalApproaches(tileMap, goal, options = {}) {
   };
 }
 
-function scoreFlagArea(tileMap, goal, options = {}) {
+export function scoreFlagArea(tileMap, goal, options = {}) {
   let score = 0;
   const playerCount = options.playerCount ?? 1;
   const trafficScale = playerCount <= 1 ? 0 : Math.min(1, (playerCount - 1) / 3);

@@ -4,7 +4,7 @@ const versionedPath = (path) => `${path}${VERSION_SUFFIX}`;
 
 const [
   { render },
-  { analyzeCourse, analyzeFlagLeg },
+  { analyzeCourse, analyzeFlagLeg, analyzeGoalApproaches, scoreFlagArea },
   {
     buildMainFootprintTiles,
     buildResolvedMap,
@@ -1298,6 +1298,109 @@ function getMeaningfulVariantReasons(scenario) {
   };
 }
 
+function scoreLegDifficultyForExplanation(leg, isFirstLeg = false) {
+  if (!leg?.analysis?.summary) {
+    return 0;
+  }
+
+  const summary = leg.analysis.summary;
+  return isFirstLeg
+    ? summary.difficultyScore ?? 0
+    : (
+      (summary.averageRouteScore ?? 0) +
+      (summary.congestionScore ?? 0) * 0.45 -
+      (summary.diversityScore ?? 0) * 0.18 +
+      (summary.crossLegOverlap ?? 0) * 6
+    );
+}
+
+function getCheckpointDifficultyReason(scenario, difficultyBand) {
+  const legs = scenario.sequence?.legs || [];
+  if (!legs.length) {
+    return null;
+  }
+
+  const scoredLegs = legs.map((leg, index) => ({
+    checkpoint: leg.to,
+    from: leg.from,
+    score: scoreLegDifficultyForExplanation(leg, index === 0),
+    goal: leg.analysis?.goal ?? null,
+    summary: leg.analysis?.summary ?? {}
+  })).filter((entry) => Number.isFinite(entry.score));
+
+  if (scoredLegs.length < 2) {
+    return null;
+  }
+
+  const mean = averageValues(scoredLegs.map((entry) => entry.score));
+
+  if (difficultyBand === "hard") {
+    const standout = scoredLegs.reduce((best, entry) => (
+      !best || entry.score > best.score ? entry : best
+    ), null);
+    if (!standout || standout.score - mean < 14) {
+      return null;
+    }
+
+    const approachSummary = standout.goal
+      ? analyzeGoalApproaches(scenario.goalTileMap, standout.goal, {
+        lessDeadlyGame: scenario.lessDeadlyGame
+      })
+      : null;
+    const reasons = [];
+    if (approachSummary && (approachSummary.openCount <= 2 || approachSummary.trappedCorners >= 1)) {
+      reasons.push(
+        approachSummary.openCount <= 1
+          ? `Checkpoint ${standout.checkpoint} has only one clean entry side`
+          : `Checkpoint ${standout.checkpoint} has only ${approachSummary.openCount} clean entry sides`
+      );
+    }
+    if ((standout.summary.congestionScore ?? 0) >= 16) {
+      reasons.push(`route congestion is high near Checkpoint ${standout.checkpoint}`);
+    }
+    if ((standout.summary.crossLegOverlap ?? 0) >= 1.2) {
+      reasons.push(`routes into Checkpoint ${standout.checkpoint} overlap heavily with earlier lines`);
+    }
+    if (!approachSummary && (standout.summary.distinctRouteCount ?? 0) <= 2) {
+      reasons.push(`there are not many clean route options into Checkpoint ${standout.checkpoint}`);
+    }
+
+    if (!reasons.length) {
+      reasons.push(`Checkpoint ${standout.checkpoint} has much higher route pressure than the rest of the course`);
+    }
+
+    return joinReasonParts(reasons.slice(0, 2));
+  }
+
+  if (difficultyBand === "easy") {
+    const standout = scoredLegs.reduce((best, entry) => (
+      !best || entry.score < best.score ? entry : best
+    ), null);
+    if (!standout || mean - standout.score < 12) {
+      return null;
+    }
+
+    const reasons = [];
+    if ((standout.summary.congestionScore ?? 0) <= 8) {
+      reasons.push(`traffic stays light around Checkpoint ${standout.checkpoint}`);
+    }
+    if ((standout.summary.crossLegOverlap ?? 0) <= 0.45) {
+      reasons.push(`Checkpoint ${standout.checkpoint} does not force much backtracking`);
+    }
+    if (!standout.goal && (standout.summary.distinctRouteCount ?? 0) >= 3) {
+      reasons.push(`Checkpoint ${standout.checkpoint} has several clean route options`);
+    }
+
+    if (!reasons.length) {
+      reasons.push(`Checkpoint ${standout.checkpoint} is much more forgiving than the rest of the course`);
+    }
+
+    return joinReasonParts(reasons.slice(0, 2));
+  }
+
+  return null;
+}
+
 function buildCourseExplanationHtml(scenario, noteParts = []) {
   const parts = [];
   const firstLeg = scenario.sequence.firstLeg.summary;
@@ -1309,9 +1412,6 @@ function buildCourseExplanationHtml(scenario, noteParts = []) {
   const lengthBand = describeCourseLengthBand(scenario.metrics.lengthRaw);
   const openingForcedDistance = openingRoutes.length
     ? averageValues(openingRoutes.map((route) => route.forcedDistance || 0))
-    : 0;
-  const openingActionLoad = openingRoutes.length
-    ? averageValues(openingRoutes.map((route) => route.actions || 0))
     : 0;
   const openingFacingChanges = openingRoutes.length
     ? averageValues(openingRoutes.map((route) => {
@@ -1336,14 +1436,8 @@ function buildCourseExplanationHtml(scenario, noteParts = []) {
   const variantReasons = getMeaningfulVariantReasons(scenario);
 
   if (difficultyBand === "hard") {
-    if (firstLeg.difficultyScore >= 72) {
-      if (openingForcedDistance >= 3.5 || openingFacingChanges >= 2.2) {
-        difficultyReasons.push("the opening run includes several forced moves and facing changes");
-      } else if (openingActionLoad >= 7.5) {
-        difficultyReasons.push("the opening run asks for a long programmed sequence");
-      } else {
-        difficultyReasons.push("the opening run to the first checkpoint is punishing");
-      }
+    if (firstLeg.difficultyScore >= 72 && (openingForcedDistance >= 3.5 || openingFacingChanges >= 2.2)) {
+      difficultyReasons.push("the opening run includes several forced moves and facing changes");
     }
     if (firstLeg.averageTrafficPenalty >= 18 || avgCongestion >= 18) {
       difficultyReasons.push("traffic builds up around key routes");
@@ -1387,8 +1481,6 @@ function buildCourseExplanationHtml(scenario, noteParts = []) {
     if (firstLeg.difficultyScore >= 60) {
       if (openingForcedDistance >= 2.5 || openingFacingChanges >= 1.4) {
         difficultyReasons.push("the opening run includes a few forced moves and facing changes");
-      } else {
-        difficultyReasons.push("the opening run asks for some careful programming");
       }
     }
     if (firstLeg.averageTrafficPenalty >= 14 || avgCongestion >= 14) {
@@ -1407,6 +1499,10 @@ function buildCourseExplanationHtml(scenario, noteParts = []) {
   }
 
   const uniqueDifficultyReasons = difficultyReasons.filter((reason, index, list) => list.indexOf(reason) === index);
+  const checkpointDifficultyReason = getCheckpointDifficultyReason(scenario, difficultyBand);
+  if (checkpointDifficultyReason) {
+    uniqueDifficultyReasons.push(checkpointDifficultyReason);
+  }
 
   const contributionEntries = Object.entries(scenario.metrics.lengthMetrics?.contributions || {})
     .filter(([id, value]) => value > 0 && (formatContributionLabel(id) || formatShortLengthReliefLabel(id)))
@@ -4542,7 +4638,24 @@ function collectUsedBoardIndices(sequence, boardPlacements, pieceMap, usableStar
   return used;
 }
 
-function computeDifficultyRaw(sequence) {
+function computeLaterCheckpointPressure(tileMap, checkpoints = [], preferences = {}) {
+  if (!tileMap || checkpoints.length <= 1) {
+    return 0;
+  }
+
+  const laterScores = checkpoints
+    .slice(1)
+    .map((checkpoint) => scoreFlagArea(tileMap, checkpoint, {
+      playerCount: preferences.playerCount,
+      lessDeadlyGame: preferences.lessDeadlyGame,
+      lighterGame: preferences.lighterGame
+    }))
+    .filter((score) => Number.isFinite(score));
+
+  return laterScores.length ? Number(averageValues(laterScores).toFixed(2)) : 0;
+}
+
+function computeDifficultyRaw(sequence, checkpointPressure = 0) {
   const first = sequence.firstLeg.summary;
   const later = sequence.legs.slice(1);
   const avgLegScore = later.length ? later.reduce((sum, leg) => sum + leg.analysis.summary.averageRouteScore, 0) / later.length : 0;
@@ -4556,6 +4669,7 @@ function computeDifficultyRaw(sequence) {
     first.flagAreaScore * 1.15 +
     avgLegScore * 0.32 +
     avgCongestion * 0.65 +
+    checkpointPressure * 0.42 +
     avgBacktrack * 20 -
     avgDiversity * 0.45
   ).toFixed(2));
@@ -4756,10 +4870,15 @@ function classifyCandidate(sequence, preferences, context = {}) {
   const usableStarts = computeUsableStarts(sequence.firstLeg, preferences);
   const boardHarshness = computeBoardHarshness(context.boardPlacements, context.pieceMap);
   const fairnessStdDev = sequence.firstLeg.summary.scoreStdDev;
+  const checkpointPressure = computeLaterCheckpointPressure(
+    context.tileMap,
+    context.checkpoints,
+    preferences
+  );
   const movingTargetStats = preferences.movingTargets
     ? summarizeMovingTargets(context.tileMap, context.checkpoints)
     : summarizeMovingTargets(null, []);
-  let difficultyRaw = applyVariantDifficultyModifiers(computeDifficultyRaw(sequence), {
+  let difficultyRaw = applyVariantDifficultyModifiers(computeDifficultyRaw(sequence, checkpointPressure), {
     ...preferences,
     movingTargetStats
   }, boardHarshness);
@@ -4853,6 +4972,7 @@ function classifyCandidate(sequence, preferences, context = {}) {
     lengthFit,
     lengthDirection,
     fairnessStdDev,
+    checkpointPressure,
     movingTargetStats,
     movingTargetVolatilityPenalty,
     acceptable: hardFailures.length === 0 && difficultyFit === 0 && lengthFit === 0,
