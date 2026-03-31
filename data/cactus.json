@@ -1,9 +1,6 @@
 {
   "id": "cactus",
   "name": "Cactus",
-  "expansionId": "roborally",
-  "physicalBoardId": "cactus-sidewinder",
-  "image": "./assets/boards/cactus.jpeg",
   "kind": "base",
   "width": 12,
   "height": 12,
@@ -270,6 +267,17 @@
       ]
     },
     {
+      "x": 6,
+      "y": 2,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
       "x": 7,
       "y": 2,
       "features": [
@@ -703,9 +711,8 @@
       "y": 6,
       "features": [
         {
-          "type": "belt",
-          "dir": "E",
-          "speed": 1
+          "type": "checkpoint",
+          "id": 1
         }
       ]
     },
@@ -1149,16 +1156,9 @@
           "speed": 2
         }
       ]
-    },
-    {
-      "x": 6,
-      "y": 6,
-      "features": [
-        {
-          "type": "checkpoint",
-          "id": 1
-        }
-      ]
     }
-  ]
+  ],
+  "expansionId": "roborally",
+  "physicalBoardId": "cactus-sidewinder",
+  "image": "./assets/boards/cactus.jpeg"
 }
