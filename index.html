@@ -2,7 +2,20 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#20252a" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="RoboRally" />
+  <meta name="application-name" content="RoboRally Course Generator" />
+  <meta name="app-version" content="2026-04-01-1" />
   <title>RoboRally Course Generator</title>
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="icon" type="image/png" sizes="16x16" href="./assets/icons/favicon-16.png" />
+  <link rel="icon" type="image/png" sizes="24x24" href="./assets/icons/favicon-24.png" />
+  <link rel="icon" type="image/png" sizes="32x32" href="./assets/icons/favicon-32.png" />
+  <link rel="icon" href="./assets/icons/favicon.ico" sizes="any" />
+  <link rel="apple-touch-icon" href="./assets/icons/apple-touch-icon.png" />
   <style>
     :root {
       --bg-top: #20252a;
@@ -1019,7 +1032,18 @@
     </div>
   </dialog>
   <script type="module">
-    const assetVersion = Date.now().toString();
+    const assetVersion = document
+      .querySelector('meta[name="app-version"]')
+      ?.getAttribute("content") ?? "dev";
+
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker
+          .register(`./sw.js?v=${encodeURIComponent(assetVersion)}`, { scope: "./" })
+          .catch(console.error);
+      });
+    }
+
     import(`./main.js?v=${encodeURIComponent(assetVersion)}`).catch(console.error);
   </script>
 </body>
