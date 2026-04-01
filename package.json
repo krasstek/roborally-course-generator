@@ -2,6 +2,11 @@
   "name": "roborally",
   "private": true,
   "scripts": {
+    "version:stamp": "node ./scripts/stamp-version.js",
+    "predev": "npm run version:stamp",
     "dev": "serve ."
+  },
+  "devDependencies": {
+    "serve": "^14.2.4"
   }
 }
