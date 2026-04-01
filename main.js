@@ -1933,11 +1933,10 @@ function chooseVariantBundle(preferences = {}) {
   const forcedEntries = definitions.filter((entry) => getVariantPreferenceState(preferences, entry.id) === "forced");
   forcedEntries.forEach((entry) => {
     active[entry.id] = true;
-    usedBudget += entry.cost;
   });
 
   const sampledBudget = sampleVariantComplexityBudget(preferences);
-  const budget = Math.max(sampledBudget, usedBudget);
+  const budget = sampledBudget;
   const allowedEntries = definitions
     .filter((entry) => getVariantPreferenceState(preferences, entry.id) === "allowed")
     .map((entry) => ({
