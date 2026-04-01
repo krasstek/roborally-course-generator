@@ -1,9 +1,6 @@
 {
   "id": "assembly",
   "name": "Assembly",
-  "expansionId": "master-builder",
-  "physicalBoardId": "assembly-the-x",
-  "image": "./assets/boards/assembly.jpg",
   "kind": "small",
   "width": 6,
   "height": 6,
@@ -169,7 +166,9 @@
       "y": 3,
       "features": [
         {
-          "type": "battery"
+          "type": "belt",
+          "dir": "S",
+          "speed": 2
         }
       ]
     },
@@ -178,7 +177,9 @@
       "y": 3,
       "features": [
         {
-          "type": "battery"
+          "type": "belt",
+          "dir": "W",
+          "speed": 2
         }
       ]
     },
@@ -208,7 +209,9 @@
       "y": 4,
       "features": [
         {
-          "type": "battery"
+          "type": "belt",
+          "dir": "N",
+          "speed": 2
         }
       ]
     },
@@ -229,9 +232,14 @@
       "y": 5,
       "features": [
         {
-          "type": "battery"
+          "type": "belt",
+          "dir": "N",
+          "speed": 2
         }
       ]
     }
-  ]
+  ],
+  "expansionId": "master-builder",
+  "physicalBoardId": "assembly-the-x",
+  "image": "./assets/boards/assembly.jpg"
 }

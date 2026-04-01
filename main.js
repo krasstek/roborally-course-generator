@@ -1163,8 +1163,8 @@ function describeCourseLengthText(rawLength) {
 function describeDifficultyLead(scenario) {
   if (scenario.preferences.difficulty !== "any" && scenario.metrics.difficultyDirection !== "matched") {
     return scenario.metrics.difficultyDirection === "low"
-      ? "It comes out easier than requested"
-      : "It comes out harder than requested";
+      ? "The course comes out easier than requested"
+      : "The course comes out harder than requested";
   }
 
   return `It plays ${describeCourseDifficultyText(scenario.metrics.difficultyRaw)}`;
@@ -1173,11 +1173,11 @@ function describeDifficultyLead(scenario) {
 function describeLengthLead(scenario) {
   if (scenario.preferences.length !== "any" && scenario.metrics.lengthDirection !== "matched") {
     return scenario.metrics.lengthDirection === "low"
-      ? "It comes out shorter than requested"
-      : "It comes out longer than requested";
+      ? "The course comes out shorter than requested"
+      : "The course comes out longer than requested";
   }
 
-  return `It plays ${describeCourseLengthText(scenario.metrics.lengthRaw)}`;
+  return `The course plays ${describeCourseLengthText(scenario.metrics.lengthRaw)}`;
 }
 
 function formatContributionLabel(id) {
@@ -1644,13 +1644,13 @@ function hasMovingTargetsEffect(scenario) {
 function getActFastRuleText(mode) {
   switch (mode) {
     case "countdown_3m":
-      return "Act Fast: use a 3-minute programming timer. Empty registers are filled randomly when time runs out (Game Guide p. 32).";
+      return "Act Fast: use a 3-minute programming timer. (Game Guide p. 32).";
     case "countdown_2m":
-      return "Act Fast: use a 2-minute programming timer. Empty registers are filled randomly when time runs out (Game Guide p. 32).";
+      return "Act Fast: use a 2-minute programming timer. (Game Guide p. 32).";
     case "countdown_1m":
-      return "Act Fast: use a 1-minute programming timer. Empty registers are filled randomly when time runs out (Altered from Game Guide p. 32).";
+      return "Act Fast: use a 1-minute programming timer. (Altered from Game Guide p. 32).";
     case "countdown_30s":
-      return "Act Fast: use a 30-second programming timer. Empty registers are filled randomly when time runs out (Altered from Game Guide p. 32).";
+      return "Act Fast: use a 30-second programming timer. (Altered from Game Guide p. 32).";
     case "last_player_30s":
       return "Act Fast: when only one player remains, that player has 30 seconds to finish programming (Previous Robo Rally editions).";
     default:
@@ -1693,11 +1693,11 @@ function updateRulesNote(scenario) {
   }
 
   if (!scenario.hazardousFlags && hasSuppressedCheckpointFeatures(scenario)) {
-    checkpointNotes.push("Checkpoint spaces suppress board elements other than walls and lasers (and flamethrowers) (Game Guide p. 15).");
+    checkpointNotes.push("Checkpoint spaces suppress board elements other than walls and lasers (and flamethrowers) (altered from Game Guide p. 15).");
   }
 
   if (scenario.recoveryRule === "dynamic_archiving") {
-    notes.push("Dynamic Archiving: instead of placing reboot tokens on each board, robots archive when they end a register on a checkpoint or battery space (Game Guide p. 32).");
+    notes.push("Dynamic Archiving: No reboot tokens, robots archive when they end a register on a checkpoint or battery space (Game Guide p. 32).");
   }
 
   const actFastRuleText = getActFastRuleText(scenario.actFastMode);
@@ -1706,7 +1706,7 @@ function updateRulesNote(scenario) {
   }
 
   if (hasHazardousFlagsEffect(scenario)) {
-    notes.push("Hazardous Flags: board elements under checkpoints remain active, but do not move or affect the checkpoints (Previous Robo Rally editions).");
+    notes.push("Hazardous Flags: board elements under checkpoints remain active, but do not affect the checkpoints (Previous Robo Rally editions).");
   }
 
   if (hasMovingTargetsEffect(scenario)) {
@@ -1714,7 +1714,7 @@ function updateRulesNote(scenario) {
   }
 
   if (scenario.competitiveMode) {
-    notes.push("Competitive Mode: before the game, players take turns blocking starting spaces with energy cubes. Robots must start on the remaining starting spaces, then the cubes return to the energy tracks (Game Guide p. 32).");
+    notes.push("Competitive Mode: before the game, players take turns blocking starting spaces. (Game Guide p. 32).");
   }
 
   if (scenario.factoryRejects) {
