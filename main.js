@@ -47,7 +47,7 @@ const OPPOSITE_DIRS = {
   S: "N",
   W: "E"
 };
-const MAX_ATTEMPTS = 10;
+const MAX_ATTEMPTS = 40;
 const MIN_LENGTH_RAW = 28;
 const MIN_SHARED_EDGE = 5;
 const DOCK_BRIDGE_GAP = 3;
@@ -522,6 +522,25 @@ function formatDifficultyLabel(difficultyPreference) {
   };
 
   return labels[difficultyPreference] ?? String(difficultyPreference ?? "intermediate");
+}
+
+function formatOverlaySearchTarget(preferences = {}) {
+  const parts = [];
+  const lengthLabel = formatLengthLabel(preferences.length);
+  const difficultyLabel = formatDifficultyLabel(preferences.difficulty);
+
+  if (preferences.length && preferences.length !== "any") {
+    parts.push(lengthLabel);
+  }
+  if (preferences.difficulty && preferences.difficulty !== "any") {
+    parts.push(difficultyLabel);
+  }
+
+  if (!parts.length) {
+    return `a setup with ${preferences.playerCount} usable starts`;
+  }
+
+  return `a ${parts.join(" ")} setup with ${preferences.playerCount} usable starts`;
 }
 
 function getSelectedExpansionIds(preferences = {}) {
@@ -2004,6 +2023,34 @@ function getVariantBaseChance(variantId, preferences = {}) {
   return byVariant[variantId]?.[difficulty] ?? 0.2;
 }
 
+function getLateEasyVariantRescueBonus(variantId, preferences = {}) {
+  const attempt = preferences.generationAttempt ?? 1;
+  const difficulty = preferences.difficulty ?? "moderate";
+
+  if (difficulty !== "easy" || attempt < 28) {
+    return 0;
+  }
+
+  const latePhase = attempt >= 36 ? 2 : 1;
+  const easingVariants = {
+    lighterGame: latePhase === 2 ? 0.34 : 0.18,
+    lessSpammyGame: latePhase === 2 ? 0.28 : 0.14,
+    lessDeadlyGame: latePhase === 2 ? 0.24 : 0.12
+  };
+  const hardeningVariants = {
+    actFast: -0.06,
+    moreDeadlyGame: -0.12,
+    classicSharedDeck: -0.08,
+    competitiveMode: -0.05,
+    factoryRejects: -0.08,
+    hazardousFlags: -0.08,
+    movingTargets: -0.1,
+    lessForeshadowing: -0.08
+  };
+
+  return easingVariants[variantId] ?? hardeningVariants[variantId] ?? 0;
+}
+
 function chooseVariantBundle(preferences = {}) {
   const definitions = VARIANT_DEFINITIONS.map((variant) => ({
     id: variant.id,
@@ -2024,7 +2071,11 @@ function chooseVariantBundle(preferences = {}) {
     .filter((entry) => getVariantPreferenceState(preferences, entry.id) === "allowed")
     .map((entry) => ({
       ...entry,
-      chance: getVariantBaseChance(entry.id, preferences)
+      chance: clamp(
+        getVariantBaseChance(entry.id, preferences) + getLateEasyVariantRescueBonus(entry.id, preferences),
+        0,
+        0.95
+      )
     }));
   const orderedEntries = weightedOrder(
     allowedEntries,
@@ -2293,11 +2344,17 @@ function getMinimumSmallOnlyBoardCount(lengthPreference, preferences = {}) {
 }
 
 function weightedBoardCount(lengthPreference, maxBoards, hasLargeBoards = true, preferences = {}) {
-  const table = {
-    short: [1, 1, 1, 2, 2],
-    moderate: [1, 2, 2, 3, 3],
-    long: [2, 2, 3, 3, 4]
-  };
+  const table = hasLargeBoards
+    ? {
+      short: [1, 1, 1, 2, 2],
+      moderate: [1, 2, 2, 3, 3],
+      long: [2, 2, 3, 3, 4]
+    }
+    : {
+      short: [2, 2, 3, 3, 4],
+      moderate: [3, 4, 4, 5, 5],
+      long: [4, 5, 5, 6, 6]
+    };
 
   const minimumCount = hasLargeBoards
     ? 1
@@ -4207,8 +4264,8 @@ function tryExtendAlignedBoardLayout(existingPlacements, nextBoardId, pieceMap) 
 
 function createBoardPlacements(pieceMap, lengthPreference, preferences, guidanceLevel, expansionIds = null, dockPieceId = "docking-bay-a", generationAttempt = 1) {
   const mainBoardIds = getAvailableMainBoardIds(pieceMap, expansionIds);
-  const maxBoards = Math.min(4, countPhysicalBoards(mainBoardIds, pieceMap));
   const hasLargeBoards = mainBoardIds.some((boardId) => pieceMap[boardId]?.kind !== "small");
+  const maxBoards = Math.min(hasLargeBoards ? 4 : 6, countPhysicalBoards(mainBoardIds, pieceMap));
   const boardCount = weightedBoardCount(lengthPreference, maxBoards, hasLargeBoards, preferences);
   const shouldForceFilteredSubset = generationAttempt >= BOARD_SELECTION_FALLBACK_ATTEMPT;
   let boardIds = [];
@@ -5587,6 +5644,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
   const actFastMode = actFast ? chooseActFastMode(preferences) : null;
   const generationPreferences = {
     ...preferences,
+    generationAttempt: attempt,
     alignedLayout,
     actFast,
     actFastMode,
@@ -6076,7 +6134,7 @@ async function start() {
           const visibleAttempt = Math.min(MAX_ATTEMPTS, attempt + localEvaluations);
           setGeneratingOverlay(
             true,
-            `Attempt ${visibleAttempt} of ${MAX_ATTEMPTS}: still looking for a ${formatLengthLabel(preferences.length)} ${formatDifficultyLabel(preferences.difficulty)} setup with ${preferences.playerCount} usable starts.`
+            `Attempt ${visibleAttempt} of ${MAX_ATTEMPTS}: still looking for ${formatOverlaySearchTarget(preferences)}.`
           );
           await nextFrame();
         }
@@ -6110,7 +6168,7 @@ async function start() {
     }
 
     if (attempt % OVERLAY_UPDATE_INTERVAL === 0) {
-      setGeneratingOverlay(true, `Attempt ${attempt} of ${MAX_ATTEMPTS}: still looking for a ${formatLengthLabel(preferences.length)} ${formatDifficultyLabel(preferences.difficulty)} setup with ${preferences.playerCount} usable starts.`);
+      setGeneratingOverlay(true, `Attempt ${attempt} of ${MAX_ATTEMPTS}: still looking for ${formatOverlaySearchTarget(preferences)}.`);
       await nextFrame();
     }
   }
