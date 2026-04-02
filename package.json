@@ -4,7 +4,7 @@
   "scripts": {
     "version:stamp": "node ./scripts/stamp-version.js",
     "predev": "npm run version:stamp",
-    "dev": "serve ."
+    "dev": "serve -l tcp://127.0.0.1:3000 ."
   },
   "devDependencies": {
     "serve": "^14.2.4"

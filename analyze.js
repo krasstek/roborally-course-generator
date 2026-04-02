@@ -1717,6 +1717,41 @@ export function analyzeGoalApproaches(tileMap, goal, options = {}) {
   };
 }
 
+function beltLeadsToGoal(tileMap, start, goal, options = {}) {
+  const visited = new Set();
+  let current = { x: start.x, y: start.y };
+
+  for (let step = 0; step < 12; step += 1) {
+    const key = tileKey(current.x, current.y);
+    if (visited.has(key)) {
+      return false;
+    }
+    visited.add(key);
+
+    const tile = tileMap.get(key);
+    const belt = getBelt(tile);
+    if (!belt?.dir || !DIRS[belt.dir]) {
+      return false;
+    }
+
+    const next = {
+      x: current.x + DIRS[belt.dir].dx,
+      y: current.y + DIRS[belt.dir].dy
+    };
+    const move = canMoveBetween(tileMap, current, next, belt.dir, options);
+    if (!move.ok) {
+      return false;
+    }
+    if (next.x === goal.x && next.y === goal.y) {
+      return true;
+    }
+
+    current = next;
+  }
+
+  return false;
+}
+
 export function scoreFlagArea(tileMap, goal, options = {}) {
   let score = 0;
   const playerCount = options.playerCount ?? 1;
@@ -1757,9 +1792,15 @@ export function scoreFlagArea(tileMap, goal, options = {}) {
       if (!tile) continue;
 
       for (const feature of tile.features || []) {
-        score += getFlagAreaFeatureScore(feature, dist, {
+        const featureScore = getFlagAreaFeatureScore(feature, dist, {
           batteryActive: isBatteryActive(options)
         });
+        if (feature.type === "belt" && beltLeadsToGoal(tileMap, { x, y }, goal, options)) {
+          score -= featureScore;
+          continue;
+        }
+
+        score += featureScore;
       }
     }
   }

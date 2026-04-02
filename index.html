@@ -4,11 +4,11 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#20252a" />
-  <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="apple-mobile-web-app-title" content="RoboRally" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="mobile-web-app-title" content="RoboRally" />
   <meta name="application-name" content="RoboRally Course Generator" />
-  <meta name="app-version" content="20260401105654" />
+  <meta name="app-version" content="20260402063030" />
   <title>RoboRally Course Generator</title>
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="icon" type="image/png" sizes="16x16" href="./assets/icons/favicon-16.png" />
@@ -682,27 +682,40 @@
     }
 
     .overlay {
-      position: absolute;
+      position: fixed;
       inset: 0;
       display: none;
-      place-items: center;
+      align-items: center;
+      justify-content: center;
+      min-height: 100dvh;
+      padding:
+        max(16px, env(safe-area-inset-top))
+        max(16px, env(safe-area-inset-right))
+        max(16px, env(safe-area-inset-bottom))
+        max(16px, env(safe-area-inset-left));
+      box-sizing: border-box;
+      overflow: hidden;
       background: rgba(17, 21, 26, 0.62);
       backdrop-filter: blur(5px);
-      border-radius: 12px;
+      z-index: 1000;
     }
 
     .overlay.visible {
-      display: grid;
+      display: flex;
     }
 
     .overlay-card {
       min-width: 260px;
       max-width: 360px;
+      width: min(360px, 100%);
+      max-height: min(calc(100dvh - 32px), 100%);
       padding: 18px 20px;
       border-radius: 12px;
       background: linear-gradient(180deg, rgba(236, 240, 242, 0.99) 0%, rgba(210, 218, 223, 0.98) 100%);
       border: 1px solid rgba(54, 67, 77, 0.24);
       box-shadow: 0 18px 38px rgba(0, 0, 0, 0.24);
+      box-sizing: border-box;
+      overflow: auto;
     }
 
     .overlay-title {
@@ -950,13 +963,10 @@
         max-height: min(240px, 42vh);
       }
 
-      .overlay {
-        border-radius: 0;
-      }
-
       .overlay-card {
         min-width: 0;
-        width: calc(100% - 24px);
+        width: 100%;
+        max-height: min(calc(100dvh - 32px), 100%);
         padding: 16px;
       }
 

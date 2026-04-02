@@ -1135,7 +1135,7 @@ function drawPieceImages(ctx, placements, pieces, imageMap, bounds, tileSize, ma
 }
 
 export function render(canvas, pieces, imageMap = {}, options = {}) {
-  const ctx = canvas.getContext("2d");
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
   const placements = options.placements || [
     { pieceId: "cactus", x: 5, y: 5, rotation: 0 },
     { pieceId: "docking-bay-a", x: 2, y: 5, rotation: 0 }

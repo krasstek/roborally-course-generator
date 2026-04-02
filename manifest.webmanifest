@@ -1,6 +1,6 @@
 {
   "name": "RoboRally Course Generator",
-  "short_name": "RRGenerator",
+  "short_name": "RRCG",
   "description": "Generate randomized RoboRally courses from official board layouts.",
   "start_url": "./",
   "scope": "./",

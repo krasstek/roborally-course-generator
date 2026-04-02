@@ -47,7 +47,7 @@ const OPPOSITE_DIRS = {
   S: "N",
   W: "E"
 };
-const MAX_ATTEMPTS = 40;
+const MAX_ATTEMPTS = 10;
 const MIN_LENGTH_RAW = 28;
 const MIN_SHARED_EDGE = 5;
 const DOCK_BRIDGE_GAP = 3;
@@ -1167,7 +1167,7 @@ function describeDifficultyLead(scenario) {
       : "The course comes out harder than requested";
   }
 
-  return `It plays ${describeCourseDifficultyText(scenario.metrics.difficultyRaw)}`;
+  return `The course plays ${describeCourseDifficultyText(scenario.metrics.difficultyRaw)}`;
 }
 
 function describeLengthLead(scenario) {
@@ -1222,6 +1222,50 @@ function formatShortLengthReliefLabel(id) {
   }
 }
 
+function getShortLengthReasons(scenario, contributionEntries, variantReasons = []) {
+  const reasons = [];
+  const inputs = scenario.metrics.lengthMetrics?.inputs ?? {};
+  const contributions = scenario.metrics.lengthMetrics?.contributions ?? {};
+  const playerCount = scenario.preferences.playerCount ?? inputs.playerCount ?? 4;
+  const checkpointCount = scenario.checkpoints?.length ?? inputs.flagCount ?? 0;
+
+  if (checkpointCount <= 2 || (contributions.checkpointLoad ?? 0) <= 4.4) {
+    reasons.push("it keeps the checkpoint count down");
+  }
+  if (playerCount <= 4 || (contributions.playerLoad ?? 0) <= computePlayerTimeLoad(4)) {
+    reasons.push("there is limited player overhead");
+  }
+  if ((contributions.actionLoad ?? 0) <= 28 || (inputs.totalActionLoad ?? 0) <= 10) {
+    reasons.push("routes do not need many programmed actions");
+  }
+  if ((contributions.distanceLoad ?? 0) <= 12 || (inputs.totalRouteDistance ?? 0) <= 16) {
+    reasons.push("checkpoints stay relatively close together");
+  }
+  if ((contributions.congestionLoad ?? 0) <= 1.6 || (inputs.totalCongestion ?? 0) <= 13) {
+    reasons.push("traffic stays fairly manageable");
+  }
+  if ((contributions.flagAreaLoad ?? 0) <= 1.5 || (inputs.flagAreaScore ?? 0) <= 18) {
+    reasons.push("checkpoint areas are not too sticky");
+  }
+  if (!scenario.movingTargets || (contributions.movingTargetLoad ?? 0) <= 1) {
+    reasons.push("there is little moving-target overhead");
+  }
+
+  if (!reasons.length) {
+    reasons.push(
+      ...contributionEntries
+        .map(([id]) => formatShortLengthReliefLabel(id))
+        .filter(Boolean)
+    );
+  }
+
+  reasons.push(...variantReasons);
+
+  return reasons
+    .filter((reason, index, list) => list.indexOf(reason) === index)
+    .slice(0, 3);
+}
+
 function joinReasonParts(parts = []) {
   if (!parts.length) {
     return "";
@@ -1244,17 +1288,19 @@ function averageValues(values = []) {
 }
 
 function getMeaningfulVariantReasons(scenario) {
-  const difficultyReasons = [];
-  const lengthReasons = [];
+  const difficultyHigherReasons = [];
+  const difficultyLowerReasons = [];
+  const lengthLongerReasons = [];
+  const lengthShorterReasons = [];
   const lengthContributions = scenario.metrics.lengthMetrics?.contributions ?? {};
   const movingTargetStats = scenario.movingTargetStats ?? {};
 
   if (scenario.movingTargets && (movingTargetStats.activeCount ?? 0) > 0) {
     if ((movingTargetStats.difficultyBonus ?? 0) >= 6) {
-      difficultyReasons.push("moving targets add extra uncertainty");
+      difficultyHigherReasons.push("moving targets add extra uncertainty");
     }
     if ((lengthContributions.movingTargetLoad ?? 0) >= 3) {
-      lengthReasons.push("moving targets add extra repositioning");
+      lengthLongerReasons.push("moving targets add extra repositioning");
     }
   }
 
@@ -1263,39 +1309,85 @@ function getMeaningfulVariantReasons(scenario) {
     scenario.actFastMode === "countdown_30s" ||
     scenario.actFastMode === "countdown_2m"
   )) {
-    difficultyReasons.push("Act Fast makes planning more demanding");
+    difficultyHigherReasons.push("Act Fast makes planning more demanding");
   }
 
   if (scenario.classicSharedDeck) {
-    difficultyReasons.push("the shared deck makes card planning less forgiving");
+    difficultyHigherReasons.push("the shared deck makes card planning less forgiving");
   }
 
   if (scenario.lessForeshadowing) {
-    difficultyReasons.push("less foreshadowing makes the route harder to plan ahead");
+    difficultyHigherReasons.push("less foreshadowing makes the route harder to plan ahead");
   }
 
   if (scenario.factoryRejects) {
-    difficultyReasons.push("Factory Rejects reduces planning flexibility");
+    difficultyHigherReasons.push("Factory Rejects reduces planning flexibility");
   }
 
   if (scenario.competitiveMode && (scenario.metrics.fairnessStdDev ?? 0) >= 6) {
-    difficultyReasons.push("Competitive Mode increases pressure on weaker starts");
+    difficultyHigherReasons.push("Competitive Mode increases pressure on weaker starts");
   }
 
   if (scenario.lighterGame) {
-    difficultyReasons.push("A Lighter Game softens the board pressure");
-    lengthReasons.push("A Lighter Game trims some board friction");
+    difficultyLowerReasons.push("A Lighter Game softens the board pressure");
+    lengthShorterReasons.push("A Lighter Game trims some board friction");
   }
 
   if (scenario.lessSpammyGame) {
-    difficultyReasons.push("A Less SPAM-Y Game makes recovery cleaner");
-    lengthReasons.push("A Less SPAM-Y Game keeps turns moving");
+    difficultyLowerReasons.push("A Less SPAM-Y Game makes recovery cleaner");
+    lengthShorterReasons.push("A Less SPAM-Y Game keeps turns moving");
   }
 
   return {
-    difficulty: difficultyReasons,
-    length: lengthReasons
+    difficulty: {
+      higher: difficultyHigherReasons,
+      lower: difficultyLowerReasons
+    },
+    length: {
+      longer: lengthLongerReasons,
+      shorter: lengthShorterReasons
+    }
   };
+}
+
+function getDifficultyVariantReasonsForExplanation(scenario, variantReasons, difficultyBand) {
+  if (scenario.preferences.difficulty !== "any" && scenario.metrics.difficultyDirection !== "matched") {
+    return scenario.metrics.difficultyDirection === "high"
+      ? variantReasons.difficulty.higher
+      : variantReasons.difficulty.lower;
+  }
+
+  if (difficultyBand === "hard") {
+    return variantReasons.difficulty.higher;
+  }
+  if (difficultyBand === "easy") {
+    return variantReasons.difficulty.lower;
+  }
+
+  return [
+    ...variantReasons.difficulty.higher,
+    ...variantReasons.difficulty.lower
+  ];
+}
+
+function getLengthVariantReasonsForExplanation(scenario, variantReasons, lengthBand) {
+  if (scenario.preferences.length !== "any" && scenario.metrics.lengthDirection !== "matched") {
+    return scenario.metrics.lengthDirection === "high"
+      ? variantReasons.length.longer
+      : variantReasons.length.shorter;
+  }
+
+  if (lengthBand === "long") {
+    return variantReasons.length.longer;
+  }
+  if (lengthBand === "short") {
+    return variantReasons.length.shorter;
+  }
+
+  return [
+    ...variantReasons.length.longer,
+    ...variantReasons.length.shorter
+  ];
 }
 
 function scoreLegDifficultyForExplanation(leg, isFirstLeg = false) {
@@ -1434,6 +1526,8 @@ function buildCourseExplanationHtml(scenario, noteParts = []) {
   const boardHarshness = computeBoardHarshness(boardPlacements, scenario.pieceMap);
   const difficultyReasons = [];
   const variantReasons = getMeaningfulVariantReasons(scenario);
+  const difficultyVariantReasons = getDifficultyVariantReasonsForExplanation(scenario, variantReasons, difficultyBand);
+  const lengthVariantReasons = getLengthVariantReasonsForExplanation(scenario, variantReasons, lengthBand);
 
   if (difficultyBand === "hard") {
     if (firstLeg.difficultyScore >= 72 && (openingForcedDistance >= 3.5 || openingFacingChanges >= 2.2)) {
@@ -1451,7 +1545,7 @@ function buildCourseExplanationHtml(scenario, noteParts = []) {
     if (avgBacktrack >= 1.2) {
       difficultyReasons.push("later legs force route overlap and backtracking");
     }
-    difficultyReasons.push(...variantReasons.difficulty);
+    difficultyReasons.push(...difficultyVariantReasons);
     if (!difficultyReasons.length) {
       difficultyReasons.push("multiple route and hazard pressures stack up across the course");
     }
@@ -1474,9 +1568,7 @@ function buildCourseExplanationHtml(scenario, noteParts = []) {
     if (!difficultyReasons.length) {
       difficultyReasons.push("its hazards and route pressure stay fairly controlled");
     }
-    difficultyReasons.push(...variantReasons.difficulty.filter((reason) => (
-      reason.includes("softens") || reason.includes("cleaner")
-    )));
+    difficultyReasons.push(...difficultyVariantReasons);
   } else {
     if (firstLeg.difficultyScore >= 60) {
       if (openingForcedDistance >= 2.5 || openingFacingChanges >= 1.4) {
@@ -1495,7 +1587,7 @@ function buildCourseExplanationHtml(scenario, noteParts = []) {
     if (!difficultyReasons.length) {
       difficultyReasons.push("it mixes manageable hazards with a few spots that still need planning");
     }
-    difficultyReasons.push(...variantReasons.difficulty);
+    difficultyReasons.push(...difficultyVariantReasons);
   }
 
   const uniqueDifficultyReasons = difficultyReasons.filter((reason, index, list) => list.indexOf(reason) === index);
@@ -1515,21 +1607,12 @@ function buildCourseExplanationHtml(scenario, noteParts = []) {
       .filter(Boolean)
       .filter((reason, index, list) => list.indexOf(reason) === index)
       .slice(0, 3);
-    lengthReasons.push(...variantReasons.length);
+    lengthReasons.push(...lengthVariantReasons);
     if (!lengthReasons.length) {
       lengthReasons.push("routes take time to resolve");
     }
   } else if (lengthBand === "short") {
-    lengthReasons = contributionEntries
-      .slice()
-      .reverse()
-      .map(([id]) => formatShortLengthReliefLabel(id))
-      .filter(Boolean)
-      .filter((reason, index, list) => list.indexOf(reason) === index)
-      .slice(0, 3);
-    lengthReasons.push(...variantReasons.length.filter((reason) => (
-      reason.includes("keeps turns moving") || reason.includes("trims")
-    )));
+    lengthReasons = getShortLengthReasons(scenario, contributionEntries, lengthVariantReasons);
     if (!lengthReasons.length) {
       lengthReasons.push("routes resolve fairly quickly");
     }
@@ -1549,7 +1632,7 @@ function buildCourseExplanationHtml(scenario, noteParts = []) {
     if (!lengthReasons.length) {
       lengthReasons.push("it balances travel and action load without stretching into a long slog");
     }
-    lengthReasons.push(...variantReasons.length);
+    lengthReasons.push(...lengthVariantReasons);
   }
   const uniqueLengthReasons = lengthReasons.filter((reason, index, list) => list.indexOf(reason) === index).slice(0, 3);
 
@@ -4584,6 +4667,62 @@ function computeUsableStarts(firstLeg, preferences = {}) {
   return firstLeg.starts.filter((startAnalysis) => startAnalysis.reachable && !outlierSet.has(startAnalysis.index));
 }
 
+function computeCompetitiveBlockImpact(firstLeg, playerCount = 4) {
+  const reachable = (firstLeg?.starts || [])
+    .filter((startAnalysis) => startAnalysis.reachable && startAnalysis.selectedRoute && Number.isFinite(startAnalysis.adjustedScore))
+    .slice()
+    .sort((left, right) => left.adjustedScore - right.adjustedScore);
+
+  if (!reachable.length) {
+    return {
+      blockedStartCount: 0,
+      remainingStartCount: 0,
+      strongStartCount: 0,
+      bestScoreDelta: 0,
+      topBandDelta: 0,
+      strongStartsRemoved: 0,
+      meaningful: false
+    };
+  }
+
+  const blockCount = Math.min(playerCount, reachable.length);
+  const remaining = reachable.slice(blockCount);
+  const topBandCount = Math.min(playerCount, reachable.length);
+  const baselineTopBand = reachable.slice(0, topBandCount);
+  const remainingTopBand = remaining.slice(0, Math.min(topBandCount, remaining.length));
+  const scoreStdDev = firstLeg?.summary?.scoreStdDev ?? 0;
+  const strongThreshold = (baselineTopBand[baselineTopBand.length - 1]?.adjustedScore ?? reachable[0].adjustedScore) + Math.max(4, scoreStdDev * 0.4);
+  const strongStartCount = reachable.filter((item) => item.adjustedScore <= strongThreshold).length;
+  const remainingStrongStartCount = remaining.filter((item) => item.adjustedScore <= strongThreshold).length;
+  const bestScoreDelta = remaining.length
+    ? Number((remaining[0].adjustedScore - reachable[0].adjustedScore).toFixed(2))
+    : 0;
+  const topBandDelta = remainingTopBand.length
+    ? Number((averageValues(remainingTopBand.map((item) => item.adjustedScore)) - averageValues(baselineTopBand.map((item) => item.adjustedScore))).toFixed(2))
+    : 0;
+  const strongStartsRemoved = strongStartCount - remainingStrongStartCount;
+  const meaningfulScoreShift = (
+    bestScoreDelta >= Math.max(6, scoreStdDev * 0.7) &&
+    topBandDelta >= Math.max(4, scoreStdDev * 0.45)
+  );
+  const meaningfulStrongDrop = strongStartsRemoved >= Math.max(2, Math.ceil(playerCount * 0.5));
+  const meaningful = (
+    strongStartCount >= playerCount &&
+    remaining.length >= playerCount &&
+    (meaningfulScoreShift || meaningfulStrongDrop)
+  );
+
+  return {
+    blockedStartCount: blockCount,
+    remainingStartCount: remaining.length,
+    strongStartCount,
+    bestScoreDelta,
+    topBandDelta,
+    strongStartsRemoved,
+    meaningful
+  };
+}
+
 function pointOnPlacement(point, placement, pieceMap) {
   const piece = pieceMap[placement.pieceId];
   const dims = rotatedDimensions(piece, placement.rotation ?? 0);
@@ -4635,6 +4774,63 @@ function collectUsedBoardIndices(sequence, boardPlacements, pieceMap, usableStar
   });
 
   return used;
+}
+
+function overlayFitsWithinBoards(overlayPlacement, boardPlacements, pieceMap) {
+  const piece = pieceMap[overlayPlacement.pieceId];
+  if (!piece) {
+    return false;
+  }
+
+  const dims = rotatedDimensions(piece, overlayPlacement.rotation ?? 0);
+
+  for (let y = overlayPlacement.y; y < overlayPlacement.y + dims.height; y += 1) {
+    for (let x = overlayPlacement.x; x < overlayPlacement.x + dims.width; x += 1) {
+      const covered = boardPlacements.some((placement) => pointOnPlacement({ x, y }, placement, pieceMap));
+      if (!covered) {
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
+function pruneUnusedBoardPlacements(boardPlacements, overlayPlacements, pieceMap, sequence, usableStarts, checkpoints) {
+  if ((boardPlacements?.length ?? 0) <= 1) {
+    return {
+      boardPlacements,
+      overlayPlacements,
+      pruned: false
+    };
+  }
+
+  const usedBoards = collectUsedBoardIndices(
+    sequence,
+    boardPlacements,
+    pieceMap,
+    usableStarts,
+    checkpoints
+  );
+
+  if (usedBoards.size === 0 || usedBoards.size >= boardPlacements.length) {
+    return {
+      boardPlacements,
+      overlayPlacements,
+      pruned: false
+    };
+  }
+
+  const nextBoardPlacements = boardPlacements.filter((_, index) => usedBoards.has(index));
+  const nextOverlayPlacements = (overlayPlacements || []).filter((placement) => (
+    overlayFitsWithinBoards(placement, nextBoardPlacements, pieceMap)
+  ));
+
+  return {
+    boardPlacements: nextBoardPlacements,
+    overlayPlacements: nextOverlayPlacements,
+    pruned: nextBoardPlacements.length !== boardPlacements.length || nextOverlayPlacements.length !== (overlayPlacements || []).length
+  };
 }
 
 function computeLaterCheckpointPressure(tileMap, checkpoints = [], preferences = {}) {
@@ -4869,6 +5065,9 @@ function classifyCandidate(sequence, preferences, context = {}) {
   const usableStarts = computeUsableStarts(sequence.firstLeg, preferences);
   const boardHarshness = computeBoardHarshness(context.boardPlacements, context.pieceMap);
   const fairnessStdDev = sequence.firstLeg.summary.scoreStdDev;
+  const competitiveBlockImpact = preferences.competitiveMode
+    ? computeCompetitiveBlockImpact(sequence.firstLeg, preferences.playerCount)
+    : null;
   const checkpointPressure = computeLaterCheckpointPressure(
     context.tileMap,
     context.checkpoints,
@@ -4907,6 +5106,14 @@ function classifyCandidate(sequence, preferences, context = {}) {
 
   if (sequence.firstLeg.summary.reachableStarts < preferences.playerCount) {
     hardFailures.push("reachable-starts");
+  }
+
+  if (preferences.competitiveMode && (
+    !competitiveBlockImpact?.meaningful ||
+    (competitiveBlockImpact?.strongStartCount ?? 0) < preferences.playerCount ||
+    (competitiveBlockImpact?.remainingStartCount ?? 0) < preferences.playerCount
+  )) {
+    hardFailures.push("competitive-block-impact");
   }
 
   if (context.boardPlacements?.length > 1 && context.pieceMap && context.checkpoints) {
@@ -4948,6 +5155,13 @@ function classifyCandidate(sequence, preferences, context = {}) {
   const fairnessPenalty = preferences.competitiveMode
     ? 0
     : fairnessStdDev >= 14 ? fairnessStdDev - 14 : 0;
+  const competitiveBlockPenalty = preferences.competitiveMode
+    ? (
+      Math.max(0, preferences.playerCount - (competitiveBlockImpact?.strongStartCount ?? 0)) * 16 +
+      Math.max(0, preferences.playerCount - (competitiveBlockImpact?.remainingStartCount ?? 0)) * 18 +
+      (competitiveBlockImpact?.meaningful ? 0 : 24)
+    )
+    : 0;
   const movingTargetVolatilityPenalty = getMovingTargetVolatilityPenalty(
     movingTargetStats,
     fairnessStdDev,
@@ -4957,6 +5171,7 @@ function classifyCandidate(sequence, preferences, context = {}) {
     difficultyFit * 1.2 +
     lengthFit +
     fairnessPenalty * 0.5 +
+    competitiveBlockPenalty +
     movingTargetVolatilityPenalty +
     Math.max(0, preferences.playerCount - usableStarts.length) * 20
   );
@@ -4971,6 +5186,7 @@ function classifyCandidate(sequence, preferences, context = {}) {
     lengthFit,
     lengthDirection,
     fairnessStdDev,
+    competitiveBlockImpact,
     checkpointPressure,
     movingTargetStats,
     movingTargetVolatilityPenalty,
@@ -5043,6 +5259,9 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     `Length contributions: flags ${scenario.metrics.lengthMetrics.contributions.checkpointLoad}, players ${scenario.metrics.lengthMetrics.contributions.playerLoad}, actions ${scenario.metrics.lengthMetrics.contributions.actionLoad}, distance ${scenario.metrics.lengthMetrics.contributions.distanceLoad}, congestion ${scenario.metrics.lengthMetrics.contributions.congestionLoad}, flagArea ${scenario.metrics.lengthMetrics.contributions.flagAreaLoad}, difficulty ${scenario.metrics.lengthMetrics.contributions.difficultyLoad}, moving-targets ${scenario.metrics.lengthMetrics.contributions.movingTargetLoad}`,
     `Moving target profile: active ${scenario.movingTargetStats?.activeCount ?? 0}, pathTiles ${scenario.movingTargetStats?.totalPathLength ?? 0}, uniqueCoverage ${scenario.movingTargetStats?.coverageTiles ?? 0}, turns ${scenario.movingTargetStats?.totalTurns ?? 0}, fastSegments ${scenario.movingTargetStats?.fastSegments ?? 0}, difficultyBonus ${scenario.movingTargetStats?.difficultyBonus ?? 0}, lengthBonus ${scenario.movingTargetStats?.lengthBonus ?? 0}`,
     `Moving target volatility penalty: ${scenario.metrics.movingTargetVolatilityPenalty ?? 0}`,
+    scenario.metrics.competitiveBlockImpact
+      ? `Competitive block impact: strongStarts ${scenario.metrics.competitiveBlockImpact.strongStartCount}, remainingAfterBlocks ${scenario.metrics.competitiveBlockImpact.remainingStartCount}, bestDelta ${scenario.metrics.competitiveBlockImpact.bestScoreDelta}, topBandDelta ${scenario.metrics.competitiveBlockImpact.topBandDelta}, strongRemoved ${scenario.metrics.competitiveBlockImpact.strongStartsRemoved}, meaningful ${scenario.metrics.competitiveBlockImpact.meaningful ? "yes" : "no"}`
+      : "Competitive block impact: n/a",
     scenario.movingTargetReentryMarkers?.length
       ? `Moving target re-entry: ${scenario.movingTargetReentryMarkers.map((marker) => `${marker.label}(${marker.x},${marker.y})`).join(", ")}`
       : "Moving target re-entry: none",
@@ -5140,6 +5359,59 @@ function updateDevView() {
   updateBoardAuditVisibility();
 }
 
+function canvasHasVisibleCourse(canvas) {
+  if (!canvas?.width || !canvas?.height) {
+    return false;
+  }
+
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) {
+    return false;
+  }
+
+  const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const pixelStride = Math.max(1, Math.floor((data.length / 4) / 4000));
+
+  for (let index = 0; index < data.length; index += pixelStride * 4) {
+    const red = data[index];
+    const green = data[index + 1];
+    const blue = data[index + 2];
+    const alpha = data[index + 3];
+
+    if (alpha > 0 && (red < 248 || green < 248 || blue < 248)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function drawCanvasFailureNotice(canvas, message) {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    return;
+  }
+
+  canvas.width = 880;
+  canvas.height = 220;
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#f6f7f8";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  ctx.fillStyle = "#2a333a";
+  ctx.font = "bold 26px Trebuchet MS, Verdana, sans-serif";
+  ctx.fillText("Course Render Failed", 36, 68);
+
+  ctx.fillStyle = "#58636c";
+  ctx.font = "16px Trebuchet MS, Verdana, sans-serif";
+  ctx.fillText(message, 36, 108);
+
+  ctx.fillStyle = "#7a4e00";
+  ctx.font = "bold 15px Trebuchet MS, Verdana, sans-serif";
+  ctx.fillText("Try rerolling. If it happens again, inspect the generated scenario.", 36, 152);
+}
+
 function renderScenario(scenario) {
   updateDevView();
   updateSetupSummary(scenario);
@@ -5189,8 +5461,8 @@ function renderScenario(scenario) {
   const unusableStartIndices = scenario.sequence.firstLeg.starts
     .filter((startAnalysis) => !scenario.metrics.usableStarts.some((item) => item.index === startAnalysis.index))
     .map((startAnalysis) => startAnalysis.index);
-
-  render(document.getElementById("canvas"), scenario.pieceMap, scenario.imageMap, {
+  const canvas = document.getElementById("canvas");
+  const renderOptions = {
     placements: scenario.placements,
     goal,
     analysis: renderAnalysis,
@@ -5207,7 +5479,30 @@ function renderScenario(scenario) {
     showPieceImages: !iconBoardView,
     showFootprints: true,
     showFeatureIcons: iconBoardView
-  });
+  };
+
+  render(canvas, scenario.pieceMap, scenario.imageMap, renderOptions);
+
+  if (!canvasHasVisibleCourse(canvas)) {
+    render(canvas, scenario.pieceMap, scenario.imageMap, {
+      ...renderOptions,
+      showBoardLabels: true,
+      showStartFacing: true,
+      showWalls: true,
+      showPieceImages: false,
+      showFeatureIcons: true
+    });
+
+    if (!canvasHasVisibleCourse(canvas)) {
+      console.warn("Scenario rendered blank", {
+        preferences: scenario.preferences,
+        placements: scenario.placements,
+        checkpoints: scenario.checkpoints,
+        boardCount: scenario.boardCount
+      });
+      drawCanvasFailureNotice(canvas, "The generated course data could not be drawn to the board canvas.");
+    }
+  }
 
   if (devViewEnabled) {
     document.getElementById("report").textContent = buildScenarioReport(scenario, selectedLegIndex ?? 0);
@@ -5426,36 +5721,29 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       continue;
     }
 
-    const rebootTokens = recoveryRule === "reboot_tokens"
-      ? placeRebootTokens(boardRects, pieceMap, tileMap, checkpoints, preferences.playerCount)
-      : [];
+    let scenarioBoardPlacements = boardLayout.placements;
     let scenarioDockPlacements = dockPlacements;
+    let scenarioOverlayPlacements = overlayPlacements;
     let scenarioPlacements = placements;
+    let scenarioBoardRects = boardRects;
     let scenarioTileMap = tileMap;
-    let goalTileMap = applyFlagOverrides(scenarioTileMap, checkpoints, { hazardousFlags });
+    let goalTileMap = scenarioTileMap;
     let activeStarts = filterStartsForGoals(starts, checkpoints);
-    let sequence = analyzeFlagSequence(goalTileMap, activeStarts, checkpoints, preferences.playerCount, {
-      competitiveMode,
-      recoveryRule,
-      lessDeadlyGame,
-      lessSpammyGame,
-      moreDeadlyGame,
-      lighterGame,
-      hazardousFlags,
-      lessForeshadowing,
-      rebootTokens,
-      boardRects
-    });
-    const prunedDockPlacements = filterDockPlacementsWithReachableStarts(scenarioDockPlacements, sequence.firstLeg.starts, pieceMap);
-    if (prunedDockPlacements.length && prunedDockPlacements.length !== scenarioDockPlacements.length) {
-      scenarioDockPlacements = prunedDockPlacements;
+    let rebootTokens = [];
+    let sequence = null;
+
+    for (let pass = 0; pass < 4; pass += 1) {
       scenarioPlacements = [
-        ...boardLayout.placements,
+        ...scenarioBoardPlacements,
         ...scenarioDockPlacements,
-        ...overlayPlacements
+        ...scenarioOverlayPlacements
       ];
+      scenarioBoardRects = buildBoardRects(scenarioBoardPlacements, pieceMap);
       const resolved = buildResolvedMap(scenarioPlacements, pieceMap);
       scenarioTileMap = resolved.tileMap;
+      rebootTokens = recoveryRule === "reboot_tokens"
+        ? placeRebootTokens(scenarioBoardRects, pieceMap, scenarioTileMap, checkpoints, preferences.playerCount)
+        : [];
       goalTileMap = applyFlagOverrides(scenarioTileMap, checkpoints, { hazardousFlags });
       activeStarts = filterStartsForGoals(resolved.starts, checkpoints);
       sequence = analyzeFlagSequence(goalTileMap, activeStarts, checkpoints, preferences.playerCount, {
@@ -5468,8 +5756,31 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         hazardousFlags,
         lessForeshadowing,
         rebootTokens,
-        boardRects
+        boardRects: scenarioBoardRects
       });
+
+      const prunedDockPlacements = filterDockPlacementsWithReachableStarts(scenarioDockPlacements, sequence.firstLeg.starts, pieceMap);
+      if (prunedDockPlacements.length && prunedDockPlacements.length !== scenarioDockPlacements.length) {
+        scenarioDockPlacements = prunedDockPlacements;
+        continue;
+      }
+
+      const usableStarts = computeUsableStarts(sequence.firstLeg, { competitiveMode });
+      const prunedBoards = pruneUnusedBoardPlacements(
+        scenarioBoardPlacements,
+        scenarioOverlayPlacements,
+        pieceMap,
+        sequence,
+        usableStarts,
+        checkpoints
+      );
+      if (prunedBoards.pruned) {
+        scenarioBoardPlacements = prunedBoards.boardPlacements;
+        scenarioOverlayPlacements = prunedBoards.overlayPlacements;
+        continue;
+      }
+
+      break;
     }
     const metrics = classifyCandidate(sequence, {
       ...generationPreferences,
@@ -5484,7 +5795,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       lessSpammyGame,
       lessForeshadowing
     }, {
-      boardPlacements: boardLayout.placements,
+      boardPlacements: scenarioBoardPlacements,
       pieceMap,
       checkpoints,
       tileMap: scenarioTileMap
@@ -5494,9 +5805,9 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       pieceMap: assets.pieceMap,
       imageMap: assets.imageMap,
       placements: scenarioPlacements,
-      overlayPlacements,
+      overlayPlacements: scenarioOverlayPlacements,
       dockPlacements: scenarioDockPlacements,
-      dockSummaries: buildDockSummaries(boardLayout.placements, scenarioDockPlacements, pieceMap),
+      dockSummaries: buildDockSummaries(scenarioBoardPlacements, scenarioDockPlacements, pieceMap),
       checkpoints,
       rebootTokens,
       goalTileMap,
@@ -5519,10 +5830,10 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       lessForeshadowing,
       variantComplexityBudget,
       variantComplexityUsed,
-      mainBoardIds: boardLayout.boardIds,
-      mainRotations: boardLayout.placements.map((placement) => placement.rotation),
-      boardCount: boardLayout.boardCount,
-      boardRects,
+      mainBoardIds: scenarioBoardPlacements.map((placement) => placement.pieceId),
+      mainRotations: scenarioBoardPlacements.map((placement) => placement.rotation),
+      boardCount: scenarioBoardPlacements.length,
+      boardRects: scenarioBoardRects,
       guidanceLevel,
       sequence,
       metrics,
