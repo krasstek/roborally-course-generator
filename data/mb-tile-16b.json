@@ -1,0 +1,47 @@
+{
+  "id": "mb-tile-16b",
+  "name": "Conveyor fast right large",
+  "kind": "overlay",
+  "width": 2,
+  "height": 2,
+  "mergeMode": "overlay",
+  "starts": [],
+  "tiles": [
+    {
+      "x": 0,
+      "y": 0,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 0,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 1,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 2
+        }
+      ]
+    }
+  ],
+  "expansionId": "master-builder",
+  "physicalBoardId": "mb-tile-16",
+  "image": ".assets/boards/tile-conveyor-fast-right-large-2x2.jpg"
+}

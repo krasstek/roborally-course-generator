@@ -1,0 +1,34 @@
+{
+  "id": "mb-tile-6a",
+  "name": "Pusher 2-4",
+  "kind": "overlay",
+  "width": 1,
+  "height": 1,
+  "mergeMode": "overlay",
+  "starts": [],
+  "tiles": [
+    {
+      "x": 0,
+      "y": 0,
+      "features": [
+        {
+          "type": "push",
+          "dir": "E",
+          "timing": [
+            2,
+            4
+          ]
+        },
+         {
+          "type": "wall",
+          "sides": [
+            "W"
+          ]
+        }
+      ]
+    }
+  ],
+  "expansionId": "master-builder",
+  "physicalBoardId": "mb-tile-6",
+  "image": "./assets/boards/tile-pusher-2-4.jpg"
+}

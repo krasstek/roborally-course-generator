@@ -1,0 +1,25 @@
+{
+  "id": "mb-tile-11b",
+  "name": "Laser",
+  "kind": "overlay",
+  "width": 1,
+  "height": 1,
+  "mergeMode": "overlay",
+  "starts": [],
+  "tiles": [
+    {
+      "x": 0,
+      "y": 0,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "W",
+          "damage": 1
+        }
+      ]
+    }
+  ],
+  "expansionId": "master-builder",
+  "physicalBoardId": "mb-tile-11",
+  "image": "./assets/boards/tile-laser.jpg"
+}

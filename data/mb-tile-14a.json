@@ -1,0 +1,40 @@
+{
+  "id": "mb-tile-14a",
+  "name": "Wall cage",
+  "kind": "overlay",
+  "width": 2,
+  "height": 1,
+  "mergeMode": "overlay",
+  "starts": [],
+  "tiles": [
+    {
+      "x": 0,
+      "y": 0,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "S",
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 0,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "E",
+            "N"
+          ]
+        }
+      ]
+    }
+  ],
+  "expansionId": "master-builder",
+  "physicalBoardId": "mb-tile-14",
+  "image": "./assets/tile-wall-cage-2x1.jpg"
+}

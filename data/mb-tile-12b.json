@@ -1,0 +1,25 @@
+{
+  "id": "mb-tile-12b",
+  "name": "Conveyor fast",
+  "kind": "overlay",
+  "width": 1,
+  "height": 1,
+  "mergeMode": "overlay",
+  "starts": [],
+  "tiles": [
+    {
+      "x": 0,
+      "y": 0,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 2
+        }
+      ]
+    }
+  ],
+  "expansionId": "master-builder",
+  "physicalBoardId": "mb-tile-12",
+  "image": "./assets/boards/tile-conveyor-fast.jpg"
+}

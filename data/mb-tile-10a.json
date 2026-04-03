@@ -1,0 +1,24 @@
+{
+  "id": "mb-tile-10a",
+  "name": "Gear counterclockwise",
+  "kind": "overlay",
+  "width": 1,
+  "height": 1,
+  "mergeMode": "overlay",
+  "starts": [],
+  "tiles": [
+    {
+      "x": 0,
+      "y": 0,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "ccw"
+        }
+      ]
+    }
+  ],
+  "expansionId": "master-builder",
+  "physicalBoardId": "mb-tile-10",
+  "image": "./assets/boards/tile-gear-ccw.jpg"
+}

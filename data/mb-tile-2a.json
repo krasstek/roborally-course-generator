@@ -1,0 +1,23 @@
+{
+  "id": "mb-tile-2a",
+  "name": "Pit",
+  "kind": "overlay",
+  "width": 1,
+  "height": 1,
+  "mergeMode": "overlay",
+  "starts": [],
+  "tiles": [
+    {
+      "x": 0,
+      "y": 0,
+      "features": [
+        {
+          "type": "pit"
+        }
+      ]
+    }
+  ],
+  "expansionId": "master-builder",
+  "physicalBoardId": "mb-tile-2",
+  "image": "./assets/boards/tile-pit.jpg"
+}

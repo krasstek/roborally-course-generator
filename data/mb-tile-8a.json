@@ -1,0 +1,25 @@
+{
+  "id": "mb-tile-8a",
+  "name": "Conveyor fast merge left",
+  "kind": "overlay",
+  "width": 1,
+  "height": 1,
+  "mergeMode": "overlay",
+  "starts": [],
+  "tiles": [
+    {
+      "x": 0,
+      "y": 0,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 2
+        }
+      ]
+    }
+  ],
+  "expansionId": "master-builder",
+  "physicalBoardId": "mb-tile-8",
+  "image": "./assets/boards/tile-conveyor-fast-merge-left.jpg"
+}

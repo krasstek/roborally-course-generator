@@ -1,0 +1,24 @@
+{
+  "id": "mb-tile-3a",
+  "name": "Gear clockwise",
+  "kind": "overlay",
+  "width": 1,
+  "height": 1,
+  "mergeMode": "overlay",
+  "starts": [],
+  "tiles": [
+    {
+      "x": 0,
+      "y": 0,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "cw"
+        }
+      ]
+    }
+  ],
+  "expansionId": "master-builder",
+  "physicalBoardId": "mb-tile-3",
+  "image": "./assets/boards/tile-gear-cw.jpg"
+}

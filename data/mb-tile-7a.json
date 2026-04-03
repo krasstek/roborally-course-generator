@@ -1,0 +1,23 @@
+{
+  "id": "mb-tile-7a",
+  "name": "Battery",
+  "kind": "overlay",
+  "width": 1,
+  "height": 1,
+  "mergeMode": "overlay",
+  "starts": [],
+  "tiles": [
+    {
+      "x": 0,
+      "y": 0,
+      "features": [
+        {
+          "type": "battery"
+        }
+      ]
+    }
+  ],
+  "expansionId": "master-builder",
+  "physicalBoardId": "mb-tile-7",
+  "image": "./assets/boards/tile-battery.jpg"
+}

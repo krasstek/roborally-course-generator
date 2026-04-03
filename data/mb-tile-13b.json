@@ -1,0 +1,25 @@
+{
+  "id": "mb-tile-13b",
+  "name": "Conveyor merge left",
+  "kind": "overlay",
+  "width": 1,
+  "height": 1,
+  "mergeMode": "overlay",
+  "starts": [],
+  "tiles": [
+    {
+      "x": 0,
+      "y": 0,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        }
+      ]
+    }
+  ],
+  "expansionId": "master-builder",
+  "physicalBoardId": "mb-tile-13",
+  "image": "./assets/boards/tile-conveyor-merge-left.jpg"
+}
