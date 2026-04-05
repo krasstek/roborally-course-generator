@@ -1,0 +1,692 @@
+{
+  "id": "links",
+  "name": "Links",
+  "kind": "base",
+  "width": 12,
+  "height": 12,
+  "mergeMode": "base",
+  "starts": [],
+  "tiles": [
+    {
+      "x": 7,
+      "y": 0,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 11,
+      "y": 0,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "cw"
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 1,
+      "features": [
+        {
+          "type": "pit"
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 2,
+      "features": [
+        {
+          "type": "battery"
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 2,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 2
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "N",
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 2,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 2,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 2,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 2,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 2,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 2,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 2
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "E",
+            "N"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 3,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "ccw"
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 3,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 3,
+      "features": [
+        {
+          "type": "battery"
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 3,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 4,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "E",
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 4,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 4,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 11,
+      "y": 4,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "S",
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 5,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "N",
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 5,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 5,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 5,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 5,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 5,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 5,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 5,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 6,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 6,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 6,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 6,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 7,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "S",
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 7,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 7,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 2
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "S",
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 7,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 7,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 7,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 7,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 7,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 7,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 2
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "E",
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 8,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 8,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 8,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "N",
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 9,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 9,
+      "features": [
+        {
+          "type": "battery"
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 9,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 9,
+      "features": [
+        {
+          "type": "battery"
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 10,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "S",
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 10,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 10,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 10,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 10,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 10,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 10,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "E",
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 10,
+      "features": [
+        {
+          "type": "pit"
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 11,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "S",
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 11,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "ccw"
+        }
+      ]
+    }
+  ],
+  "expansionId": "30th-anniversary",
+  "physicalBoardId": "links-concentric",
+  "image": ".assets/boards/links.JPG"
+}
