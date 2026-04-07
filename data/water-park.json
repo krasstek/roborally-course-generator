@@ -2,9 +2,6 @@
   "id": "water-park",
   "name": "Water Park",
   "kind": "base",
-  "expansionId": "wet-and-wild",
-  "physicalBoardId": "circuit-trap-water-park",
-  "image": "./assets/boards/water-park.jpeg",
   "width": 12,
   "height": 12,
   "mergeMode": "base",
@@ -121,7 +118,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         },
         {
           "type": "water"
@@ -155,7 +153,8 @@
         {
           "type": "belt",
           "dir": "S",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         },
         {
           "type": "water"
@@ -202,7 +201,8 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         },
         {
           "type": "water"
@@ -216,7 +216,8 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         },
         {
           "type": "ledge",
@@ -282,8 +283,9 @@
       "features": [
         {
           "type": "belt",
-          "dir": "S",
-          "speed": 1
+          "dir": "W",
+          "speed": 1,
+          "turn": "right"
         },
         {
           "type": "water"
@@ -396,7 +398,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         },
         {
           "type": "water"
@@ -629,7 +632,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         },
         {
           "type": "water"
@@ -643,7 +647,8 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         },
         {
           "type": "ledge",
@@ -867,7 +872,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         },
         {
           "type": "ledge",
@@ -1027,7 +1033,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         },
         {
           "type": "water"
@@ -1041,7 +1048,8 @@
         {
           "type": "belt",
           "dir": "S",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         },
         {
           "type": "ledge",
@@ -1174,7 +1182,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         },
         {
           "type": "water"
@@ -1188,7 +1197,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 1
+          "speed": 1,
+          "turn": "both"
         },
         {
           "type": "ledge",
@@ -1208,7 +1218,8 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         },
         {
           "type": "ledge",
@@ -1248,7 +1259,8 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         },
         {
           "type": "water"
@@ -1341,7 +1353,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         },
         {
           "type": "ledge",
@@ -1361,7 +1374,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         },
         {
           "type": "ledge",
@@ -1398,7 +1412,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         },
         {
           "type": "water"
@@ -1412,7 +1427,8 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         },
         {
           "type": "water"
@@ -1483,7 +1499,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         },
         {
           "type": "ledge",
@@ -1504,7 +1521,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         },
         {
           "type": "ledge",
@@ -1694,5 +1712,8 @@
         }
       ]
     }
-  ]
+  ],
+  "expansionId": "wet-and-wild",
+  "physicalBoardId": "circuit-trap-water-park",
+  "image": "./assets/boards/water-park.jpeg"
 }
