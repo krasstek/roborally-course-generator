@@ -54,5 +54,5 @@
   ],
   "expansionId": "master-builder",
   "physicalBoardId": "mb-tile-17",
-  "image": ".assets/boards/tile-conveyor-fast-bend-left-3x2.jpg"
+  "image": "./assets/boards/tile-conveyor-fast-bend-left-3x2.jpg"
 }

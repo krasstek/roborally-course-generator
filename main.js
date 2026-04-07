@@ -41,6 +41,24 @@ const CARDINAL_DIRS = {
   S: { dx: 0, dy: 1 },
   W: { dx: -1, dy: 0 }
 };
+const LASER_BUNDLE_DEFINITIONS = [
+  {
+    startPhysicalId: "mb-tile-12",
+    midPhysicalId: "mb-tile-11",
+    endPhysicalId: "mb-tile-13",
+    startId: "mb-tile-12a",
+    midId: "mb-tile-11b",
+    endId: "mb-tile-13a"
+  },
+  {
+    startPhysicalId: "mb-tile-5",
+    midPhysicalId: "mb-tile-4",
+    endPhysicalId: "mb-tile-8",
+    startId: "mb-tile-5b",
+    midId: "mb-tile-4b",
+    endId: "mb-tile-8b"
+  }
+];
 const OPPOSITE_DIRS = {
   N: "S",
   E: "W",
@@ -48,6 +66,10 @@ const OPPOSITE_DIRS = {
   W: "E"
 };
 const MAX_ATTEMPTS = 40;
+const DIAGNOSTIC_ATTEMPTS = 24;
+const DIAGNOSTIC_PLAYER_COUNTS = [2, 4, 6];
+const DIAGNOSTIC_DIFFICULTIES = ["easy", "moderate", "hard", "brutal"];
+const DIAGNOSTIC_LENGTHS = ["short", "moderate", "long"];
 const MIN_LENGTH_RAW = 28;
 const MIN_SHARED_EDGE = 5;
 const DOCK_BRIDGE_GAP = 3;
@@ -82,11 +104,13 @@ const BOARD_VIEW_MODES = {
 };
 const AUDIT_FEATURE_TYPES = [
   { id: "battery", label: "Batteries" },
-  { id: "belt", label: "Belts" },
+  { id: "belt", label: "Conveyors" },
+  { id: "chopShop", label: "Chop Shops" },
   { id: "checkpoint", label: "Checkpoints" },
   { id: "crusher", label: "Crushers" },
   { id: "flamethrower", label: "Flamethrowers" },
   { id: "gear", label: "Gears" },
+  { id: "homingMissile", label: "Homing Missiles" },
   { id: "laser", label: "Lasers" },
   { id: "ledge", label: "Ledges" },
   { id: "oil", label: "Oil" },
@@ -95,12 +119,16 @@ const AUDIT_FEATURE_TYPES = [
   { id: "push", label: "Push Panels" },
   { id: "randomizer", label: "Randomizers" },
   { id: "ramp", label: "Ramps" },
+  { id: "repulsor", label: "Repulsor Fields" },
   { id: "start", label: "Starts" },
   { id: "teleporter", label: "Teleporters" },
+  { id: "trapdoor", label: "Trapdoors" },
   { id: "wall", label: "Walls" },
   { id: "water", label: "Water" }
 ].sort((left, right) => left.label.localeCompare(right.label));
 const PIECE_DATA_FILES = [
+  "30th-docking-bay-a",
+  "30th-docking-bay-b",
   "all-roads",
   "assembly",
   "black-gold",
@@ -123,16 +151,52 @@ const PIECE_DATA_FILES = [
   "gear-box",
   "labyrinth",
   "laser-maze",
+  "links",
   "locked",
   "mergers",
-  "mb-docking-bay",
   "mb-docking-bay-a",
+  "mb-docking-bay-b",
+  "mb-tile-1a",
+  "mb-tile-1b",
+  "mb-tile-2a",
+  "mb-tile-2b",
+  "mb-tile-3a",
+  "mb-tile-3b",
+  "mb-tile-4a",
+  "mb-tile-4b",
+  "mb-tile-5a",
+  "mb-tile-5b",
+  "mb-tile-6a",
+  "mb-tile-6b",
+  "mb-tile-7a",
+  "mb-tile-7b",
+  "mb-tile-8a",
+  "mb-tile-8b",
+  "mb-tile-9a",
+  "mb-tile-9b",
+  "mb-tile-10a",
+  "mb-tile-10b",
+  "mb-tile-11a",
+  "mb-tile-11b",
+  "mb-tile-12a",
+  "mb-tile-12b",
+  "mb-tile-13a",
+  "mb-tile-13b",
+  "mb-tile-14a",
+  "mb-tile-14b",
+  "mb-tile-15a",
+  "mb-tile-15b",
+  "mb-tile-16a",
+  "mb-tile-16b",
+  "mb-tile-17a",
+  "mb-tile-17b",
   "misdirection",
   "portal-palace",
   "pushy",
   "sidewinder",
   "steps",
   "stop-and-go",
+  "straight-a-ways",
   "tabula-rasa",
   "tempest",
   "the-h",
@@ -283,6 +347,14 @@ const VARIANT_CONTROL_IDS = Object.fromEntries(
 
 const DEFAULT_CHECKPOINT_ACTIVE_FEATURE_TYPES = new Set(["wall", "laser", "flamethrower"]);
 
+function isCheckpointActiveFeature(feature, options = {}) {
+  if (DEFAULT_CHECKPOINT_ACTIVE_FEATURE_TYPES.has(feature?.type)) {
+    return true;
+  }
+
+  return Boolean(options.movingTargets && feature?.type === "belt");
+}
+
 let currentScenario = null;
 let cachedAssets = null;
 let boardAuditInitialized = false;
@@ -294,6 +366,9 @@ let boardAuditState = {
 let courseExplanationState = {
   scenarioRef: null,
   manualOpen: null
+};
+let lastRenderDiagnostics = {
+  blankFallbackTriggered: false
 };
 
 function renderVariantControls() {
@@ -391,7 +466,10 @@ async function loadAssets() {
   );
 
   for (const piece of Object.values(pieceMap)) {
-    piece.overlayCapable = piece.expansionId === "master-builder" && piece.width === 6 && piece.height === 6;
+    piece.overlayCapable = piece.expansionId === "master-builder" && (
+      piece.kind === "overlay" ||
+      (piece.width === 6 && piece.height === 6)
+    );
   }
 
   for (const piece of Object.values(pieceMap)) {
@@ -402,7 +480,11 @@ async function loadAssets() {
   const imageMap = {};
   for (const piece of Object.values(pieceMap)) {
     if (piece.image) {
-      imageMap[piece.id] = await loadImage(piece.image);
+      try {
+        imageMap[piece.id] = await loadImage(piece.image);
+      } catch (error) {
+        console.warn(`Unable to load piece image for ${piece.id}: ${piece.image}`, error);
+      }
     }
   }
 
@@ -494,6 +576,85 @@ function countConnectedComponents(graph) {
   return components;
 }
 
+function getGraphDiameter(graph) {
+  if (!graph?.nodes?.length) {
+    return 0;
+  }
+
+  let diameter = 0;
+
+  for (const node of graph.nodes) {
+    const seen = new Set([node.index]);
+    const queue = [{ index: node.index, depth: 0 }];
+
+    while (queue.length) {
+      const current = queue.shift();
+      diameter = Math.max(diameter, current.depth);
+
+      for (const nextIndex of graph.adjacency.get(current.index) || []) {
+        if (seen.has(nextIndex)) {
+          continue;
+        }
+        seen.add(nextIndex);
+        queue.push({ index: nextIndex, depth: current.depth + 1 });
+      }
+    }
+  }
+
+  return diameter;
+}
+
+function isSingleSmallBoardCourseAllowed(preferences = {}) {
+  return (preferences.difficulty ?? "moderate") === "easy" && (preferences.length ?? "moderate") === "short";
+}
+
+function isSmallBoardLayoutAcceptable(boardPlacements, pieceMap, layoutValidation, preferences = {}) {
+  const smallBoardPlacements = boardPlacements.filter((placement) => pieceMap[placement.pieceId]?.kind === "small");
+  const allSmallBoards = smallBoardPlacements.length === boardPlacements.length && boardPlacements.length > 0;
+  const lengthPreference = preferences.length ?? "moderate";
+
+  if (!allSmallBoards) {
+    return true;
+  }
+
+  if (boardPlacements.length === 1) {
+    return isSingleSmallBoardCourseAllowed(preferences);
+  }
+
+  if (lengthPreference === "long" && boardPlacements.length < 4) {
+    return false;
+  }
+
+  if (boardPlacements.length < 4) {
+    return true;
+  }
+
+  const rects = buildBoardRects(boardPlacements, pieceMap);
+  const minX = Math.min(...rects.map((rect) => rect.x));
+  const minY = Math.min(...rects.map((rect) => rect.y));
+  const maxX = Math.max(...rects.map((rect) => rect.x + rect.width));
+  const maxY = Math.max(...rects.map((rect) => rect.y + rect.height));
+  const spanWidth = maxX - minX;
+  const spanHeight = maxY - minY;
+  const aspectRatio = Math.max(spanWidth, spanHeight) / Math.max(1, Math.min(spanWidth, spanHeight));
+  const graph = layoutValidation?.graph;
+  const degrees = graph?.nodes?.map((node) => (graph.adjacency.get(node.index) || []).length) ?? [];
+  const maxDegree = degrees.length ? Math.max(...degrees) : 0;
+  const leafCount = degrees.filter((degree) => degree <= 1).length;
+  const diameter = getGraphDiameter(graph);
+  const chainLike = leafCount <= 2 && maxDegree <= 2 && diameter >= boardPlacements.length - 1;
+
+  if (chainLike && boardPlacements.length >= 5) {
+    return false;
+  }
+
+  if (aspectRatio > 3.2) {
+    return false;
+  }
+
+  return true;
+}
+
 function nextFrame() {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));
 }
@@ -518,10 +679,15 @@ function formatDifficultyLabel(difficultyPreference) {
     any: "any",
     easy: "beginner",
     moderate: "intermediate",
-    hard: "advanced"
+    hard: "advanced",
+    brutal: "expert"
   };
 
   return labels[difficultyPreference] ?? String(difficultyPreference ?? "intermediate");
+}
+
+function getTuningDifficulty(difficultyPreference) {
+  return difficultyPreference === "brutal" ? "hard" : (difficultyPreference ?? "moderate");
 }
 
 function formatOverlaySearchTarget(preferences = {}) {
@@ -552,7 +718,8 @@ function getSelectedExpansionIds(preferences = {}) {
 
 function formatExpansionName(expansionId) {
   const labels = {
-    roborally: "RoboRally Base Game (2023)",
+    roborally: "Robo Rally (2023)",
+    "30th-anniversary": "Robo Rally: 30th Anniversary",
     "thrills-and-spills": "Thrills & Spills",
     "master-builder": "Master Builder",
     "wet-and-wild": "Wet & Wild",
@@ -564,9 +731,10 @@ function formatExpansionName(expansionId) {
 
 function getDifficultyThresholds() {
   return {
-     easy: [0, 95],
+    easy: [0, 95],
     moderate: [90, 155],
-    hard: [150, Infinity]
+    hard: [150, Infinity],
+    brutal: [150, Infinity]
   };
 }
 
@@ -644,19 +812,27 @@ function summarizeFeature(feature) {
     case "randomizer":
     case "water":
       return feature.type;
+    case "chopShop":
+      return "chop shop";
     case "belt":
-      return `belt ${feature.dir ?? "?"}${feature.speed ? ` speed ${feature.speed}` : ""}`;
+      return `conveyor ${feature.dir ?? "?"}${feature.speed ? ` speed ${feature.speed}` : ""}`;
     case "gear":
       return `gear ${feature.rotation ?? "?"}`;
     case "laser":
       return `laser ${feature.dir ?? "?"} dmg ${feature.damage ?? 1}`;
+    case "trapdoor":
+      return `trapdoor [${(feature.timing || []).join(", ")}]`;
     case "wall":
       return `wall ${((feature.sides || []).join(", ")) || "?"}`;
+    case "repulsor":
+      return `repulsor ${((feature.sides || []).join(", ")) || "?"}`;
     case "push":
     case "flamethrower":
       return `${feature.type} ${feature.dir ?? "?"} [${(feature.timing || []).join(", ")}]`;
     case "crusher":
       return `crusher [${(feature.timing || []).join(", ")}]`;
+    case "homingMissile":
+      return "homing missile";
     case "portal":
       return `portal ${feature.id ?? "?"}`;
     case "teleporter":
@@ -675,39 +851,47 @@ function summarizeFeature(feature) {
 function getFeatureTypeSymbol(featureType) {
   switch (featureType) {
     case "wall":
-      return "[]";
+      return "#";
     case "belt":
-      return "->";
+      return "=>";
+    case "repulsor":
+      return "<>";
     case "laser":
-      return "*>";
+      return "L>";
+    case "trapdoor":
+      return "TD";
     case "pit":
-      return "O";
+      return "PT";
     case "gear":
-      return "@";
+      return "GR";
     case "push":
-      return ">>";
+      return "PS";
     case "flamethrower":
-      return "~*";
+      return "FL";
     case "crusher":
-      return "||";
+      return "CR";
     case "portal":
-      return "OO";
+      return "PO";
     case "teleporter":
-      return "()";
+      return "TP";
     case "randomizer":
-      return "?";
+      return "R?";
+    case "homingMissile":
+      return "HM";
+    case "chopShop":
+      return "CS";
     case "water":
-      return "~~";
+      return "WA";
     case "oil":
-      return "o";
+      return "OI";
     case "ledge":
-      return "_|";
+      return "LG";
     case "ramp":
-      return "/_";
+      return "RA";
     case "checkpoint":
       return "F";
     case "battery":
-      return "+|";
+      return "BT";
     case "start":
       return "S>";
     default:
@@ -875,7 +1059,8 @@ function updateAuditReadout(assets) {
     const tile = tileMap.get(`${boardAuditState.hoverTile.x},${boardAuditState.hoverTile.y}`);
     const features = (tile?.features || [])
       .filter((feature) => isAuditFeatureVisible(feature.type))
-      .map(summarizeFeature);
+      .map(summarizeFeature)
+      .sort((left, right) => left.localeCompare(right));
     const starts = (piece.starts || [])
       .filter(() => isAuditFeatureVisible("start"))
       .filter((start) => start.x === boardAuditState.hoverTile.x && start.y === boardAuditState.hoverTile.y)
@@ -1049,20 +1234,40 @@ function updateSetupSummary(scenario) {
   const fitNoteEl = document.getElementById("fit-note");
   const summary = document.getElementById("setup-summary");
   const boardsEl = document.getElementById("setup-boards");
-  const overlaysRowEl = document.getElementById("setup-overlays-row");
-  const overlaysEl = document.getElementById("setup-overlays");
+  const overlayBoardsRowEl = document.getElementById("setup-overlay-boards-row");
+  const overlayBoardsEl = document.getElementById("setup-overlay-boards");
+  const overlayTilesRowEl = document.getElementById("setup-overlay-tiles-row");
+  const overlayTilesEl = document.getElementById("setup-overlay-tiles");
   const flagsEl = document.getElementById("setup-flags");
   const explanationToggleEl = document.getElementById("course-explanation-toggle");
   const explanationPanelEl = document.getElementById("course-explanation-panel");
   const explanationCopyEl = document.getElementById("course-explanation-copy");
+
+  if (
+    !fitNoteEl ||
+    !summary ||
+    !boardsEl ||
+    !overlayBoardsRowEl ||
+    !overlayBoardsEl ||
+    !overlayTilesRowEl ||
+    !overlayTilesEl ||
+    !flagsEl ||
+    !explanationToggleEl ||
+    !explanationPanelEl ||
+    !explanationCopyEl
+  ) {
+    return;
+  }
 
   if (!scenario) {
     fitNoteEl.textContent = "";
     fitNoteEl.classList.add("hidden");
     summary.classList.add("hidden");
     boardsEl.textContent = "";
-    overlaysRowEl.classList.add("hidden");
-    overlaysEl.textContent = "";
+    overlayBoardsRowEl.classList.add("hidden");
+    overlayBoardsEl.textContent = "";
+    overlayTilesRowEl.classList.add("hidden");
+    overlayTilesEl.textContent = "";
     flagsEl.textContent = "";
     explanationCopyEl.innerHTML = "";
     explanationPanelEl.classList.add("hidden");
@@ -1084,17 +1289,27 @@ function updateSetupSummary(scenario) {
   const boardLabels = scenario.mainBoardIds.map((pieceId) => (
     formatBoardLabel(pieceId, scenario.pieceMap)
   ));
-  const overlayLabels = (scenario.overlayPlacements || []).map((placement) => (
-    formatBoardLabel(placement.pieceId, scenario.pieceMap)
-  ));
+  const overlayBoardLabels = (scenario.overlayPlacements || [])
+    .filter((placement) => !isMiniOverlayPiece(scenario.pieceMap[placement.pieceId]))
+    .map((placement) => formatBoardLabel(placement.pieceId, scenario.pieceMap));
+  const overlayTileLabels = (scenario.overlayPlacements || [])
+    .filter((placement) => isMiniOverlayPiece(scenario.pieceMap[placement.pieceId]))
+    .map((placement) => formatBoardLabel(placement.pieceId, scenario.pieceMap));
 
   boardsEl.textContent = boardLabels.join(", ");
-  if (overlayLabels.length) {
-    overlaysEl.textContent = overlayLabels.join(", ");
-    overlaysRowEl.classList.remove("hidden");
+  if (overlayBoardLabels.length) {
+    overlayBoardsEl.textContent = overlayBoardLabels.join(", ");
+    overlayBoardsRowEl.classList.remove("hidden");
   } else {
-    overlaysRowEl.classList.add("hidden");
-    overlaysEl.textContent = "";
+    overlayBoardsRowEl.classList.add("hidden");
+    overlayBoardsEl.textContent = "";
+  }
+  if (overlayTileLabels.length) {
+    overlayTilesEl.textContent = overlayTileLabels.join(", ");
+    overlayTilesRowEl.classList.remove("hidden");
+  } else {
+    overlayTilesRowEl.classList.add("hidden");
+    overlayTilesEl.textContent = "";
   }
   flagsEl.textContent = `${scenario.checkpoints.length} checkpoint${scenario.checkpoints.length === 1 ? "" : "s"}`;
   const noteParts = [];
@@ -1512,6 +1727,138 @@ function getCheckpointDifficultyReason(scenario, difficultyBand) {
   return null;
 }
 
+function uniqueReasons(reasons = [], limit = 3) {
+  return reasons.filter((reason, index, list) => list.indexOf(reason) === index).slice(0, limit);
+}
+
+function getOpeningDifficultyReasons(firstLeg, openingForcedDistance, openingFacingChanges, difficultyBand) {
+  const reasons = [];
+
+  if (difficultyBand === "hard") {
+    if (openingForcedDistance >= 3.5 || openingFacingChanges >= 2.2) {
+      reasons.push("it forces several moves and facing changes before players can settle");
+    }
+    if ((firstLeg.averageTrafficPenalty ?? 0) >= 18) {
+      reasons.push("multiple starts crowd into the same early routes");
+    }
+    if ((firstLeg.flagAreaScore ?? 0) >= 24) {
+      reasons.push("Checkpoint 1 is surrounded by active board elements");
+    }
+  } else if (difficultyBand === "easy") {
+    if (openingForcedDistance <= 1.4 && openingFacingChanges <= 1.1) {
+      reasons.push("most starts can line up the first checkpoint without much reorientation");
+    }
+    if ((firstLeg.averageTrafficPenalty ?? 0) <= 12) {
+      reasons.push("the dock launch does not create much early traffic");
+    }
+    if ((firstLeg.flagAreaScore ?? 0) <= 18) {
+      reasons.push("Checkpoint 1 has a fairly calm approach area");
+    }
+  } else {
+    if (openingForcedDistance >= 2.5 || openingFacingChanges >= 1.4) {
+      reasons.push("players still need to clean up a few awkward early angles");
+    }
+    if ((firstLeg.averageTrafficPenalty ?? 0) >= 14) {
+      reasons.push("the opening routes overlap enough to create some traffic");
+    }
+    if ((firstLeg.flagAreaScore ?? 0) >= 20) {
+      reasons.push("Checkpoint 1 asks for some care instead of being a free pickup");
+    }
+  }
+
+  return uniqueReasons(reasons, 2);
+}
+
+function getLaterCheckpointPressureReasons(scenario, difficultyBand, avgCongestion, avgBacktrack, checkpointDifficultyReason) {
+  const reasons = [];
+
+  if (difficultyBand === "hard") {
+    if (avgCongestion >= 18) {
+      reasons.push("later checkpoints create heavy congestion");
+    }
+    if (avgBacktrack >= 1.2) {
+      reasons.push("later legs repeatedly overlap and force repositioning");
+    }
+  } else if (difficultyBand === "easy") {
+    if (avgCongestion <= 12) {
+      reasons.push("later checkpoints keep traffic manageable");
+    }
+    if (avgBacktrack <= 0.6) {
+      reasons.push("later legs do not punish players with much backtracking");
+    }
+  } else {
+    if (avgCongestion >= 14) {
+      reasons.push("later checkpoints introduce some congestion after the opening");
+    }
+    if (avgBacktrack >= 0.8) {
+      reasons.push("later legs create some route reuse and repositioning");
+    }
+  }
+
+  if (checkpointDifficultyReason) {
+    reasons.push(checkpointDifficultyReason.charAt(0).toLowerCase() + checkpointDifficultyReason.slice(1));
+  }
+
+  return uniqueReasons(reasons, 2);
+}
+
+function describeLengthDrivers(scenario, lengthBand, contributionEntries, lengthVariantReasons) {
+  const reasons = [];
+  const contributions = scenario.metrics.lengthMetrics?.contributions ?? {};
+
+  if (lengthBand === "long") {
+    if ((contributions.checkpointLoad ?? 0) >= 8.8 || scenario.checkpoints.length >= 4) {
+      reasons.push("it uses enough checkpoints to stretch the route");
+    }
+    if ((contributions.actionLoad ?? 0) >= 35) {
+      reasons.push("players need a lot of programmed movement");
+    }
+    if ((contributions.distanceLoad ?? 0) >= 18) {
+      reasons.push("the route covers a lot of board space");
+    }
+    if ((contributions.congestionLoad ?? 0) >= 2.2) {
+      reasons.push("traffic slows the later legs down");
+    }
+  } else if (lengthBand === "short") {
+    if ((contributions.checkpointLoad ?? 0) <= 4.4 || scenario.checkpoints.length <= 2) {
+      reasons.push("it keeps the checkpoint count low");
+    }
+    if ((contributions.actionLoad ?? 0) <= 28) {
+      reasons.push("the routes resolve with relatively few programmed actions");
+    }
+    if ((contributions.distanceLoad ?? 0) <= 12) {
+      reasons.push("the route does not ask for much travel");
+    }
+    if ((contributions.congestionLoad ?? 0) <= 1.6) {
+      reasons.push("traffic rarely stalls the pace");
+    }
+  } else {
+    if ((contributions.checkpointLoad ?? 0) >= 6.6 || scenario.checkpoints.length >= 3) {
+      reasons.push("it has enough checkpoints to feel full without dragging");
+    }
+    if ((contributions.actionLoad ?? 0) >= 35) {
+      reasons.push("players still need a fair amount of programmed movement");
+    }
+    if ((contributions.distanceLoad ?? 0) >= 18) {
+      reasons.push("the route creates some real travel between checkpoints");
+    }
+    if ((contributions.congestionLoad ?? 0) >= 2.2) {
+      reasons.push("some congestion adds time without turning it into a slog");
+    }
+  }
+
+  reasons.push(...lengthVariantReasons);
+  if (!reasons.length) {
+    reasons.push(lengthBand === "long"
+      ? "routes take time to resolve"
+      : lengthBand === "short"
+        ? "routes resolve fairly quickly"
+        : "it balances travel and action load cleanly");
+  }
+
+  return uniqueReasons(reasons, 3);
+}
+
 function buildCourseExplanationHtml(scenario, noteParts = []) {
   const parts = [];
   const firstLeg = scenario.sequence.firstLeg.summary;
@@ -1609,59 +1956,43 @@ function buildCourseExplanationHtml(scenario, noteParts = []) {
     difficultyReasons.push(...difficultyVariantReasons);
   }
 
-  const uniqueDifficultyReasons = difficultyReasons.filter((reason, index, list) => list.indexOf(reason) === index);
+  const uniqueDifficultyReasons = uniqueReasons(difficultyReasons, 3);
   const checkpointDifficultyReason = getCheckpointDifficultyReason(scenario, difficultyBand);
-  if (checkpointDifficultyReason) {
-    uniqueDifficultyReasons.push(checkpointDifficultyReason);
-  }
+  const openingReasons = getOpeningDifficultyReasons(firstLeg, openingForcedDistance, openingFacingChanges, difficultyBand);
+  const laterPressureReasons = getLaterCheckpointPressureReasons(
+    scenario,
+    difficultyBand,
+    avgCongestion,
+    avgBacktrack,
+    checkpointDifficultyReason
+  );
 
   const contributionEntries = Object.entries(scenario.metrics.lengthMetrics?.contributions || {})
     .filter(([id, value]) => value > 0 && (formatContributionLabel(id) || formatShortLengthReliefLabel(id)))
     .sort((left, right) => right[1] - left[1]);
-  let lengthReasons = [];
-
-  if (lengthBand === "long") {
-    lengthReasons = contributionEntries
-      .map(([id]) => formatContributionLabel(id))
-      .filter(Boolean)
-      .filter((reason, index, list) => list.indexOf(reason) === index)
-      .slice(0, 3);
-    lengthReasons.push(...lengthVariantReasons);
-    if (!lengthReasons.length) {
-      lengthReasons.push("routes take time to resolve");
-    }
-  } else if (lengthBand === "short") {
-    lengthReasons = getShortLengthReasons(scenario, contributionEntries, lengthVariantReasons);
-    if (!lengthReasons.length) {
-      lengthReasons.push("routes resolve fairly quickly");
-    }
-  } else {
-    if (scenario.preferences.flagCount >= 3 || scenario.checkpoints.length >= 3) {
-      lengthReasons.push("it has enough checkpoints to feel like a full course");
-    }
-    if ((scenario.metrics.lengthMetrics?.contributions?.actionLoad ?? 0) >= 35) {
-      lengthReasons.push("routes need a fair amount of programmed movement");
-    }
-    if ((scenario.metrics.lengthMetrics?.contributions?.distanceLoad ?? 0) >= 18) {
-      lengthReasons.push("checkpoints are spread out enough to create some travel");
-    }
-    if ((scenario.metrics.lengthMetrics?.contributions?.congestionLoad ?? 0) >= 2.2) {
-      lengthReasons.push("some congestion slows the course down");
-    }
-    if (!lengthReasons.length) {
-      lengthReasons.push("it balances travel and action load without stretching into a long slog");
-    }
-    lengthReasons.push(...lengthVariantReasons);
-  }
-  const uniqueLengthReasons = lengthReasons.filter((reason, index, list) => list.indexOf(reason) === index).slice(0, 3);
+  const uniqueLengthReasons = lengthBand === "short"
+    ? getShortLengthReasons(scenario, contributionEntries, lengthVariantReasons)
+    : describeLengthDrivers(scenario, lengthBand, contributionEntries, lengthVariantReasons);
 
   if (noteParts.length) {
-    parts.push(`<div><strong>Fit:</strong> This course is ${noteParts.join(" and ")} than requested.</div>`);
+    const mismatchFocus = scenario.metrics.difficultyFit >= scenario.metrics.lengthFit ? "difficulty" : "length";
+    const multipleMismatchAxes = noteParts.length > 1;
+    parts.push(`<div><strong>Fit:</strong> This course is ${noteParts.join(" and ")} than requested.${multipleMismatchAxes ? ` The larger mismatch is ${mismatchFocus}.` : ""}</div>`);
   }
 
   parts.push(
     `<div><strong>Difficulty:</strong> ${describeDifficultyLead(scenario)} because ${joinReasonParts(uniqueDifficultyReasons.slice(0, 3))}.</div>`
   );
+  if (openingReasons.length) {
+    parts.push(
+      `<div><strong>Opening:</strong> The Dock to Checkpoint 1 leg ${difficultyBand === "hard" ? "is where players first feel the pressure" : difficultyBand === "easy" ? "stays comparatively forgiving" : "sets the tone"} because ${joinReasonParts(openingReasons)}.</div>`
+    );
+  }
+  if (laterPressureReasons.length) {
+    parts.push(
+      `<div><strong>Later Checkpoints:</strong> ${joinReasonParts(laterPressureReasons)}.</div>`
+    );
+  }
   parts.push(
     `<div><strong>Length:</strong> ${describeLengthLead(scenario)} because ${joinReasonParts(uniqueLengthReasons)}.</div>`
   );
@@ -1687,6 +2018,9 @@ function updateExpansionSummary() {
 
   if (document.getElementById("expansion-roborally").checked) {
     enabled.push(formatExpansionName("roborally"));
+  }
+  if (document.getElementById("expansion-30th-anniversary").checked) {
+    enabled.push(formatExpansionName("30th-anniversary"));
   }
   if (document.getElementById("expansion-master-builder").checked) {
     enabled.push(formatExpansionName("master-builder"));
@@ -1722,7 +2056,7 @@ function hasSuppressedCheckpointFeatures(scenario) {
   return scenario.checkpoints.some((checkpoint) => {
     const tile = tileMap.get(`${checkpoint.x},${checkpoint.y}`);
     return (tile?.features || []).some((feature) => (
-      !DEFAULT_CHECKPOINT_ACTIVE_FEATURE_TYPES.has(feature.type) &&
+      !isCheckpointActiveFeature(feature, { movingTargets: scenario.movingTargets }) &&
       feature.type !== "checkpoint"
     ));
   });
@@ -1735,7 +2069,7 @@ function hasHazardousFlagsEffect(scenario) {
 
   return hasCheckpointBoardFeatures(
     scenario,
-    (feature) => !DEFAULT_CHECKPOINT_ACTIVE_FEATURE_TYPES.has(feature.type)
+    (feature) => !isCheckpointActiveFeature(feature, { movingTargets: scenario.movingTargets })
   );
 }
 
@@ -1746,13 +2080,13 @@ function hasMovingTargetsEffect(scenario) {
 function getActFastRuleText(mode) {
   switch (mode) {
     case "countdown_3m":
-      return "Act Fast: use a 3-minute programming timer. (Game Guide p. 32).";
+      return "Act Fast: use a 3-minute programming timer. (Rulebook p. 32).";
     case "countdown_2m":
-      return "Act Fast: use a 2-minute programming timer. (Game Guide p. 32).";
+      return "Act Fast: use a 2-minute programming timer. (Rulebook p. 32).";
     case "countdown_1m":
-      return "Act Fast: use a 1-minute programming timer. (Altered from Game Guide p. 32).";
+      return "Act Fast: use a 1-minute programming timer. (Altered from Rulebook p. 32).";
     case "countdown_30s":
-      return "Act Fast: use a 30-second programming timer. (Altered from Game Guide p. 32).";
+      return "Act Fast: use a 30-second programming timer. (Altered from Rulebook p. 32).";
     case "last_player_30s":
       return "Act Fast: when only one player remains, that player has 30 seconds to finish programming (Previous Robo Rally editions).";
     default:
@@ -1795,11 +2129,15 @@ function updateRulesNote(scenario) {
   }
 
   if (!scenario.hazardousFlags && hasSuppressedCheckpointFeatures(scenario)) {
-    checkpointNotes.push("Checkpoint spaces suppress board elements other than walls and lasers (and flamethrowers) (altered from Game Guide p. 15).");
+    checkpointNotes.push(
+      scenario.movingTargets
+        ? "Checkpoint spaces suppress board elements other than walls, lasers, and conveyors carrying moving checkpoints (Rulebook p. 15; Moving Targets variant)."
+        : "Checkpoint spaces suppress board elements other than walls and lasers (Rulebook p. 15)."
+    );
   }
 
   if (scenario.recoveryRule === "dynamic_archiving") {
-    notes.push("Dynamic Archiving: No reboot tokens, robots archive when they end a register on a checkpoint or battery space (Game Guide p. 32).");
+    notes.push("Dynamic Archiving: No reboot tokens, robots archive when they end a register on a checkpoint or battery space (Rulebook p. 32).");
   }
 
   const actFastRuleText = getActFastRuleText(scenario.actFastMode);
@@ -1816,7 +2154,7 @@ function updateRulesNote(scenario) {
   }
 
   if (scenario.competitiveMode) {
-    notes.push("Competitive Mode: before the game, players take turns blocking starting spaces. (Game Guide p. 32).");
+    notes.push("Competitive Mode: before the game, players take turns blocking starting spaces. (Rulebook p. 32).");
   }
 
   if (scenario.factoryRejects) {
@@ -1824,15 +2162,15 @@ function updateRulesNote(scenario) {
   }
 
   if (scenario.lessDeadlyGame) {
-    notes.push("A Less Deadly Game: board edges act as walls (Game Guide p. 32).");
+    notes.push("A Less Deadly Game: board edges act as walls (Rulebook p. 32).");
   }
 
   if (scenario.lessSpammyGame) {
-    notes.push("A Less SPAM-Y Game: discard all SPAM cards from hand to your discard pile at the end of programming phase (Game Guide p. 32).");
+    notes.push("A Less SPAM-Y Game: discard all SPAM cards from hand to your discard pile at the end of programming phase (Rulebook p. 32).");
   }
 
   if (scenario.moreDeadlyGame) {
-    notes.push("A More Deadly Game: rebooting deals 3 damage instead of 2 (Game Guide p. 28).");
+    notes.push("A More Deadly Game: rebooting deals 3 damage instead of 2 (Rulebook p. 28).");
   }
 
   if (scenario.classicSharedDeck) {
@@ -1840,11 +2178,11 @@ function updateRulesNote(scenario) {
   }
 
   if (scenario.lighterGame) {
-    notes.push("A Lighter Game: upgrade cards are removed and battery spaces are inactive (Game Guide p. 32).");
+    notes.push("A Lighter Game: upgrade cards are removed and battery spaces are inactive (Rulebook p. 32).");
   }
 
   if (scenario.lessForeshadowing) {
-    notes.push("Less Foreshadowing: decks reshuffle every turn (Game Guide p. 32).");
+    notes.push("Less Foreshadowing: decks reshuffle every turn (Rulebook p. 32).");
   }
 
   if (checkpointNotes.length) {
@@ -1991,7 +2329,7 @@ function chooseLessForeshadowing(preferences) {
 }
 
 function sampleVariantComplexityBudget(preferences = {}) {
-  const difficulty = preferences.difficulty ?? "moderate";
+  const difficulty = getTuningDifficulty(preferences.difficulty);
   const budgets = {
     easy: [0, 0, 0, 1, 1, 1, 2],
     moderate: [0, 0, 1, 1, 1, 2, 2, 3, 4],
@@ -2002,7 +2340,7 @@ function sampleVariantComplexityBudget(preferences = {}) {
 }
 
 function getVariantBaseChance(variantId, preferences = {}) {
-  const difficulty = preferences.difficulty ?? "moderate";
+  const difficulty = getTuningDifficulty(preferences.difficulty);
   const byVariant = {
     actFast: { easy: 0.08, moderate: 0.16, hard: 0.2 },
     lighterGame: { easy: 0.42, moderate: 0.28, hard: 0.18 },
@@ -2025,7 +2363,7 @@ function getVariantBaseChance(variantId, preferences = {}) {
 
 function getLateEasyVariantRescueBonus(variantId, preferences = {}) {
   const attempt = preferences.generationAttempt ?? 1;
-  const difficulty = preferences.difficulty ?? "moderate";
+  const difficulty = getTuningDifficulty(preferences.difficulty);
 
   if (difficulty !== "easy" || attempt < 28) {
     return 0;
@@ -2129,7 +2467,7 @@ function isVariantForced(preferences = {}, variantId) {
 }
 
 function chooseActFastMode(preferences = {}) {
-  const difficulty = preferences.difficulty ?? "moderate";
+  const difficulty = getTuningDifficulty(preferences.difficulty);
   const table = {
     easy: [
       "countdown_3m",
@@ -2172,6 +2510,7 @@ function getPreferencesFromControls() {
     length: document.getElementById("length").value,
     selectedExpansions: {
       roborally: document.getElementById("expansion-roborally").checked,
+      "30th-anniversary": document.getElementById("expansion-30th-anniversary").checked,
       "master-builder": document.getElementById("expansion-master-builder").checked,
       "thrills-and-spills": document.getElementById("expansion-thrills-and-spills").checked,
       "chaos-and-carnage": document.getElementById("expansion-chaos-and-carnage").checked,
@@ -2192,6 +2531,7 @@ function applyPreferencesToControls(preferences) {
   document.getElementById("difficulty").value = preferences.difficulty ?? "any";
   document.getElementById("length").value = preferences.length ?? "any";
   document.getElementById("expansion-roborally").checked = preferences.selectedExpansions?.roborally ?? true;
+  document.getElementById("expansion-30th-anniversary").checked = preferences.selectedExpansions?.["30th-anniversary"] ?? false;
   document.getElementById("expansion-master-builder").checked = preferences.selectedExpansions?.["master-builder"] ?? false;
   document.getElementById("expansion-thrills-and-spills").checked = preferences.selectedExpansions?.["thrills-and-spills"] ?? false;
   document.getElementById("expansion-chaos-and-carnage").checked = preferences.selectedExpansions?.["chaos-and-carnage"] ?? false;
@@ -2338,7 +2678,7 @@ function getMinimumSmallOnlyBoardCount(lengthPreference, preferences = {}) {
     return 3;
   }
   if (lengthPreference === "short") {
-    return preferences.difficulty === "hard" ? 1 : 2;
+    return getTuningDifficulty(preferences.difficulty) === "hard" ? 1 : 2;
   }
   return 1;
 }
@@ -2362,7 +2702,7 @@ function weightedBoardCount(lengthPreference, maxBoards, hasLargeBoards = true, 
   const candidates = (table[lengthPreference] || table.moderate).filter((count) => (
     count <= maxBoards && count >= minimumCount
   ));
-  return sample(candidates.length ? candidates : [1]);
+  return sample(candidates.length ? candidates : [Math.max(1, minimumCount)]);
 }
 
 function getAvailableMainBoardIds(pieceMap, expansionIds = null) {
@@ -2605,11 +2945,12 @@ function boardPreferencePenalty(piece, preferences, guidanceLevel) {
     };
   }
 
-  const target = difficultyTargets[preferences.difficulty] || difficultyTargets.moderate;
+  const tuningDifficulty = getTuningDifficulty(preferences.difficulty);
+  const target = difficultyTargets[tuningDifficulty] || difficultyTargets.moderate;
 
-  const mismatchWeights = preferences.difficulty === "easy"
+  const mismatchWeights = tuningDifficulty === "easy"
     ? { hazard: 1.35, congestion: 1.05, complexity: 1.0, swinginess: 1.1, overall: 1.35 }
-    : preferences.difficulty === "moderate"
+    : tuningDifficulty === "moderate"
       ? { hazard: 1.2, congestion: 1.15, complexity: 1.0, swinginess: 0.95, overall: 1.35 }
       : { hazard: 0.95, congestion: 0.9, complexity: 0.85, swinginess: 0.7, overall: 0.85 };
 
@@ -2621,20 +2962,20 @@ function boardPreferencePenalty(piece, preferences, guidanceLevel) {
     Math.abs((profile.overall ?? 2) - target.overall) * mismatchWeights.overall
   );
 
-  const guidancePenalty = preferences.difficulty === "easy"
+  const guidancePenalty = tuningDifficulty === "easy"
     ? Math.max(0, (profile.overall ?? 2) - 1.9) * 6.5 +
       Math.max(0, (profile.swinginess ?? 2) - 1.6) * 3.5
-    : preferences.difficulty === "moderate"
+    : tuningDifficulty === "moderate"
       ? (profile.band === "extreme" ? 3.5 : 0) +
         Math.max(0, (profile.overall ?? 2) - 2.75) * 1.2
       : 0;
 
-  const sparsePenalty = preferences.difficulty === "hard"
+  const sparsePenalty = tuningDifficulty === "hard"
     ? 0
     : (profile.density ?? 0.08) <= 0.03
-      ? (preferences.difficulty === "moderate" ? 2.2 : 1.1)
+      ? (tuningDifficulty === "moderate" ? 2.2 : 1.1)
       : (profile.density ?? 0.08) <= 0.055
-        ? (preferences.difficulty === "moderate" ? 1.15 : 0.45)
+        ? (tuningDifficulty === "moderate" ? 1.15 : 0.45)
         : 0;
 
   const jitter = guidanceLevel === 0
@@ -2690,7 +3031,526 @@ function getDockTileKeySet(dockPlacements = [], pieceMap) {
   return keys;
 }
 
-function getOverlayCount(preferences, largeBoardCount, maxAvailable) {
+function rotateTileOffset(x, y, piece, rotation) {
+  if (rotation === 90) {
+    return { x: piece.height - 1 - y, y: x };
+  }
+  if (rotation === 180) {
+    return { x: piece.width - 1 - x, y: piece.height - 1 - y };
+  }
+  if (rotation === 270) {
+    return { x: y, y: piece.width - 1 - x };
+  }
+  return { x, y };
+}
+
+function getPlacementOccupiedOffsets(piece, rotation = 0) {
+  if (!piece?.tiles?.length) {
+    const dims = rotatedDimensions(piece, rotation);
+    const offsets = [];
+
+    for (let y = 0; y < dims.height; y += 1) {
+      for (let x = 0; x < dims.width; x += 1) {
+        offsets.push({ x, y });
+      }
+    }
+
+    return offsets;
+  }
+
+  return piece.tiles.map((tile) => rotateTileOffset(tile.x, tile.y, piece, rotation));
+}
+
+function getPlacementOccupiedTiles(piece, placement) {
+  return getPlacementOccupiedOffsets(piece, placement.rotation ?? 0).map(({ x, y }) => (
+    `${placement.x + x},${placement.y + y}`
+  ));
+}
+
+function isMiniOverlayPiece(piece) {
+  return piece?.kind === "overlay";
+}
+
+function isBlankCustomBoardPiece(piece) {
+  return piece?.expansionId === "master-builder" &&
+    piece?.kind === "small" &&
+    (piece?.tiles?.length ?? 0) === 0;
+}
+
+function chooseWeightedCount(maxCount, weightForCount) {
+  if (maxCount <= 0) {
+    return 0;
+  }
+
+  const bag = [];
+  for (let count = 0; count <= maxCount; count += 1) {
+    const copies = Math.max(1, Math.round(weightForCount(count)));
+    for (let copy = 0; copy < copies; copy += 1) {
+      bag.push(count);
+    }
+  }
+
+  return sample(bag);
+}
+
+function chooseBlankBoardMiniOverlayCount(maxCount) {
+  return chooseWeightedCount(maxCount, (count) => {
+    if (count === 0) {
+      return 2;
+    }
+
+    const ratio = count / Math.max(1, maxCount);
+    if (ratio >= 0.3 && ratio <= 0.7) {
+      return ratio >= 0.4 && ratio <= 0.6 ? 6 : 5;
+    }
+    if (ratio >= 0.2 && ratio <= 0.8) {
+      return 3;
+    }
+    return 1;
+  });
+}
+
+function chooseLargeBoardMiniOverlayCount(maxCount) {
+  return chooseWeightedCount(Math.min(4, maxCount), (count) => {
+    const weights = [4, 4, 3, 2, 1];
+    return weights[count] ?? 1;
+  });
+}
+
+function chooseSmallBoardMiniOverlayCount(maxCount) {
+  return chooseWeightedCount(Math.min(1, maxCount), (count) => {
+    const weights = [4, 1];
+    return weights[count] ?? 1;
+  });
+}
+
+function getPlacementSupportTiles(placement, pieceMap) {
+  const piece = pieceMap[placement.pieceId];
+  const dims = rotatedDimensions(piece, placement.rotation ?? 0);
+  const supportTiles = new Set();
+
+  for (let y = 0; y < dims.height; y += 1) {
+    for (let x = 0; x < dims.width; x += 1) {
+      supportTiles.add(`${placement.x + x},${placement.y + y}`);
+    }
+  }
+
+  return supportTiles;
+}
+
+function getOverlayPlacementsForSupportTiles(overlayPiece, supportTiles, dockTiles) {
+  const bounds = Array.from(supportTiles).map((key) => key.split(",").map(Number));
+  if (!bounds.length) {
+    return [];
+  }
+
+  const xs = bounds.map(([x]) => x);
+  const ys = bounds.map(([, y]) => y);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  const placements = [];
+
+  for (const rotation of ROTATIONS) {
+    const dims = rotatedDimensions(overlayPiece, rotation);
+    const occupiedOffsets = getPlacementOccupiedOffsets(overlayPiece, rotation);
+
+    for (let y = minY; y <= maxY - dims.height + 1; y += 1) {
+      for (let x = minX; x <= maxX - dims.width + 1; x += 1) {
+        const valid = occupiedOffsets.every(({ x: dx, y: dy }) => {
+          const key = `${x + dx},${y + dy}`;
+          return supportTiles.has(key) && !dockTiles.has(key);
+        });
+
+        if (valid) {
+          placements.push({
+            pieceId: overlayPiece.id,
+            x,
+            y,
+            rotation,
+            overlay: true
+          });
+        }
+      }
+    }
+  }
+
+  return placements;
+}
+
+function getBoardMiniOverlayTargets(structuralPlacements, boardOverlayPlacements, pieceMap) {
+  const blankBoards = [];
+  const otherBoards = [];
+
+  for (const placement of [...boardOverlayPlacements, ...structuralPlacements]) {
+    const piece = pieceMap[placement.pieceId];
+    if (!piece) {
+      continue;
+    }
+
+    if (isBlankCustomBoardPiece(piece)) {
+      blankBoards.push(placement);
+      continue;
+    }
+
+    otherBoards.push(placement);
+  }
+
+  return { blankBoards, otherBoards };
+}
+
+function getTargetSupportTiles(targetPlacement, boardOverlayPlacements, pieceMap) {
+  const supportTiles = getPlacementSupportTiles(targetPlacement, pieceMap);
+  if (targetPlacement.overlay) {
+    return supportTiles;
+  }
+
+  for (const overlayPlacement of boardOverlayPlacements) {
+    for (const key of getPlacementOccupiedTiles(pieceMap[overlayPlacement.pieceId], overlayPlacement)) {
+      supportTiles.delete(key);
+    }
+  }
+
+  return supportTiles;
+}
+
+function getOppositeSide(side) {
+  return {
+    N: "S",
+    E: "W",
+    S: "N",
+    W: "E"
+  }[side] ?? side;
+}
+
+function tileHasWallOnSide(features = [], side) {
+  return features.some((feature) => feature.type === "wall" && (feature.sides || []).includes(side));
+}
+
+function tileHasLaserInDirection(features = [], dir) {
+  return features.some((feature) => feature.type === "laser" && feature.dir === dir);
+}
+
+function getPlacedTileFeatureMap(piece, placement) {
+  const placed = placePiece(piece, placement);
+  return new Map(placed.tiles.map((tile) => [`${tile.x},${tile.y}`, tile.features || []]));
+}
+
+function getCombinedPlacedTileFeatureMap(placements, pieceMap) {
+  const featureMap = new Map();
+
+  placements.forEach((placement) => {
+    const placed = placePiece(pieceMap[placement.pieceId], placement);
+    placed.tiles.forEach((tile) => {
+      const key = `${tile.x},${tile.y}`;
+      const existing = featureMap.get(key) || [];
+      featureMap.set(key, [...existing, ...(tile.features || [])]);
+    });
+  });
+
+  return featureMap;
+}
+
+function placementSuppresssTrackedHazard(placement, piece, currentTileMap) {
+  return getPlacementOccupiedOffsets(piece, placement.rotation ?? 0).some(({ x, y }) => {
+    const tile = currentTileMap.get(`${placement.x + x},${placement.y + y}`);
+    return (tile?.features || []).some((feature) => (
+      feature.type === "laser" || feature.type === "flamethrower"
+    ));
+  });
+}
+
+function laserTileHasValidContinuation(tile, laser, candidateFeatureMap, currentTileMap, supportTiles) {
+  const sideChecks = [laser.dir, getOppositeSide(laser.dir)];
+
+  return sideChecks.every((side) => {
+    const currentFeatures = tile.features || [];
+    if (tileHasWallOnSide(currentFeatures, side)) {
+      return true;
+    }
+
+    const delta = CARDINAL_DIRS[side];
+    const neighborX = tile.x + delta.dx;
+    const neighborY = tile.y + delta.dy;
+    const neighborKey = `${neighborX},${neighborY}`;
+    if (!supportTiles.has(neighborKey)) {
+      return !currentTileMap.has(neighborKey);
+    }
+
+    const neighborFeatures = candidateFeatureMap.get(neighborKey) ?? currentTileMap.get(neighborKey)?.features ?? [];
+    if (tileHasWallOnSide(neighborFeatures, getOppositeSide(side))) {
+      return true;
+    }
+
+    return tileHasLaserInDirection(neighborFeatures, laser.dir);
+  });
+}
+
+function placementHasValidLaserSupport(placement, piece, currentTileMap, supportTiles, candidateFeatureMap = null) {
+  const placed = placePiece(piece, placement);
+  const effectiveFeatureMap = candidateFeatureMap ?? getPlacedTileFeatureMap(piece, placement);
+
+  return placed.tiles.every((tile) => {
+    const lasers = (tile.features || []).filter((feature) => feature.type === "laser");
+    if (!lasers.length) {
+      return true;
+    }
+
+    return lasers.every((laser) => laserTileHasValidContinuation(tile, laser, effectiveFeatureMap, currentTileMap, supportTiles));
+  });
+}
+
+function rotateBundleOffset(offset, length, rotation) {
+  if (rotation === 90) {
+    return { x: 0, y: offset };
+  }
+  if (rotation === 180) {
+    return { x: length - 1 - offset, y: 0 };
+  }
+  if (rotation === 270) {
+    return { x: 0, y: length - 1 - offset };
+  }
+  return { x: offset, y: 0 };
+}
+
+function getAvailableLaserBundlePatterns(groupedMiniOverlayIds, maxTiles) {
+  const patterns = [];
+
+  LASER_BUNDLE_DEFINITIONS.forEach((definition) => {
+    const hasStart = groupedMiniOverlayIds.has(definition.startPhysicalId);
+    const hasMid = groupedMiniOverlayIds.has(definition.midPhysicalId);
+    const hasEnd = groupedMiniOverlayIds.has(definition.endPhysicalId);
+
+    if (hasStart && hasMid && hasEnd && maxTiles >= 3) {
+      patterns.push({ ids: [definition.endId, definition.midId, definition.startId], weight: 5 });
+    }
+    if (hasStart && hasEnd && maxTiles >= 2) {
+      patterns.push({ ids: [definition.endId, definition.startId], weight: 3 });
+    }
+    if (hasStart && hasMid && maxTiles >= 2) {
+      patterns.push({ ids: [definition.midId, definition.startId], weight: 2 });
+    }
+    if (hasMid && hasEnd && maxTiles >= 2) {
+      patterns.push({ ids: [definition.endId, definition.midId], weight: 2 });
+    }
+    if (hasMid && maxTiles >= 1) {
+      patterns.push({ ids: [definition.midId], weight: 1 });
+    }
+  });
+
+  return patterns;
+}
+
+function sampleWeightedLaserBundle(patterns) {
+  const bag = [];
+  patterns.forEach((pattern) => {
+    for (let copy = 0; copy < pattern.weight; copy += 1) {
+      bag.push(pattern);
+    }
+  });
+  return bag.length ? sample(bag) : null;
+}
+
+function tryPlaceLaserBundleOnBoard(groupedMiniOverlayIds, pieceMap, supportTiles, dockTiles, occupiedMiniOverlayTiles, currentTileMap, remainingSlots) {
+  const bundlePattern = sampleWeightedLaserBundle(getAvailableLaserBundlePatterns(groupedMiniOverlayIds, remainingSlots));
+  if (!bundlePattern) {
+    return null;
+  }
+
+  const bounds = Array.from(supportTiles).map((key) => key.split(",").map(Number));
+  if (!bounds.length) {
+    return null;
+  }
+
+  const xs = bounds.map(([x]) => x);
+  const ys = bounds.map(([, y]) => y);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  const bundleLength = bundlePattern.ids.length;
+  const candidateBundles = [];
+
+  for (const rotation of ROTATIONS) {
+    const width = rotation === 90 || rotation === 270 ? 1 : bundleLength;
+    const height = rotation === 90 || rotation === 270 ? bundleLength : 1;
+
+    for (let y = minY; y <= maxY - height + 1; y += 1) {
+      for (let x = minX; x <= maxX - width + 1; x += 1) {
+        const placements = bundlePattern.ids.map((pieceId, index) => {
+          const offset = rotateBundleOffset(index, bundleLength, rotation);
+          return {
+            pieceId,
+            x: x + offset.x,
+            y: y + offset.y,
+            rotation,
+            overlay: true
+          };
+        });
+
+        const occupiedKeys = placements.flatMap((placement) => getPlacementOccupiedTiles(pieceMap[placement.pieceId], placement));
+        if (!occupiedKeys.every((key) => supportTiles.has(key) && !dockTiles.has(key) && !occupiedMiniOverlayTiles.has(key))) {
+          continue;
+        }
+        if (placements.some((placement) => placementSuppresssTrackedHazard(placement, pieceMap[placement.pieceId], currentTileMap))) {
+          continue;
+        }
+
+        const candidateFeatureMap = getCombinedPlacedTileFeatureMap(placements, pieceMap);
+        if (!placements.every((placement) => (
+          placementHasValidLaserSupport(placement, pieceMap[placement.pieceId], currentTileMap, supportTiles, candidateFeatureMap)
+        ))) {
+          continue;
+        }
+
+        candidateBundles.push(placements);
+      }
+    }
+  }
+
+  if (!candidateBundles.length) {
+    return null;
+  }
+
+  return sample(candidateBundles);
+}
+
+function placementTouchesSupportEdge(placement, piece, supportTiles) {
+  return getPlacementOccupiedOffsets(piece, placement.rotation ?? 0).some(({ x, y }) => {
+    const absoluteX = placement.x + x;
+    const absoluteY = placement.y + y;
+    return (
+      !supportTiles.has(`${absoluteX},${absoluteY - 1}`) ||
+      !supportTiles.has(`${absoluteX + 1},${absoluteY}`) ||
+      !supportTiles.has(`${absoluteX},${absoluteY + 1}`) ||
+      !supportTiles.has(`${absoluteX - 1},${absoluteY}`)
+    );
+  });
+}
+
+function placementTouchesOccupiedNeighbors(placement, piece, occupiedOverlayTiles) {
+  return getPlacementOccupiedOffsets(piece, placement.rotation ?? 0).some(({ x, y }) => {
+    const absoluteX = placement.x + x;
+    const absoluteY = placement.y + y;
+    for (let dy = -1; dy <= 1; dy += 1) {
+      for (let dx = -1; dx <= 1; dx += 1) {
+        if (dx === 0 && dy === 0) {
+          continue;
+        }
+        if (occupiedOverlayTiles.has(`${absoluteX + dx},${absoluteY + dy}`)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  });
+}
+
+function placeMiniOverlaysOnBoards(targetBoards, groupedMiniOverlayIds, pieceMap, dockPlacements, occupiedMiniOverlayTiles, countChooser, currentPlacements, boardOverlayPlacements) {
+  const dockTiles = getDockTileKeySet(dockPlacements, pieceMap);
+  const placements = [];
+  let currentTileMap = buildResolvedMap(currentPlacements, pieceMap).tileMap;
+
+  for (const targetPlacement of targetBoards) {
+    const remainingGroups = [...groupedMiniOverlayIds.entries()];
+    if (!remainingGroups.length) {
+      break;
+    }
+
+    const targetCount = countChooser(remainingGroups.length, targetPlacement);
+    if (targetCount <= 0) {
+      continue;
+    }
+
+    const supportTiles = getTargetSupportTiles(targetPlacement, boardOverlayPlacements, pieceMap);
+    if (!supportTiles.size) {
+      continue;
+    }
+    const targetPiece = pieceMap[targetPlacement.pieceId];
+    const allowDensePacking = isBlankCustomBoardPiece(targetPiece);
+
+    for (let placedCount = 0; placedCount < targetCount;) {
+      let placed = false;
+      const remainingSlots = targetCount - placedCount;
+      const laserBundlePlacements = tryPlaceLaserBundleOnBoard(
+        groupedMiniOverlayIds,
+        pieceMap,
+        supportTiles,
+        dockTiles,
+        occupiedMiniOverlayTiles,
+        currentTileMap,
+        remainingSlots
+      );
+      if (laserBundlePlacements?.length) {
+        laserBundlePlacements.forEach((placement) => {
+          getPlacementOccupiedTiles(pieceMap[placement.pieceId], placement).forEach((key) => occupiedMiniOverlayTiles.add(key));
+          placements.push(placement);
+          currentPlacements.push(placement);
+          groupedMiniOverlayIds.delete(getPhysicalBoardId(pieceMap[placement.pieceId]));
+        });
+        currentTileMap = buildResolvedMap(currentPlacements, pieceMap).tileMap;
+        placedCount += laserBundlePlacements.length;
+        continue;
+      }
+
+      for (const [physicalBoardId, overlayIds] of shuffle([...groupedMiniOverlayIds.entries()])) {
+        const chosenOverlayId = sample(overlayIds);
+        const overlayPiece = pieceMap[chosenOverlayId];
+        const legalPlacements = shuffle(
+          getOverlayPlacementsForSupportTiles(overlayPiece, supportTiles, dockTiles)
+        ).filter((placement) => {
+          if (!getPlacementOccupiedTiles(overlayPiece, placement).every((key) => !occupiedMiniOverlayTiles.has(key))) {
+            return false;
+          }
+          if (placementSuppresssTrackedHazard(placement, overlayPiece, currentTileMap)) {
+            return false;
+          }
+          if (!placementHasValidLaserSupport(placement, overlayPiece, currentTileMap, supportTiles)) {
+            return false;
+          }
+          return true;
+        });
+
+        if (!legalPlacements.length) {
+          continue;
+        }
+
+        const preferredPlacements = allowDensePacking
+          ? legalPlacements
+          : legalPlacements.filter((placement) => (
+            !placementTouchesSupportEdge(placement, overlayPiece, supportTiles) &&
+            !placementTouchesOccupiedNeighbors(placement, overlayPiece, occupiedMiniOverlayTiles)
+          ));
+        const fallbackPlacements = allowDensePacking
+          ? legalPlacements
+          : legalPlacements.filter((placement) => (
+            !placementTouchesOccupiedNeighbors(placement, overlayPiece, occupiedMiniOverlayTiles)
+          ));
+        const candidatePlacements = preferredPlacements.length
+          ? preferredPlacements
+          : (fallbackPlacements.length ? fallbackPlacements : legalPlacements);
+        const chosenPlacement = candidatePlacements[0];
+        getPlacementOccupiedTiles(overlayPiece, chosenPlacement).forEach((key) => occupiedMiniOverlayTiles.add(key));
+        placements.push(chosenPlacement);
+        currentPlacements.push(chosenPlacement);
+        currentTileMap = buildResolvedMap(currentPlacements, pieceMap).tileMap;
+        groupedMiniOverlayIds.delete(physicalBoardId);
+        placedCount += 1;
+        placed = true;
+        break;
+      }
+
+      if (!placed) {
+        break;
+      }
+    }
+  }
+
+  return placements;
+}
+
+function getBoardOverlayCount(preferences, largeBoardCount, maxAvailable) {
   if (preferences.difficulty === "easy") {
     return 0;
   }
@@ -2717,50 +3577,11 @@ function getOverlayCount(preferences, largeBoardCount, maxAvailable) {
 }
 
 function getLegalOverlayPlacements(overlayPiece, structuralPlacements, dockPlacements, pieceMap) {
-  const supportTiles = buildMainFootprintTiles(structuralPlacements, pieceMap);
-  const dockTiles = getDockTileKeySet(dockPlacements, pieceMap);
-  const bounds = Array.from(supportTiles).map((key) => key.split(",").map(Number));
-  if (!bounds.length) {
-    return [];
-  }
-
-  const xs = bounds.map(([x]) => x);
-  const ys = bounds.map(([, y]) => y);
-  const minX = Math.min(...xs);
-  const maxX = Math.max(...xs);
-  const minY = Math.min(...ys);
-  const maxY = Math.max(...ys);
-  const placements = [];
-
-  for (const rotation of ROTATIONS) {
-    const dims = rotatedDimensions(overlayPiece, rotation);
-    for (let y = minY; y <= maxY - dims.height + 1; y += 1) {
-      for (let x = minX; x <= maxX - dims.width + 1; x += 1) {
-        let valid = true;
-        for (let dy = 0; dy < dims.height && valid; dy += 1) {
-          for (let dx = 0; dx < dims.width; dx += 1) {
-            const key = `${x + dx},${y + dy}`;
-            if (!supportTiles.has(key) || dockTiles.has(key)) {
-              valid = false;
-              break;
-            }
-          }
-        }
-
-        if (valid) {
-          placements.push({
-            pieceId: overlayPiece.id,
-            x,
-            y,
-            rotation,
-            overlay: true
-          });
-        }
-      }
-    }
-  }
-
-  return placements;
+  return getOverlayPlacementsForSupportTiles(
+    overlayPiece,
+    buildMainFootprintTiles(structuralPlacements, pieceMap),
+    getDockTileKeySet(dockPlacements, pieceMap)
+  );
 }
 
 function getAlignedEdgeOffsets(anchorStart, anchorLength, candidateLength) {
@@ -2872,65 +3693,105 @@ function chooseOverlayPlacements(structuralPlacements, dockPlacements, pieceMap,
   const usedStructuralBoards = new Set(
     structuralPlacements.map((placement) => getPhysicalBoardId(pieceMap[placement.pieceId]))
   );
-  const overlayIds = getAvailableOverlayIds(pieceMap, expansionIds)
-    .filter((overlayId) => !usedStructuralBoards.has(getPhysicalBoardId(pieceMap[overlayId])));
-  if (!overlayIds.length) {
-    return [];
-  }
+  const overlayIds = getAvailableOverlayIds(pieceMap, expansionIds);
+  const miniOverlayIds = overlayIds.filter((overlayId) => isMiniOverlayPiece(pieceMap[overlayId]));
+  const boardOverlayIds = overlayIds.filter((overlayId) => (
+    !isMiniOverlayPiece(pieceMap[overlayId]) &&
+    !usedStructuralBoards.has(getPhysicalBoardId(pieceMap[overlayId]))
+  ));
 
   const largeBoardCount = structuralPlacements.filter((placement) => {
     const piece = pieceMap[placement.pieceId];
     return Math.max(piece?.width ?? 0, piece?.height ?? 0) >= 12;
   }).length;
-  const grouped = new Map();
-  for (const overlayId of overlayIds) {
+  const groupedBoardOverlays = new Map();
+  for (const overlayId of boardOverlayIds) {
     const physicalBoardId = getPhysicalBoardId(pieceMap[overlayId]);
-    if (!grouped.has(physicalBoardId)) {
-      grouped.set(physicalBoardId, []);
+    if (!groupedBoardOverlays.has(physicalBoardId)) {
+      groupedBoardOverlays.set(physicalBoardId, []);
     }
-    grouped.get(physicalBoardId).push(overlayId);
+    groupedBoardOverlays.get(physicalBoardId).push(overlayId);
   }
 
-  const targetCount = getOverlayCount(preferences, largeBoardCount, grouped.size);
-  if (targetCount <= 0) {
-    return [];
-  }
-
-  const chosenGroups = shuffle([...grouped.values()]).slice(0, targetCount);
   const placements = [];
-  const occupiedOverlayTiles = new Set();
+  const occupiedBoardOverlayTiles = new Set();
+  const occupiedMiniOverlayTiles = new Set();
+  const currentPlacements = [
+    ...structuralPlacements,
+    ...dockPlacements
+  ];
+  const boardOverlayPlacements = [];
 
-  for (const groupOverlayIds of chosenGroups) {
+  const targetBoardOverlayCount = getBoardOverlayCount(preferences, largeBoardCount, groupedBoardOverlays.size);
+  for (const groupOverlayIds of shuffle([...groupedBoardOverlays.values()]).slice(0, targetBoardOverlayCount)) {
     const chosenOverlayId = sample(groupOverlayIds);
     const overlayPiece = pieceMap[chosenOverlayId];
-      const legalPlacements = (
+    const legalPlacements = (
       preferences.alignedLayout
         ? getAlignedOverlayPlacements(overlayPiece, structuralPlacements, dockPlacements, pieceMap)
         : getLegalOverlayPlacements(overlayPiece, structuralPlacements, dockPlacements, pieceMap)
-      )
-      .filter((placement) => {
-        const dims = rotatedDimensions(overlayPiece, placement.rotation);
-        for (let dy = 0; dy < dims.height; dy += 1) {
-          for (let dx = 0; dx < dims.width; dx += 1) {
-            if (occupiedOverlayTiles.has(`${placement.x + dx},${placement.y + dy}`)) {
-              return false;
-            }
-          }
-        }
-        return true;
-      });
+    ).filter((placement) => (
+      getPlacementOccupiedTiles(overlayPiece, placement).every((key) => !occupiedBoardOverlayTiles.has(key))
+    ));
     if (!legalPlacements.length) {
       continue;
     }
+
     const chosenPlacement = sample(legalPlacements);
-    const dims = rotatedDimensions(overlayPiece, chosenPlacement.rotation);
-    for (let dy = 0; dy < dims.height; dy += 1) {
-      for (let dx = 0; dx < dims.width; dx += 1) {
-        occupiedOverlayTiles.add(`${chosenPlacement.x + dx},${chosenPlacement.y + dy}`);
-      }
-    }
+    getPlacementOccupiedTiles(overlayPiece, chosenPlacement).forEach((key) => occupiedBoardOverlayTiles.add(key));
     placements.push(chosenPlacement);
+    boardOverlayPlacements.push(chosenPlacement);
+    currentPlacements.push(chosenPlacement);
   }
+
+  const groupedMiniOverlays = new Map();
+  for (const overlayId of miniOverlayIds) {
+    const physicalBoardId = getPhysicalBoardId(pieceMap[overlayId]);
+    if (!groupedMiniOverlays.has(physicalBoardId)) {
+      groupedMiniOverlays.set(physicalBoardId, []);
+    }
+    groupedMiniOverlays.get(physicalBoardId).push(overlayId);
+  }
+
+  const { blankBoards, otherBoards } = getBoardMiniOverlayTargets(structuralPlacements, boardOverlayPlacements, pieceMap);
+  placements.push(...placeMiniOverlaysOnBoards(
+    shuffle(blankBoards),
+    groupedMiniOverlays,
+    pieceMap,
+    dockPlacements,
+    occupiedMiniOverlayTiles,
+    (maxCount) => chooseBlankBoardMiniOverlayCount(maxCount),
+    currentPlacements,
+    boardOverlayPlacements
+  ));
+
+  placements.push(...placeMiniOverlaysOnBoards(
+    shuffle(otherBoards.filter((placement) => {
+      const piece = pieceMap[placement.pieceId];
+      return Math.max(piece?.width ?? 0, piece?.height ?? 0) >= 12;
+    })),
+    groupedMiniOverlays,
+    pieceMap,
+    dockPlacements,
+    occupiedMiniOverlayTiles,
+    (maxCount) => chooseLargeBoardMiniOverlayCount(maxCount),
+    currentPlacements,
+    boardOverlayPlacements
+  ));
+
+  placements.push(...placeMiniOverlaysOnBoards(
+    shuffle(otherBoards.filter((placement) => {
+      const piece = pieceMap[placement.pieceId];
+      return Math.max(piece?.width ?? 0, piece?.height ?? 0) < 12;
+    })),
+    groupedMiniOverlays,
+    pieceMap,
+    dockPlacements,
+    occupiedMiniOverlayTiles,
+    (maxCount) => chooseSmallBoardMiniOverlayCount(maxCount),
+    currentPlacements,
+    boardOverlayPlacements
+  ));
 
   return placements;
 }
@@ -3007,7 +3868,8 @@ function selectBoardIdsForCourse(boardIds, count, pieceMap, preferences, guidanc
 
   const ranked = scoredGroups.sort((a, b) => a.score - b.score);
 
-  const candidatePoolSize = preferences.difficulty === "hard"
+  const tuningDifficulty = getTuningDifficulty(preferences.difficulty);
+  const candidatePoolSize = tuningDifficulty === "hard"
     ? Math.min(ranked.length, Math.max(count + 6, Math.ceil(ranked.length * 1)))
     : Math.min(ranked.length, Math.max(count + 4, Math.ceil(ranked.length * 0.45)));
 
@@ -3019,14 +3881,16 @@ function selectBoardIdsForCourse(boardIds, count, pieceMap, preferences, guidanc
     const getTop = (ratio, extra = 0) =>
       rankedEntries.slice(0, Math.min(total, Math.max(boardCount + extra, Math.ceil(total * ratio))));
 
-    if (currentPreferences.difficulty === "hard") {
+    const currentTuningDifficulty = getTuningDifficulty(currentPreferences.difficulty);
+
+    if (currentTuningDifficulty === "hard") {
       if (attempt < 10) return rankedEntries;
       if (attempt < 25) return getTop(0.8, 8);
       if (attempt < 35) return getTop(0.55, 5);
       return getTop(0.35, 3);
     }
 
-    if (currentPreferences.difficulty === "moderate") {
+    if (currentTuningDifficulty === "moderate") {
       if (attempt < 5) return rankedEntries;
       if (attempt < 20) return getTop(0.65, 6);
       if (attempt < 35) return getTop(0.45, 4);
@@ -3371,6 +4235,39 @@ function getConveyorPredecessors(tileMap, point) {
   return predecessors;
 }
 
+function pointStartsClosedConveyorLoop(tileMap, point) {
+  if (!tileMap) {
+    return false;
+  }
+
+  const startKey = `${point.x},${point.y}`;
+  const startTile = tileMap.get(startKey);
+  const startBelt = getTileBelt(startTile);
+  if (!startBelt || !CARDINAL_DIRS[startBelt.dir]) {
+    return false;
+  }
+
+  const visited = new Set();
+  let current = { x: point.x, y: point.y };
+
+  for (let step = 0; step < 24; step += 1) {
+    const key = `${current.x},${current.y}`;
+    if (visited.has(key)) {
+      return key === startKey;
+    }
+    visited.add(key);
+
+    const next = getConveyorSuccessor(tileMap, current);
+    if (!next) {
+      return false;
+    }
+
+    current = next;
+  }
+
+  return false;
+}
+
 function getMovingCheckpointTrace(tileMap, point, cache = null) {
   if (!tileMap) {
     return {
@@ -3442,7 +4339,6 @@ function getMovingCheckpointTrace(tileMap, point, cache = null) {
 
     const next = getConveyorSuccessor(tileMap, current);
     if (!next) {
-      wraps = coverage.length > 0;
       break;
     }
 
@@ -3471,6 +4367,10 @@ function getMovingCheckpointTrace(tileMap, point, cache = null) {
 
 function findMovingCheckpointReentryPoint(tileMap, point) {
   if (!tileMap) {
+    return { x: point.x, y: point.y };
+  }
+
+  if (pointStartsClosedConveyorLoop(tileMap, point)) {
     return { x: point.x, y: point.y };
   }
 
@@ -3631,7 +4531,7 @@ function getConsecutiveFlagDistanceThreshold(preferences = {}, guidanceLevel = 0
     long: 1
   };
 
-  const base = byDifficulty[preferences.difficulty] ?? byDifficulty.moderate;
+  const base = byDifficulty[getTuningDifficulty(preferences.difficulty)] ?? byDifficulty.moderate;
   const lengthOffset = byLengthOffset[preferences.length] ?? 0;
 
   return Math.max(3, base + lengthOffset);
@@ -3651,7 +4551,7 @@ function getSequentialFlagDistanceThreshold(preferences = {}, pairIndex = 0, tot
       lateBonus = 3;
     } else if (lengthPreference === "long") {
       lateBonus = 3;
-    } else if ((preferences.difficulty ?? "moderate") !== "hard") {
+    } else if (getTuningDifficulty(preferences.difficulty) !== "hard") {
       lateBonus = 1;
     }
   } else if (pairIndex === totalFlags - 3) {
@@ -3844,7 +4744,7 @@ function getFlagCandidateAreaPenalty(candidate, tileMap, difficulty, preferences
 function getFlagCandidateWeight(candidate, tileMap, starts, preferences, sequenceIndex, guidanceLevel, thresholds, previousFlag = null, movingTargetTraceCache = null) {
   let weight = candidate.weight ?? 1;
   const approachStats = getFlagCandidateApproachStats(tileMap, candidate);
-  const difficulty = preferences.difficulty ?? "moderate";
+  const difficulty = getTuningDifficulty(preferences.difficulty);
   const lengthPreference = preferences.length ?? "moderate";
   const tilePenalty = getFlagCandidateTilePenalty(candidate, tileMap, difficulty, preferences);
   const areaPenalty = getFlagCandidateAreaPenalty(candidate, tileMap, difficulty, preferences);
@@ -3901,7 +4801,7 @@ function getFlagCandidateWeight(candidate, tileMap, starts, preferences, sequenc
 }
 
 function sampleFlagSequence(flagCandidates, flagCount, tileMap, starts, preferences, guidanceLevel, thresholds, movingTargetTraceCache = null) {
-  const difficulty = preferences.difficulty ?? "moderate";
+  const difficulty = getTuningDifficulty(preferences.difficulty);
   const weighted = difficulty === "easy" || difficulty === "moderate";
   const pool = [...flagCandidates];
   const picked = [];
@@ -4014,6 +4914,7 @@ function pickFlags(flagCandidates, flagCount, boardPlacements, dockPlacements, p
 function applyFlagOverrides(tileMap, goals, options = {}) {
   const next = cloneTileMap(tileMap);
   const hazardousFlags = Boolean(options.hazardousFlags);
+  const movingTargets = Boolean(options.movingTargets);
 
   goals.forEach((goal, index) => {
     const key = `${goal.x},${goal.y}`;
@@ -4021,7 +4922,7 @@ function applyFlagOverrides(tileMap, goals, options = {}) {
 
     if (!hazardousFlags) {
       tile.features = tile.features.filter((feature) => (
-        DEFAULT_CHECKPOINT_ACTIVE_FEATURE_TYPES.has(feature.type)
+        isCheckpointActiveFeature(feature, { movingTargets })
       ));
     }
     tile.features = tile.features.filter((feature) => feature.type !== "checkpoint");
@@ -4326,6 +5227,10 @@ function createBoardPlacements(pieceMap, lengthPreference, preferences, guidance
 
     placements = extension.placements;
     layoutValidation = extension.layoutValidation;
+  }
+
+  if (!isSmallBoardLayoutAcceptable(placements, pieceMap, layoutValidation, preferences)) {
+    return null;
   }
 
   return {
@@ -4782,6 +5687,17 @@ function computeCompetitiveBlockImpact(firstLeg, playerCount = 4) {
 
 function pointOnPlacement(point, placement, pieceMap) {
   const piece = pieceMap[placement.pieceId];
+  if (!piece) {
+    return false;
+  }
+
+  if (placement.overlay) {
+    return getPlacementOccupiedOffsets(piece, placement.rotation ?? 0).some((offset) => (
+      point.x === placement.x + offset.x &&
+      point.y === placement.y + offset.y
+    ));
+  }
+
   const dims = rotatedDimensions(piece, placement.rotation ?? 0);
 
   return (
@@ -4839,18 +5755,187 @@ function overlayFitsWithinBoards(overlayPlacement, boardPlacements, pieceMap) {
     return false;
   }
 
-  const dims = rotatedDimensions(piece, overlayPlacement.rotation ?? 0);
+  return getPlacementOccupiedOffsets(piece, overlayPlacement.rotation ?? 0).every(({ x, y }) => (
+    boardPlacements.some((placement) => (
+      pointOnPlacement({ x: overlayPlacement.x + x, y: overlayPlacement.y + y }, placement, pieceMap)
+    ))
+  ));
+}
 
-  for (let y = overlayPlacement.y; y < overlayPlacement.y + dims.height; y += 1) {
-    for (let x = overlayPlacement.x; x < overlayPlacement.x + dims.width; x += 1) {
-      const covered = boardPlacements.some((placement) => pointOnPlacement({ x, y }, placement, pieceMap));
-      if (!covered) {
-        return false;
-      }
-    }
+function collectTrackedRouteTileKeys(sequence, usableStarts = []) {
+  const keys = new Set();
+
+  usableStarts.forEach((startAnalysis) => {
+    (startAnalysis.selectedRoute?.path || []).forEach((point) => {
+      keys.add(`${point.x},${point.y}`);
+    });
+  });
+
+  sequence?.legs?.forEach((leg) => {
+    (leg.analysis?.distinctRoutes || []).forEach((route) => {
+      (route.path || []).forEach((point) => {
+        keys.add(`${point.x},${point.y}`);
+      });
+    });
+  });
+
+  return keys;
+}
+
+function overlayTouchesTrackedPlay(overlayPlacement, pieceMap, routeTileKeys, checkpoints = [], radius = 2) {
+  const piece = pieceMap[overlayPlacement.pieceId];
+  if (!piece) {
+    return false;
   }
 
-  return true;
+  return getPlacementOccupiedOffsets(piece, overlayPlacement.rotation ?? 0).some(({ x, y }) => {
+    const absolute = {
+      x: overlayPlacement.x + x,
+      y: overlayPlacement.y + y
+    };
+
+    if (checkpoints.some((checkpoint) => manhattanDistance(absolute, checkpoint) <= radius)) {
+      return true;
+    }
+
+    for (let dy = -radius; dy <= radius; dy += 1) {
+      for (let dx = -radius; dx <= radius; dx += 1) {
+        if (Math.abs(dx) + Math.abs(dy) > radius) {
+          continue;
+        }
+        if (routeTileKeys.has(`${absolute.x + dx},${absolute.y + dy}`)) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  });
+}
+
+function overlaySitsUnderCheckpoint(overlayPlacement, pieceMap, checkpoints = []) {
+  const piece = pieceMap[overlayPlacement.pieceId];
+  if (!piece || !checkpoints.length) {
+    return false;
+  }
+
+  return getPlacementOccupiedOffsets(piece, overlayPlacement.rotation ?? 0).some(({ x, y }) => (
+    checkpoints.some((checkpoint) => (
+      checkpoint.x === overlayPlacement.x + x &&
+      checkpoint.y === overlayPlacement.y + y
+    ))
+  ));
+}
+
+function overlayHasCheckpointActiveFeatures(overlayPlacement, pieceMap, checkpoints = [], options = {}) {
+  const piece = pieceMap[overlayPlacement.pieceId];
+  if (!piece || !checkpoints.length) {
+    return false;
+  }
+
+  const placed = placePiece(piece, overlayPlacement);
+  return placed.tiles.some((tile) => (
+    checkpoints.some((checkpoint) => checkpoint.x === tile.x && checkpoint.y === tile.y) &&
+    (tile.features || []).some((feature) => isCheckpointActiveFeature(feature, options))
+  ));
+}
+
+function getPlacedOverlayTiles(overlayPlacement, pieceMap) {
+  const piece = pieceMap[overlayPlacement.pieceId];
+  if (!piece) {
+    return [];
+  }
+
+  return placePiece(piece, overlayPlacement).tiles;
+}
+
+function placementHasLaserFeature(overlayPlacement, pieceMap) {
+  return getPlacedOverlayTiles(overlayPlacement, pieceMap).some((tile) => (
+    (tile.features || []).some((feature) => feature.type === "laser")
+  ));
+}
+
+function placementsAreLaserLinked(sourcePlacement, candidatePlacement, pieceMap) {
+  const sourceTiles = getPlacedOverlayTiles(sourcePlacement, pieceMap);
+  const candidateFeatureMap = new Map(
+    getPlacedOverlayTiles(candidatePlacement, pieceMap).map((tile) => [`${tile.x},${tile.y}`, tile.features || []])
+  );
+
+  return sourceTiles.some((tile) => {
+    const lasers = (tile.features || []).filter((feature) => feature.type === "laser");
+    return lasers.some((laser) => {
+      const sides = [laser.dir, getOppositeSide(laser.dir)];
+      return sides.some((side) => {
+        if (tileHasWallOnSide(tile.features || [], side)) {
+          return false;
+        }
+
+        const delta = CARDINAL_DIRS[side];
+        const neighborFeatures = candidateFeatureMap.get(`${tile.x + delta.dx},${tile.y + delta.dy}`);
+        if (!neighborFeatures) {
+          return false;
+        }
+
+        return (
+          tileHasWallOnSide(neighborFeatures, getOppositeSide(side)) ||
+          tileHasLaserInDirection(neighborFeatures, laser.dir)
+        );
+      });
+    });
+  });
+}
+
+function pruneIrrelevantOverlayPlacements(overlayPlacements, pieceMap, sequence, usableStarts, checkpoints, options = {}) {
+  if (!overlayPlacements?.length) {
+    return {
+      overlayPlacements,
+      pruned: false
+    };
+  }
+
+  const routeTileKeys = collectTrackedRouteTileKeys(sequence, usableStarts);
+  const hazardousFlags = Boolean(options.hazardousFlags);
+  const initiallyKept = overlayPlacements.filter((placement) => (
+    (
+      hazardousFlags ||
+      !overlaySitsUnderCheckpoint(placement, pieceMap, checkpoints) ||
+      overlayHasCheckpointActiveFeatures(placement, pieceMap, checkpoints, options)
+    ) &&
+    overlayTouchesTrackedPlay(placement, pieceMap, routeTileKeys, checkpoints, 2)
+  ));
+  const keptPlacements = [...initiallyKept];
+  const keptKeys = new Set(keptPlacements.map((placement) => `${placement.pieceId}@${placement.x},${placement.y},${placement.rotation ?? 0}`));
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    overlayPlacements.forEach((placement) => {
+      const placementKey = `${placement.pieceId}@${placement.x},${placement.y},${placement.rotation ?? 0}`;
+      if (keptKeys.has(placementKey) || !placementHasLaserFeature(placement, pieceMap)) {
+        return;
+      }
+
+      const linkedToKeptLaser = keptPlacements.some((keptPlacement) => (
+        placementHasLaserFeature(keptPlacement, pieceMap) &&
+        (
+          placementsAreLaserLinked(keptPlacement, placement, pieceMap) ||
+          placementsAreLaserLinked(placement, keptPlacement, pieceMap)
+        )
+      ));
+      if (!linkedToKeptLaser) {
+        return;
+      }
+
+      keptPlacements.push(placement);
+      keptKeys.add(placementKey);
+      changed = true;
+    });
+  }
+
+  return {
+    overlayPlacements: keptPlacements,
+    pruned: keptPlacements.length !== overlayPlacements.length
+  };
 }
 
 function pruneUnusedBoardPlacements(boardPlacements, overlayPlacements, pieceMap, sequence, usableStarts, checkpoints) {
@@ -5413,6 +6498,7 @@ function updateDevView() {
   document.getElementById("trace-leg-label")?.classList.toggle("hidden", !enabled);
   document.getElementById("report-panel")?.classList.toggle("hidden", !enabled);
   document.getElementById("board-audit-toggle-label")?.classList.toggle("hidden", !enabled);
+  document.getElementById("run-diagnostics")?.classList.add("hidden");
   updateBoardAuditVisibility();
 }
 
@@ -5470,6 +6556,7 @@ function drawCanvasFailureNotice(canvas, message) {
 }
 
 function renderScenario(scenario) {
+  lastRenderDiagnostics.blankFallbackTriggered = false;
   updateDevView();
   updateSetupSummary(scenario);
   updateRulesNote(scenario);
@@ -5557,6 +6644,7 @@ function renderScenario(scenario) {
         checkpoints: scenario.checkpoints,
         boardCount: scenario.boardCount
       });
+      lastRenderDiagnostics.blankFallbackTriggered = true;
       drawCanvasFailureNotice(canvas, "The generated course data could not be drawn to the board canvas.");
     }
   }
@@ -5591,7 +6679,7 @@ function validateSelectedInventory(assets, preferences) {
 }
 
 function getFlagRetryBudget(preferences = {}, remainingEvaluations = 1) {
-  const difficulty = preferences.difficulty ?? "moderate";
+  const difficulty = getTuningDifficulty(preferences.difficulty);
   const lengthPreference = preferences.length ?? "moderate";
   const table = {
     easy: { short: 3, moderate: 6, long: 7 },
@@ -5603,7 +6691,7 @@ function getFlagRetryBudget(preferences = {}, remainingEvaluations = 1) {
 }
 
 function getFlagRetryStallLimit(preferences = {}) {
-  const difficulty = preferences.difficulty ?? "moderate";
+  const difficulty = getTuningDifficulty(preferences.difficulty);
   const lengthPreference = preferences.length ?? "moderate";
 
   if (difficulty === "easy" && lengthPreference !== "short") {
@@ -5802,7 +6890,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       rebootTokens = recoveryRule === "reboot_tokens"
         ? placeRebootTokens(scenarioBoardRects, pieceMap, scenarioTileMap, checkpoints, preferences.playerCount)
         : [];
-      goalTileMap = applyFlagOverrides(scenarioTileMap, checkpoints, { hazardousFlags });
+      goalTileMap = applyFlagOverrides(scenarioTileMap, checkpoints, { hazardousFlags, movingTargets });
       activeStarts = filterStartsForGoals(resolved.starts, checkpoints);
       sequence = analyzeFlagSequence(goalTileMap, activeStarts, checkpoints, preferences.playerCount, {
         competitiveMode,
@@ -5838,6 +6926,19 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         continue;
       }
 
+      const prunedOverlays = pruneIrrelevantOverlayPlacements(
+        scenarioOverlayPlacements,
+        pieceMap,
+        sequence,
+        usableStarts,
+        checkpoints,
+        { hazardousFlags }
+      );
+      if (prunedOverlays.pruned) {
+        scenarioOverlayPlacements = prunedOverlays.overlayPlacements;
+        continue;
+      }
+
       break;
     }
     const metrics = classifyCandidate(sequence, {
@@ -5858,12 +6959,18 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       checkpoints,
       tileMap: scenarioTileMap
     });
+    scenarioPlacements = [
+      ...scenarioBoardPlacements,
+      ...scenarioDockPlacements,
+      ...scenarioOverlayPlacements
+    ];
+    const finalOverlayPlacements = scenarioPlacements.filter((placement) => placement.overlay);
     const movingTargetReentryMarkers = collectMovingTargetReentryMarkers(scenarioTileMap, checkpoints, movingTargets);
     const scenario = {
       pieceMap: assets.pieceMap,
       imageMap: assets.imageMap,
       placements: scenarioPlacements,
-      overlayPlacements: scenarioOverlayPlacements,
+      overlayPlacements: finalOverlayPlacements,
       dockPlacements: scenarioDockPlacements,
       dockSummaries: buildDockSummaries(scenarioBoardPlacements, scenarioDockPlacements, pieceMap),
       checkpoints,
@@ -6010,7 +7117,7 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
   }
 
   const { tileMap, starts } = buildResolvedMap(placements, pieceMap);
-  const goalTileMap = applyFlagOverrides(tileMap, checkpoints, { hazardousFlags });
+  const goalTileMap = applyFlagOverrides(tileMap, checkpoints, { hazardousFlags, movingTargets });
   const activeStarts = filterStartsForGoals(starts, checkpoints);
   const sequence = analyzeFlagSequence(goalTileMap, activeStarts, checkpoints, snapshot.preferences.playerCount, {
     competitiveMode,
@@ -6102,26 +7209,16 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
   };
 }
 
-async function start() {
-  setGeneratingOverlay(true, "Trying random setups and checking difficulty, length, and usable starts.");
-  await nextFrame();
-  const assets = await loadAssets();
-  initializeBoardAudit(assets);
-  const preferences = getPreferencesFromControls();
-  const inventoryError = validateSelectedInventory(assets, preferences);
-  if (inventoryError) {
-    setGeneratingOverlay(false);
-    window.alert(inventoryError);
-    return;
-  }
-
+async function generateScenarioForPreferences(assets, preferences, options = {}) {
+  const maxAttempts = options.maxAttempts ?? MAX_ATTEMPTS;
+  const onProgress = options.onProgress ?? null;
   let bestScenario = null;
   let crashedAttempts = 0;
   let lastAttemptError = null;
   let attempt = 0;
 
-  while (attempt < MAX_ATTEMPTS) {
-    const remainingAttempts = MAX_ATTEMPTS - attempt;
+  while (attempt < maxAttempts) {
+    const remainingAttempts = maxAttempts - attempt;
     const attemptLabel = attempt + 1;
     let result;
     try {
@@ -6131,12 +7228,11 @@ async function start() {
         attemptLabel,
         remainingAttempts,
         async (localEvaluations) => {
-          const visibleAttempt = Math.min(MAX_ATTEMPTS, attempt + localEvaluations);
-          setGeneratingOverlay(
-            true,
-            `Attempt ${visibleAttempt} of ${MAX_ATTEMPTS}: still looking for ${formatOverlaySearchTarget(preferences)}.`
-          );
-          await nextFrame();
+          if (!onProgress) {
+            return;
+          }
+          const visibleAttempt = Math.min(maxAttempts, attempt + localEvaluations);
+          await onProgress(visibleAttempt, maxAttempts);
         }
       );
     } catch (error) {
@@ -6160,30 +7256,208 @@ async function start() {
     }
 
     if (scenario.metrics.acceptable) {
-      currentScenario = scenario;
-      renderScenario(currentScenario);
-      saveScenarioSnapshot(currentScenario);
-      setGeneratingOverlay(false);
-      return;
+      return {
+        scenario,
+        attemptsUsed: attempt,
+        crashedAttempts,
+        lastAttemptError,
+        accepted: true
+      };
     }
 
-    if (attempt % OVERLAY_UPDATE_INTERVAL === 0) {
-      setGeneratingOverlay(true, `Attempt ${attempt} of ${MAX_ATTEMPTS}: still looking for ${formatOverlaySearchTarget(preferences)}.`);
-      await nextFrame();
+    if (onProgress && attempt % OVERLAY_UPDATE_INTERVAL === 0) {
+      await onProgress(attempt, maxAttempts);
     }
   }
 
-  if (!bestScenario) {
+  return {
+    scenario: bestScenario,
+    attemptsUsed: attempt,
+    crashedAttempts,
+    lastAttemptError,
+    accepted: false
+  };
+}
+
+function detectScenarioExplanationIssues(scenario) {
+  const issues = [];
+  const explanationHtml = buildCourseExplanationHtml(scenario, []);
+  const checks = [
+    {
+      active: scenario.metrics.difficultyDirection === "high",
+      tokens: ["softens the board pressure", "makes recovery cleaner"]
+    },
+    {
+      active: scenario.metrics.difficultyDirection === "low",
+      tokens: [
+        "planning more demanding",
+        "less forgiving",
+        "harder to plan ahead",
+        "reduces planning flexibility",
+        "extra uncertainty"
+      ]
+    },
+    {
+      active: scenario.metrics.lengthDirection === "high",
+      tokens: ["keeps turns moving", "trims some board friction"]
+    },
+    {
+      active: scenario.metrics.lengthDirection === "low",
+      tokens: ["add extra repositioning"]
+    }
+  ];
+
+  checks.forEach((check) => {
+    if (!check.active) {
+      return;
+    }
+    check.tokens.forEach((token) => {
+      if (explanationHtml.includes(token)) {
+        issues.push(`note-contradiction:${token}`);
+      }
+    });
+  });
+
+  return issues;
+}
+
+function buildDiagnosticsCases(basePreferences) {
+  const cases = [];
+
+  for (const playerCount of DIAGNOSTIC_PLAYER_COUNTS) {
+    for (const difficulty of DIAGNOSTIC_DIFFICULTIES) {
+      for (const length of DIAGNOSTIC_LENGTHS) {
+        cases.push({
+          label: `${playerCount}p ${difficulty} ${length}`,
+          preferences: {
+            ...basePreferences,
+            playerCount,
+            difficulty,
+            length
+          }
+        });
+      }
+    }
+  }
+
+  return cases;
+}
+
+async function runDiagnostics() {
+  const button = document.getElementById("run-diagnostics");
+  const reportEl = document.getElementById("report");
+  const assets = await loadAssets();
+  const basePreferences = getPreferencesFromControls();
+  const cases = buildDiagnosticsCases(basePreferences);
+  const results = [];
+  const previousScenario = currentScenario;
+
+  button.disabled = true;
+  document.getElementById("dev-view").checked = true;
+  updateDevView();
+  reportEl.textContent = `Running diagnostics across ${cases.length} cases...\n`;
+
+  for (const [index, testCase] of cases.entries()) {
+    reportEl.textContent = `Running diagnostics: case ${index + 1} of ${cases.length}\nCurrent: ${testCase.label}\n`;
+    const inventoryError = validateSelectedInventory(assets, testCase.preferences);
+    if (inventoryError) {
+      results.push({
+        label: testCase.label,
+        issues: [`inventory:${inventoryError}`]
+      });
+      continue;
+    }
+
+    const generation = await generateScenarioForPreferences(assets, testCase.preferences, {
+      maxAttempts: DIAGNOSTIC_ATTEMPTS
+    });
+    const issues = [];
+
+    if (!generation.scenario) {
+      issues.push(generation.lastAttemptError
+        ? `generation-failed:${generation.lastAttemptError.message}`
+        : "generation-failed");
+      results.push({
+        label: testCase.label,
+        issues,
+        attemptsUsed: generation.attemptsUsed
+      });
+      continue;
+    }
+
+    renderScenario(generation.scenario);
+
+    if (lastRenderDiagnostics.blankFallbackTriggered) {
+      issues.push("blank-render");
+    }
+    issues.push(...generation.scenario.metrics.hardFailures);
+    issues.push(...detectScenarioExplanationIssues(generation.scenario));
+
+    results.push({
+      label: testCase.label,
+      issues: [...new Set(issues)],
+      attemptsUsed: generation.attemptsUsed,
+      accepted: generation.accepted,
+      fitScore: generation.scenario.metrics.fitScore
+    });
+  }
+
+  currentScenario = previousScenario;
+  if (currentScenario) {
+    renderScenario(currentScenario);
+  }
+
+  const failures = results.filter((item) => item.issues.length);
+  const summaryLines = [
+    `Diagnostics complete: ${results.length} cases`,
+    `Failures: ${failures.length}`,
+    ""
+  ];
+
+  if (failures.length) {
+    failures.forEach((failure) => {
+      summaryLines.push(`${failure.label}: ${failure.issues.join(", ")}${failure.fitScore !== undefined ? ` | fit ${failure.fitScore}` : ""}${failure.attemptsUsed ? ` | attempts ${failure.attemptsUsed}` : ""}`);
+    });
+  } else {
+    summaryLines.push("No diagnostic issues detected in the sampled matrix.");
+  }
+
+  reportEl.textContent = summaryLines.join("\n");
+  button.disabled = false;
+}
+
+async function start() {
+  setGeneratingOverlay(true, "Trying random setups and checking difficulty, length, and usable starts.");
+  await nextFrame();
+  const assets = await loadAssets();
+  initializeBoardAudit(assets);
+  const preferences = getPreferencesFromControls();
+  const inventoryError = validateSelectedInventory(assets, preferences);
+  if (inventoryError) {
+    setGeneratingOverlay(false);
+    window.alert(inventoryError);
+    return;
+  }
+
+  const generation = await generateScenarioForPreferences(assets, preferences, {
+    maxAttempts: MAX_ATTEMPTS,
+    onProgress: async (attempt, maxAttempts) => {
+      setGeneratingOverlay(true, `Attempt ${attempt} of ${maxAttempts}: still looking for ${formatOverlaySearchTarget(preferences)}.`);
+      await nextFrame();
+    }
+  });
+
+  if (!generation.scenario) {
     setGeneratingOverlay(false);
     window.alert(
-      crashedAttempts > 0 && lastAttemptError
-        ? `Course generation failed after ${MAX_ATTEMPTS} attempts. Last error: ${lastAttemptError.message}`
+      generation.crashedAttempts > 0 && generation.lastAttemptError
+        ? `Course generation failed after ${MAX_ATTEMPTS} attempts. Last error: ${generation.lastAttemptError.message}`
         : `Course generation failed after ${MAX_ATTEMPTS} attempts.`
     );
     return;
   }
 
-  currentScenario = bestScenario;
+  currentScenario = generation.scenario;
   renderScenario(currentScenario);
   saveScenarioSnapshot(currentScenario);
   setGeneratingOverlay(false);
@@ -6195,6 +7469,14 @@ document.getElementById("reroll").addEventListener("click", () => {
 
 document.getElementById("about-button").addEventListener("click", () => {
   openAboutDialog();
+});
+
+document.getElementById("run-diagnostics").addEventListener("click", () => {
+  runDiagnostics().catch((error) => {
+    document.getElementById("report").textContent = `Diagnostics failed: ${error.message}`;
+    document.getElementById("run-diagnostics").disabled = false;
+    console.error(error);
+  });
 });
 
 document.getElementById("about-close-icon").addEventListener("click", () => {
@@ -6263,6 +7545,10 @@ document.getElementById("variant-rules-menu").addEventListener("click", (event) 
 });
 
 document.getElementById("expansion-roborally").addEventListener("change", () => {
+  updateExpansionSummary();
+});
+
+document.getElementById("expansion-30th-anniversary").addEventListener("change", () => {
   updateExpansionSummary();
 });
 

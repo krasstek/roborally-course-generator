@@ -54,5 +54,5 @@
   ],
   "expansionId": "master-builder",
   "physicalBoardId": "mb-tile-17",
-  "image": ".assets/boards/tile-conveyor-bend-right-2x3.jpg"
+  "image": "./assets/boards/tile-conveyor-bend-right-2x3.jpg"
 }

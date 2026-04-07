@@ -43,5 +43,5 @@
   ],
   "expansionId": "master-builder",
   "physicalBoardId": "mb-tile-16",
-  "image": ".assets/boards/tile-conveyor-fast-right-large-2x2.jpg"
+  "image": "./assets/boards/tile-conveyor-fast-right-large-2x2.jpg"
 }

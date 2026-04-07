@@ -36,5 +36,5 @@
   ],
   "expansionId": "master-builder",
   "physicalBoardId": "mb-tile-14",
-  "image": "./assets/tile-wall-cage-2x1.jpg"
+  "image": "./assets/boards/tile-wall-cage-2x1.jpg"
 }

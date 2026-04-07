@@ -106,6 +106,23 @@ export function placePiece(piece, placement) {
   };
 }
 
+function getOccupiedOffsets(piece, rotation = 0) {
+  if (!(piece.tiles || []).length) {
+    const dims = rotatedDimensions(piece, rotation);
+    const offsets = [];
+
+    for (let y = 0; y < dims.height; y += 1) {
+      for (let x = 0; x < dims.width; x += 1) {
+        offsets.push({ x, y });
+      }
+    }
+
+    return offsets;
+  }
+
+  return piece.tiles.map((tile) => rotateXY(tile.x, tile.y, piece.width, piece.height, rotation));
+}
+
 export function rectanglesOverlap(a, b) {
   return (
     a.x < b.x + b.width &&
@@ -514,23 +531,29 @@ export function buildResolvedMap(placements, pieces) {
       kind: placement.overlay ? "overlay" : piece.kind
     });
 
-    for (let dy = 0; dy < placed.height; dy += 1) {
-      for (let dx = 0; dx < placed.width; dx += 1) {
-        const key = `${placed.x + dx},${placed.y + dy}`;
-        if (!tileMap.has(key)) {
-          tileMap.set(key, {
-            x: placed.x + dx,
-            y: placed.y + dy,
-            features: []
-          });
-        }
-        if (placement.overlay) {
-          tileMap.set(key, {
-            x: placed.x + dx,
-            y: placed.y + dy,
-            features: []
-          });
-        }
+    const occupiedOffsets = placement.overlay
+      ? getOccupiedOffsets(piece, placement.rotation ?? 0)
+      : Array.from({ length: placed.height }, (_, dy) => dy).flatMap((dy) => (
+        Array.from({ length: placed.width }, (_, dx) => ({ x: dx, y: dy }))
+      ));
+
+    for (const offset of occupiedOffsets) {
+      const tileX = placed.x + offset.x;
+      const tileY = placed.y + offset.y;
+      const key = `${tileX},${tileY}`;
+      if (!tileMap.has(key)) {
+        tileMap.set(key, {
+          x: tileX,
+          y: tileY,
+          features: []
+        });
+      }
+      if (placement.overlay) {
+        tileMap.set(key, {
+          x: tileX,
+          y: tileY,
+          features: []
+        });
       }
     }
 

@@ -6,8 +6,63 @@ const {
   buildResolvedMap,
   getBoundaryEdges,
   getBounds,
-  groupBoundaryRuns
+  groupBoundaryRuns,
+  rotateXY
 } = await import(versionedPath("./board.js"));
+
+function isMiniOverlayPiece(piece) {
+  return piece?.kind === "overlay";
+}
+
+function getOccupiedOffsets(piece, rotation = 0) {
+  if (!(piece?.tiles || []).length) {
+    const width = rotation === 90 || rotation === 270 ? piece.height : piece.width;
+    const height = rotation === 90 || rotation === 270 ? piece.width : piece.height;
+    const offsets = [];
+
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        offsets.push({ x, y });
+      }
+    }
+
+    return offsets;
+  }
+
+  return piece.tiles.map((tile) => rotateXY(tile.x, tile.y, piece.width, piece.height, rotation));
+}
+
+function drawTileContour(ctx, absoluteTiles, bounds, tileSize, margin) {
+  const tileSet = new Set(absoluteTiles.map(({ x, y }) => `${x},${y}`));
+  const edges = [];
+
+  for (const tile of absoluteTiles) {
+    const left = margin + (tile.x - bounds.minX) * tileSize;
+    const top = margin + (tile.y - bounds.minY) * tileSize;
+    const right = left + tileSize;
+    const bottom = top + tileSize;
+
+    if (!tileSet.has(`${tile.x},${tile.y - 1}`)) {
+      edges.push([[left, top], [right, top]]);
+    }
+    if (!tileSet.has(`${tile.x + 1},${tile.y}`)) {
+      edges.push([[right, top], [right, bottom]]);
+    }
+    if (!tileSet.has(`${tile.x},${tile.y + 1}`)) {
+      edges.push([[left, bottom], [right, bottom]]);
+    }
+    if (!tileSet.has(`${tile.x - 1},${tile.y}`)) {
+      edges.push([[left, top], [left, bottom]]);
+    }
+  }
+
+  ctx.beginPath();
+  for (const [[x1, y1], [x2, y2]] of edges) {
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+  }
+  ctx.stroke();
+}
 
 function drawGrid(ctx, bounds, tileSize, margin) {
   const width = bounds.maxX - bounds.minX + 1;
@@ -112,6 +167,9 @@ function drawFootprints(ctx, footprints, pieces, bounds, tileSize, margin) {
     const x = margin + (fp.x - bounds.minX) * tileSize;
     const y = margin + (fp.y - bounds.minY) * tileSize;
     const piece = pieces[fp.id];
+    if (isMiniOverlayPiece(piece)) {
+      continue;
+    }
     const label = piece?.name ?? fp.id;
 
     const overlayStyles = {
@@ -154,9 +212,22 @@ function drawOverlayGlows(ctx, overlayPlacements, pieces, bounds, tileSize, marg
     }
     const drawX = margin + (placement.x - bounds.minX) * tileSize;
     const drawY = margin + (placement.y - bounds.minY) * tileSize;
+    if (isMiniOverlayPiece(piece)) {
+      const absoluteTiles = getOccupiedOffsets(piece, placement.rotation ?? 0).map((offset) => ({
+        x: placement.x + offset.x,
+        y: placement.y + offset.y
+      }));
+      ctx.shadowColor = "rgba(218, 52, 45, 0.72)";
+      ctx.shadowBlur = 12 * glowScale;
+      ctx.strokeStyle = "rgba(199, 31, 24, 0.92)";
+      ctx.lineWidth = 2.25 * glowScale;
+      ctx.lineJoin = "round";
+      drawTileContour(ctx, absoluteTiles, bounds, tileSize, margin);
+      continue;
+    }
+
     const drawW = piece.width * tileSize;
     const drawH = piece.height * tileSize;
-
     ctx.shadowColor = "rgba(88, 190, 255, 0.6)";
     ctx.shadowBlur = 14 * glowScale;
     ctx.strokeStyle = "rgba(88, 190, 255, 0.82)";
@@ -302,9 +373,28 @@ function drawFeatureIcon(ctx, feature, left, top, size) {
         });
       }
       return;
+    case "repulsor":
+      drawIconBadge(ctx, left, top, size, { fill: "#8b3cbb", stroke: "#4b1768" });
+      drawDirectionArrow(ctx, cx, cy, size * 0.42, feature.sides?.[0] ?? "E", "#f7ecff");
+      return;
     case "laser":
       drawIconBadge(ctx, left, top, size, { fill: "#d95d2a", stroke: "#7e2d12" });
       drawBadgeText(ctx, "L", left, top, size, { color: "#fff6df", bold: true });
+      return;
+    case "trapdoor":
+      drawIconBadge(ctx, left, top, size, { fill: "#5c4a40", stroke: "#241812" });
+      ctx.save();
+      ctx.strokeStyle = "#f2e0ce";
+      ctx.lineWidth = Math.max(1.1, size * 0.08);
+      ctx.strokeRect(left + size * 0.24, top + size * 0.24, size * 0.52, size * 0.52);
+      ctx.beginPath();
+      ctx.moveTo(left + size * 0.24, top + size * 0.24);
+      ctx.lineTo(left + size * 0.76, top + size * 0.76);
+      ctx.moveTo(left + size * 0.76, top + size * 0.24);
+      ctx.lineTo(left + size * 0.24, top + size * 0.76);
+      ctx.stroke();
+      ctx.restore();
+      drawBadgeTiming(ctx, feature.timing, left, top, size);
       return;
     case "pit":
       drawIconBadge(ctx, left, top, size, { fill: "#2d2d2d", stroke: "#0f0f0f" });
@@ -491,6 +581,30 @@ function drawFeatureIcon(ctx, feature, left, top, size) {
       ctx.fillRect(left + size * 0.32, top + size * 0.44, size * 0.2, size * 0.08);
       ctx.restore();
       return;
+    case "chopShop":
+      drawIconBadge(ctx, left, top, size, { fill: "#4d9d6a", stroke: "#1d5a38" });
+      drawBadgeText(ctx, "CS", left, top, size, { color: "#f3fff4", bold: true });
+      return;
+    case "homingMissile":
+      drawIconBadge(ctx, left, top, size, { fill: "#7d2f2f", stroke: "#461414" });
+      ctx.save();
+      ctx.strokeStyle = "#fff4dc";
+      ctx.lineWidth = Math.max(1.2, size * 0.08);
+      ctx.beginPath();
+      ctx.arc(cx, cy, size * 0.23, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(cx, top + size * 0.16);
+      ctx.lineTo(cx, top + size * 0.34);
+      ctx.moveTo(cx, top + size * 0.66);
+      ctx.lineTo(cx, top + size * 0.84);
+      ctx.moveTo(left + size * 0.16, cy);
+      ctx.lineTo(left + size * 0.34, cy);
+      ctx.moveTo(left + size * 0.66, cy);
+      ctx.lineTo(left + size * 0.84, cy);
+      ctx.stroke();
+      ctx.restore();
+      return;
     default:
       drawIconBadge(ctx, left, top, size);
       drawBadgeText(ctx, feature.type.slice(0, 2).toUpperCase(), left, top, size, { color: "#ffffff", bold: true });
@@ -504,6 +618,7 @@ function getFeatureIconLayer(feature) {
     case "pit":
       return "background";
     case "belt":
+    case "trapdoor":
     case "gear":
     case "portal":
     case "teleporter":
@@ -854,9 +969,14 @@ function drawFeatures(
       let label = feature.type;
 
       if (feature.type === "belt") {
-        label = `belt ${feature.dir ?? ""}${feature.speed ?? ""}`.trim();
+        label = `conveyor ${feature.dir ?? ""}${feature.speed ?? ""}`.trim();
+      } else if (feature.type === "repulsor") {
+        label = `repulsor ${((feature.sides || []).join(",")) || ""}`.trim();
       } else if (feature.type === "laser") {
         label = `laser${feature.dir ? " " + feature.dir : ""}`;
+      } else if (feature.type === "trapdoor") {
+        const timing = feature.timing?.length ? ` [${feature.timing.join(",")}]` : "";
+        label = `trapdoor${timing}`;
       } else if (feature.type === "flamethrower") {
         const timing = feature.timing?.length ? ` [${feature.timing.join(",")}]` : "";
         label = `flame${feature.dir ? " " + feature.dir : ""}${timing}`;
@@ -872,6 +992,10 @@ function drawFeatures(
         label = `crusher${timing}`;
       } else if (feature.type === "portal") {
         label = `portal ${feature.id ?? ""}`.trim();
+      } else if (feature.type === "chopShop") {
+        label = "chop shop";
+      } else if (feature.type === "homingMissile") {
+        label = "homing missile";
       } else if (feature.type === "oil") {
         label = "oil";
       }
@@ -885,7 +1009,17 @@ function drawFeatures(
   ctx.restore();
 }
 
-function drawStarts(ctx, starts, bounds, tileSize, margin, unusableStartIndices = new Set(), showFacing = true, visibleFeatureTypes = null) {
+function drawStarts(
+  ctx,
+  starts,
+  bounds,
+  tileSize,
+  margin,
+  unusableStartIndices = new Set(),
+  showFacing = true,
+  visibleFeatureTypes = null,
+  showAllStartMarkers = false
+) {
   if (visibleFeatureTypes && !visibleFeatureTypes.has("start")) {
     return;
   }
@@ -895,13 +1029,30 @@ function drawStarts(ctx, starts, bounds, tileSize, margin, unusableStartIndices 
   starts.forEach((s, index) => {
     const px = margin + (s.x - bounds.minX) * tileSize;
     const py = margin + (s.y - bounds.minY) * tileSize;
+    const badgeSize = tileSize * 0.46;
+    const badgeLeft = px + (tileSize - badgeSize) / 2;
+    const badgeTop = py + (tileSize - badgeSize) / 2;
 
     if (unusableStartIndices.has(index)) {
       ctx.fillStyle = "rgba(232, 137, 28, 0.88)";
-      ctx.fillRect(px + 13, py + 13, tileSize - 26, tileSize - 26);
+      ctx.fillRect(badgeLeft, badgeTop, badgeSize, badgeSize);
       ctx.strokeStyle = "#8a4b10";
       ctx.lineWidth = 1.25;
-      ctx.strokeRect(px + 13, py + 13, tileSize - 26, tileSize - 26);
+      ctx.strokeRect(badgeLeft, badgeTop, badgeSize, badgeSize);
+    } else if (showAllStartMarkers) {
+      ctx.fillStyle = "rgba(52, 120, 246, 0.9)";
+      ctx.beginPath();
+      ctx.roundRect(badgeLeft, badgeTop, badgeSize, badgeSize, 8);
+      ctx.fill();
+      ctx.strokeStyle = "#113a78";
+      ctx.lineWidth = 1.25;
+      ctx.stroke();
+    }
+
+    if (showAllStartMarkers && !unusableStartIndices.has(index)) {
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "bold 12px sans-serif";
+      ctx.fillText("S", badgeLeft + badgeSize * 0.32, badgeTop + badgeSize * 0.67);
     }
 
     if (showFacing) {
@@ -921,9 +1072,11 @@ function drawGoals(ctx, goals, bounds, tileSize, margin) {
     const py = top + tileSize / 2;
 
     ctx.save();
-    ctx.fillStyle = "#f2b300";
-    ctx.strokeStyle = "#8a6200";
+    ctx.fillStyle = "#fff06a";
+    ctx.strokeStyle = "#b98500";
     ctx.lineWidth = 2;
+    ctx.shadowColor = "rgba(255, 226, 92, 0.72)";
+    ctx.shadowBlur = 10;
     ctx.beginPath();
     ctx.moveTo(left + tileSize * 0.26, top + tileSize * 0.22);
     ctx.lineTo(left + tileSize * 0.26, top + tileSize * 0.78);
@@ -1112,8 +1265,16 @@ function drawPieceImages(ctx, placements, pieces, imageMap, bounds, tileSize, ma
     const hTiles = piece.height;
     const drawW = wTiles * tileSize;
     const drawH = hTiles * tileSize;
+    const shouldMaskToTiles = isMiniOverlayPiece(piece) && (piece.tiles || []).length;
 
     if (placement.rotation === 0) {
+      if (shouldMaskToTiles) {
+        ctx.beginPath();
+        for (const tile of piece.tiles) {
+          ctx.rect(tile.x * tileSize, tile.y * tileSize, tileSize, tileSize);
+        }
+        ctx.clip();
+      }
       ctx.drawImage(img, 0, 0, drawW, drawH);
     } else {
       const rot = placement.rotation * Math.PI / 180;
@@ -1127,6 +1288,13 @@ function drawPieceImages(ctx, placements, pieces, imageMap, bounds, tileSize, ma
       }
 
       ctx.rotate(rot);
+      if (shouldMaskToTiles) {
+        ctx.beginPath();
+        for (const tile of piece.tiles) {
+          ctx.rect(tile.x * tileSize, tile.y * tileSize, tileSize, tileSize);
+        }
+        ctx.clip();
+      }
       ctx.drawImage(img, 0, 0, drawW, drawH);
     }
 
@@ -1157,6 +1325,7 @@ export function render(canvas, pieces, imageMap = {}, options = {}) {
   const showPieceImages = options.showPieceImages ?? true;
   const showFootprints = options.showFootprints ?? true;
   const showFeatureIcons = options.showFeatureIcons ?? false;
+  const showAllStartMarkers = options.showAllStartMarkers ?? (showFeatureIcons || !showPieceImages);
   const edgeOutlineColor = options.edgeOutlineColor ?? null;
   const visibleFeatureTypes = options.visibleFeatureTypes
     ? new Set(options.visibleFeatureTypes)
@@ -1185,7 +1354,17 @@ export function render(canvas, pieces, imageMap = {}, options = {}) {
   }
   drawGrid(ctx, bounds, tileSize, margin);
   drawFeatures(ctx, tileMap, bounds, tileSize, margin, showBoardLabels, showWalls, visibleFeatureTypes, showFeatureIcons);
-  drawStarts(ctx, starts, bounds, tileSize, margin, unusableStartIndices, showStartFacing, visibleFeatureTypes);
+  drawStarts(
+    ctx,
+    starts,
+    bounds,
+    tileSize,
+    margin,
+    unusableStartIndices,
+    showStartFacing,
+    visibleFeatureTypes,
+    showAllStartMarkers
+  );
   drawRebootTokens(ctx, options.rebootTokens || [], bounds, tileSize, margin);
   drawRoutes(ctx, options.analysis, bounds, tileSize, margin);
   drawGoals(ctx, options.goals || (options.goal ? [options.goal] : []), bounds, tileSize, margin);

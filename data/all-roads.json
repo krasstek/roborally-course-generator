@@ -1,9 +1,6 @@
 {
   "id": "all-roads",
   "name": "All Roads",
-  "expansionId": "master-builder",
-  "physicalBoardId": "all-roads-winding",
-  "image": "./assets/boards/all-roads.jpeg",
   "kind": "small",
   "width": 6,
   "height": 6,
@@ -38,7 +35,8 @@
         {
           "type": "belt",
           "dir": "S",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         }
       ]
     },
@@ -196,7 +194,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         }
       ]
     },
@@ -221,5 +220,8 @@
         }
       ]
     }
-  ]
+  ],
+  "expansionId": "master-builder",
+  "physicalBoardId": "all-roads-winding",
+  "image": "./assets/boards/all-roads.jpeg"
 }

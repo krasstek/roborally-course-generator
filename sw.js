@@ -1,4 +1,4 @@
-const APP_VERSION = "20260402121643";
+const APP_VERSION = "20260407115110";
 const STATIC_CACHE = `roborally-static-${APP_VERSION}`;
 const RUNTIME_CACHE = `roborally-runtime-${APP_VERSION}`;
 
@@ -44,8 +44,8 @@ const DATA_ASSETS = [
   "labyrinth",
   "laser-maze",
   "locked",
-  "mb-docking-bay",
   "mb-docking-bay-a",
+  "mb-docking-bay-b",
   "mergers",
   "misdirection",
   "portal-palace",

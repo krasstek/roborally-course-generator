@@ -1,0 +1,183 @@
+{
+  "id": "30th-docking-bay-b",
+  "name": "Docking Bay B",
+  "expansionId": "30th-anniversary",
+  "physicalBoardId": "30th-docking-bay",
+  "image": "./assets/boards/docking-bay-b.jpg",
+  "kind": "dock",
+  "width": 3,
+  "height": 12,
+  "mergeMode": "base",
+  "starts": [
+    {
+      "x": 0,
+      "y": 0,
+      "facing": "E"
+    },
+    {
+      "x": 0,
+      "y": 1,
+      "facing": "E"
+    },
+    {
+      "x": 0,
+      "y": 2,
+      "facing": "E"
+    },
+    {
+      "x": 1,
+      "y": 3,
+      "facing": "E"
+    },
+    {
+      "x": 1,
+      "y": 4,
+      "facing": "E"
+    },
+    {
+      "x": 1,
+      "y": 5,
+      "facing": "E"
+    },
+    {
+      "x": 1,
+      "y": 6,
+      "facing": "E"
+    },
+    {
+      "x": 1,
+      "y": 7,
+      "facing": "E"
+    },
+    {
+      "x": 1,
+      "y": 8,
+      "facing": "E"
+    },
+    {
+      "x": 0,
+      "y": 9,
+      "facing": "E"
+    },
+    {
+      "x": 0,
+      "y": 10,
+      "facing": "E"
+    },
+    {
+      "x": 0,
+      "y": 11,
+      "facing": "E"
+    }
+  ],
+  "tiles": [
+    {
+      "x": 0,
+      "y": 3,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 3,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 3,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 6,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 6,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 6,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 9,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 9,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 9,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
+        }
+      ]
+    }
+  ]
+}

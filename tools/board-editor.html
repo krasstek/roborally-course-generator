@@ -286,26 +286,30 @@
         <h2>Editing mode</h2>
 
         <div class="tool-grid">
-          <button data-tool="pit">Pit</button>
-          <button data-tool="oil">Oil slick</button>
-          <button data-tool="belt">Conveyor</button>
-          <button data-tool="gear">Gear</button>
-          <button data-tool="laser">Laser</button>
-          <button data-tool="wall">Wall</button>
-          <button data-tool="push">Push panel</button>
-          <button data-tool="flamethrower">Flamethrower</button>
-          <button data-tool="crusher">Crusher</button>
-          <button data-tool="portal">Portal</button>
-          <button data-tool="teleporter">Teleporter</button>
-          <button data-tool="randomizer">Randomizer</button>
-          <button data-tool="ledge">Ledge</button>
-          <button data-tool="ramp">Ramp</button>
-          <button data-tool="water">Water</button>
-          <button data-tool="checkpoint">Checkpoint</button>
           <button data-tool="battery">Battery</button>
-          <button data-tool="start">Start</button>
+          <button data-tool="checkpoint">Checkpoint</button>
+          <button data-tool="chopShop">Chop Shop</button>
+          <button data-tool="belt">Conveyor</button>
+          <button data-tool="crusher">Crusher</button>
           <button data-tool="eraseFeature">Erase feature</button>
           <button data-tool="eraseTile">Erase tile</button>
+          <button data-tool="flamethrower">Flamethrower</button>
+          <button data-tool="gear">Gear</button>
+          <button data-tool="homingMissile">Homing missile</button>
+          <button data-tool="laser">Laser</button>
+          <button data-tool="ledge">Ledge</button>
+          <button data-tool="oil">Oil slick</button>
+          <button data-tool="pit">Pit</button>
+          <button data-tool="portal">Portal</button>
+          <button data-tool="push">Push panel</button>
+          <button data-tool="randomizer">Randomizer</button>
+          <button data-tool="ramp">Ramp</button>
+          <button data-tool="repulsor">Repulsor</button>
+          <button data-tool="start">Start</button>
+          <button data-tool="teleporter">Teleporter</button>
+          <button data-tool="trapdoor">Trapdoor</button>
+          <button data-tool="wall">Wall</button>
+          <button data-tool="water">Water</button>
         </div>
 
         <div class="field" style="margin-top: 10px;">
@@ -328,6 +332,16 @@
             <select id="beltSpeed">
               <option value="1">1</option>
               <option value="2">2</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="beltTurn">Conveyor turn</label>
+            <select id="beltTurn">
+              <option value="">none</option>
+              <option value="left">left</option>
+              <option value="right">right</option>
+              <option value="both">both</option>
             </select>
           </div>
 
@@ -383,9 +397,10 @@
         </div>
 
         <p class="small-note">
-          Click a tile to add the selected feature. Click again with the same settings
-          to avoid duplicates. Use “Erase feature” to remove only the selected type,
-          or “Erase tile” to wipe the tile entirely.
+          Click a tile to add the selected feature. Most same-type tile features
+          replace earlier ones on that tile. Walls, ledges, repulsors, and lasers
+          can still accumulate. Use “Erase feature” to remove only the selected
+          type, or “Erase tile” to wipe the tile entirely.
         </p>
       </div>
 
@@ -468,6 +483,7 @@
 
     const directionInput = document.getElementById("direction");
     const beltSpeedInput = document.getElementById("beltSpeed");
+    const beltTurnInput = document.getElementById("beltTurn");
     const gearRotationInput = document.getElementById("gearRotation");
     const laserDamageInput = document.getElementById("laserDamage");
     const checkpointIdInput = document.getElementById("checkpointId");
@@ -537,6 +553,10 @@
       return [...new Set((timing || []).filter(n => Number.isInteger(n) && n >= 1 && n <= 5))].sort((a, b) => a - b);
     }
 
+    function normalizeBeltTurn(turn) {
+      return turn === "left" || turn === "right" || turn === "both" ? turn : undefined;
+    }
+
     function normalizeFeature(feature) {
       if (!feature || typeof feature !== "object" || typeof feature.type !== "string") {
         return null;
@@ -548,13 +568,18 @@
         case "battery":
         case "randomizer":
         case "water":
+        case "chopShop":
+        case "homingMissile":
           return { type: feature.type };
         case "belt":
-          return {
+          const normalizedBelt = {
             type: "belt",
             dir: feature.dir || "N",
             speed: feature.speed === 2 ? 2 : 1
           };
+          const turn = normalizeBeltTurn(feature.turn);
+          if (turn) normalizedBelt.turn = turn;
+          return normalizedBelt;
         case "gear":
           return {
             type: "gear",
@@ -567,14 +592,20 @@
             damage: Number.isFinite(feature.damage) && feature.damage > 0 ? Number(feature.damage) : 1
           };
         case "wall":
+        case "repulsor":
           return {
-            type: "wall",
+            type: feature.type,
             sides: normalizeSides(feature.sides)
           };
         case "push":
           return {
             type: "push",
             dir: feature.dir || "N",
+            timing: normalizeTiming(feature.timing)
+          };
+        case "trapdoor":
+          return {
+            type: "trapdoor",
             timing: normalizeTiming(feature.timing)
           };
         case "flamethrower":
@@ -656,19 +687,23 @@
         case "battery":
         case "randomizer":
         case "water":
+        case "chopShop":
+        case "homingMissile":
           return true;
         case "belt":
-          return a.dir === b.dir && a.speed === b.speed;
+          return a.dir === b.dir && a.speed === b.speed && a.turn === b.turn;
         case "gear":
           return a.rotation === b.rotation;
         case "laser":
           return a.dir === b.dir && a.damage === b.damage;
         case "wall":
+        case "repulsor":
           return sameArray(a.sides || [], b.sides || []);
         case "push":
         case "flamethrower":
           return a.dir === b.dir && sameArray(a.timing || [], b.timing || []);
         case "crusher":
+        case "trapdoor":
           return sameArray(a.timing || [], b.timing || []);
         case "checkpoint":
         case "portal":
@@ -686,11 +721,13 @@
 
     function addFeatureToTile(x, y, feature) {
       const tile = getTile(x, y, true);
+      const normalizedFeature = normalizeFeature(feature);
+      if (!normalizedFeature) return;
 
-      if (feature.type === "wall" || feature.type === "ledge") {
-        const existing = tile.features.find(f => f.type === feature.type);
+      if (normalizedFeature.type === "wall" || normalizedFeature.type === "ledge" || normalizedFeature.type === "repulsor") {
+        const existing = tile.features.find(f => f.type === normalizedFeature.type);
         if (existing) {
-          for (const side of feature.sides) {
+          for (const side of normalizedFeature.sides) {
             if (!existing.sides.includes(side)) {
               existing.sides.push(side);
             }
@@ -700,21 +737,22 @@
         }
       }
 
-      const normalizedFeature = normalizeFeature(feature);
-      if (!normalizedFeature) return;
-
       const exists = tile.features.some(f => sameFeature(f, normalizedFeature));
-      if (!exists) {
-        tile.features.push(normalizedFeature);
+      if (exists) return;
+
+      const sameTypeStacks = new Set(["wall", "ledge", "repulsor", "laser"]);
+      if (!sameTypeStacks.has(normalizedFeature.type)) {
+        tile.features = tile.features.filter(f => f.type !== normalizedFeature.type);
       }
+      tile.features.push(normalizedFeature);
     }
 
     function eraseFeatureFromTile(x, y, selectedType) {
       const tile = getTile(x, y, false);
       if (!tile) return;
 
-      if (selectedType === "wall") {
-        const existing = tile.features.find(f => f.type === "wall");
+      if (selectedType === "wall" || selectedType === "repulsor") {
+        const existing = tile.features.find(f => f.type === selectedType);
         if (!existing) return;
 
         const side = directionInput.value;
@@ -768,6 +806,7 @@
     function buildFeatureFromControls() {
       const dir = directionInput.value;
       const beltSpeed = Number(beltSpeedInput.value);
+      const beltTurn = normalizeBeltTurn(beltTurnInput.value);
       const gearRotation = gearRotationInput.value;
       const laserDamage = Number(laserDamageInput.value);
       const checkpointId = Number(checkpointIdInput.value);
@@ -781,19 +820,23 @@
         case "oil":
           return normalizeFeature({ type: "oil" });
         case "belt":
-          return normalizeFeature({ type: "belt", dir, speed: beltSpeed });
+          return normalizeFeature({ type: "belt", dir, speed: beltSpeed, turn: beltTurn });
         case "gear":
           return normalizeFeature({ type: "gear", rotation: gearRotation });
         case "laser":
           return normalizeFeature({ type: "laser", dir, damage: laserDamage });
         case "wall":
           return normalizeFeature({ type: "wall", sides: [dir] });
+        case "repulsor":
+          return normalizeFeature({ type: "repulsor", sides: [dir] });
         case "push":
           return normalizeFeature({ type: "push", dir, timing: pushTiming });
         case "flamethrower":
           return normalizeFeature({ type: "flamethrower", dir, timing: pushTiming });
         case "crusher":
           return normalizeFeature({ type: "crusher", timing: pushTiming });
+        case "trapdoor":
+          return normalizeFeature({ type: "trapdoor", timing: pushTiming });
         case "portal":
           return normalizeFeature({ type: "portal", id: featureId || "1" });
         case "teleporter":
@@ -810,6 +853,10 @@
           return normalizeFeature({ type: "checkpoint", id: checkpointId });
         case "battery":
           return normalizeFeature({ type: "battery" });
+        case "chopShop":
+          return normalizeFeature({ type: "chopShop" });
+        case "homingMissile":
+          return normalizeFeature({ type: "homingMissile" });
         default:
           return null;
       }
@@ -1003,6 +1050,14 @@
       if (wallFeature) {
         drawWalls(x, y, wallFeature.sides || []);
       }
+      const repulsorFeature = features.find(f => f.type === "repulsor");
+      if (repulsorFeature) {
+        ctx.save();
+        ctx.strokeStyle = "#7c2d12";
+        ctx.lineWidth = 2;
+        drawWalls(x, y, repulsorFeature.sides || []);
+        ctx.restore();
+      }
 
       ctx.font = "12px sans-serif";
       ctx.fillStyle = "#111";
@@ -1012,7 +1067,8 @@
         const f = features[i];
 
         if (f.type === "belt") {
-          drawArrowInTile(x, y, f.dir, `B${f.speed}`);
+          const turnSuffix = f.turn === "left" ? "L" : f.turn === "right" ? "R" : f.turn === "both" ? "B" : "";
+          drawArrowInTile(x, y, f.dir, `C${f.speed}${turnSuffix}`);
         } else if (f.type === "laser") {
           drawArrowInTile(x, y, f.dir || "N", `L${f.damage ?? 1}`);
         } else if (f.type === "gear") {
@@ -1027,11 +1083,17 @@
         } else if (f.type === "push") {
           ctx.fillText(`P ${f.dir}`, left + 4, textY);
           textY += 12;
+        } else if (f.type === "repulsor") {
+          ctx.fillText(`Rp ${(f.sides || []).join("")}`, left + 4, textY);
+          textY += 12;
         } else if (f.type === "flamethrower") {
           ctx.fillText(`F ${f.dir} ${(f.timing || []).join("/") || "-"}`, left + 4, textY);
           textY += 12;
         } else if (f.type === "crusher") {
           ctx.fillText(`Cr ${(f.timing || []).join("/") || "-"}`, left + 4, textY);
+          textY += 12;
+        } else if (f.type === "trapdoor") {
+          ctx.fillText(`Td ${(f.timing || []).join("/") || "-"}`, left + 4, textY);
           textY += 12;
         } else if (f.type === "portal") {
           ctx.fillText(`Po${f.id}`, left + 4, textY);
@@ -1056,6 +1118,12 @@
           textY += 12;
         } else if (f.type === "battery") {
           ctx.fillText("Bat", left + 4, textY);
+          textY += 12;
+        } else if (f.type === "chopShop") {
+          ctx.fillText("Shop", left + 4, textY);
+          textY += 12;
+        } else if (f.type === "homingMissile") {
+          ctx.fillText("HM", left + 4, textY);
           textY += 12;
         } else if (f.type === "wall") {
           // drawn separately
@@ -1138,19 +1206,23 @@
         case "oil":
           return "oil";
         case "belt":
-          return `belt dir=${feature.dir} speed=${feature.speed}`;
+          return `conveyor dir=${feature.dir} speed=${feature.speed}${feature.turn ? ` turn=${feature.turn}` : ""}`;
         case "gear":
           return `gear rotation=${feature.rotation}`;
         case "laser":
           return `laser dir=${feature.dir ?? "?"} damage=${feature.damage ?? 1}`;
         case "wall":
           return `wall sides=${(feature.sides || []).join(",")}`;
+        case "repulsor":
+          return `repulsor sides=${(feature.sides || []).join(",")}`;
         case "push":
           return `push dir=${feature.dir} timing=${(feature.timing || []).join(",")}`;
         case "flamethrower":
           return `flamethrower dir=${feature.dir} timing=${(feature.timing || []).join(",")}`;
         case "crusher":
           return `crusher timing=${(feature.timing || []).join(",")}`;
+        case "trapdoor":
+          return `trapdoor timing=${(feature.timing || []).join(",")}`;
         case "portal":
           return `portal id=${feature.id}`;
         case "teleporter":
@@ -1167,6 +1239,10 @@
           return `checkpoint id=${feature.id}`;
         case "battery":
           return "battery";
+        case "chopShop":
+          return "chop shop";
+        case "homingMissile":
+          return "homing missile";
         default:
           return JSON.stringify(feature);
       }
@@ -1221,17 +1297,21 @@
         gear: 4,
         laser: 5,
         wall: 6,
-        push: 7,
-        flamethrower: 8,
-        crusher: 9,
-        portal: 10,
-        teleporter: 11,
-        randomizer: 12,
-        ledge: 13,
-        ramp: 14,
-        water: 15,
-        checkpoint: 16,
-        battery: 17
+        repulsor: 7,
+        push: 8,
+        flamethrower: 9,
+        crusher: 10,
+        trapdoor: 11,
+        portal: 12,
+        teleporter: 13,
+        randomizer: 14,
+        ledge: 15,
+        ramp: 16,
+        water: 17,
+        checkpoint: 18,
+        battery: 19,
+        chopShop: 20,
+        homingMissile: 21
       };
 
       return [...features].sort((a, b) => {

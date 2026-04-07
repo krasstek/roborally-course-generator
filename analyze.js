@@ -71,9 +71,10 @@ function getWalls(tile) {
   const walls = new Set();
 
   for (const feature of tile?.features || []) {
-    if (feature.type !== "wall") continue;
-    for (const side of feature.sides || []) {
-      walls.add(side);
+    if (feature.type === "wall" || feature.type === "repulsor") {
+      for (const side of feature.sides || []) {
+        walls.add(side);
+      }
     }
   }
 
@@ -82,6 +83,13 @@ function getWalls(tile) {
 
 function getBelt(tile) {
   return (tile?.features || []).find((feature) => feature.type === "belt") ?? null;
+}
+
+function getRepulsor(tile, side) {
+  return (tile?.features || []).find((feature) => (
+    feature.type === "repulsor" &&
+    (feature.sides || []).includes(side)
+  )) ?? null;
 }
 
 function getRamps(tile) {
@@ -110,6 +118,14 @@ function getPushes(tile) {
 
 function hasCrusher(tile) {
   return (tile?.features || []).some((feature) => feature.type === "crusher");
+}
+
+function hasTrapdoor(tile) {
+  return (tile?.features || []).some((feature) => feature.type === "trapdoor");
+}
+
+function hasHomingMissile(tile) {
+  return (tile?.features || []).some((feature) => feature.type === "homingMissile");
 }
 
 function getPortal(tile) {
@@ -219,7 +235,8 @@ function getTilePenalty(tile, options = {}) {
   for (const feature of tile?.features || []) {
     penalty += getTilePenaltyForFeature(feature, {
       batteryActive: isBatteryActive(options),
-      rebootDamagePenalty: getRebootDamagePenalty(options)
+      rebootDamagePenalty: getRebootDamagePenalty(options),
+      playerCount: options.playerCount
     });
   }
 
@@ -318,6 +335,8 @@ function canMoveBetween(tileMap, from, to, dir, options = {}) {
   }
 
   const toTile = tileMap.get(tileKey(to.x, to.y));
+  const fromRepulsor = getRepulsor(fromTile, dir);
+  const toRepulsor = getRepulsor(toTile, OPPOSITE[dir]);
 
   if (!toTile) {
     return {
@@ -330,6 +349,15 @@ function canMoveBetween(tileMap, from, to, dir, options = {}) {
   const toWalls = getWalls(toTile);
   const fromLedges = getLedgeSides(fromTile);
   const toLedges = getLedgeSides(toTile);
+
+  if (fromRepulsor || toRepulsor) {
+    return {
+      ok: false,
+      crash: false,
+      offBoard: false,
+      repulsor: true
+    };
+  }
 
   if (fromWalls.has(dir) || toWalls.has(OPPOSITE[dir])) {
     return { ok: false, crash: false, offBoard: false };
@@ -529,6 +557,65 @@ function moveOneStep(tileMap, state, dir, mode, options = {}, moveBudget = null)
   }
 
   if (!moveCheck.ok) {
+    if (moveCheck.repulsor) {
+      const reverseDir = OPPOSITE[dir];
+      const workingState = cloneState(state);
+      const traversed = [];
+      let hazard = 0;
+      let rebootPenalty = 0;
+      let distance = 0;
+      let forcedDistance = 0;
+      const repulsorPushDistance = mode === "manual"
+        ? Math.max(1, moveBudget ?? 1)
+        : 1;
+
+      for (let index = 0; index < repulsorPushDistance; index += 1) {
+        const bounce = moveOneStep(tileMap, workingState, reverseDir, "repulsor", options);
+        traversed.push(...bounce.traversed);
+        hazard += bounce.hazard;
+        rebootPenalty += bounce.rebootPenalty || 0;
+        distance += bounce.distance;
+        forcedDistance += bounce.forcedDistance;
+
+        if (bounce.crashed || bounce.blocked || bounce.rebooted) {
+          return {
+            state: bounce.state,
+            rebootChoices: bounce.rebootChoices ?? null,
+            blocked: bounce.blocked,
+            crashed: bounce.crashed,
+            rebooted: bounce.rebooted,
+            traversed,
+            conveyorSteps: [],
+            hazard,
+            rebootPenalty,
+            distance,
+            forcedDistance,
+            spentMove: true,
+            rampAscent: false
+          };
+        }
+
+        workingState.x = bounce.state.x;
+        workingState.y = bounce.state.y;
+        workingState.facing = bounce.state.facing;
+      }
+
+      return {
+        state: workingState,
+        blocked: false,
+        crashed: false,
+        rebooted: false,
+        traversed,
+        conveyorSteps: [],
+        hazard,
+        rebootPenalty,
+        distance,
+        forcedDistance,
+        spentMove: true,
+        rampAscent: false
+      };
+    }
+
     const rebootToken = moveCheck.crash && options.recoveryRule === "reboot_tokens"
       ? getRebootTokenForPoint(
         moveCheck.offBoard ? { x: state.x, y: state.y } : { x: next.x, y: next.y },
@@ -557,7 +644,7 @@ function moveOneStep(tileMap, state, dir, mode, options = {}, moveBudget = null)
         hazard: getRebootDamagePenalty(options),
         rebootPenalty: REBOOT_TEMPO_PENALTY,
         distance: 1,
-        forcedDistance: mode === "belt" || mode === "push" ? 1 : 0,
+        forcedDistance: mode === "belt" || mode === "push" || mode === "repulsor" ? 1 : 0,
         spentMove: true,
         rampAscent: false
       };
@@ -573,7 +660,7 @@ function moveOneStep(tileMap, state, dir, mode, options = {}, moveBudget = null)
       hazard: moveCheck.crash ? 25 : 0,
       rebootPenalty: 0,
       distance: moveCheck.crash ? 1 : 0,
-      forcedDistance: (mode === "belt" || mode === "push") && moveCheck.crash ? 1 : 0,
+      forcedDistance: (mode === "belt" || mode === "push" || mode === "repulsor") && moveCheck.crash ? 1 : 0,
       spentMove: true,
       rampAscent: false
     };
@@ -624,12 +711,17 @@ function moveOneStep(tileMap, state, dir, mode, options = {}, moveBudget = null)
       turned
     }] : [],
     hazard: getTilePenalty(nextTile, options) +
+      (hasHomingMissile(nextTile)
+        ? (tileMap.get(tileKey(state.x, state.y))?.x !== nextTile?.x || tileMap.get(tileKey(state.x, state.y))?.y !== nextTile?.y
+          ? getTilePenaltyForFeature({ type: "homingMissile" }, { onEntrance: true, playerCount: options.playerCount })
+          : 0)
+        : 0) +
       getPitPressurePenalty(tileMap, resolvedState, options) +
       getLedgePressurePenalty(tileMap, resolvedState, options) +
       (moveCheck.ledgeDamage || 0),
     rebootPenalty: 0,
     distance: 1,
-    forcedDistance: mode === "belt" || mode === "oil" || mode === "push" ? 1 : 0,
+    forcedDistance: mode === "belt" || mode === "oil" || mode === "push" || mode === "repulsor" ? 1 : 0,
     spentMove: true,
     rampAscent: Boolean(moveCheck.rampAscent)
   };
@@ -783,8 +875,15 @@ function resolveConveyorPhase(tileMap, state, eligibleSpeed, options = {}) {
   while (stepsTaken < maxSteps) {
     const tile = tileMap.get(tileKey(workingState.x, workingState.y));
     const belt = getBelt(tile);
+    const waterOnly = Boolean(options.waterOnly);
 
     if (!belt || belt.speed !== eligibleSpeed) {
+      break;
+    }
+    if (waterOnly && !isWater(tile)) {
+      break;
+    }
+    if (!waterOnly && eligibleSpeed === 1 && isWater(tile)) {
       break;
     }
 
@@ -899,7 +998,7 @@ function resolvePushPhase(tileMap, state, options = {}) {
 function resolveCrusherPhase(tileMap, state, options = {}) {
   const tile = tileMap.get(tileKey(state.x, state.y));
 
-  if (!hasCrusher(tile)) {
+  if (!hasCrusher(tile) && !hasTrapdoor(tile)) {
     return {
       state: cloneState(state),
       traversed: [],
@@ -909,6 +1008,20 @@ function resolveCrusherPhase(tileMap, state, options = {}) {
       distance: 0,
       forcedDistance: 0,
       crashed: false,
+      rebooted: false
+    };
+  }
+
+  if (hasTrapdoor(tile)) {
+    return {
+      state: cloneState(state),
+      traversed: [{ x: state.x, y: state.y }],
+      conveyorSteps: [],
+      hazard: 30,
+      rebootPenalty: 0,
+      distance: 0,
+      forcedDistance: 0,
+      crashed: true,
       rebooted: false
     };
   }
@@ -1070,6 +1183,22 @@ function simulateAction(tileMap, startState, action, options = {}) {
     state.x = green.state.x;
     state.y = green.state.y;
     state.facing = green.state.facing;
+  }
+
+  if (!crashed && !rebooted) {
+    const waterGreen = resolveConveyorPhase(tileMap, state, 1, { ...options, waterOnly: true });
+    traversed.push(...waterGreen.traversed);
+    conveyorSteps.push(...waterGreen.conveyorSteps);
+    hazard += waterGreen.hazard;
+    rebootPenalty += waterGreen.rebootPenalty || 0;
+    distance += waterGreen.distance;
+    forcedDistance += waterGreen.forcedDistance;
+    crashed = waterGreen.crashed;
+    rebooted = waterGreen.rebooted;
+    rebootChoices = waterGreen.rebootChoices ?? rebootChoices;
+    state.x = waterGreen.state.x;
+    state.y = waterGreen.state.y;
+    state.facing = waterGreen.state.facing;
   }
 
   if (!crashed && !rebooted) {

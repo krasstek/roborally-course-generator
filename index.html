@@ -8,7 +8,7 @@
   <meta name="mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="mobile-web-app-title" content="RoboRally" />
   <meta name="application-name" content="RoboRally Course Generator" />
-  <meta name="app-version" content="20260402121643" />
+  <meta name="app-version" content="20260407115110" />
   <title>RoboRally Course Generator</title>
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="icon" type="image/png" sizes="16x16" href="./assets/icons/favicon-16.png" />
@@ -1012,6 +1012,7 @@
             <option value="easy">Beginner</option>
             <option value="moderate">Intermediate</option>
             <option value="hard">Advanced</option>
+            <option value="brutal">Expert</option>
           </select>
         </label>
         <label>
@@ -1033,11 +1034,15 @@
         <label class="variant-field">
           Sets
           <details class="variant-picker">
-            <summary id="expansion-summary">RoboRally Base Game (2023)</summary>
+            <summary id="expansion-summary">Robo Rally (2023)</summary>
             <div class="variant-menu">
               <label class="variant-option">
                 <input id="expansion-roborally" type="checkbox" checked />
-                RoboRally Base Game (2023)
+                Robo Rally (2023)
+              </label>
+              <label class="variant-option">
+                <input id="expansion-30th-anniversary" type="checkbox" />
+                Robo Rally: 30th Anniversary
               </label>
               <label class="variant-option">
                 <input id="expansion-chaos-and-carnage" type="checkbox" />
@@ -1079,6 +1084,7 @@
           <input id="board-audit-toggle" type="checkbox" />
           Board Audit
         </label>
+        <button id="run-diagnostics" class="secondary-button hidden" type="button">Run Diagnostics</button>
         <button id="about-button" class="secondary-button" type="button">About</button>
         <button id="reroll" type="button">Generate Course</button>
       </div>
@@ -1091,9 +1097,13 @@
             <button id="course-explanation-toggle" class="setup-help-button" type="button" aria-expanded="false" aria-controls="course-explanation-panel" title="Why this course plays the way it does">?</button>
           </div>
         </div>
-        <div id="setup-overlays-row" class="setup-row hidden">
-          <div class="setup-label">Overlays</div>
-          <div id="setup-overlays" class="setup-value"></div>
+        <div id="setup-overlay-boards-row" class="setup-row hidden">
+          <div class="setup-label">Overlay Boards</div>
+          <div id="setup-overlay-boards" class="setup-value"></div>
+        </div>
+        <div id="setup-overlay-tiles-row" class="setup-row hidden">
+          <div class="setup-label">Overlay Tiles</div>
+          <div id="setup-overlay-tiles" class="setup-value"></div>
         </div>
         <div class="setup-row">
           <div class="setup-label">Flags</div>
@@ -1108,7 +1118,7 @@
       <canvas id="canvas"></canvas>
       <div class="meta-strip">
         <span class="pill">Orange square: prohibited starting space</span>
-        <span class="pill">Gold flag: checkpoint</span>
+        <span class="pill">Yellow flag: checkpoint</span>
         <span id="legend-reboot-token" class="pill hidden">Green marker: reboot token</span>
       </div>
       <div id="rules-anchor-bottom"></div>
