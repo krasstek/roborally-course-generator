@@ -1,6 +1,6 @@
 {
-  "id": "chasm",
-  "name": "Chasm",
+  "id": "vacancy",
+  "name": "Vacancy",
   "kind": "base",
   "width": 12,
   "height": 12,
@@ -8,12 +8,23 @@
   "starts": [],
   "tiles": [
     {
+      "x": 0,
+      "y": 0,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
       "x": 1,
       "y": 0,
       "features": [
         {
           "type": "belt",
-          "dir": "S",
+          "dir": "E",
           "speed": 1
         }
       ]
@@ -22,6 +33,11 @@
       "x": 2,
       "y": 0,
       "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        },
         {
           "type": "wall",
           "sides": [
@@ -35,151 +51,16 @@
       "y": 0,
       "features": [
         {
-          "type": "teleporter",
-          "power": 2
-        }
-      ]
-    },
-    {
-      "x": 4,
-      "y": 0,
-      "features": [
-        {
-          "type": "pit"
-        },
-        {
-          "type": "wall",
-          "sides": [
-            "N"
-          ]
-        }
-      ]
-    },
-    {
-      "x": 5,
-      "y": 0,
-      "features": [
-        {
           "type": "belt",
           "dir": "S",
-          "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 6,
-      "y": 0,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "N",
-          "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 7,
-      "y": 0,
-      "features": [
-        {
-          "type": "pit"
-        },
-        {
-          "type": "wall",
-          "sides": [
-            "N"
-          ]
-        }
-      ]
-    },
-    {
-      "x": 8,
-      "y": 0,
-      "features": [
-        {
-          "type": "pit"
-        }
-      ]
-    },
-    {
-      "x": 9,
-      "y": 0,
-      "features": [
-        {
-          "type": "pit"
-        },
-        {
-          "type": "wall",
-          "sides": [
-            "N"
-          ]
-        }
-      ]
-    },
-    {
-      "x": 10,
-      "y": 0,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "N",
-          "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 0,
-      "y": 1,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "W",
-          "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 1,
-      "y": 1,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "W",
           "speed": 1,
           "turn": "right"
         }
       ]
     },
     {
-      "x": 2,
-      "y": 1,
-      "features": [
-        {
-          "type": "pit"
-        }
-      ]
-    },
-    {
-      "x": 3,
-      "y": 1,
-      "features": [
-        {
-          "type": "pit"
-        }
-      ]
-    },
-    {
-      "x": 4,
-      "y": 1,
-      "features": [
-        {
-          "type": "pit"
-        }
-      ]
-    },
-    {
       "x": 5,
-      "y": 1,
+      "y": 0,
       "features": [
         {
           "type": "belt",
@@ -189,47 +70,43 @@
       ]
     },
     {
-      "x": 6,
-      "y": 1,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "N",
-          "speed": 1
-        }
-      ]
-    },
-    {
       "x": 7,
-      "y": 1,
+      "y": 0,
       "features": [
         {
-          "type": "teleporter",
-          "power": 2
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
         }
       ]
     },
     {
       "x": 8,
-      "y": 1,
+      "y": 0,
       "features": [
         {
-          "type": "pit"
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
         }
       ]
     },
     {
       "x": 9,
-      "y": 1,
+      "y": 0,
       "features": [
         {
-          "type": "pit"
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
         }
       ]
     },
     {
       "x": 10,
-      "y": 1,
+      "y": 0,
       "features": [
         {
           "type": "battery"
@@ -237,14 +114,71 @@
       ]
     },
     {
-      "x": 11,
+      "x": 3,
+      "y": 1,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1,
+          "turn": "left"
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 1,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 1,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1,
+          "turn": "left"
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 1,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 1,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 8,
       "y": 1,
       "features": [
         {
           "type": "belt",
           "dir": "S",
           "speed": 1,
-          "turn": "left"
+          "turn": "right"
         }
       ]
     },
@@ -257,10 +191,6 @@
           "sides": [
             "W"
           ]
-        },
-        {
-          "type": "teleporter",
-          "power": 2
         }
       ]
     },
@@ -269,7 +199,10 @@
       "y": 2,
       "features": [
         {
-          "type": "pit"
+          "type": "belt",
+          "dir": "E",
+          "speed": 2,
+          "turn": "right"
         }
       ]
     },
@@ -278,7 +211,9 @@
       "y": 2,
       "features": [
         {
-          "type": "pit"
+          "type": "belt",
+          "dir": "E",
+          "speed": 2
         }
       ]
     },
@@ -287,8 +222,9 @@
       "y": 2,
       "features": [
         {
-          "type": "teleporter",
-          "power": 2
+          "type": "belt",
+          "dir": "E",
+          "speed": 2
         }
       ]
     },
@@ -297,7 +233,10 @@
       "y": 2,
       "features": [
         {
-          "type": "pit"
+          "type": "belt",
+          "dir": "N",
+          "speed": 2,
+          "turn": "both"
         }
       ]
     },
@@ -307,9 +246,8 @@
       "features": [
         {
           "type": "belt",
-          "dir": "E",
-          "speed": 1,
-          "turn": "left"
+          "dir": "W",
+          "speed": 2
         }
       ]
     },
@@ -319,9 +257,8 @@
       "features": [
         {
           "type": "belt",
-          "dir": "N",
-          "speed": 1,
-          "turn": "left"
+          "dir": "W",
+          "speed": 2
         }
       ]
     },
@@ -330,7 +267,10 @@
       "y": 2,
       "features": [
         {
-          "type": "pit"
+          "type": "belt",
+          "dir": "W",
+          "speed": 2,
+          "turn": "left"
         }
       ]
     },
@@ -339,7 +279,12 @@
       "y": 2,
       "features": [
         {
-          "type": "pit"
+          "type": "trapdoor",
+          "timing": [
+            1,
+            2,
+            4
+          ]
         }
       ]
     },
@@ -348,7 +293,10 @@
       "y": 2,
       "features": [
         {
-          "type": "pit"
+          "type": "belt",
+          "dir": "W",
+          "speed": 1,
+          "turn": "left"
         }
       ]
     },
@@ -357,7 +305,13 @@
       "y": 2,
       "features": [
         {
-          "type": "pit"
+          "type": "flamethrower",
+          "dir": "W",
+          "timing": [
+            1,
+            3,
+            4
+          ]
         }
       ]
     },
@@ -372,280 +326,42 @@
           ]
         },
         {
-          "type": "teleporter",
-          "power": 2
-        }
-      ]
-    },
-    {
-      "x": 1,
-      "y": 3,
-      "features": [
-        {
-          "type": "pit"
-        }
-      ]
-    },
-    {
-      "x": 2,
-      "y": 3,
-      "features": [
-        {
-          "type": "pit"
-        }
-      ]
-    },
-    {
-      "x": 3,
-      "y": 3,
-      "features": [
-        {
-          "type": "battery"
-        }
-      ]
-    },
-    {
-      "x": 4,
-      "y": 3,
-      "features": [
-        {
-          "type": "pit"
-        }
-      ]
-    },
-    {
-      "x": 5,
-      "y": 3,
-      "features": [
-        {
-          "type": "pit"
-        }
-      ]
-    },
-    {
-      "x": 6,
-      "y": 3,
-      "features": [
-        {
-          "type": "teleporter",
-          "power": 2
-        }
-      ]
-    },
-    {
-      "x": 8,
-      "y": 3,
-      "features": [
-        {
-          "type": "pit"
-        }
-      ]
-    },
-    {
-      "x": 9,
-      "y": 3,
-      "features": [
-        {
-          "type": "pit"
-        }
-      ]
-    },
-    {
-      "x": 10,
-      "y": 3,
-      "features": [
-        {
-          "type": "pit"
-        }
-      ]
-    },
-    {
-      "x": 11,
-      "y": 3,
-      "features": [
-        {
-          "type": "pit"
-        }
-      ]
-    },
-    {
-      "x": 0,
-      "y": 4,
-      "features": [
-        {
-          "type": "pit"
-        }
-      ]
-    },
-    {
-      "x": 1,
-      "y": 4,
-      "features": [
-        {
-          "type": "pit"
-        }
-      ]
-    },
-    {
-      "x": 2,
-      "y": 4,
-      "features": [
-        {
-          "type": "battery"
-        }
-      ]
-    },
-    {
-      "x": 3,
-      "y": 4,
-      "features": [
-        {
-          "type": "pit"
-        }
-      ]
-    },
-    {
-      "x": 4,
-      "y": 4,
-      "features": [
-        {
-          "type": "pit"
-        }
-      ]
-    },
-    {
-      "x": 5,
-      "y": 4,
-      "features": [
-        {
-          "type": "pit"
-        }
-      ]
-    },
-    {
-      "x": 6,
-      "y": 4,
-      "features": [
-        {
-          "type": "pit"
-        }
-      ]
-    },
-    {
-      "x": 7,
-      "y": 4,
-      "features": [
-        {
-          "type": "pit"
-        }
-      ]
-    },
-    {
-      "x": 10,
-      "y": 4,
-      "features": [
-        {
-          "type": "teleporter",
-          "power": 2
-        }
-      ]
-    },
-    {
-      "x": 11,
-      "y": 4,
-      "features": [
-        {
-          "type": "wall",
-          "sides": [
-            "E"
+          "type": "flamethrower",
+          "dir": "W",
+          "timing": [
+            1,
+            3,
+            4
           ]
         }
       ]
     },
     {
       "x": 0,
-      "y": 5,
+      "y": 3,
       "features": [
         {
           "type": "belt",
-          "dir": "W",
-          "speed": 1
+          "dir": "E",
+          "speed": 2
         }
       ]
     },
     {
       "x": 1,
-      "y": 5,
+      "y": 3,
       "features": [
         {
           "type": "belt",
-          "dir": "W",
-          "speed": 1,
+          "dir": "N",
+          "speed": 2,
           "turn": "left"
         }
       ]
     },
     {
-      "x": 2,
-      "y": 5,
-      "features": [
-        {
-          "type": "teleporter",
-          "power": 2
-        }
-      ]
-    },
-    {
       "x": 3,
-      "y": 5,
-      "features": [
-        {
-          "type": "pit"
-        }
-      ]
-    },
-    {
-      "x": 4,
-      "y": 5,
-      "features": [
-        {
-          "type": "teleporter",
-          "power": 2
-        }
-      ]
-    },
-    {
-      "x": 6,
-      "y": 5,
-      "features": [
-        {
-          "type": "teleporter",
-          "power": 2
-        }
-      ]
-    },
-    {
-      "x": 7,
-      "y": 5,
-      "features": [
-        {
-          "type": "pit"
-        }
-      ]
-    },
-    {
-      "x": 8,
-      "y": 5,
-      "features": [
-        {
-          "type": "teleporter",
-          "power": 2
-        }
-      ]
-    },
-    {
-      "x": 9,
-      "y": 5,
+      "y": 3,
       "features": [
         {
           "type": "belt",
@@ -656,134 +372,401 @@
       ]
     },
     {
-      "x": 10,
-      "y": 5,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "W",
-          "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 11,
-      "y": 5,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "W",
-          "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 0,
-      "y": 6,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "E",
-          "speed": 1
-        }
-      ]
-    },
-    {
-      "x": 1,
-      "y": 6,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "N",
-          "speed": 1,
-          "turn": "left"
-        }
-      ]
-    },
-    {
-      "x": 3,
-      "y": 6,
-      "features": [
-        {
-          "type": "pit"
-        }
-      ]
-    },
-    {
       "x": 4,
-      "y": 6,
+      "y": 3,
       "features": [
         {
-          "type": "pit"
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
         }
       ]
     },
     {
       "x": 5,
-      "y": 6,
+      "y": 3,
       "features": [
         {
-          "type": "pit"
-        }
-      ]
-    },
-    {
-      "x": 6,
-      "y": 6,
-      "features": [
-        {
-          "type": "pit"
+          "type": "belt",
+          "dir": "W",
+          "speed": 1,
+          "turn": "left"
         }
       ]
     },
     {
       "x": 7,
-      "y": 6,
+      "y": 3,
       "features": [
         {
-          "type": "pit"
+          "type": "belt",
+          "dir": "N",
+          "speed": 2,
+          "turn": "right"
         }
       ]
     },
     {
       "x": 8,
-      "y": 6,
+      "y": 3,
       "features": [
         {
-          "type": "pit"
+          "type": "belt",
+          "dir": "W",
+          "speed": 2,
+          "turn": "left"
         }
       ]
     },
     {
       "x": 9,
-      "y": 6,
+      "y": 3,
       "features": [
         {
           "type": "belt",
-          "dir": "S",
+          "dir": "N",
           "speed": 1
         }
       ]
     },
     {
       "x": 10,
-      "y": 6,
+      "y": 3,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "cw"
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 4,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "N",
+            "W"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 4,
       "features": [
         {
           "type": "belt",
-          "dir": "E",
+          "dir": "S",
+          "speed": 1,
+          "turn": "left"
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 4,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
           "speed": 1,
           "turn": "right"
         }
       ]
     },
     {
+      "x": 5,
+      "y": 4,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "E"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 4,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "W",
+          "damage": 2
+        },
+        {
+          "type": "chopShop"
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 4,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "W",
+          "damage": 2
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "E"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 4,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 2
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "W"
+          ]
+        },
+        {
+          "type": "push",
+          "dir": "E",
+          "timing": [
+            2,
+            4
+          ]
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 4,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
       "x": 11,
+      "y": 4,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "E"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 5,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1,
+          "turn": "left"
+        },
+        {
+          "type": "repulsor",
+          "sides": [
+            "S"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 5,
+      "features": [
+        {
+          "type": "pit"
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 5,
+      "features": [
+        {
+          "type": "oil"
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 5,
+      "features": [
+        {
+          "type": "oil"
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 5,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 5,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 2,
+          "turn": "left"
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 5,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 5,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1,
+          "turn": "left"
+        }
+      ]
+    },
+    {
+      "x": 11,
+      "y": 5,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 0,
       "y": 6,
       "features": [
         {
           "type": "belt",
           "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 6,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 6,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1,
+          "turn": "right"
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 6,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 2,
+          "turn": "left"
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 6,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 2
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 6,
+      "features": [
+        {
+          "type": "oil"
+        }
+      ]
+    },
+    {
+      "x": 6,
+      "y": 6,
+      "features": [
+        {
+          "type": "oil"
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 6,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 6,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
           "speed": 1
         }
       ]
@@ -805,7 +788,19 @@
       "y": 7,
       "features": [
         {
-          "type": "pit"
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
+        },
+        {
+          "type": "push",
+          "dir": "S",
+          "timing": [
+            1,
+            3,
+            5
+          ]
         }
       ]
     },
@@ -814,7 +809,9 @@
       "y": 7,
       "features": [
         {
-          "type": "pit"
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
         }
       ]
     },
@@ -823,16 +820,20 @@
       "y": 7,
       "features": [
         {
-          "type": "pit"
+          "type": "belt",
+          "dir": "S",
+          "speed": 2
         }
       ]
     },
     {
-      "x": 5,
+      "x": 6,
       "y": 7,
       "features": [
         {
-          "type": "battery"
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
         }
       ]
     },
@@ -841,8 +842,7 @@
       "y": 7,
       "features": [
         {
-          "type": "teleporter",
-          "power": 2
+          "type": "pit"
         }
       ]
     },
@@ -851,24 +851,15 @@
       "y": 7,
       "features": [
         {
-          "type": "pit"
+          "type": "belt",
+          "dir": "E",
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
     {
       "x": 9,
-      "y": 7,
-      "features": [
-        {
-          "type": "belt",
-          "dir": "E",
-          "speed": 1,
-          "turn": "left"
-        }
-      ]
-    },
-    {
-      "x": 10,
       "y": 7,
       "features": [
         {
@@ -880,12 +871,20 @@
       ]
     },
     {
-      "x": 11,
+      "x": 10,
       "y": 7,
       "features": [
         {
-          "type": "pit"
-        },
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 11,
+      "y": 7,
+      "features": [
         {
           "type": "wall",
           "sides": [
@@ -895,119 +894,53 @@
       ]
     },
     {
-      "x": 0,
-      "y": 8,
-      "features": [
-        {
-          "type": "teleporter",
-          "power": 2
-        }
-      ]
-    },
-    {
-      "x": 2,
-      "y": 8,
-      "features": [
-        {
-          "type": "teleporter",
-          "power": 2
-        }
-      ]
-    },
-    {
-      "x": 3,
-      "y": 8,
-      "features": [
-        {
-          "type": "pit"
-        }
-      ]
-    },
-    {
-      "x": 4,
-      "y": 8,
-      "features": [
-        {
-          "type": "teleporter",
-          "power": 2
-        }
-      ]
-    },
-    {
-      "x": 8,
-      "y": 8,
-      "features": [
-        {
-          "type": "pit"
-        }
-      ]
-    },
-    {
-      "x": 9,
-      "y": 8,
-      "features": [
-        {
-          "type": "pit"
-        }
-      ]
-    },
-    {
-      "x": 11,
-      "y": 8,
-      "features": [
-        {
-          "type": "pit"
-        }
-      ]
-    },
-    {
-      "x": 0,
-      "y": 9,
-      "features": [
-        {
-          "type": "pit"
-        }
-      ]
-    },
-    {
       "x": 1,
-      "y": 9,
+      "y": 8,
       "features": [
         {
-          "type": "pit"
+          "type": "gear",
+          "rotation": "cw"
         }
       ]
     },
     {
       "x": 2,
-      "y": 9,
+      "y": 8,
       "features": [
         {
-          "type": "pit"
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
         }
       ]
     },
     {
       "x": 3,
-      "y": 9,
+      "y": 8,
       "features": [
         {
-          "type": "pit"
+          "type": "belt",
+          "dir": "E",
+          "speed": 2,
+          "turn": "left"
         }
       ]
     },
     {
       "x": 4,
-      "y": 9,
+      "y": 8,
       "features": [
         {
-          "type": "pit"
+          "type": "belt",
+          "dir": "S",
+          "speed": 2,
+          "turn": "right"
         }
       ]
     },
     {
       "x": 5,
-      "y": 9,
+      "y": 8,
       "features": [
         {
           "type": "pit"
@@ -1016,10 +949,129 @@
     },
     {
       "x": 6,
+      "y": 8,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1,
+          "turn": "left"
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 8,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 8,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1,
+          "turn": "left"
+        }
+      ]
+    },
+    {
+      "x": 10,
+      "y": 8,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
+      "x": 11,
+      "y": 8,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 2,
+          "turn": "left"
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 9,
+      "features": [
+        {
+          "type": "wall",
+          "sides": [
+            "W"
+          ]
+        },
+        {
+          "type": "chopShop"
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 9,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "ccw"
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 9,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 1,
+          "turn": "left"
+        }
+      ]
+    },
+    {
+      "x": 3,
       "y": 9,
       "features": [
         {
           "type": "pit"
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 9,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 2,
+          "turn": "left"
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 9,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "N",
+          "speed": 2,
+          "turn": "left"
         }
       ]
     },
@@ -1028,7 +1080,10 @@
       "y": 9,
       "features": [
         {
-          "type": "pit"
+          "type": "belt",
+          "dir": "S",
+          "speed": 2,
+          "turn": "left"
         }
       ]
     },
@@ -1037,7 +1092,26 @@
       "y": 9,
       "features": [
         {
-          "type": "pit"
+          "type": "belt",
+          "dir": "W",
+          "speed": 2
+        },
+        {
+          "type": "repulsor",
+          "sides": [
+            "N"
+          ]
+        }
+      ]
+    },
+    {
+      "x": 9,
+      "y": 9,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 2
         }
       ]
     },
@@ -1046,8 +1120,10 @@
       "y": 9,
       "features": [
         {
-          "type": "teleporter",
-          "power": 2
+          "type": "belt",
+          "dir": "W",
+          "speed": 2,
+          "turn": "right"
         }
       ]
     },
@@ -1056,7 +1132,10 @@
       "y": 9,
       "features": [
         {
-          "type": "pit"
+          "type": "belt",
+          "dir": "W",
+          "speed": 2,
+          "turn": "right"
         },
         {
           "type": "wall",
@@ -1067,30 +1146,13 @@
       ]
     },
     {
-      "x": 0,
+      "x": 3,
       "y": 10,
       "features": [
         {
-          "type": "teleporter",
-          "power": 2
-        }
-      ]
-    },
-    {
-      "x": 1,
-      "y": 10,
-      "features": [
-        {
-          "type": "pit"
-        }
-      ]
-    },
-    {
-      "x": 2,
-      "y": 10,
-      "features": [
-        {
-          "type": "pit"
+          "type": "belt",
+          "dir": "N",
+          "speed": 1
         }
       ]
     },
@@ -1099,7 +1161,19 @@
       "y": 10,
       "features": [
         {
-          "type": "pit"
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
+        },
+        {
+          "type": "flamethrower",
+          "dir": "W",
+          "timing": [
+            2,
+            3,
+            5
+          ]
         }
       ]
     },
@@ -1108,17 +1182,11 @@
       "y": 10,
       "features": [
         {
-          "type": "teleporter",
-          "power": 2
-        }
-      ]
-    },
-    {
-      "x": 8,
-      "y": 10,
-      "features": [
-        {
-          "type": "pit"
+          "type": "trapdoor",
+          "timing": [
+            2,
+            3
+          ]
         }
       ]
     },
@@ -1127,44 +1195,7 @@
       "y": 10,
       "features": [
         {
-          "type": "teleporter",
-          "power": 2
-        }
-      ]
-    },
-    {
-      "x": 10,
-      "y": 10,
-      "features": [
-        {
           "type": "battery"
-        }
-      ]
-    },
-    {
-      "x": 11,
-      "y": 10,
-      "features": [
-        {
-          "type": "pit"
-        }
-      ]
-    },
-    {
-      "x": 0,
-      "y": 11,
-      "features": [
-        {
-          "type": "battery"
-        }
-      ]
-    },
-    {
-      "x": 1,
-      "y": 11,
-      "features": [
-        {
-          "type": "pit"
         }
       ]
     },
@@ -1172,9 +1203,6 @@
       "x": 2,
       "y": 11,
       "features": [
-        {
-          "type": "pit"
-        },
         {
           "type": "wall",
           "sides": [
@@ -1188,8 +1216,10 @@
       "y": 11,
       "features": [
         {
-          "type": "teleporter",
-          "power": 2
+          "type": "belt",
+          "dir": "N",
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -1198,9 +1228,23 @@
       "y": 11,
       "features": [
         {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
+        },
+        {
           "type": "wall",
           "sides": [
             "S"
+          ]
+        },
+        {
+          "type": "flamethrower",
+          "dir": "W",
+          "timing": [
+            2,
+            3,
+            5
           ]
         }
       ]
@@ -1211,9 +1255,8 @@
       "features": [
         {
           "type": "belt",
-          "dir": "S",
-          "speed": 1,
-          "turn": "left"
+          "dir": "W",
+          "speed": 1
         }
       ]
     },
@@ -1234,6 +1277,12 @@
       "y": 11,
       "features": [
         {
+          "type": "belt",
+          "dir": "N",
+          "speed": 1,
+          "turn": "right"
+        },
+        {
           "type": "wall",
           "sides": [
             "S"
@@ -1246,7 +1295,9 @@
       "y": 11,
       "features": [
         {
-          "type": "pit"
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
         }
       ]
     },
@@ -1255,7 +1306,9 @@
       "y": 11,
       "features": [
         {
-          "type": "pit"
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
         },
         {
           "type": "wall",
@@ -1270,7 +1323,9 @@
       "y": 11,
       "features": [
         {
-          "type": "pit"
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
         }
       ]
     },
@@ -1279,12 +1334,14 @@
       "y": 11,
       "features": [
         {
-          "type": "pit"
+          "type": "belt",
+          "dir": "W",
+          "speed": 1
         }
       ]
     }
   ],
-  "expansionId": "chaos-and-carnage",
-  "physicalBoardId": "stop-and-go-chasm",
-  "image": "./assets/boards/chasm.jpg"
+  "expansionId": "30th-anniversary",
+  "physicalBoardId": "vacancy-sampler",
+  "image": ".assets/boards/vacancy.JPG"
 }
