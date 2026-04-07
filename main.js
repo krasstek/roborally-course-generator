@@ -357,6 +357,7 @@ function isCheckpointActiveFeature(feature, options = {}) {
 
 let currentScenario = null;
 let cachedAssets = null;
+let scenarioAnimationFrameId = null;
 let boardAuditInitialized = false;
 let boardAuditState = {
   pieceId: null,
@@ -6555,41 +6556,16 @@ function drawCanvasFailureNotice(canvas, message) {
   ctx.fillText("Try rerolling. If it happens again, inspect the generated scenario.", 36, 152);
 }
 
-function renderScenario(scenario) {
-  lastRenderDiagnostics.blankFallbackTriggered = false;
-  updateDevView();
-  updateSetupSummary(scenario);
-  updateRulesNote(scenario);
-  updateLegend(scenario);
+function getScenarioRenderState(scenario) {
   const legSelect = document.getElementById("leg-select");
   const devViewEnabled = isDevViewEnabled();
-  const legOptions = scenario.sequence.legs.map((leg, index) => ({
-    value: String(index),
-    label: index === 0 ? "Dock -> 1" : `${leg.from} -> ${leg.to}`
-  }));
-
-  const previousLegValue = legSelect.value;
-  legSelect.innerHTML = "";
-  const noneElement = document.createElement("option");
-  noneElement.value = "none";
-  noneElement.textContent = "None";
-  legSelect.appendChild(noneElement);
-  legOptions.forEach((option) => {
-    const element = document.createElement("option");
-    element.value = option.value;
-    element.textContent = option.label;
-    legSelect.appendChild(element);
-  });
-
   const selectedLegValue = !devViewEnabled
     ? "none"
-    : previousLegValue === "none"
+    : legSelect.value === "none"
     ? "none"
-    : legOptions.some((option) => option.value === previousLegValue)
-      ? previousLegValue
+    : scenario.sequence.legs.some((_, index) => String(index) === legSelect.value)
+      ? legSelect.value
       : "none";
-  legSelect.value = selectedLegValue;
-
   const selectedLegIndex = selectedLegValue === "none" ? null : Number(selectedLegValue);
   const displayedLeg = selectedLegIndex === null ? null : scenario.sequence.legs[selectedLegIndex];
   const goal = selectedLegIndex === null
@@ -6605,6 +6581,27 @@ function renderScenario(scenario) {
   const unusableStartIndices = scenario.sequence.firstLeg.starts
     .filter((startAnalysis) => !scenario.metrics.usableStarts.some((item) => item.index === startAnalysis.index))
     .map((startAnalysis) => startAnalysis.index);
+
+  return {
+    devViewEnabled,
+    goal,
+    iconBoardView,
+    renderAnalysis,
+    selectedLegIndex,
+    unusableStartIndices
+  };
+}
+
+function drawScenarioCanvas(scenario) {
+  lastRenderDiagnostics.blankFallbackTriggered = false;
+  const {
+    devViewEnabled,
+    goal,
+    iconBoardView,
+    renderAnalysis,
+    selectedLegIndex,
+    unusableStartIndices
+  } = getScenarioRenderState(scenario);
   const canvas = document.getElementById("canvas");
   const renderOptions = {
     placements: scenario.placements,
@@ -6649,8 +6646,62 @@ function renderScenario(scenario) {
     }
   }
 
-  if (devViewEnabled) {
-    document.getElementById("report").textContent = buildScenarioReport(scenario, selectedLegIndex ?? 0);
+  return { devViewEnabled, selectedLegIndex };
+}
+
+function ensureScenarioAnimationLoop() {
+  if (scenarioAnimationFrameId !== null) {
+    return;
+  }
+
+  const tick = () => {
+    scenarioAnimationFrameId = requestAnimationFrame(tick);
+    if (!currentScenario || document.hidden) {
+      return;
+    }
+    drawScenarioCanvas(currentScenario);
+  };
+
+  scenarioAnimationFrameId = requestAnimationFrame(tick);
+}
+
+function renderScenario(scenario) {
+  updateDevView();
+  updateSetupSummary(scenario);
+  updateRulesNote(scenario);
+  updateLegend(scenario);
+  const legSelect = document.getElementById("leg-select");
+  const devViewEnabled = isDevViewEnabled();
+  const legOptions = scenario.sequence.legs.map((leg, index) => ({
+    value: String(index),
+    label: index === 0 ? "Dock -> 1" : `${leg.from} -> ${leg.to}`
+  }));
+
+  const previousLegValue = legSelect.value;
+  legSelect.innerHTML = "";
+  const noneElement = document.createElement("option");
+  noneElement.value = "none";
+  noneElement.textContent = "None";
+  legSelect.appendChild(noneElement);
+  legOptions.forEach((option) => {
+    const element = document.createElement("option");
+    element.value = option.value;
+    element.textContent = option.label;
+    legSelect.appendChild(element);
+  });
+
+  const selectedLegValue = !devViewEnabled
+    ? "none"
+    : previousLegValue === "none"
+    ? "none"
+    : legOptions.some((option) => option.value === previousLegValue)
+      ? previousLegValue
+      : "none";
+  legSelect.value = selectedLegValue;
+  const renderState = drawScenarioCanvas(scenario);
+
+  if (renderState.devViewEnabled) {
+    document.getElementById("report").textContent = buildScenarioReport(scenario, renderState.selectedLegIndex ?? 0);
   }
 }
 
@@ -7594,6 +7645,7 @@ document.addEventListener("keydown", (event) => {
 async function init() {
   const assets = await loadAssets();
   initializeBoardAudit(assets);
+  ensureScenarioAnimationLoop();
   renderVariantControls();
   updateExpansionSummary();
   updateDevView();

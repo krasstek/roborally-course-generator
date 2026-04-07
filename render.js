@@ -313,6 +313,18 @@ function drawIconBadge(ctx, left, top, size, options = {}) {
   ctx.restore();
 }
 
+function getCheckpointGleam(timeMs, seed = 0) {
+  const cycleMs = 5200;
+  const phase = ((timeMs + seed * 380) % cycleMs) / cycleMs;
+  const sweep = Math.max(0, 1 - Math.abs(phase - 0.5) / 0.22);
+  const pulse = (Math.sin(((timeMs + seed * 380) / cycleMs) * Math.PI * 2) + 1) / 2;
+  return {
+    phase,
+    intensity: sweep * sweep,
+    pulse
+  };
+}
+
 function drawBadgeText(ctx, text, left, top, size, options = {}) {
   if (!text) {
     return;
@@ -359,6 +371,7 @@ function drawBadgeTiming(ctx, timing, left, top, size, options = {}) {
 function drawFeatureIcon(ctx, feature, left, top, size) {
   const cx = left + size / 2;
   const cy = top + size / 2;
+  const timeMs = performance.now();
 
   switch (feature.type) {
     case "belt":
@@ -547,6 +560,41 @@ function drawFeatureIcon(ctx, feature, left, top, size) {
       return;
     case "checkpoint":
       drawIconBadge(ctx, left, top, size, { fill: "#f0c23b", stroke: "#936500" });
+      {
+        const gleam = getCheckpointGleam(timeMs, Number(feature.id ?? 0));
+        ctx.save();
+        ctx.strokeStyle = `rgba(255, 245, 176, ${0.28 + gleam.pulse * 0.28})`;
+        ctx.lineWidth = Math.max(1.4, size * 0.09);
+        ctx.beginPath();
+        ctx.roundRect(left + size * 0.05, top + size * 0.05, size * 0.9, size * 0.9, Math.max(3, size * 0.22));
+        ctx.stroke();
+        ctx.restore();
+        if (gleam.intensity > 0) {
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(cx, cy, size * 0.38, 0, Math.PI * 2);
+          ctx.clip();
+          ctx.translate(cx, cy);
+          ctx.rotate(-0.42);
+          const gleamWidth = size * 0.26;
+          const gradient = ctx.createLinearGradient(-size * 0.5, 0, size * 0.5, 0);
+          const lead = Math.max(-0.15, gleam.phase - 0.24);
+          const center = gleam.phase;
+          const trail = Math.min(1.15, gleam.phase + 0.24);
+          const shadowLead = Math.max(0, gleam.phase - 0.34);
+          const shadowCenter = Math.max(0, gleam.phase - 0.14);
+          gradient.addColorStop(0, "rgba(255, 255, 255, 0)");
+          gradient.addColorStop(shadowLead, "rgba(255, 255, 255, 0)");
+          gradient.addColorStop(shadowCenter, `rgba(106, 74, 0, ${0.18 + gleam.intensity * 0.24})`);
+          gradient.addColorStop(lead, "rgba(255, 255, 255, 0)");
+          gradient.addColorStop(center, `rgba(255, 255, 242, ${0.36 + gleam.intensity * 0.48})`);
+          gradient.addColorStop(trail, "rgba(255, 255, 255, 0)");
+          gradient.addColorStop(1, "rgba(255, 255, 255, 0)");
+          ctx.fillStyle = gradient;
+          ctx.fillRect(-size * 0.55, -gleamWidth, size * 1.1, gleamWidth * 2);
+          ctx.restore();
+        }
+      }
       ctx.save();
       ctx.strokeStyle = "#312100";
       ctx.lineWidth = Math.max(1.1, size * 0.08);
@@ -1072,11 +1120,12 @@ function drawGoals(ctx, goals, bounds, tileSize, margin) {
     const py = top + tileSize / 2;
 
     ctx.save();
+    const gleam = getCheckpointGleam(performance.now(), index + 1);
     ctx.fillStyle = "#fff06a";
     ctx.strokeStyle = "#b98500";
     ctx.lineWidth = 2;
     ctx.shadowColor = "rgba(255, 226, 92, 0.72)";
-    ctx.shadowBlur = 10;
+    ctx.shadowBlur = 14 + gleam.intensity * 12 + gleam.pulse * 4;
     ctx.beginPath();
     ctx.moveTo(left + tileSize * 0.26, top + tileSize * 0.22);
     ctx.lineTo(left + tileSize * 0.26, top + tileSize * 0.78);
@@ -1084,6 +1133,43 @@ function drawGoals(ctx, goals, bounds, tileSize, margin) {
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
+    ctx.save();
+    ctx.strokeStyle = `rgba(255, 248, 198, ${0.35 + gleam.pulse * 0.3})`;
+    ctx.lineWidth = 1.5 + gleam.pulse * 1.6;
+    ctx.beginPath();
+    ctx.moveTo(left + tileSize * 0.3, top + tileSize * 0.25);
+    ctx.lineTo(left + tileSize * 0.3, top + tileSize * 0.75);
+    ctx.lineTo(left + tileSize * 0.78, py);
+    ctx.closePath();
+    ctx.stroke();
+    ctx.restore();
+    if (gleam.intensity > 0) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(left + tileSize * 0.26, top + tileSize * 0.22);
+      ctx.lineTo(left + tileSize * 0.26, top + tileSize * 0.78);
+      ctx.lineTo(left + tileSize * 0.84, py);
+      ctx.closePath();
+      ctx.clip();
+      ctx.translate(left + tileSize / 2, py);
+      ctx.rotate(-0.4);
+      const gradient = ctx.createLinearGradient(-tileSize * 0.45, 0, tileSize * 0.45, 0);
+      const lead = Math.max(-0.15, gleam.phase - 0.24);
+      const center = gleam.phase;
+      const trail = Math.min(1.15, gleam.phase + 0.24);
+      const shadowLead = Math.max(0, gleam.phase - 0.34);
+      const shadowCenter = Math.max(0, gleam.phase - 0.14);
+      gradient.addColorStop(0, "rgba(255,255,255,0)");
+      gradient.addColorStop(shadowLead, "rgba(255,255,255,0)");
+      gradient.addColorStop(shadowCenter, `rgba(118,83,0,${0.2 + gleam.intensity * 0.28})`);
+      gradient.addColorStop(lead, "rgba(255,255,255,0)");
+      gradient.addColorStop(center, `rgba(255,255,245,${0.42 + gleam.intensity * 0.44})`);
+      gradient.addColorStop(trail, "rgba(255,255,255,0)");
+      gradient.addColorStop(1, "rgba(255,255,255,0)");
+      ctx.fillStyle = gradient;
+      ctx.fillRect(-tileSize * 0.54, -tileSize * 0.18, tileSize * 1.08, tileSize * 0.36);
+      ctx.restore();
+    }
     ctx.fillStyle = "#111";
     ctx.font = "bold 12px sans-serif";
     ctx.fillText(String(index + 1), left + tileSize * 0.4, py + 4);
