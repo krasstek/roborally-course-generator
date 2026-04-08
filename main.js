@@ -1234,7 +1234,6 @@ function initializeBoardAudit(assets) {
 
 function updateSetupSummary(scenario) {
   const fitNoteEl = document.getElementById("fit-note");
-  const photoReferenceNoteEl = document.getElementById("photo-reference-note");
   const summary = document.getElementById("setup-summary");
   const boardsEl = document.getElementById("setup-boards");
   const overlayBoardsRowEl = document.getElementById("setup-overlay-boards-row");
@@ -1248,7 +1247,6 @@ function updateSetupSummary(scenario) {
 
   if (
     !fitNoteEl ||
-    !photoReferenceNoteEl ||
     !summary ||
     !boardsEl ||
     !overlayBoardsRowEl ||
@@ -1266,8 +1264,6 @@ function updateSetupSummary(scenario) {
   if (!scenario) {
     fitNoteEl.textContent = "";
     fitNoteEl.classList.add("hidden");
-    photoReferenceNoteEl.textContent = "";
-    photoReferenceNoteEl.classList.add("hidden");
     summary.classList.add("hidden");
     boardsEl.textContent = "";
     overlayBoardsRowEl.classList.add("hidden");
@@ -1301,8 +1297,6 @@ function updateSetupSummary(scenario) {
   const overlayTileLabels = (scenario.overlayPlacements || [])
     .filter((placement) => isMiniOverlayPiece(scenario.pieceMap[placement.pieceId]))
     .map((placement) => formatBoardLabel(placement.pieceId, scenario.pieceMap));
-  const showPhotoReferenceNote = getBoardViewMode() === BOARD_VIEW_MODES.photos && (scenario.overlayPlacements?.length ?? 0) > 0;
-
   boardsEl.textContent = boardLabels.join(", ");
   if (overlayBoardLabels.length) {
     overlayBoardsEl.textContent = overlayBoardLabels.join(", ");
@@ -1317,13 +1311,6 @@ function updateSetupSummary(scenario) {
   } else {
     overlayTilesRowEl.classList.add("hidden");
     overlayTilesEl.textContent = "";
-  }
-  if (showPhotoReferenceNote) {
-    photoReferenceNoteEl.textContent = "Board photos are for general layout reference only. With overlays, use the physical boards or Icon View for exact placement of walls, ledges, and other border elements.";
-    photoReferenceNoteEl.classList.remove("hidden");
-  } else {
-    photoReferenceNoteEl.textContent = "";
-    photoReferenceNoteEl.classList.add("hidden");
   }
   flagsEl.textContent = `${scenario.checkpoints.length} checkpoint${scenario.checkpoints.length === 1 ? "" : "s"}`;
   const noteParts = [];

@@ -288,10 +288,10 @@ function drawDirectionArrow(ctx, cx, cy, size, dir, color = "#ffffff") {
   ctx.translate(cx, cy);
   ctx.rotate(directionToAngle(dir));
   ctx.fillStyle = color;
-  ctx.font = `bold ${Math.max(11, Math.round(size * 0.9))}px sans-serif`;
+  ctx.font = `bold ${Math.max(13, Math.round(size * 1.14))}px sans-serif`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText("→", 0, 0);
+  ctx.fillText("➜", 0, 0);
   ctx.restore();
 }
 
@@ -316,7 +316,7 @@ function getDirectionVector(dir) {
 
 function drawTurnConveyorIcon(ctx, cx, cy, size, exitDir, turn, color = "#eff8ff") {
   const glyph = "↳";
-  const fontSize = Math.max(11, Math.round(size * (turn === "both" ? 0.34 : 0.5)));
+  const fontSize = Math.max(18, Math.round(size * (turn === "both" ? 0.5 : 0.66)));
 
   const drawGlyph = (offsetY, flipY = 1) => {
     ctx.save();
