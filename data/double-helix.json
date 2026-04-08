@@ -531,6 +531,11 @@
       "y": 4,
       "features": [
         {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        },
+        {
           "type": "push",
           "dir": "W",
           "timing": [
