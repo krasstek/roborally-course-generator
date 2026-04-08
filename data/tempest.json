@@ -80,7 +80,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -100,7 +101,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -111,7 +113,8 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -122,7 +125,8 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 2
+          "speed": 2,
+          "turn": "left"
         }
       ]
     },
@@ -133,7 +137,8 @@
         {
           "type": "belt",
           "dir": "S",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         }
       ]
     },
@@ -144,7 +149,8 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -170,7 +176,8 @@
         {
           "type": "belt",
           "dir": "S",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         },
         {
           "type": "wall",
@@ -187,7 +194,8 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -207,7 +215,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -229,7 +238,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 2
+          "speed": 2,
+          "turn": "right"
         }
       ]
     },
@@ -240,7 +250,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 2
+          "speed": 2,
+          "turn": "left"
         }
       ]
     },
@@ -251,7 +262,8 @@
         {
           "type": "belt",
           "dir": "S",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         },
         {
           "type": "laser",
@@ -273,7 +285,8 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -344,7 +357,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 2
+          "speed": 2,
+          "turn": "left"
         }
       ]
     },
@@ -355,7 +369,8 @@
         {
           "type": "belt",
           "dir": "S",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         }
       ]
     },
@@ -366,7 +381,8 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         },
         {
           "type": "laser",
@@ -401,7 +417,8 @@
         {
           "type": "belt",
           "dir": "S",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         }
       ]
     },
@@ -412,7 +429,8 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -445,7 +463,8 @@
         {
           "type": "belt",
           "dir": "S",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         }
       ]
     },
@@ -456,7 +475,8 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -478,7 +498,8 @@
         {
           "type": "belt",
           "dir": "S",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         }
       ]
     },
@@ -489,7 +510,8 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -500,7 +522,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         },
         {
           "type": "laser",
@@ -527,7 +550,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         },
         {
           "type": "wall",
@@ -555,7 +579,8 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -608,7 +633,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -630,7 +656,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         },
         {
           "type": "laser",
@@ -700,7 +727,8 @@
         {
           "type": "belt",
           "dir": "S",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         },
         {
           "type": "laser",
@@ -727,7 +755,8 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -781,7 +810,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -803,7 +833,8 @@
         {
           "type": "belt",
           "dir": "S",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         }
       ]
     },
@@ -825,7 +856,8 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         },
         {
           "type": "laser",
@@ -841,7 +873,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -852,7 +885,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         }
       ]
     },
@@ -883,7 +917,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -894,7 +929,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         }
       ]
     },
@@ -942,7 +978,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -953,7 +990,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         }
       ]
     },
@@ -974,7 +1012,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         },
         {
           "type": "laser",
@@ -990,7 +1029,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         }
       ]
     },
@@ -1001,7 +1041,8 @@
         {
           "type": "belt",
           "dir": "S",
-          "speed": 2
+          "speed": 2,
+          "turn": "left"
         }
       ]
     },
@@ -1044,7 +1085,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -1055,7 +1097,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         }
       ]
     },
@@ -1066,7 +1109,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -1077,7 +1121,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         },
         {
           "type": "laser",
@@ -1093,7 +1138,8 @@
         {
           "type": "belt",
           "dir": "S",
-          "speed": 2
+          "speed": 2,
+          "turn": "left"
         }
       ]
     },
@@ -1104,7 +1150,8 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 2
+          "speed": 2,
+          "turn": "right"
         }
       ]
     },
@@ -1126,7 +1173,8 @@
         {
           "type": "belt",
           "dir": "S",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -1175,7 +1223,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -1186,7 +1235,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         }
       ]
     },
@@ -1209,7 +1259,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 2
+          "speed": 2,
+          "turn": "left"
         }
       ]
     },
@@ -1220,7 +1271,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -1231,7 +1283,8 @@
         {
           "type": "belt",
           "dir": "S",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -1251,7 +1304,8 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },

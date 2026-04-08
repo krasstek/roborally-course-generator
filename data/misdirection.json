@@ -2,9 +2,6 @@
   "id": "misdirection",
   "name": "Misdirection",
   "kind": "base",
-    "expansionId": "roborally",
-  "physicalBoardId": "energize-misdirection",
-  "image": "./assets/boards/misdirection.jpeg",
   "width": 12,
   "height": 12,
   "mergeMode": "base",
@@ -56,7 +53,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 2
+          "speed": 2,
+          "turn": "right"
         }
       ]
     },
@@ -67,7 +65,8 @@
         {
           "type": "belt",
           "dir": "S",
-          "speed": 2
+          "speed": 2,
+          "turn": "right"
         }
       ]
     },
@@ -110,7 +109,8 @@
         {
           "type": "belt",
           "dir": "S",
-          "speed": 2
+          "speed": 2,
+          "turn": "left"
         }
       ]
     },
@@ -153,7 +153,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         }
       ]
     },
@@ -174,7 +175,8 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 2
+          "speed": 2,
+          "turn": "right"
         }
       ]
     },
@@ -185,7 +187,8 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 2
+          "speed": 2,
+          "turn": "right"
         }
       ]
     },
@@ -277,7 +280,8 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         }
       ]
     },
@@ -288,7 +292,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 2
+          "speed": 2,
+          "turn": "left"
         }
       ]
     },
@@ -347,7 +352,8 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 2
+          "speed": 2,
+          "turn": "left"
         }
       ]
     },
@@ -358,7 +364,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -370,6 +377,14 @@
           "type": "belt",
           "dir": "E",
           "speed": 1
+        },
+        {
+          "type": "push",
+          "dir": "N",
+          "timing": [
+            2,
+            4
+          ]
         }
       ]
     },
@@ -380,7 +395,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         }
       ]
     },
@@ -639,7 +655,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -650,7 +667,8 @@
         {
           "type": "belt",
           "dir": "S",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -779,7 +797,20 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
+        }
+      ]
+    },
+    {
+      "x": 8,
+      "y": 7,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "W",
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -835,6 +866,15 @@
           "type": "belt",
           "dir": "W",
           "speed": 1
+        },
+        {
+          "type": "push",
+          "dir": "N",
+          "timing": [
+            1,
+            3,
+            5
+          ]
         }
       ]
     },
@@ -856,7 +896,8 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -867,7 +908,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 2
+          "speed": 2,
+          "turn": "right"
         },
         {
           "type": "wall",
@@ -993,7 +1035,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -1023,7 +1066,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 2
+          "speed": 2,
+          "turn": "right"
         }
       ]
     },
@@ -1076,7 +1120,8 @@
         {
           "type": "belt",
           "dir": "S",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -1097,7 +1142,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 2
+          "speed": 2,
+          "turn": "right"
         }
       ]
     },
@@ -1108,7 +1154,8 @@
         {
           "type": "belt",
           "dir": "S",
-          "speed": 2
+          "speed": 2,
+          "turn": "right"
         }
       ]
     },
@@ -1119,7 +1166,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -1130,7 +1178,8 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -1163,7 +1212,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         }
       ]
     },
@@ -1174,7 +1224,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         }
       ]
     },
@@ -1185,7 +1236,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 2
+          "speed": 2,
+          "turn": "right"
         }
       ]
     },
@@ -1196,9 +1248,13 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 2
+          "speed": 2,
+          "turn": "right"
         }
       ]
     }
-  ]
+  ],
+  "expansionId": "roborally",
+  "physicalBoardId": "energize-misdirection",
+  "image": "./assets/boards/misdirection.jpeg"
 }

@@ -1,9 +1,6 @@
 {
   "id": "winding",
   "name": "Winding",
-    "expansionId": "master-builder",
-  "physicalBoardId": "all-roads-winding",
-  "image": "./assets/boards/winding.jpeg",
   "kind": "small",
   "width": 6,
   "height": 6,
@@ -17,7 +14,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 2
+          "speed": 2,
+          "turn": "right"
         }
       ]
     },
@@ -28,7 +26,8 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 2
+          "speed": 2,
+          "turn": "left"
         }
       ]
     },
@@ -72,7 +71,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 2
+          "speed": 2,
+          "turn": "right"
         },
         {
           "type": "laser",
@@ -88,7 +88,8 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 2
+          "speed": 2,
+          "turn": "left"
         },
         {
           "type": "laser",
@@ -143,7 +144,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 2
+          "speed": 2,
+          "turn": "right"
         }
       ]
     },
@@ -154,7 +156,8 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 2
+          "speed": 2,
+          "turn": "left"
         }
       ]
     },
@@ -176,7 +179,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 2
+          "speed": 2,
+          "turn": "right"
         }
       ]
     },
@@ -187,7 +191,8 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 2
+          "speed": 2,
+          "turn": "left"
         }
       ]
     },
@@ -243,7 +248,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 2
+          "speed": 2,
+          "turn": "right"
         }
       ]
     },
@@ -254,7 +260,8 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 2
+          "speed": 2,
+          "turn": "left"
         }
       ]
     },
@@ -289,9 +296,13 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 2
+          "speed": 2,
+          "turn": "right"
         }
       ]
     }
-  ]
+  ],
+  "expansionId": "master-builder",
+  "physicalBoardId": "all-roads-winding",
+  "image": "./assets/boards/winding.jpeg"
 }

@@ -456,7 +456,8 @@
         {
           "type": "belt",
           "dir": "S",
-          "speed": 2
+          "speed": 2,
+          "turn": "left"
         }
       ]
     },
@@ -467,7 +468,8 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 2
+          "speed": 2,
+          "turn": "right"
         }
       ]
     },
@@ -563,7 +565,8 @@
         {
           "type": "belt",
           "dir": "S",
-          "speed": 2
+          "speed": 2,
+          "turn": "right"
         },
         {
           "type": "ledge",
@@ -684,7 +687,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 2
+          "speed": 2,
+          "turn": "left"
         }
       ]
     },
@@ -695,7 +699,8 @@
         {
           "type": "belt",
           "dir": "S",
-          "speed": 2
+          "speed": 2,
+          "turn": "right"
         }
       ]
     },
@@ -928,7 +933,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 2
+          "speed": 2,
+          "turn": "left"
         }
       ]
     },
@@ -961,7 +967,8 @@
         {
           "type": "belt",
           "dir": "S",
-          "speed": 2
+          "speed": 2,
+          "turn": "right"
         }
       ]
     },
@@ -1128,7 +1135,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 2
+          "speed": 2,
+          "turn": "left"
         }
       ]
     },
@@ -1155,7 +1163,8 @@
         {
           "type": "belt",
           "dir": "S",
-          "speed": 2
+          "speed": 2,
+          "turn": "right"
         }
       ]
     },
@@ -1331,7 +1340,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 2
+          "speed": 2,
+          "turn": "left"
         }
       ]
     },

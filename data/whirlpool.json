@@ -1,9 +1,6 @@
 {
   "id": "whirlpool",
   "name": "Whirlpool",
-  "expansionId": "master-builder",
-  "physicalBoardId": "whirlpool-blueprint",
-  "image": "./assets/boards/whirlpool.jpeg",
   "kind": "base",
   "width": 6,
   "height": 6,
@@ -72,7 +69,8 @@
         {
           "type": "belt",
           "dir": "S",
-          "speed": 2
+          "speed": 2,
+          "turn": "right"
         }
       ]
     },
@@ -141,7 +139,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 2
+          "speed": 2,
+          "turn": "right"
         }
       ]
     },
@@ -174,7 +173,8 @@
         {
           "type": "belt",
           "dir": "S",
-          "speed": 2
+          "speed": 2,
+          "turn": "right"
         },
         {
           "type": "laser",
@@ -244,7 +244,8 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 2
+          "speed": 2,
+          "turn": "right"
         },
         {
           "type": "laser",
@@ -339,7 +340,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -394,9 +396,13 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     }
-  ]
+  ],
+  "expansionId": "master-builder",
+  "physicalBoardId": "whirlpool-blueprint",
+  "image": "./assets/boards/whirlpool.jpeg"
 }

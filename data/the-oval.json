@@ -1,9 +1,6 @@
 {
   "id": "the-oval",
   "name": "The Oval",
-  "expansionId": "master-builder",
-  "physicalBoardId": "convergence-the-oval",
-  "image": "./assets/boards/the-oval.jpg",
   "kind": "small",
   "width": 6,
   "height": 6,
@@ -29,7 +26,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 2
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -51,7 +49,8 @@
         {
           "type": "belt",
           "dir": "S",
-          "speed": 2
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -84,7 +83,8 @@
         {
           "type": "belt",
           "dir": "S",
-          "speed": 2
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -134,7 +134,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 2
+          "speed": 1,
+          "turn": "left"
         }
       ]
     },
@@ -145,7 +146,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 2
+          "speed": 1,
+          "turn": "left"
         }
       ]
     },
@@ -285,7 +287,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 2
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -307,9 +310,13 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 2
+          "speed": 1,
+          "turn": "right"
         }
       ]
     }
-  ]
+  ],
+  "expansionId": "master-builder",
+  "physicalBoardId": "convergence-the-oval",
+  "image": "./assets/boards/the-oval.jpg"
 }
