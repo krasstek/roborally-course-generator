@@ -123,6 +123,23 @@ function getOccupiedOffsets(piece, rotation = 0) {
   return piece.tiles.map((tile) => rotateXY(tile.x, tile.y, piece.width, piece.height, rotation));
 }
 
+function getOverlayCoverageOffsets(piece, rotation = 0, placement = null) {
+  if (placement?.overlay && piece?.kind !== "overlay") {
+    const dims = rotatedDimensions(piece, rotation);
+    const offsets = [];
+
+    for (let y = 0; y < dims.height; y += 1) {
+      for (let x = 0; x < dims.width; x += 1) {
+        offsets.push({ x, y });
+      }
+    }
+
+    return offsets;
+  }
+
+  return getOccupiedOffsets(piece, rotation);
+}
+
 export function rectanglesOverlap(a, b) {
   return (
     a.x < b.x + b.width &&
@@ -532,7 +549,7 @@ export function buildResolvedMap(placements, pieces) {
     });
 
     const occupiedOffsets = placement.overlay
-      ? getOccupiedOffsets(piece, placement.rotation ?? 0)
+      ? getOverlayCoverageOffsets(piece, placement.rotation ?? 0, placement)
       : Array.from({ length: placed.height }, (_, dy) => dy).flatMap((dy) => (
         Array.from({ length: placed.width }, (_, dx) => ({ x: dx, y: dy }))
       ));

@@ -208,6 +208,7 @@ const PIECE_DATA_FILES = [
   "the-zone",
   "transition",
   "trench-run",
+  "vacancy",
   "water-park",
   "winding",
   "whirlpool"
@@ -816,7 +817,7 @@ function summarizeFeature(feature) {
     case "chopShop":
       return "chop shop";
     case "belt":
-      return `conveyor ${feature.dir ?? "?"}${feature.speed ? ` speed ${feature.speed}` : ""}`;
+      return `conveyor ${feature.dir ?? "?"}${feature.speed ? ` speed ${feature.speed}` : ""}${feature.turn ? ` turn ${feature.turn}` : ""}`;
     case "gear":
       return `gear ${feature.rotation ?? "?"}`;
     case "laser":
@@ -1233,6 +1234,7 @@ function initializeBoardAudit(assets) {
 
 function updateSetupSummary(scenario) {
   const fitNoteEl = document.getElementById("fit-note");
+  const photoReferenceNoteEl = document.getElementById("photo-reference-note");
   const summary = document.getElementById("setup-summary");
   const boardsEl = document.getElementById("setup-boards");
   const overlayBoardsRowEl = document.getElementById("setup-overlay-boards-row");
@@ -1246,6 +1248,7 @@ function updateSetupSummary(scenario) {
 
   if (
     !fitNoteEl ||
+    !photoReferenceNoteEl ||
     !summary ||
     !boardsEl ||
     !overlayBoardsRowEl ||
@@ -1263,6 +1266,8 @@ function updateSetupSummary(scenario) {
   if (!scenario) {
     fitNoteEl.textContent = "";
     fitNoteEl.classList.add("hidden");
+    photoReferenceNoteEl.textContent = "";
+    photoReferenceNoteEl.classList.add("hidden");
     summary.classList.add("hidden");
     boardsEl.textContent = "";
     overlayBoardsRowEl.classList.add("hidden");
@@ -1296,6 +1301,7 @@ function updateSetupSummary(scenario) {
   const overlayTileLabels = (scenario.overlayPlacements || [])
     .filter((placement) => isMiniOverlayPiece(scenario.pieceMap[placement.pieceId]))
     .map((placement) => formatBoardLabel(placement.pieceId, scenario.pieceMap));
+  const showPhotoReferenceNote = getBoardViewMode() === BOARD_VIEW_MODES.photos && (scenario.overlayPlacements?.length ?? 0) > 0;
 
   boardsEl.textContent = boardLabels.join(", ");
   if (overlayBoardLabels.length) {
@@ -1311,6 +1317,13 @@ function updateSetupSummary(scenario) {
   } else {
     overlayTilesRowEl.classList.add("hidden");
     overlayTilesEl.textContent = "";
+  }
+  if (showPhotoReferenceNote) {
+    photoReferenceNoteEl.textContent = "Board photos are for general layout reference only. With overlays, use the physical boards or Icon View for exact placement of walls, ledges, and other border elements.";
+    photoReferenceNoteEl.classList.remove("hidden");
+  } else {
+    photoReferenceNoteEl.textContent = "";
+    photoReferenceNoteEl.classList.add("hidden");
   }
   flagsEl.textContent = `${scenario.checkpoints.length} checkpoint${scenario.checkpoints.length === 1 ? "" : "s"}`;
   const noteParts = [];
@@ -2115,8 +2128,10 @@ function updateRulesNote(scenario) {
   const topAnchorEl = document.getElementById("rules-anchor-top");
   const bottomAnchorEl = document.getElementById("rules-anchor-bottom");
   const checkpointNoteEl = document.getElementById("checkpoint-note");
+  const photoRulesNoteEl = document.getElementById("photo-rules-note");
   const noteEl = document.getElementById("rules-note");
   const checkpointNotes = [];
+  const photoNotes = [];
   const notes = [];
 
   if (!scenario) {
@@ -2124,6 +2139,8 @@ function updateRulesNote(scenario) {
     rulesBlockEl?.classList.add("hidden");
     checkpointNoteEl.textContent = "";
     checkpointNoteEl.classList.add("hidden");
+    photoRulesNoteEl.textContent = "";
+    photoRulesNoteEl.classList.add("hidden");
     noteEl.textContent = "";
     noteEl.classList.add("hidden");
     return;
@@ -2152,6 +2169,10 @@ function updateRulesNote(scenario) {
 
   if (hasMovingTargetsEffect(scenario)) {
     notes.push("Moving Targets: during each register, checkpoints on conveyors move with the belts. If one would leave the conveyor or stop moving, return it to its marked re-entry space (R#) (Altered from previous Robo Rally editions).");
+  }
+
+  if (getBoardViewMode() === BOARD_VIEW_MODES.photos && (scenario.overlayPlacements?.length ?? 0) > 0) {
+    photoNotes.push("Board photos are for general layout reference only. With overlays, use the physical boards or Icon View for exact placement of walls, ledges, and other border elements.");
   }
 
   if (scenario.competitiveMode) {
@@ -2194,9 +2215,17 @@ function updateRulesNote(scenario) {
     checkpointNoteEl.classList.add("hidden");
   }
 
+  if (photoNotes.length) {
+    photoRulesNoteEl.textContent = photoNotes.join(" ");
+    photoRulesNoteEl.classList.remove("hidden");
+  } else {
+    photoRulesNoteEl.textContent = "";
+    photoRulesNoteEl.classList.add("hidden");
+  }
+
   if (!notes.length) {
     bottomAnchorEl?.appendChild(rulesBlockEl);
-    rulesBlockEl?.classList.toggle("hidden", !checkpointNotes.length);
+    rulesBlockEl?.classList.toggle("hidden", !checkpointNotes.length && !photoNotes.length);
     noteEl.textContent = "";
     noteEl.classList.add("hidden");
     return;
@@ -3045,8 +3074,23 @@ function rotateTileOffset(x, y, piece, rotation) {
   return { x, y };
 }
 
-function getPlacementOccupiedOffsets(piece, rotation = 0) {
-  if (!piece?.tiles?.length) {
+function getFullRectOffsets(piece, rotation = 0) {
+  const dims = rotatedDimensions(piece, rotation);
+  const offsets = [];
+
+  for (let y = 0; y < dims.height; y += 1) {
+    for (let x = 0; x < dims.width; x += 1) {
+      offsets.push({ x, y });
+    }
+  }
+
+  return offsets;
+}
+
+function getPlacementOccupiedOffsets(piece, rotation = 0, options = {}) {
+  const useFullRect = Boolean(options.fullRect);
+
+  if (useFullRect || !piece?.tiles?.length) {
     const dims = rotatedDimensions(piece, rotation);
     const offsets = [];
 
@@ -3063,7 +3107,8 @@ function getPlacementOccupiedOffsets(piece, rotation = 0) {
 }
 
 function getPlacementOccupiedTiles(piece, placement) {
-  return getPlacementOccupiedOffsets(piece, placement.rotation ?? 0).map(({ x, y }) => (
+  const fullRect = Boolean(placement?.overlay && !isMiniOverlayPiece(piece));
+  return getPlacementOccupiedOffsets(piece, placement.rotation ?? 0, { fullRect }).map(({ x, y }) => (
     `${placement.x + x},${placement.y + y}`
   ));
 }
@@ -3127,13 +3172,10 @@ function chooseSmallBoardMiniOverlayCount(maxCount) {
 
 function getPlacementSupportTiles(placement, pieceMap) {
   const piece = pieceMap[placement.pieceId];
-  const dims = rotatedDimensions(piece, placement.rotation ?? 0);
   const supportTiles = new Set();
 
-  for (let y = 0; y < dims.height; y += 1) {
-    for (let x = 0; x < dims.width; x += 1) {
-      supportTiles.add(`${placement.x + x},${placement.y + y}`);
-    }
+  for (const { x, y } of getFullRectOffsets(piece, placement.rotation ?? 0)) {
+    supportTiles.add(`${placement.x + x},${placement.y + y}`);
   }
 
   return supportTiles;
@@ -3155,7 +3197,9 @@ function getOverlayPlacementsForSupportTiles(overlayPiece, supportTiles, dockTil
 
   for (const rotation of ROTATIONS) {
     const dims = rotatedDimensions(overlayPiece, rotation);
-    const occupiedOffsets = getPlacementOccupiedOffsets(overlayPiece, rotation);
+    const occupiedOffsets = isMiniOverlayPiece(overlayPiece)
+      ? getPlacementOccupiedOffsets(overlayPiece, rotation)
+      : getFullRectOffsets(overlayPiece, rotation);
 
     for (let y = minY; y <= maxY - dims.height + 1; y += 1) {
       for (let x = minX; x <= maxX - dims.width + 1; x += 1) {
@@ -3229,6 +3273,18 @@ function tileHasWallOnSide(features = [], side) {
   return features.some((feature) => feature.type === "wall" && (feature.sides || []).includes(side));
 }
 
+function tileHasLedgeOnSide(features = [], side) {
+  return features.some((feature) => feature.type === "ledge" && (feature.sides || []).includes(side));
+}
+
+function tileHasLaserSupportBlock(features = [], side, options = {}) {
+  if (tileHasWallOnSide(features, side)) {
+    return true;
+  }
+
+  return Boolean(options.includeLowerLedge && tileHasLedgeOnSide(features, side));
+}
+
 function tileHasLaserInDirection(features = [], dir) {
   return features.some((feature) => feature.type === "laser" && feature.dir === dir);
 }
@@ -3267,7 +3323,7 @@ function laserTileHasValidContinuation(tile, laser, candidateFeatureMap, current
 
   return sideChecks.every((side) => {
     const currentFeatures = tile.features || [];
-    if (tileHasWallOnSide(currentFeatures, side)) {
+    if (tileHasLaserSupportBlock(currentFeatures, side, { includeLowerLedge: true })) {
       return true;
     }
 
@@ -3280,7 +3336,7 @@ function laserTileHasValidContinuation(tile, laser, candidateFeatureMap, current
     }
 
     const neighborFeatures = candidateFeatureMap.get(neighborKey) ?? currentTileMap.get(neighborKey)?.features ?? [];
-    if (tileHasWallOnSide(neighborFeatures, getOppositeSide(side))) {
+    if (tileHasLaserSupportBlock(neighborFeatures, getOppositeSide(side))) {
       return true;
     }
 
@@ -5867,7 +5923,7 @@ function placementsAreLaserLinked(sourcePlacement, candidatePlacement, pieceMap)
     return lasers.some((laser) => {
       const sides = [laser.dir, getOppositeSide(laser.dir)];
       return sides.some((side) => {
-        if (tileHasWallOnSide(tile.features || [], side)) {
+        if (tileHasLaserSupportBlock(tile.features || [], side, { includeLowerLedge: true })) {
           return false;
         }
 
@@ -5878,7 +5934,8 @@ function placementsAreLaserLinked(sourcePlacement, candidatePlacement, pieceMap)
         }
 
         return (
-          tileHasWallOnSide(neighborFeatures, getOppositeSide(side)) ||
+          tileHasLaserSupportBlock(tile.features || [], side, { includeLowerLedge: true }) ||
+          tileHasLaserSupportBlock(neighborFeatures, getOppositeSide(side)) ||
           tileHasLaserInDirection(neighborFeatures, laser.dir)
         );
       });

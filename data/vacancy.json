@@ -1343,5 +1343,5 @@
   ],
   "expansionId": "30th-anniversary",
   "physicalBoardId": "vacancy-sampler",
-  "image": ".assets/boards/vacancy.JPG"
+  "image": "./assets/boards/vacancy.JPG"
 }

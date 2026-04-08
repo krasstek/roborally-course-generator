@@ -687,5 +687,6 @@
     }
   ],
   "expansionId": "30th-anniversary",
-  "physicalBoardId": "links-concentric"
+  "physicalBoardId": "links-concentric",
+  "image": "./assets/boards/links.jpg"
 }

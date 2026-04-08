@@ -288,16 +288,59 @@ function drawDirectionArrow(ctx, cx, cy, size, dir, color = "#ffffff") {
   ctx.translate(cx, cy);
   ctx.rotate(directionToAngle(dir));
   ctx.fillStyle = color;
-  ctx.beginPath();
-  ctx.moveTo(size * 0.5, 0);
-  ctx.lineTo(-size * 0.18, -size * 0.34);
-  ctx.lineTo(-size * 0.18, -size * 0.12);
-  ctx.lineTo(-size * 0.5, -size * 0.12);
-  ctx.lineTo(-size * 0.5, size * 0.12);
-  ctx.lineTo(-size * 0.18, size * 0.12);
-  ctx.lineTo(-size * 0.18, size * 0.34);
-  ctx.closePath();
-  ctx.fill();
+  ctx.font = `bold ${Math.max(11, Math.round(size * 0.9))}px sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("→", 0, 0);
+  ctx.restore();
+}
+
+function rotateCardinalDir(dir, rotation) {
+  const order = ["N", "E", "S", "W"];
+  const index = order.indexOf(dir);
+  if (index < 0) {
+    return dir;
+  }
+  const steps = rotation === "cw" ? 1 : rotation === "ccw" ? -1 : 0;
+  return order[(index + steps + order.length) % order.length];
+}
+
+function getDirectionVector(dir) {
+  return {
+    N: { x: 0, y: -1 },
+    E: { x: 1, y: 0 },
+    S: { x: 0, y: 1 },
+    W: { x: -1, y: 0 }
+  }[dir] ?? { x: 1, y: 0 };
+}
+
+function drawTurnConveyorIcon(ctx, cx, cy, size, exitDir, turn, color = "#eff8ff") {
+  const glyph = "↳";
+  const fontSize = Math.max(11, Math.round(size * (turn === "both" ? 0.34 : 0.5)));
+
+  const drawGlyph = (offsetY, flipY = 1) => {
+    ctx.save();
+    ctx.translate(0, offsetY);
+    ctx.scale(1, flipY);
+    ctx.font = `bold ${fontSize}px sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(glyph, 0, 0);
+    ctx.restore();
+  };
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(directionToAngle(exitDir));
+  ctx.fillStyle = color;
+
+  if (turn === "both") {
+    drawGlyph(-size * 0.12, 1);
+    drawGlyph(size * 0.12, -1);
+  } else {
+    drawGlyph(0, turn === "right" ? -1 : 1);
+  }
+
   ctx.restore();
 }
 
@@ -375,15 +418,13 @@ function drawFeatureIcon(ctx, feature, left, top, size) {
 
   switch (feature.type) {
     case "belt":
-      drawIconBadge(ctx, left, top, size, { fill: "#2f7fb8", stroke: "#13456d" });
-      drawDirectionArrow(ctx, cx, cy, size * 0.52, feature.dir, "#eff8ff");
-      if (feature.speed && feature.speed > 1) {
-        drawBadgeText(ctx, String(feature.speed), left, top, size, {
-          color: "#ffffff",
-          bold: true,
-          x: left + size * 0.76,
-          y: top + size * 0.28
-        });
+      drawIconBadge(ctx, left, top, size, feature.speed > 1
+        ? { fill: "#2f7fb8", stroke: "#13456d" }
+        : { fill: "#3d9850", stroke: "#1f5b2b" });
+      if (feature.turn) {
+        drawTurnConveyorIcon(ctx, cx, cy, size, feature.dir, feature.turn, "#eff8ff");
+      } else {
+        drawDirectionArrow(ctx, cx, cy, size * 0.52, feature.dir, "#eff8ff");
       }
       return;
     case "repulsor":
@@ -563,37 +604,14 @@ function drawFeatureIcon(ctx, feature, left, top, size) {
       {
         const gleam = getCheckpointGleam(timeMs, Number(feature.id ?? 0));
         ctx.save();
-        ctx.strokeStyle = `rgba(255, 245, 176, ${0.28 + gleam.pulse * 0.28})`;
-        ctx.lineWidth = Math.max(1.4, size * 0.09);
+        ctx.strokeStyle = `rgba(255, 246, 188, ${0.34 + gleam.pulse * 0.34})`;
+        ctx.lineWidth = Math.max(1.6, size * 0.1) + gleam.pulse * Math.max(0.6, size * 0.04);
+        ctx.shadowColor = `rgba(255, 233, 120, ${0.26 + gleam.pulse * 0.26})`;
+        ctx.shadowBlur = 4 + gleam.pulse * 6;
         ctx.beginPath();
         ctx.roundRect(left + size * 0.05, top + size * 0.05, size * 0.9, size * 0.9, Math.max(3, size * 0.22));
         ctx.stroke();
         ctx.restore();
-        if (gleam.intensity > 0) {
-          ctx.save();
-          ctx.beginPath();
-          ctx.arc(cx, cy, size * 0.38, 0, Math.PI * 2);
-          ctx.clip();
-          ctx.translate(cx, cy);
-          ctx.rotate(-0.42);
-          const gleamWidth = size * 0.26;
-          const gradient = ctx.createLinearGradient(-size * 0.5, 0, size * 0.5, 0);
-          const lead = Math.max(-0.15, gleam.phase - 0.24);
-          const center = gleam.phase;
-          const trail = Math.min(1.15, gleam.phase + 0.24);
-          const shadowLead = Math.max(0, gleam.phase - 0.34);
-          const shadowCenter = Math.max(0, gleam.phase - 0.14);
-          gradient.addColorStop(0, "rgba(255, 255, 255, 0)");
-          gradient.addColorStop(shadowLead, "rgba(255, 255, 255, 0)");
-          gradient.addColorStop(shadowCenter, `rgba(106, 74, 0, ${0.18 + gleam.intensity * 0.24})`);
-          gradient.addColorStop(lead, "rgba(255, 255, 255, 0)");
-          gradient.addColorStop(center, `rgba(255, 255, 242, ${0.36 + gleam.intensity * 0.48})`);
-          gradient.addColorStop(trail, "rgba(255, 255, 255, 0)");
-          gradient.addColorStop(1, "rgba(255, 255, 255, 0)");
-          ctx.fillStyle = gradient;
-          ctx.fillRect(-size * 0.55, -gleamWidth, size * 1.1, gleamWidth * 2);
-          ctx.restore();
-        }
       }
       ctx.save();
       ctx.strokeStyle = "#312100";
@@ -1017,7 +1035,7 @@ function drawFeatures(
       let label = feature.type;
 
       if (feature.type === "belt") {
-        label = `conveyor ${feature.dir ?? ""}${feature.speed ?? ""}`.trim();
+        label = `conveyor ${feature.dir ?? ""}${feature.speed ?? ""}${feature.turn ? ` ${feature.turn}` : ""}`.trim();
       } else if (feature.type === "repulsor") {
         label = `repulsor ${((feature.sides || []).join(",")) || ""}`.trim();
       } else if (feature.type === "laser") {
@@ -1125,7 +1143,7 @@ function drawGoals(ctx, goals, bounds, tileSize, margin) {
     ctx.strokeStyle = "#b98500";
     ctx.lineWidth = 2;
     ctx.shadowColor = "rgba(255, 226, 92, 0.72)";
-    ctx.shadowBlur = 14 + gleam.intensity * 12 + gleam.pulse * 4;
+    ctx.shadowBlur = 10 + gleam.pulse * 10;
     ctx.beginPath();
     ctx.moveTo(left + tileSize * 0.26, top + tileSize * 0.22);
     ctx.lineTo(left + tileSize * 0.26, top + tileSize * 0.78);
@@ -1134,8 +1152,10 @@ function drawGoals(ctx, goals, bounds, tileSize, margin) {
     ctx.fill();
     ctx.stroke();
     ctx.save();
-    ctx.strokeStyle = `rgba(255, 248, 198, ${0.35 + gleam.pulse * 0.3})`;
-    ctx.lineWidth = 1.5 + gleam.pulse * 1.6;
+    ctx.strokeStyle = `rgba(255, 248, 198, ${0.38 + gleam.pulse * 0.34})`;
+    ctx.lineWidth = 1.8 + gleam.pulse * 2.2;
+    ctx.shadowColor = `rgba(255, 240, 150, ${0.24 + gleam.pulse * 0.26})`;
+    ctx.shadowBlur = 3 + gleam.pulse * 8;
     ctx.beginPath();
     ctx.moveTo(left + tileSize * 0.3, top + tileSize * 0.25);
     ctx.lineTo(left + tileSize * 0.3, top + tileSize * 0.75);
@@ -1143,33 +1163,6 @@ function drawGoals(ctx, goals, bounds, tileSize, margin) {
     ctx.closePath();
     ctx.stroke();
     ctx.restore();
-    if (gleam.intensity > 0) {
-      ctx.save();
-      ctx.beginPath();
-      ctx.moveTo(left + tileSize * 0.26, top + tileSize * 0.22);
-      ctx.lineTo(left + tileSize * 0.26, top + tileSize * 0.78);
-      ctx.lineTo(left + tileSize * 0.84, py);
-      ctx.closePath();
-      ctx.clip();
-      ctx.translate(left + tileSize / 2, py);
-      ctx.rotate(-0.4);
-      const gradient = ctx.createLinearGradient(-tileSize * 0.45, 0, tileSize * 0.45, 0);
-      const lead = Math.max(-0.15, gleam.phase - 0.24);
-      const center = gleam.phase;
-      const trail = Math.min(1.15, gleam.phase + 0.24);
-      const shadowLead = Math.max(0, gleam.phase - 0.34);
-      const shadowCenter = Math.max(0, gleam.phase - 0.14);
-      gradient.addColorStop(0, "rgba(255,255,255,0)");
-      gradient.addColorStop(shadowLead, "rgba(255,255,255,0)");
-      gradient.addColorStop(shadowCenter, `rgba(118,83,0,${0.2 + gleam.intensity * 0.28})`);
-      gradient.addColorStop(lead, "rgba(255,255,255,0)");
-      gradient.addColorStop(center, `rgba(255,255,245,${0.42 + gleam.intensity * 0.44})`);
-      gradient.addColorStop(trail, "rgba(255,255,255,0)");
-      gradient.addColorStop(1, "rgba(255,255,255,0)");
-      ctx.fillStyle = gradient;
-      ctx.fillRect(-tileSize * 0.54, -tileSize * 0.18, tileSize * 1.08, tileSize * 0.36);
-      ctx.restore();
-    }
     ctx.fillStyle = "#111";
     ctx.font = "bold 12px sans-serif";
     ctx.fillText(String(index + 1), left + tileSize * 0.4, py + 4);
