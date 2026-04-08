@@ -1,9 +1,6 @@
 {
   "id": "gauntlet-of-fire",
   "name": "Gauntlet of Fire",
-  "expansionId": "thrills-and-spills",
-  "physicalBoardId": "gauntlet-of-fire-portal-palace",
-  "image": "./assets/boards/gauntlet-of-fire.jpeg",
   "kind": "base",
   "width": 12,
   "height": 12,
@@ -150,7 +147,8 @@
         {
           "type": "belt",
           "dir": "S",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         }
       ]
     },
@@ -208,7 +206,8 @@
         {
           "type": "belt",
           "dir": "S",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         }
       ]
     },
@@ -686,14 +685,6 @@
           "sides": [
             "N"
           ]
-        },
-        {
-          "type": "flamethrower",
-          "dir": "S",
-          "timing": [
-            1,
-            5
-          ]
         }
       ]
     },
@@ -795,7 +786,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -836,7 +828,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         }
       ]
     },
@@ -994,14 +987,6 @@
           "sides": [
             "E"
           ]
-        },
-        {
-          "type": "flamethrower",
-          "dir": "W",
-          "timing": [
-            3,
-            4
-          ]
         }
       ]
     },
@@ -1065,7 +1050,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -1128,7 +1114,8 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -1326,7 +1313,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 2
+          "speed": 1,
+          "turn": "left"
         }
       ]
     },
@@ -1449,7 +1437,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 2
+          "speed": 1,
+          "turn": "left"
         }
       ]
     },
@@ -1554,5 +1543,8 @@
         }
       ]
     }
-  ]
+  ],
+  "expansionId": "thrills-and-spills",
+  "physicalBoardId": "gauntlet-of-fire-portal-palace",
+  "image": "./assets/boards/gauntlet-of-fire.jpeg"
 }

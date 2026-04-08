@@ -92,6 +92,9 @@
       "y": 2,
       "features": [
         {
+          "type": "pit"
+        },
+        {
           "type": "belt",
           "dir": "E",
           "speed": 1

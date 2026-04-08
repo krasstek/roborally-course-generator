@@ -1,9 +1,6 @@
 {
   "id": "circles",
   "name": "Circles",
-  "expansionId": "master-builder",
-  "physicalBoardId": "circles-the-zone",
-  "image": "./assets/boards/circles.jpg",
   "kind": "small",
   "width": 6,
   "height": 6,
@@ -17,7 +14,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 2
+          "speed": 2,
+          "turn": "right"
         }
       ]
     },
@@ -72,7 +70,8 @@
         {
           "type": "belt",
           "dir": "S",
-          "speed": 2
+          "speed": 2,
+          "turn": "right"
         }
       ]
     },
@@ -135,7 +134,8 @@
         {
           "type": "belt",
           "dir": "S",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         }
       ]
     },
@@ -146,7 +146,8 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         }
       ]
     },
@@ -179,7 +180,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         }
       ]
     },
@@ -190,7 +192,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         }
       ]
     },
@@ -253,7 +256,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 2
+          "speed": 2,
+          "turn": "right"
         }
       ]
     },
@@ -308,9 +312,13 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 2
+          "speed": 2,
+          "turn": "right"
         }
       ]
     }
-  ]
+  ],
+  "expansionId": "master-builder",
+  "physicalBoardId": "circles-the-zone",
+  "image": "./assets/boards/circles.jpg"
 }

@@ -1,9 +1,6 @@
 {
   "id": "flood-zone",
   "name": "Flood Zone",
-  "expansionId": "wet-and-wild",
-  "physicalBoardId": "flood-zone-trench-run",
-  "image": "./assets/boards/flood-zone.jpg",
   "kind": "base",
   "width": 12,
   "height": 12,
@@ -57,7 +54,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         }
       ]
     },
@@ -68,7 +66,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         }
       ]
     },
@@ -123,7 +122,8 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -1013,7 +1013,8 @@
         {
           "type": "belt",
           "dir": "S",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -1119,7 +1120,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         }
       ]
     },
@@ -1159,7 +1161,8 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         }
       ]
     },
@@ -1198,7 +1201,8 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         }
       ]
     },
@@ -1246,5 +1250,8 @@
         }
       ]
     }
-  ]
+  ],
+  "expansionId": "wet-and-wild",
+  "physicalBoardId": "flood-zone-trench-run",
+  "image": "./assets/boards/flood-zone.jpg"
 }

@@ -14,7 +14,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 2
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -25,7 +26,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 2
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -36,7 +38,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 2
+          "speed": 1,
+          "turn": "left"
         }
       ]
     },
@@ -47,7 +50,7 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 2
+          "speed": 1
         }
       ]
     }

@@ -14,7 +14,8 @@
         {
           "type": "belt",
           "dir": "S",
-          "speed": 2
+          "speed": 2,
+          "turn": "left"
         }
       ]
     }

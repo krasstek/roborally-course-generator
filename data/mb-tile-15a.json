@@ -36,10 +36,13 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     }
   ],
+  "expansionId": "master-builder",
+  "physicalBoardId": "mb-tile-15",
   "image": "./assets/boards/tile-conveyor-right-long-1x3.jpg"
 }

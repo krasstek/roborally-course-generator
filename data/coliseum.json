@@ -2,9 +2,6 @@
   "id": "coliseum",
   "name": "Coliseum",
   "kind": "base",
-  "expansionId": "wet-and-wild",
-  "physicalBoardId": "transition-coliseum",
-  "image": "./assets/boards/coliseum.jpg",
   "width": 12,
   "height": 12,
   "mergeMode": "base",
@@ -138,7 +135,8 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -183,7 +181,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -220,7 +219,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         },
         {
           "type": "ramp",
@@ -341,7 +341,8 @@
         {
           "type": "belt",
           "dir": "S",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         },
         {
           "type": "ramp",
@@ -389,7 +390,8 @@
         {
           "type": "belt",
           "dir": "S",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         },
         {
           "type": "laser",
@@ -481,7 +483,8 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         },
         {
           "type": "laser",
@@ -832,7 +835,8 @@
         {
           "type": "belt",
           "dir": "S",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         }
       ]
     },
@@ -854,7 +858,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         }
       ]
     },
@@ -865,7 +870,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         }
       ]
     },
@@ -1000,7 +1006,8 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -1187,7 +1194,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         },
         {
           "type": "laser",
@@ -1253,7 +1261,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         }
       ]
     },
@@ -1293,7 +1302,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         },
         {
           "type": "ramp",
@@ -1414,7 +1424,8 @@
         {
           "type": "belt",
           "dir": "W",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         },
         {
           "type": "ramp",
@@ -1477,8 +1488,9 @@
       "features": [
         {
           "type": "belt",
-          "dir": "E",
-          "speed": 1
+          "dir": "W",
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -1500,7 +1512,8 @@
         {
           "type": "belt",
           "dir": "S",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -1520,7 +1533,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -1577,7 +1591,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         }
       ]
     },
@@ -1588,7 +1603,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -1644,7 +1660,8 @@
         {
           "type": "belt",
           "dir": "E",
-          "speed": 1
+          "speed": 1,
+          "turn": "right"
         }
       ]
     },
@@ -1655,9 +1672,13 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         }
       ]
     }
-  ]
+  ],
+  "expansionId": "wet-and-wild",
+  "physicalBoardId": "transition-coliseum",
+  "image": "./assets/boards/coliseum.jpg"
 }
