@@ -734,8 +734,9 @@
       "y": 6,
       "features": [
         {
-          "type": "checkpoint",
-          "id": 1
+          "type": "belt",
+          "dir": "E",
+          "speed": 1
         }
       ]
     },
