@@ -415,9 +415,9 @@
       "features": [
         {
           "type": "belt",
-          "dir": "E",
+          "dir": "W",
           "speed": 1,
-          "turn": "right"
+          "turn": "both"
         }
       ]
     },

@@ -602,7 +602,8 @@
         {
           "type": "belt",
           "dir": "S",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         },
         {
           "type": "ledge",
@@ -1092,7 +1093,8 @@
         {
           "type": "belt",
           "dir": "N",
-          "speed": 1
+          "speed": 1,
+          "turn": "left"
         },
         {
           "type": "ledge",
@@ -1488,7 +1490,7 @@
       "features": [
         {
           "type": "belt",
-          "dir": "W",
+          "dir": "E",
           "speed": 1,
           "turn": "right"
         }

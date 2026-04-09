@@ -1243,7 +1243,7 @@
           "type": "belt",
           "dir": "N",
           "speed": 1,
-          "turn": "both"
+          "turn": "left"
         }
       ]
     },

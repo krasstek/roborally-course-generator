@@ -464,9 +464,25 @@
       ]
     },
     {
+      "x": 2,
+      "y": 3,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 2
+        }
+      ]
+    },
+    {
       "x": 3,
       "y": 3,
       "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 2
+        },
         {
           "type": "laser",
           "dir": "N",
@@ -481,9 +497,25 @@
       ]
     },
     {
+      "x": 4,
+      "y": 3,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 2
+        }
+      ]
+    },
+    {
       "x": 5,
       "y": 3,
       "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 2
+        },
         {
           "type": "wall",
           "sides": [
@@ -497,9 +529,25 @@
       "y": 3,
       "features": [
         {
+          "type": "belt",
+          "dir": "E",
+          "speed": 2
+        },
+        {
           "type": "laser",
           "dir": "N",
           "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 7,
+      "y": 3,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "E",
+          "speed": 2
         }
       ]
     },

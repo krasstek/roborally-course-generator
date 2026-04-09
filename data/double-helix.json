@@ -971,8 +971,7 @@
         {
           "type": "belt",
           "dir": "S",
-          "speed": 2,
-          "turn": "right"
+          "speed": 2
         }
       ]
     },

@@ -689,7 +689,7 @@
       "features": [
         {
           "type": "belt",
-          "dir": "W",
+          "dir": "E",
           "speed": 1,
           "turn": "left"
         },
