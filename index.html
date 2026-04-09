@@ -8,7 +8,7 @@
   <meta name="mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="mobile-web-app-title" content="RoboRally" />
   <meta name="application-name" content="RoboRally Course Generator" />
-  <meta name="app-version" content="20260408125247" />
+  <meta name="app-version" content="20260409130630" />
   <title>RoboRally Course Generator</title>
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="icon" type="image/png" sizes="16x16" href="./assets/icons/favicon-16.png" />
@@ -750,6 +750,37 @@
       transform-origin: left center;
     }
 
+    .toast-stack {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      z-index: 45;
+      pointer-events: none;
+    }
+
+    .toast {
+      max-width: 320px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: rgba(17, 23, 28, 0.94);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      color: #f6f8f9;
+      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
+      font-size: 13px;
+      line-height: 1.4;
+      opacity: 0;
+      transform: translateY(8px);
+      transition: opacity 0.18s ease, transform 0.18s ease;
+    }
+
+    .toast.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
     @keyframes pulse-slide {
       0% { transform: translateX(-10%) scaleX(0.9); opacity: 0.75; }
       50% { transform: translateX(80%) scaleX(1.15); opacity: 1; }
@@ -1012,7 +1043,7 @@
             <option value="easy">Beginner</option>
             <option value="moderate">Intermediate</option>
             <option value="hard">Advanced</option>
-            <option value="brutal">Expert</option>
+            <option value="brutal">Robots. Must. Die.</option>
           </select>
         </label>
         <label>
@@ -1114,18 +1145,22 @@
           <div id="course-explanation-copy" class="course-explanation-copy"></div>
         </div>
       </div>
-      <div id="rules-anchor-top"></div>
+      <div id="rules-anchor-top">
+        <div id="rules-block-top" class="hidden">
+          <p id="rules-note" class="rules-note hidden">SPECIAL RULES:</p>
+        </div>
+      </div>
       <canvas id="canvas"></canvas>
       <div class="meta-strip">
         <span class="pill">Orange square: prohibited starting space</span>
         <span class="pill">Yellow flag: checkpoint</span>
         <span id="legend-reboot-token" class="pill hidden">Green marker: reboot token</span>
       </div>
-      <div id="rules-anchor-bottom"></div>
-      <div id="rules-block" class="hidden">
+      <div id="rules-anchor-bottom">
+        <div id="rules-block-bottom" class="hidden">
         <p id="checkpoint-note" class="rules-note hidden"></p>
         <p id="photo-rules-note" class="rules-note hidden"></p>
-        <p id="rules-note" class="rules-note hidden">SPECIAL RULES:</p>
+        </div>
       </div>
       <section id="board-audit-panel" class="audit-panel hidden">
         <div class="audit-header">
@@ -1193,6 +1228,7 @@
       </div>
     </div>
   </dialog>
+  <div id="toast-stack" class="toast-stack" aria-live="polite" aria-atomic="true"></div>
   <script type="module">
     const assetVersion = document
       .querySelector('meta[name="app-version"]')

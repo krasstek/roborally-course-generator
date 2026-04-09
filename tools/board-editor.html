@@ -296,6 +296,7 @@
           <button data-tool="flamethrower">Flamethrower</button>
           <button data-tool="gear">Gear</button>
           <button data-tool="homingMissile">Homing missile</button>
+          <button data-tool="inspectTile">Inspect tile</button>
           <button data-tool="laser">Laser</button>
           <button data-tool="ledge">Ledge</button>
           <button data-tool="oil">Oil slick</button>
@@ -360,6 +361,7 @@
             <select id="laserDamage">
               <option value="1">1</option>
               <option value="2">2</option>
+              <option value="3">3</option>
             </select>
           </div>
 
@@ -464,7 +466,14 @@
     </main>
   </div>
 
-  <script>
+  <script type="module">
+    import {
+      cloneFeature,
+      normalizeBeltTurn,
+      normalizeFeature,
+      summarizeFeatureDetails
+    } from "../feature-meta.js";
+
     const canvas = document.getElementById("canvas");
     const ctx = canvas.getContext("2d");
 
@@ -542,115 +551,6 @@
           .map(Number)
           .filter(n => Number.isInteger(n) && n >= 1 && n <= 5)
       )].sort((a, b) => a - b);
-    }
-
-    function normalizeSides(sides) {
-      const validSides = new Set(["N", "E", "S", "W"]);
-      return [...new Set((sides || []).filter(side => validSides.has(side)))].sort();
-    }
-
-    function normalizeTiming(timing) {
-      return [...new Set((timing || []).filter(n => Number.isInteger(n) && n >= 1 && n <= 5))].sort((a, b) => a - b);
-    }
-
-    function normalizeBeltTurn(turn) {
-      return turn === "left" || turn === "right" || turn === "both" ? turn : undefined;
-    }
-
-    function normalizeFeature(feature) {
-      if (!feature || typeof feature !== "object" || typeof feature.type !== "string") {
-        return null;
-      }
-
-      switch (feature.type) {
-        case "pit":
-        case "oil":
-        case "battery":
-        case "randomizer":
-        case "water":
-        case "chopShop":
-        case "homingMissile":
-          return { type: feature.type };
-        case "belt":
-          const normalizedBelt = {
-            type: "belt",
-            dir: feature.dir || "N",
-            speed: feature.speed === 2 ? 2 : 1
-          };
-          const turn = normalizeBeltTurn(feature.turn);
-          if (turn) normalizedBelt.turn = turn;
-          return normalizedBelt;
-        case "gear":
-          return {
-            type: "gear",
-            rotation: feature.rotation === "ccw" ? "ccw" : "cw"
-          };
-        case "laser":
-          return {
-            type: "laser",
-            dir: feature.dir || "N",
-            damage: Number.isFinite(feature.damage) && feature.damage > 0 ? Number(feature.damage) : 1
-          };
-        case "wall":
-        case "repulsor":
-          return {
-            type: feature.type,
-            sides: normalizeSides(feature.sides)
-          };
-        case "push":
-          return {
-            type: "push",
-            dir: feature.dir || "N",
-            timing: normalizeTiming(feature.timing)
-          };
-        case "trapdoor":
-          return {
-            type: "trapdoor",
-            timing: normalizeTiming(feature.timing)
-          };
-        case "flamethrower":
-          return {
-            type: "flamethrower",
-            dir: feature.dir || "N",
-            timing: normalizeTiming(feature.timing)
-          };
-        case "crusher":
-          return {
-            type: "crusher",
-            timing: normalizeTiming(feature.timing)
-          };
-        case "portal":
-          return {
-            type: "portal",
-            id: String(feature.id || "1")
-          };
-        case "teleporter":
-          return {
-            type: "teleporter",
-            power: Number.isFinite(feature.power) && feature.power > 0 ? Number(feature.power) : 2
-          };
-        case "ledge":
-          return {
-            type: "ledge",
-            sides: normalizeSides(feature.sides)
-          };
-        case "ramp":
-          return {
-            type: "ramp",
-            dir: feature.dir || "N"
-          };
-        case "checkpoint":
-          return {
-            type: "checkpoint",
-            id: Number.isFinite(feature.id) ? Number(feature.id) : 1
-          };
-        default:
-          return JSON.parse(JSON.stringify(feature));
-      }
-    }
-
-    function cloneFeature(feature) {
-      return normalizeFeature(feature);
     }
 
     function clearBoardData() {
@@ -872,6 +772,24 @@
 
     function updateStatus(text) {
       statusEl.textContent = text;
+    }
+
+    function inspectTile(x, y) {
+      const tile = getTile(x, y, false);
+      const tileStarts = starts
+        .filter(s => s.x === x && s.y === y)
+        .map(s => ({ x: s.x, y: s.y, facing: s.facing }));
+
+      const payload = { x, y };
+      if (tile?.features?.length) {
+        payload.features = sortTileFeatures(tile.features).map(cloneFeature);
+      }
+      if (tileStarts.length) {
+        payload.starts = tileStarts;
+      }
+
+      output.value = JSON.stringify(payload, null, 2);
+      updateStatus(`Inspected tile (${x}, ${y}).`);
     }
 
     function loadImageFromFile(file) {
@@ -1200,52 +1118,7 @@
     }
 
     function featureSummary(feature) {
-      switch (feature.type) {
-        case "pit":
-          return "pit";
-        case "oil":
-          return "oil";
-        case "belt":
-          return `conveyor dir=${feature.dir} speed=${feature.speed}${feature.turn ? ` turn=${feature.turn}` : ""}`;
-        case "gear":
-          return `gear rotation=${feature.rotation}`;
-        case "laser":
-          return `laser dir=${feature.dir ?? "?"} damage=${feature.damage ?? 1}`;
-        case "wall":
-          return `wall sides=${(feature.sides || []).join(",")}`;
-        case "repulsor":
-          return `repulsor sides=${(feature.sides || []).join(",")}`;
-        case "push":
-          return `push dir=${feature.dir} timing=${(feature.timing || []).join(",")}`;
-        case "flamethrower":
-          return `flamethrower dir=${feature.dir} timing=${(feature.timing || []).join(",")}`;
-        case "crusher":
-          return `crusher timing=${(feature.timing || []).join(",")}`;
-        case "trapdoor":
-          return `trapdoor timing=${(feature.timing || []).join(",")}`;
-        case "portal":
-          return `portal id=${feature.id}`;
-        case "teleporter":
-          return `teleporter power=${feature.power ?? 2}`;
-        case "randomizer":
-          return "randomizer";
-        case "ledge":
-          return `ledge sides=${(feature.sides || []).join(",")}`;
-        case "ramp":
-          return `ramp dir=${feature.dir}`;
-        case "water":
-          return "water";
-        case "checkpoint":
-          return `checkpoint id=${feature.id}`;
-        case "battery":
-          return "battery";
-        case "chopShop":
-          return "chop shop";
-        case "homingMissile":
-          return "homing missile";
-        default:
-          return JSON.stringify(feature);
-      }
+      return summarizeFeatureDetails(feature);
     }
 
     function updateInspector() {
@@ -1403,6 +1276,12 @@
         }
         draw();
         updateStatus(`Erased last feature from tile (${x}, ${y}).`);
+        return;
+      }
+
+      if (currentTool === "inspectTile") {
+        draw();
+        inspectTile(x, y);
         return;
       }
 

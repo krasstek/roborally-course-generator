@@ -51,6 +51,11 @@ export function getTimingWeight(feature) {
   return timingCount > 0 ? timingCount / 5 : 1;
 }
 
+export function getEffectiveLaserDamage(feature, options = {}) {
+  const baseDamage = feature?.damage || 1;
+  return options.cuttingFloor ? baseDamage * 2 : baseDamage;
+}
+
 export function getBoardProfileDelta(feature) {
   const base = {
     hazardWeight: 0,
@@ -75,10 +80,11 @@ export function getBoardProfileDelta(feature) {
     return { ...base, hazardWeight: 3.2, swingWeight: 2.8, pitCount: 1, hazardCount: 1 };
   }
   if (feature.type === "laser") {
+    const laserDamage = feature.damage || 1;
     return {
       ...base,
-      hazardWeight: 2 + (feature.damage || 1) * 0.35,
-      swingWeight: 0.55 + (feature.damage || 1) * 0.15,
+      hazardWeight: 2 + laserDamage * 0.35,
+      swingWeight: 0.55 + laserDamage * 0.15,
       hazardCount: 1
     };
   }
@@ -221,7 +227,7 @@ export function getTilePenaltyForFeature(feature, options = {}) {
   }
 
   if (feature.type === "laser") {
-    return 3 + (feature.damage || 1);
+    return 3 + getEffectiveLaserDamage(feature, options);
   }
   if (feature.type === "flamethrower") {
     return 5 * getTimingWeight(feature);
@@ -248,10 +254,10 @@ export function getTilePenaltyForFeature(feature, options = {}) {
     return 2.8;
   }
   if (feature.type === "battery" && options.batteryActive) {
-    return -2;
+    return options.upgradeWorld ? -3 : -2;
   }
   if (feature.type === "chopShop" && options.batteryActive) {
-    return -3.5;
+    return options.upgradeWorld ? -4.7 : -3.5;
   }
   if (feature.type === "repulsor") {
     return 3.2;
@@ -291,7 +297,7 @@ export function getFlagAreaFeatureScore(feature, dist, options = {}) {
     return perSide * proximityWeight * Math.max(1, (feature.sides || []).length);
   }
   if (feature.type === "pit") return FLAG_AREA_FEATURE_WEIGHTS.pit * proximityWeight;
-  if (feature.type === "laser") return (FLAG_AREA_FEATURE_WEIGHTS.laserBase + (feature.damage || 1)) * proximityWeight;
+  if (feature.type === "laser") return (FLAG_AREA_FEATURE_WEIGHTS.laserBase + getEffectiveLaserDamage(feature, options)) * proximityWeight;
   if (feature.type === "flamethrower") return FLAG_AREA_FEATURE_WEIGHTS.flamethrower * getTimingWeight(feature) * proximityWeight;
   if (feature.type === "push") return FLAG_AREA_FEATURE_WEIGHTS.push * getTimingWeight(feature) * proximityWeight;
   if (feature.type === "crusher") return FLAG_AREA_FEATURE_WEIGHTS.crusher * getTimingWeight(feature) * proximityWeight;
@@ -307,8 +313,8 @@ export function getFlagAreaFeatureScore(feature, dist, options = {}) {
   if (feature.type === "ledge") return FLAG_AREA_FEATURE_WEIGHTS.ledge * proximityWeight;
   if (feature.type === "ramp") return FLAG_AREA_FEATURE_WEIGHTS.ramp * proximityWeight;
   if (feature.type === "water") return FLAG_AREA_FEATURE_WEIGHTS.water * proximityWeight;
-  if (feature.type === "battery" && options.batteryActive) return FLAG_AREA_FEATURE_WEIGHTS.battery * proximityWeight;
-  if (feature.type === "chopShop" && options.batteryActive) return FLAG_AREA_FEATURE_WEIGHTS.chopShop * proximityWeight;
+  if (feature.type === "battery" && options.batteryActive) return (options.upgradeWorld ? FLAG_AREA_FEATURE_WEIGHTS.battery * 1.45 : FLAG_AREA_FEATURE_WEIGHTS.battery) * proximityWeight;
+  if (feature.type === "chopShop" && options.batteryActive) return (options.upgradeWorld ? FLAG_AREA_FEATURE_WEIGHTS.chopShop * 1.35 : FLAG_AREA_FEATURE_WEIGHTS.chopShop) * proximityWeight;
   if (feature.type === "repulsor") return FLAG_AREA_FEATURE_WEIGHTS.repulsor * proximityWeight;
   if (feature.type === "homingMissile") return FLAG_AREA_FEATURE_WEIGHTS.homingMissile * proximityWeight;
 

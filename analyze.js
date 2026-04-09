@@ -14,6 +14,11 @@ const [
   import(versionedPath("./feature-weights.js"))
 ]);
 
+// This module is a route-evaluation model for board setup, not a full RoboRally
+// simulator. It resolves movement-shaping effects that materially change route
+// topology, while many late-phase hazards are intentionally represented as
+// penalties instead of exact register-by-register gameplay.
+
 const DIRS = {
   N: { dx: 0, dy: -1 },
   E: { dx: 1, dy: 0 },
@@ -71,7 +76,7 @@ function getWalls(tile) {
   const walls = new Set();
 
   for (const feature of tile?.features || []) {
-    if (feature.type === "wall" || feature.type === "repulsor") {
+    if (feature.type === "wall") {
       for (const side of feature.sides || []) {
         walls.add(side);
       }
@@ -221,6 +226,21 @@ function getRebootTokenForPoint(point, boardRects = [], rebootTokens = []) {
   return rebootTokens.find((token) => token.boardIndex === boardRect.index) ?? null;
 }
 
+function getHomeRebootChoices(rebootTokens = []) {
+  return rebootTokens.flatMap((token) => (
+    ROTATION_ORDER.map((facing) => ({
+      x: token.x,
+      y: token.y,
+      facing
+    }))
+  ));
+}
+
+function getHomeRebootTokensForStart(start, rebootTokens = []) {
+  const startKeyValue = tileKey(start.x, start.y);
+  return rebootTokens.filter((token) => (token.startKeys || []).includes(startKeyValue));
+}
+
 function getRebootDamagePenalty(options = {}) {
   return options.moreDeadlyGame ? MORE_DEADLY_REBOOT_DAMAGE_PENALTY : REBOOT_DAMAGE_PENALTY;
 }
@@ -232,11 +252,16 @@ function isBatteryActive(options = {}) {
 function getTilePenalty(tile, options = {}) {
   let penalty = 0;
 
+  // Feature penalties are used to approximate local danger/value for route
+  // scoring. This intentionally captures many board effects without turning the
+  // analyzer into a full combat or timing simulator.
   for (const feature of tile?.features || []) {
     penalty += getTilePenaltyForFeature(feature, {
       batteryActive: isBatteryActive(options),
       rebootDamagePenalty: getRebootDamagePenalty(options),
-      playerCount: options.playerCount
+      playerCount: options.playerCount,
+      cuttingFloor: options.cuttingFloor,
+      upgradeWorld: options.upgradeWorld
     });
   }
 
@@ -324,6 +349,7 @@ function directionBetween(a, b) {
 function canMoveBetween(tileMap, from, to, dir, options = {}) {
   const fromTile = tileMap.get(tileKey(from.x, from.y));
   const lessDeadlyGame = options.lessDeadlyGame ?? false;
+  const repulsorActive = options.repulsorActive ?? true;
 
   if (!fromTile) {
     return { ok: false, crash: EDGE_BEHAVIOR === "pit" && !lessDeadlyGame, offBoard: true };
@@ -350,7 +376,7 @@ function canMoveBetween(tileMap, from, to, dir, options = {}) {
   const fromLedges = getLedgeSides(fromTile);
   const toLedges = getLedgeSides(toTile);
 
-  if (fromRepulsor || toRepulsor) {
+  if (repulsorActive && (fromRepulsor || toRepulsor)) {
     return {
       ok: false,
       crash: false,
@@ -499,22 +525,23 @@ function movementDir(facing, relative) {
   return facing ?? "E";
 }
 
-function quarterTurnBetween(fromDir, toDir) {
-  const fromIndex = ROTATION_ORDER.indexOf(fromDir);
-  const toIndex = ROTATION_ORDER.indexOf(toDir);
-
-  if (fromIndex === -1 || toIndex === -1) {
+function getBeltTurnRotation(belt, entrySide) {
+  if (!belt?.dir || !entrySide) {
     return null;
   }
 
-  const diff = (toIndex - fromIndex + ROTATION_ORDER.length) % ROTATION_ORDER.length;
-  if (diff === 1) return "cw";
-  if (diff === 3) return "ccw";
-  return null;
-}
+  const leftEntry = rotateFacing(belt.dir, "ccw");
+  const rightEntry = rotateFacing(belt.dir, "cw");
 
-function isPerpendicular(a, b) {
-  return quarterTurnBetween(a, b) !== null;
+  if ((belt.turn === "left" || belt.turn === "both") && entrySide === leftEntry) {
+    return "ccw";
+  }
+
+  if ((belt.turn === "right" || belt.turn === "both") && entrySide === rightEntry) {
+    return "cw";
+  }
+
+  return null;
 }
 
 function applyEndOfStepRotation(tileMap, state) {
@@ -537,7 +564,10 @@ function moveOneStep(tileMap, state, dir, mode, options = {}, moveBudget = null)
     x: state.x + delta.dx,
     y: state.y + delta.dy
   };
-  const moveCheck = canMoveBetween(tileMap, state, next, dir, options);
+  const moveCheck = canMoveBetween(tileMap, state, next, dir, {
+    ...options,
+    repulsorActive: mode === "manual" || mode === "push"
+  });
 
   if (mode === "manual" && moveCheck.ok && moveCheck.rampAscent && moveBudget !== null && moveBudget < 2) {
     return {
@@ -669,15 +699,15 @@ function moveOneStep(tileMap, state, dir, mode, options = {}, moveBudget = null)
   const currentTile = tileMap.get(tileKey(state.x, state.y));
   const nextTile = tileMap.get(tileKey(next.x, next.y));
   const belt = getBelt(nextTile);
-  const currentBelt = mode === "belt" ? getBelt(currentTile) : null;
   const portalMap = options.portalMap ?? new Map();
   let nextFacing = state.facing;
   let turned = false;
 
-  if (mode === "belt" && belt && belt.speed === currentBelt?.speed && isPerpendicular(dir, belt.dir)) {
-    const quarterTurn = quarterTurnBetween(dir, belt.dir);
-    nextFacing = quarterTurn ? rotateFacing(state.facing, quarterTurn) : state.facing;
-    turned = Boolean(quarterTurn);
+  if (mode === "belt" && belt) {
+    const entrySide = OPPOSITE[dir];
+    const beltTurnRotation = getBeltTurnRotation(belt, entrySide);
+    nextFacing = beltTurnRotation ? rotateFacing(state.facing, beltTurnRotation) : state.facing;
+    turned = Boolean(beltTurnRotation);
   }
 
   const resolvedState = {
@@ -707,7 +737,7 @@ function moveOneStep(tileMap, state, dir, mode, options = {}, moveBudget = null)
       from: { x: state.x, y: state.y },
       to: { x: next.x, y: next.y },
       dir,
-      speed: currentBelt?.speed ?? belt?.speed ?? 1,
+      speed: belt?.speed ?? 1,
       turned
     }] : [],
     hazard: getTilePenalty(nextTile, options) +
@@ -752,19 +782,27 @@ function resolveCrashOrReboot(tileMap, state, destination, traversed, options = 
       options.rebootTokens
     )
     : null;
+  const homeRebootChoices = options.recoveryRule === "home_reboot"
+    ? getHomeRebootChoices(options.rebootTokens)
+    : null;
 
-  if (rebootToken) {
+  if (rebootToken || homeRebootChoices?.length) {
+    const rebootDestination = rebootToken
+      ? { x: rebootToken.x, y: rebootToken.y }
+      : homeRebootChoices[0];
     return {
       state: {
-        x: rebootToken.x,
-        y: rebootToken.y,
+        x: rebootDestination.x,
+        y: rebootDestination.y,
         facing: state.facing
       },
-      rebootChoices: ROTATION_ORDER.map((facing) => ({
-        x: rebootToken.x,
-        y: rebootToken.y,
-        facing
-      })),
+      rebootChoices: rebootToken
+        ? ROTATION_ORDER.map((facing) => ({
+          x: rebootToken.x,
+          y: rebootToken.y,
+          facing
+        }))
+        : homeRebootChoices,
       blocked: false,
       crashed: false,
       rebooted: true,
@@ -1066,7 +1104,7 @@ function resolveCrusherPhase(tileMap, state, options = {}) {
   };
 }
 
-function simulateAction(tileMap, startState, action, options = {}) {
+export function simulateAction(tileMap, startState, action, options = {}) {
   const state = cloneState(startState);
   const traversed = [];
   const conveyorSteps = [];
@@ -1217,6 +1255,13 @@ function simulateAction(tileMap, startState, action, options = {}) {
   }
 
   if (!crashed && !rebooted) {
+    const rotated = applyEndOfStepRotation(tileMap, state);
+    state.x = rotated.x;
+    state.y = rotated.y;
+    state.facing = rotated.facing;
+  }
+
+  if (!crashed && !rebooted) {
     const crushed = resolveCrusherPhase(tileMap, state, options);
     traversed.push(...crushed.traversed);
     hazard += crushed.hazard;
@@ -1229,13 +1274,6 @@ function simulateAction(tileMap, startState, action, options = {}) {
     state.x = crushed.state.x;
     state.y = crushed.state.y;
     state.facing = crushed.state.facing;
-  }
-
-  if (!crashed && !rebooted) {
-    const rotated = applyEndOfStepRotation(tileMap, state);
-    state.x = rotated.x;
-    state.y = rotated.y;
-    state.facing = rotated.facing;
   }
 
   return {
@@ -1414,7 +1452,7 @@ function enumerateRoutes(tileMap, start, goal, options = {}) {
     if (current.finalState.x === goal.x && current.finalState.y === goal.y) {
       const timeline = buildTimeline(current.transitions, startState);
       const routeScore = scoreRoute(current, goal);
-      if (options.recoveryRule !== "reboot_tokens" && routeTouchesPit(tileMap, { path: timeline })) {
+      if ((options.recoveryRule === "dynamic_archiving" || !options.recoveryRule) && routeTouchesPit(tileMap, { path: timeline })) {
         continue;
       }
       completed.push({
@@ -1606,12 +1644,58 @@ function hasLineOfSight(tileMap, from, to) {
   return elevation === 0 && maxElevation <= 0;
 }
 
-function lateralThreatPenalty(tileMap, routeA, routeB) {
+function getRouteDirectionAt(path, index) {
+  const current = path[index];
+  const next = path[index + 1];
+  if (next && !next.jump) {
+    const dir = directionBetween(current, next);
+    if (dir) {
+      return dir;
+    }
+  }
+
+  const previous = path[index - 1];
+  if (previous && !current.jump) {
+    const dir = directionBetween(previous, current);
+    if (dir) {
+      return dir;
+    }
+  }
+
+  return null;
+}
+
+function isBehindAlongDir(lead, trailing, dir) {
+  if (dir === "N") return trailing.x === lead.x && trailing.y > lead.y;
+  if (dir === "E") return trailing.y === lead.y && trailing.x < lead.x;
+  if (dir === "S") return trailing.x === lead.x && trailing.y < lead.y;
+  if (dir === "W") return trailing.y === lead.y && trailing.x > lead.x;
+  return false;
+}
+
+function getRobotLaserThreatMultipliers(options = {}) {
+  let lateral = 1;
+  let rear = 1;
+
+  if (options.setToKill) {
+    lateral *= 1.18;
+    rear *= 1.35;
+  }
+  if (options.setToStun) {
+    lateral *= 0.65;
+    rear *= 0.45;
+  }
+
+  return { lateral, rear };
+}
+
+function lateralThreatPenalty(tileMap, routeA, routeB, options = {}) {
   if (!routeA || !routeB) {
     return 0;
   }
 
   let penalty = 0;
+  const { lateral: multiplier } = getRobotLaserThreatMultipliers(options);
 
   for (let indexA = 0; indexA < routeA.path.length; indexA += 1) {
     const pointA = routeA.path[indexA];
@@ -1637,13 +1721,66 @@ function lateralThreatPenalty(tileMap, routeA, routeB) {
       }
 
       const timeDelta = Math.abs(indexA - indexB);
-      const distanceWeight = distance === 1 ? 1.35 : distance === 2 ? 1 : distance === 3 ? 0.7 : 0.45;
-      const timeWeight = timeDelta === 0 ? 1 : 0.55;
-      penalty += 4.5 * distanceWeight * timeWeight;
+      const distanceWeight = distance === 1 ? 1 : distance === 2 ? 0.72 : distance === 3 ? 0.48 : 0.28;
+      const timeWeight = timeDelta === 0 ? 0.72 : 0.34;
+      penalty += 2.2 * distanceWeight * timeWeight * multiplier;
     }
   }
 
   return Number(penalty.toFixed(2));
+}
+
+function rearThreatPenalty(tileMap, routeA, routeB, options = {}) {
+  if (!routeA || !routeB) {
+    return 0;
+  }
+
+  let penalty = 0;
+  const { rear: multiplier } = getRobotLaserThreatMultipliers(options);
+
+  for (let indexA = 0; indexA < routeA.path.length; indexA += 1) {
+    const pointA = routeA.path[indexA];
+    const dirA = getRouteDirectionAt(routeA.path, indexA);
+    if (!dirA || pointA.jump) {
+      continue;
+    }
+
+    for (let indexB = Math.max(0, indexA - 2); indexB <= Math.min(routeB.path.length - 1, indexA + 2); indexB += 1) {
+      const pointB = routeB.path[indexB];
+      const dirB = getRouteDirectionAt(routeB.path, indexB);
+      if (!dirB || pointB.jump || dirA !== dirB) {
+        continue;
+      }
+
+      if (!isBehindAlongDir(pointA, pointB, dirA)) {
+        continue;
+      }
+
+      const distance = heuristic(pointA, pointB);
+      if (distance < 1 || distance > 4) {
+        continue;
+      }
+
+      if (!hasLineOfSight(tileMap, pointA, pointB)) {
+        continue;
+      }
+
+      const timeDelta = Math.abs(indexA - indexB);
+      const distanceWeight = distance === 1 ? 1.5 : distance === 2 ? 1.15 : distance === 3 ? 0.8 : 0.5;
+      const timeWeight = timeDelta === 0 ? 1 : timeDelta === 1 ? 0.72 : 0.45;
+      penalty += 4.2 * distanceWeight * timeWeight * multiplier;
+    }
+  }
+
+  return Number(penalty.toFixed(2));
+}
+
+function routeThreatPenalty(tileMap, routeA, routeB, options = {}) {
+  return Number((
+    lateralThreatPenalty(tileMap, routeA, routeB, options) +
+    rearThreatPenalty(tileMap, routeA, routeB, options) +
+    rearThreatPenalty(tileMap, routeB, routeA, options)
+  ).toFixed(2));
 }
 
 function overlapPenalty(routeA, routeB, goal) {
@@ -1776,7 +1913,7 @@ function averageCrossLegOverlap(routes, previousLegRoutes, goal) {
   return average(values);
 }
 
-function averagePairwiseThreat(tileMap, routes) {
+function averagePairwiseThreat(tileMap, routes, options = {}) {
   if (routes.length <= 1) {
     return 0;
   }
@@ -1785,14 +1922,18 @@ function averagePairwiseThreat(tileMap, routes) {
 
   for (let i = 0; i < routes.length; i += 1) {
     for (let j = i + 1; j < routes.length; j += 1) {
-      values.push(lateralThreatPenalty(tileMap, routes[i], routes[j]));
+      values.push(
+        lateralThreatPenalty(tileMap, routes[i], routes[j], options) +
+        rearThreatPenalty(tileMap, routes[i], routes[j], options) +
+        rearThreatPenalty(tileMap, routes[j], routes[i], options)
+      );
     }
   }
 
   return average(values);
 }
 
-function averageCrossLegThreat(tileMap, routes, previousLegRoutes) {
+function averageCrossLegThreat(tileMap, routes, previousLegRoutes, options = {}) {
   if (!routes.length || !previousLegRoutes.length) {
     return 0;
   }
@@ -1800,7 +1941,11 @@ function averageCrossLegThreat(tileMap, routes, previousLegRoutes) {
   const values = [];
   for (const route of routes) {
     for (const previous of previousLegRoutes) {
-      values.push(lateralThreatPenalty(tileMap, route, previous));
+      values.push(
+        lateralThreatPenalty(tileMap, route, previous, options) +
+        rearThreatPenalty(tileMap, route, previous, options) +
+        rearThreatPenalty(tileMap, previous, route, options)
+      );
     }
   }
 
@@ -1922,7 +2067,9 @@ export function scoreFlagArea(tileMap, goal, options = {}) {
 
       for (const feature of tile.features || []) {
         const featureScore = getFlagAreaFeatureScore(feature, dist, {
-          batteryActive: isBatteryActive(options)
+          batteryActive: isBatteryActive(options),
+          cuttingFloor: options.cuttingFloor,
+          upgradeWorld: options.upgradeWorld
         });
         if (feature.type === "belt" && beltLeadsToGoal(tileMap, { x, y }, goal, options)) {
           score -= featureScore;
@@ -1937,13 +2084,14 @@ export function scoreFlagArea(tileMap, goal, options = {}) {
   return Number(Math.max(0, score).toFixed(2));
 }
 
-function assignRoutesWithOverlap(tileMap, startAnalyses, goal, trafficScale = 1) {
+function assignRoutesWithOverlap(tileMap, startAnalyses, goal, trafficScale = 1, activeIndices = null, options = {}) {
   const selections = startAnalyses.map(() => 0);
+  const activeSet = activeIndices ?? new Set(startAnalyses.filter((analysis) => analysis.routes.length).map((analysis) => analysis.index));
 
   for (let pass = 0; pass < 5; pass += 1) {
     for (let index = 0; index < startAnalyses.length; index += 1) {
       const analysis = startAnalyses[index];
-      if (!analysis.routes.length) {
+      if (!analysis.routes.length || !activeSet.has(analysis.index)) {
         continue;
       }
 
@@ -1956,9 +2104,10 @@ function assignRoutesWithOverlap(tileMap, startAnalyses, goal, trafficScale = 1)
         for (let otherIndex = 0; otherIndex < startAnalyses.length; otherIndex += 1) {
           if (otherIndex === index) continue;
           const other = startAnalyses[otherIndex];
+          if (!activeSet.has(other.index)) continue;
           const selected = other.routes[selections[otherIndex]];
           penalty += overlapPenalty(route, selected, goal) * trafficScale;
-          penalty += lateralThreatPenalty(tileMap, route, selected) * 0.3 * trafficScale;
+          penalty += routeThreatPenalty(tileMap, route, selected, options) * 0.3 * trafficScale;
         }
 
         const adjusted = route.score + penalty;
@@ -1973,6 +2122,145 @@ function assignRoutesWithOverlap(tileMap, startAnalyses, goal, trafficScale = 1)
   }
 
   return selections;
+}
+
+function selectAndScoreStartAnalyses(tileMap, startAnalyses, goal, playerCount, activeIndices = null, options = {}) {
+  const activeSet = activeIndices ?? new Set(
+    startAnalyses
+      .filter((analysis) => analysis.routes.length)
+      .map((analysis) => analysis.index)
+  );
+  const routeCapableStarts = startAnalyses.filter((analysis) => analysis.routes.length && activeSet.has(analysis.index)).length;
+  const trafficScale = computeTrafficPairScale(playerCount, routeCapableStarts);
+  const selectedRouteIndices = assignRoutesWithOverlap(tileMap, startAnalyses, goal, trafficScale, activeSet, options);
+
+  startAnalyses.forEach((analysis, index) => {
+    const selectedIndex = selectedRouteIndices[index] ?? 0;
+    const selectedRoute = analysis.routes[selectedIndex] ?? null;
+    analysis.selectedRouteIndex = selectedIndex;
+    analysis.selectedRoute = selectedRoute;
+    analysis.bestScore = selectedRoute?.score ?? Infinity;
+    analysis.bestDistance = selectedRoute?.distance ?? Infinity;
+    analysis.bestActions = selectedRoute?.actions ?? Infinity;
+  });
+
+  startAnalyses.forEach((analysis) => {
+    if (!analysis.selectedRoute) {
+      analysis.overlapPenalty = Infinity;
+      analysis.lateralThreat = Infinity;
+      analysis.rearThreat = Infinity;
+      analysis.routeThreat = Infinity;
+      analysis.trafficScale = trafficScale;
+      analysis.trafficPenalty = Infinity;
+      analysis.adjustedScore = Infinity;
+      return;
+    }
+
+    let overlap = 0;
+    let lateralThreat = 0;
+    let rearThreat = 0;
+
+    for (const other of startAnalyses) {
+      if (other.index === analysis.index || !other.selectedRoute || !activeSet.has(other.index)) {
+        continue;
+      }
+
+      overlap += overlapPenalty(analysis.selectedRoute, other.selectedRoute, goal) * trafficScale;
+      lateralThreat += lateralThreatPenalty(tileMap, analysis.selectedRoute, other.selectedRoute, options) * trafficScale;
+      rearThreat += (
+        rearThreatPenalty(tileMap, analysis.selectedRoute, other.selectedRoute, options) +
+        rearThreatPenalty(tileMap, other.selectedRoute, analysis.selectedRoute, options)
+      ) * trafficScale;
+    }
+
+    analysis.overlapPenalty = Number(overlap.toFixed(2));
+    analysis.lateralThreat = Number(lateralThreat.toFixed(2));
+    analysis.rearThreat = Number(rearThreat.toFixed(2));
+    analysis.routeThreat = Number((analysis.lateralThreat + analysis.rearThreat).toFixed(2));
+    analysis.trafficScale = trafficScale;
+    analysis.trafficPenalty = Number((Math.sqrt(analysis.overlapPenalty) + analysis.routeThreat * 0.16).toFixed(2));
+    analysis.adjustedScore = Number((analysis.bestScore + analysis.trafficPenalty).toFixed(2));
+  });
+
+  return {
+    activeSet,
+    trafficScale
+  };
+}
+
+function summarizeFirstLegAnalyses(tileMap, startAnalyses, goal, flags, playerCount, options = {}, outlierSet = new Set(), outlierDiagnostics = new Map()) {
+  const reachable = startAnalyses.filter((item) => item.reachable && item.selectedRoute);
+  const activeReachable = reachable.filter((item) => !outlierSet.has(item.index));
+  const adjustedScores = activeReachable.map((item) => item.adjustedScore);
+  const distances = activeReachable.map((item) => item.bestDistance);
+  const actions = activeReachable.map((item) => item.bestActions);
+  const trafficPenaltyValues = activeReachable.map((item) => item.trafficPenalty);
+  const overlapValues = activeReachable.map((item) => item.overlapPenalty);
+  const lateralThreatValues = activeReachable.map((item) => item.lateralThreat);
+  const rearThreatValues = activeReachable.map((item) => item.rearThreat);
+  const scoreMean = average(adjustedScores);
+  const scoreStdDev = stdDev(adjustedScores);
+  const distanceMean = average(distances);
+  const actionMean = average(actions);
+  const trafficPenaltyMean = average(trafficPenaltyValues);
+  const overlapMean = average(overlapValues);
+  const lateralThreatMean = average(lateralThreatValues);
+  const rearThreatMean = average(rearThreatValues);
+  const flagAreaScore = scoreFlagArea(tileMap, goal, {
+    playerCount,
+    lessDeadlyGame: options.lessDeadlyGame
+  });
+  const outliers = reachable
+    .filter((item) => outlierSet.has(item.index))
+    .map((item) => ({
+      index: item.index,
+      score: item.adjustedScore,
+      delta: Number((item.adjustedScore - scoreMean).toFixed(2)),
+      actionDelta: Number((item.bestActions - actionMean).toFixed(2)),
+      reasons: outlierDiagnostics.get(item.index) ?? null
+    }));
+  const difficultyScore = Number(scoreMean.toFixed(2));
+  const lengthScore = Number(distanceMean.toFixed(2));
+  const actionScore = Number(actionMean.toFixed(2));
+  const overlapScore = Number(Math.max(0, 100 - overlapMean * 9).toFixed(2));
+  const fairnessScore = Number(Math.max(0, 100 - scoreStdDev * 4).toFixed(2));
+  const overallScore = Number(
+    Math.min(
+      100,
+      difficultyScore * 0.45 +
+      lengthScore * 1 +
+      actionScore * 1.2 +
+      flagAreaScore * 0.9 +
+      (100 - fairnessScore) * 0.12 +
+      (100 - overlapScore) * 0.18
+    ).toFixed(2)
+  );
+
+  return {
+    reachable,
+    activeReachable,
+    scoreMean,
+    scoreStdDev,
+    actionMean,
+    summary: {
+      flagCount: flags.length,
+      flagAreaScore,
+      reachableStarts: reachable.length,
+      totalStarts: startAnalyses.length,
+      averageTrafficPenalty: Number(trafficPenaltyMean.toFixed(2)),
+      averageOverlapPenalty: Number(overlapMean.toFixed(2)),
+      averageLateralThreat: Number(lateralThreatMean.toFixed(2)),
+      averageRearThreat: Number(rearThreatMean.toFixed(2)),
+      difficultyScore,
+      lengthScore,
+      actionScore,
+      overlapScore,
+      fairnessScore,
+      scoreStdDev: Number(scoreStdDev.toFixed(2)),
+      outliers,
+      overallScore
+    }
+  };
 }
 
 export function collectCheckpoints(tileMap) {
@@ -1998,12 +2286,15 @@ export function analyzeCourse(tileMap, starts, goal, options = {}) {
   const flags = options.flags ?? [goal];
   const playerCount = options.playerCount ?? starts.length;
   const startAnalyses = starts.map((start, index) => {
+    const rebootTokens = options.recoveryRule === "home_reboot"
+      ? getHomeRebootTokensForStart(start, options.rebootTokens)
+      : options.rebootTokens;
     const routes = enumerateRoutes(tileMap, start, goal, {
       maxRoutes,
       maxExpansions: options.maxExpansions,
       recoveryRule: options.recoveryRule,
       lessDeadlyGame: options.lessDeadlyGame,
-      rebootTokens: options.rebootTokens,
+      rebootTokens,
       boardRects: options.boardRects
     });
 
@@ -2015,44 +2306,7 @@ export function analyzeCourse(tileMap, starts, goal, options = {}) {
     };
   });
 
-  const routeCapableStarts = startAnalyses.filter((analysis) => analysis.routes.length).length;
-  const trafficScale = computeTrafficPairScale(playerCount, routeCapableStarts);
-
-  const selectedRouteIndices = assignRoutesWithOverlap(tileMap, startAnalyses, goal, trafficScale);
-
-  startAnalyses.forEach((analysis, index) => {
-    const selectedIndex = selectedRouteIndices[index] ?? 0;
-    const selectedRoute = analysis.routes[selectedIndex] ?? null;
-
-    analysis.selectedRouteIndex = selectedIndex;
-    analysis.selectedRoute = selectedRoute;
-    analysis.bestScore = selectedRoute?.score ?? Infinity;
-    analysis.bestDistance = selectedRoute?.distance ?? Infinity;
-    analysis.bestActions = selectedRoute?.actions ?? Infinity;
-    analysis.overlapPenalty = 0;
-
-    if (selectedRoute) {
-      for (let otherIndex = 0; otherIndex < startAnalyses.length; otherIndex += 1) {
-        if (otherIndex === index) continue;
-        analysis.overlapPenalty += overlapPenalty(
-          selectedRoute,
-          startAnalyses[otherIndex].routes[startAnalyses[otherIndex].selectedRouteIndex],
-          goal
-        ) * trafficScale;
-      }
-      analysis.overlapPenalty = Number(analysis.overlapPenalty.toFixed(2));
-      analysis.lateralThreat = Number((startAnalyses.reduce((sum, other, otherIndex) => {
-        if (otherIndex === index) return sum;
-        return sum + lateralThreatPenalty(tileMap, selectedRoute, other.routes[other.selectedRouteIndex]);
-      }, 0) * trafficScale).toFixed(2));
-      analysis.trafficPenalty = Number((Math.sqrt(analysis.overlapPenalty) + analysis.lateralThreat * 0.16).toFixed(2));
-      analysis.adjustedScore = Number((analysis.bestScore + analysis.trafficPenalty).toFixed(2));
-    } else {
-      analysis.lateralThreat = Infinity;
-      analysis.trafficPenalty = Infinity;
-      analysis.adjustedScore = Infinity;
-    }
-  });
+  selectAndScoreStartAnalyses(tileMap, startAnalyses, goal, playerCount, null, options);
 
   const reachable = startAnalyses.filter((item) => item.reachable && item.selectedRoute);
   let activeIndices = new Set(reachable.map((item) => item.index));
@@ -2065,32 +2319,7 @@ export function analyzeCourse(tileMap, starts, goal, options = {}) {
   let actionStdDev = stdDev(activeReachable.map((item) => item.bestActions));
 
   for (let pass = 0; pass < 4; pass += 1) {
-    startAnalyses.forEach((analysis) => {
-      if (!analysis.selectedRoute) {
-        analysis.overlapPenalty = Infinity;
-        analysis.lateralThreat = Infinity;
-        analysis.trafficPenalty = Infinity;
-        analysis.adjustedScore = Infinity;
-        return;
-      }
-
-      let overlap = 0;
-      let threat = 0;
-
-      for (const other of startAnalyses) {
-        if (other.index === analysis.index || !other.selectedRoute || !activeIndices.has(other.index)) {
-          continue;
-        }
-
-        overlap += overlapPenalty(analysis.selectedRoute, other.selectedRoute, goal) * trafficScale;
-        threat += lateralThreatPenalty(tileMap, analysis.selectedRoute, other.selectedRoute) * trafficScale;
-      }
-
-      analysis.overlapPenalty = Number(overlap.toFixed(2));
-      analysis.lateralThreat = Number(threat.toFixed(2));
-      analysis.trafficPenalty = Number((Math.sqrt(analysis.overlapPenalty) + analysis.lateralThreat * 0.16).toFixed(2));
-      analysis.adjustedScore = Number((analysis.bestScore + analysis.trafficPenalty).toFixed(2));
-    });
+    selectAndScoreStartAnalyses(tileMap, startAnalyses, goal, playerCount, activeIndices, options);
 
     activeReachable = reachable.filter((item) => activeIndices.has(item.index));
     const adjustedScores = activeReachable.map((item) => item.adjustedScore);
@@ -2142,68 +2371,43 @@ export function analyzeCourse(tileMap, starts, goal, options = {}) {
       .filter((index) => !outlierSet.has(index)));
   }
 
-  activeReachable = reachable.filter((item) => activeIndices.has(item.index));
-  const adjustedScores = activeReachable.map((item) => item.adjustedScore);
-  const distances = activeReachable.map((item) => item.bestDistance);
-  const actions = activeReachable.map((item) => item.bestActions);
-  const overlapValues = activeReachable.map((item) => item.trafficPenalty);
-  const threatValues = activeReachable.map((item) => item.lateralThreat);
-  scoreMean = average(adjustedScores);
-  scoreStdDev = stdDev(adjustedScores);
-  const distanceMean = average(distances);
-  actionMean = average(actions);
-  const overlapMean = average(overlapValues);
-  const threatMean = average(threatValues);
-  const flagAreaScore = scoreFlagArea(tileMap, goal, {
-    playerCount,
-    lessDeadlyGame: options.lessDeadlyGame
-  });
-
-  const outliers = reachable
-    .filter((item) => outlierSet.has(item.index))
-    .map((item) => ({
-      index: item.index,
-      score: item.adjustedScore,
-      delta: Number((item.adjustedScore - scoreMean).toFixed(2)),
-      actionDelta: Number((item.bestActions - actionMean).toFixed(2)),
-      reasons: outlierDiagnostics.get(item.index) ?? null
-    }));
-
-  const difficultyScore = Number(scoreMean.toFixed(2));
-  const lengthScore = Number(distanceMean.toFixed(2));
-  const actionScore = Number(actionMean.toFixed(2));
-  const overlapScore = Number(Math.max(0, 100 - overlapMean * 9).toFixed(2));
-  const fairnessScore = Number(Math.max(0, 100 - scoreStdDev * 4).toFixed(2));
-  const overallScore = Number(
-    Math.min(
-      100,
-      difficultyScore * 0.45 +
-      lengthScore * 1 +
-      actionScore * 1.2 +
-      flagAreaScore * 0.9 +
-      (100 - fairnessScore) * 0.12 +
-      (100 - overlapScore) * 0.18
-    ).toFixed(2)
-  );
+  const finalSummary = summarizeFirstLegAnalyses(tileMap, startAnalyses, goal, flags, playerCount, options, outlierSet, outlierDiagnostics);
 
   return {
     goal,
     starts: startAnalyses,
+    summary: finalSummary.summary
+  };
+}
+
+export function recomputeFirstLegPressure(tileMap, firstLeg, options = {}) {
+  const playerCount = options.playerCount ?? firstLeg.starts.length;
+  const excludedIndices = new Set(options.excludedIndices ?? []);
+  const startAnalyses = firstLeg.starts.map((analysis) => ({ ...analysis }));
+  const activeIndices = new Set(
+    startAnalyses
+      .filter((analysis) => analysis.reachable && analysis.routes?.length && !excludedIndices.has(analysis.index))
+      .map((analysis) => analysis.index)
+  );
+
+  selectAndScoreStartAnalyses(tileMap, startAnalyses, firstLeg.goal, playerCount, activeIndices, options);
+  const recomputed = summarizeFirstLegAnalyses(
+    tileMap,
+    startAnalyses,
+    firstLeg.goal,
+    new Array(firstLeg.summary.flagCount).fill(null),
+    playerCount,
+    options,
+    excludedIndices
+  );
+
+  return {
+    ...firstLeg,
+    starts: startAnalyses,
     summary: {
-      flagCount: flags.length,
-      flagAreaScore,
-      reachableStarts: reachable.length,
-      totalStarts: starts.length,
-      averageTrafficPenalty: Number(overlapMean.toFixed(2)),
-      averageLateralThreat: Number(threatMean.toFixed(2)),
-      difficultyScore,
-      lengthScore,
-      actionScore,
-      overlapScore,
-      fairnessScore,
-      scoreStdDev: Number(scoreStdDev.toFixed(2)),
-      outliers,
-      overallScore
+      ...firstLeg.summary,
+      ...recomputed.summary,
+      outliers: firstLeg.summary.outliers
     }
   };
 }
@@ -2246,8 +2450,8 @@ export function analyzeFlagLeg(tileMap, from, goal, options = {}) {
   const routeActions = distinctRoutes.map((route) => route.actions);
   const intraLegOverlap = averagePairwiseOverlap(distinctRoutes, goal);
   const crossLegOverlap = averageCrossLegOverlap(distinctRoutes, previousLegRoutes, goal);
-  const intraLegThreat = averagePairwiseThreat(tileMap, distinctRoutes);
-  const crossLegThreat = averageCrossLegThreat(tileMap, distinctRoutes, previousLegRoutes);
+  const intraLegThreat = averagePairwiseThreat(tileMap, distinctRoutes, options);
+  const crossLegThreat = averageCrossLegThreat(tileMap, distinctRoutes, previousLegRoutes, options);
   const routeSpread = routeScores.length > 1 ? Math.max(...routeScores) - Math.min(...routeScores) : 0;
   const diversityScore = Number(
     Math.max(

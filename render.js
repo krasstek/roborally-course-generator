@@ -9,6 +9,9 @@ const {
   groupBoundaryRuns,
   rotateXY
 } = await import(versionedPath("./board.js"));
+const {
+  formatFeatureLabel
+} = await import(versionedPath("./feature-meta.js"));
 
 function isMiniOverlayPiece(piece) {
   return piece?.kind === "overlay";
@@ -237,10 +240,10 @@ function drawOverlayGlows(ctx, overlayPlacements, pieces, bounds, tileSize, marg
   ctx.restore();
 }
 
-function drawWalls(ctx, sides, x, y, tileSize) {
+function drawWalls(ctx, sides, x, y, tileSize, options = {}) {
   ctx.save();
-  ctx.strokeStyle = "#111";
-  ctx.lineWidth = 3;
+  ctx.strokeStyle = options.strokeStyle ?? "#111";
+  ctx.lineWidth = options.lineWidth ?? 3;
 
   const left = x;
   const top = y;
@@ -426,10 +429,6 @@ function drawFeatureIcon(ctx, feature, left, top, size) {
       } else {
         drawDirectionArrow(ctx, cx, cy, size * 0.52, feature.dir, "#eff8ff");
       }
-      return;
-    case "repulsor":
-      drawIconBadge(ctx, left, top, size, { fill: "#8b3cbb", stroke: "#4b1768" });
-      drawDirectionArrow(ctx, cx, cy, size * 0.42, feature.sides?.[0] ?? "E", "#f7ecff");
       return;
     case "laser":
       drawIconBadge(ctx, left, top, size, { fill: "#d95d2a", stroke: "#7e2d12" });
@@ -927,7 +926,7 @@ function drawLaserFeature(ctx, feature, x, y, tileSize) {
 }
 
 function drawTileFeatureIcons(ctx, features, x, y, tileSize) {
-  const visibleFeatures = features.filter((feature) => feature.type !== "wall");
+  const visibleFeatures = features.filter((feature) => feature.type !== "wall" && feature.type !== "repulsor");
   if (!visibleFeatures.length) {
     return;
   }
@@ -1015,6 +1014,14 @@ function drawFeatures(
         .forEach((feature) => {
           drawWalls(ctx, feature.sides, px, py, tileSize);
         });
+      filteredFeatures
+        .filter((feature) => feature.type === "repulsor")
+        .forEach((feature) => {
+          drawWalls(ctx, feature.sides, px, py, tileSize, {
+            strokeStyle: "#41d9ff",
+            lineWidth: 2
+          });
+        });
     }
 
     if (showFeatureIcons) {
@@ -1032,39 +1039,7 @@ function drawFeatures(
         continue;
       }
 
-      let label = feature.type;
-
-      if (feature.type === "belt") {
-        label = `conveyor ${feature.dir ?? ""}${feature.speed ?? ""}${feature.turn ? ` ${feature.turn}` : ""}`.trim();
-      } else if (feature.type === "repulsor") {
-        label = `repulsor ${((feature.sides || []).join(",")) || ""}`.trim();
-      } else if (feature.type === "laser") {
-        label = `laser${feature.dir ? " " + feature.dir : ""}`;
-      } else if (feature.type === "trapdoor") {
-        const timing = feature.timing?.length ? ` [${feature.timing.join(",")}]` : "";
-        label = `trapdoor${timing}`;
-      } else if (feature.type === "flamethrower") {
-        const timing = feature.timing?.length ? ` [${feature.timing.join(",")}]` : "";
-        label = `flame${feature.dir ? " " + feature.dir : ""}${timing}`;
-      } else if (feature.type === "gear") {
-        label = `gear ${feature.rotation}`;
-      } else if (feature.type === "checkpoint") {
-        label = `cp ${feature.id}`;
-      } else if (feature.type === "push") {
-        const timing = feature.timing?.length ? ` [${feature.timing.join(",")}]` : "";
-        label = `push ${feature.dir ?? ""}${timing}`.trim();
-      } else if (feature.type === "crusher") {
-        const timing = feature.timing?.length ? ` [${feature.timing.join(",")}]` : "";
-        label = `crusher${timing}`;
-      } else if (feature.type === "portal") {
-        label = `portal ${feature.id ?? ""}`.trim();
-      } else if (feature.type === "chopShop") {
-        label = "chop shop";
-      } else if (feature.type === "homingMissile") {
-        label = "homing missile";
-      } else if (feature.type === "oil") {
-        label = "oil";
-      }
+      const label = formatFeatureLabel(feature, { compact: true });
 
       ctx.fillStyle = "#111";
       ctx.fillText(label, px + 2, py + 11 + line * 10);

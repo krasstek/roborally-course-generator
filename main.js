@@ -4,7 +4,7 @@ const versionedPath = (path) => `${path}${VERSION_SUFFIX}`;
 
 const [
   { render },
-  { analyzeCourse, analyzeFlagLeg, analyzeGoalApproaches, scoreFlagArea },
+  { analyzeCourse, analyzeFlagLeg, analyzeGoalApproaches, recomputeFirstLegPressure, scoreFlagArea },
   {
     buildMainFootprintTiles,
     buildResolvedMap,
@@ -23,13 +23,29 @@ const [
     BOARD_PROFILE_DENSITY_COMPONENT_WEIGHTS,
     BOARD_PROFILE_DENSITY_WEIGHT,
     getBoardProfileDelta,
+    getEffectiveLaserDamage,
     getTilePenaltyForFeature
+  },
+  {
+    formatFeatureLabel,
+    getFeatureTypeSymbol
+  },
+  {
+    VARIANT_CONTROL_IDS,
+    VARIANT_DEFINITIONS,
+    VARIANT_STATES,
+    applyVariantAnalysisOptions,
+    applyVariantGenerationOptions,
+    applyVariantScenarioState,
+    buildVariantBundle
   }
 ] = await Promise.all([
   import(versionedPath("./render.js")),
   import(versionedPath("./analyze.js")),
   import(versionedPath("./board.js")),
-  import(versionedPath("./feature-weights.js"))
+  import(versionedPath("./feature-weights.js")),
+  import(versionedPath("./feature-meta.js")),
+  import(versionedPath("./variants.js"))
 ]);
 
 const ROTATIONS = [0, 90, 180, 270];
@@ -80,22 +96,6 @@ const BOARD_PROFILE_HAZARD_DENSITY_THRESHOLD = 0.16;
 const BOARD_PROFILE_HAZARD_DENSITY_WEIGHT = 2.4;
 const SAVED_SCENARIO_KEY = "roborally-course-generator:last-scenario";
 const BOARD_AUDIT_NOTES_KEY = "roborally-course-generator:board-audit-notes";
-const VARIANT_COMPLEXITY = {
-  actFast: 1,
-  lighterGame: 1,
-  lessSpammyGame: 1,
-  lessDeadlyGame: 1,
-  moreDeadlyGame: 1,
-  classicSharedDeck: 3,
-  dynamicArchiving: 1,
-  hazardousFlags: 2,
-  movingTargets: 2,
-  lessForeshadowing: 1,
-  extraDocks: 0,
-  factoryRejects: 1,
-  competitiveMode: 0,
-  staggeredBoards: 0
-};
 const AUDIT_RENDER_TILE_SIZE = 40;
 const AUDIT_RENDER_MARGIN = 30;
 const BOARD_VIEW_MODES = {
@@ -215,139 +215,6 @@ const PIECE_DATA_FILES = [
   "winding",
   "whirlpool"
 ];
-const VARIANT_STATES = {
-  off: { label: "Not allowed", shortLabel: "No" },
-  allowed: { label: "Allowed", shortLabel: "Yes" },
-  forced: { label: "Always on", shortLabel: "Must" }
-};
-const VARIANT_DEFINITIONS = [
-  {
-    id: "actFast",
-    label: "Act Fast",
-    controlId: "variant-act-fast",
-    defaultState: "off",
-    description: "Programming is timed.",
-    cost: VARIANT_COMPLEXITY.actFast
-  },
-  {
-    id: "lighterGame",
-    label: "A Lighter Game",
-    controlId: "variant-lighter-game",
-    defaultState: "off",
-    description: "Removes upgrade cards and makes battery spaces inactive.",
-    cost: VARIANT_COMPLEXITY.lighterGame
-  },
-  {
-    id: "lessSpammyGame",
-    label: "A Less SPAM-Y Game",
-    controlId: "variant-less-spammy-game",
-    defaultState: "off",
-    description: "Discard all SPAM cards from hand to your discard pile at the end of programming phase.",
-    cost: VARIANT_COMPLEXITY.lessSpammyGame
-  },
-  {
-    id: "lessDeadlyGame",
-    label: "A Less Deadly Game",
-    controlId: "variant-less-deadly-game",
-    defaultState: "off",
-    description: "Treats board edges as walls while pit spaces remain pits.",
-    cost: VARIANT_COMPLEXITY.lessDeadlyGame
-  },
-  {
-    id: "moreDeadlyGame",
-    label: "A More Deadly Game",
-    controlId: "variant-more-deadly-game",
-    defaultState: "off",
-    description: "Rebooting deals 3 damage instead of 2.",
-    cost: VARIANT_COMPLEXITY.moreDeadlyGame
-  },
-  {
-    id: "dynamicArchiving",
-    label: "Dynamic Archiving",
-    controlId: "variant-dynamic-archiving",
-    defaultState: "allowed",
-    description: "Robots archive when they end a register on a checkpoint or battery space.",
-    cost: VARIANT_COMPLEXITY.dynamicArchiving
-  },
-  {
-    id: "hazardousFlags",
-    label: "Hazardous Flags",
-    controlId: "variant-hazardous-flags",
-    defaultState: "off",
-    description: "Board elements under checkpoints stay active without moving the checkpoints.",
-    cost: VARIANT_COMPLEXITY.hazardousFlags
-  },
-  {
-    id: "movingTargets",
-    label: "Moving Targets",
-    controlId: "variant-moving-targets",
-    defaultState: "off",
-    description: "Checkpoints on conveyors are treated as moving targets for generation heuristics.",
-    cost: VARIANT_COMPLEXITY.movingTargets
-  },
-  {
-    id: "extraDocks",
-    label: "Extra Docks",
-    controlId: "variant-extra-docks",
-    defaultState: "off",
-    description: "Adds an extra docking bay if the selected sets have one and the layout has room.",
-    cost: VARIANT_COMPLEXITY.extraDocks,
-    stateLabels: {
-      off: { label: "No", shortLabel: "No" },
-      allowed: { label: "Yes", shortLabel: "Yes" },
-      forced: { label: "Must", shortLabel: "Must" }
-    }
-  },
-  {
-    id: "factoryRejects",
-    label: "Factory Rejects",
-    controlId: "variant-factory-rejects",
-    defaultState: "off",
-    description: "Hand size is 7 instead of 9 (Altered from previous Robo Rally editions).",
-    cost: VARIANT_COMPLEXITY.factoryRejects
-  },
-  {
-    id: "lessForeshadowing",
-    label: "Less Foreshadowing",
-    controlId: "variant-less-foreshadowing",
-    defaultState: "off",
-    description: "Decks reshuffle every turn, reducing card-draw consistency.",
-    cost: VARIANT_COMPLEXITY.lessForeshadowing
-  },
-  {
-    id: "classicSharedDeck",
-    label: "Shared Deck",
-    controlId: "variant-classic-shared-deck",
-    defaultState: "off",
-    description: "Players share one combined programming deck and spam cards go to hand.",
-    cost: VARIANT_COMPLEXITY.classicSharedDeck
-  },
-  {
-    id: "competitiveMode",
-    label: "Competitive Mode",
-    controlId: "variant-competitive-mode",
-    defaultState: "off",
-    description: "Before the game, players block starting spaces with energy cubes before choosing from the remaining starts.",
-    cost: VARIANT_COMPLEXITY.competitiveMode
-  },
-  {
-    id: "staggeredBoards",
-    label: "Staggered Boards",
-    controlId: "variant-staggered-boards",
-    defaultState: "off",
-    description: "Allows the main boards to be offset instead of forming a straight aligned block.",
-    cost: VARIANT_COMPLEXITY.staggeredBoards,
-    stateLabels: {
-      off: { label: "Aligned", shortLabel: "Aligned" },
-      allowed: { label: "Random", shortLabel: "Random" },
-      forced: { label: "Staggered", shortLabel: "Offset" }
-    }
-  }
-].sort((left, right) => left.label.localeCompare(right.label));
-const VARIANT_CONTROL_IDS = Object.fromEntries(
-  VARIANT_DEFINITIONS.map((variant) => [variant.id, variant.controlId])
-);
-
 const DEFAULT_CHECKPOINT_ACTIVE_FEATURE_TYPES = new Set(["wall", "laser", "flamethrower"]);
 
 function isCheckpointActiveFeature(feature, options = {}) {
@@ -684,7 +551,7 @@ function formatDifficultyLabel(difficultyPreference) {
     easy: "beginner",
     moderate: "intermediate",
     hard: "advanced",
-    brutal: "expert"
+    brutal: "Robots. Must. Die."
   };
 
   return labels[difficultyPreference] ?? String(difficultyPreference ?? "intermediate");
@@ -809,112 +676,93 @@ function saveBoardAuditNote(pieceId, note) {
 }
 
 function summarizeFeature(feature) {
-  switch (feature.type) {
-    case "pit":
-    case "oil":
-    case "battery":
-    case "randomizer":
-    case "water":
-      return feature.type;
-    case "chopShop":
-      return "chop shop";
-    case "belt":
-      return `conveyor ${feature.dir ?? "?"}${feature.speed ? ` speed ${feature.speed}` : ""}${feature.turn ? ` turn ${feature.turn}` : ""}`;
-    case "gear":
-      return `gear ${feature.rotation ?? "?"}`;
-    case "laser":
-      return `laser ${feature.dir ?? "?"} dmg ${feature.damage ?? 1}`;
-    case "trapdoor":
-      return `trapdoor [${(feature.timing || []).join(", ")}]`;
-    case "wall":
-      return `wall ${((feature.sides || []).join(", ")) || "?"}`;
-    case "repulsor":
-      return `repulsor ${((feature.sides || []).join(", ")) || "?"}`;
-    case "push":
-    case "flamethrower":
-      return `${feature.type} ${feature.dir ?? "?"} [${(feature.timing || []).join(", ")}]`;
-    case "crusher":
-      return `crusher [${(feature.timing || []).join(", ")}]`;
-    case "homingMissile":
-      return "homing missile";
-    case "portal":
-      return `portal ${feature.id ?? "?"}`;
-    case "teleporter":
-      return `teleporter power ${feature.power ?? 2}`;
-    case "ledge":
-      return `ledge ${((feature.sides || []).join(", ")) || "?"}`;
-    case "ramp":
-      return `ramp ${feature.dir ?? "?"}`;
-    case "checkpoint":
-      return `checkpoint ${feature.id ?? "?"}`;
-    default:
-      return JSON.stringify(feature);
-  }
-}
-
-function getFeatureTypeSymbol(featureType) {
-  switch (featureType) {
-    case "wall":
-      return "#";
-    case "belt":
-      return "=>";
-    case "repulsor":
-      return "<>";
-    case "laser":
-      return "L>";
-    case "trapdoor":
-      return "TD";
-    case "pit":
-      return "PT";
-    case "gear":
-      return "GR";
-    case "push":
-      return "PS";
-    case "flamethrower":
-      return "FL";
-    case "crusher":
-      return "CR";
-    case "portal":
-      return "PO";
-    case "teleporter":
-      return "TP";
-    case "randomizer":
-      return "R?";
-    case "homingMissile":
-      return "HM";
-    case "chopShop":
-      return "CS";
-    case "water":
-      return "WA";
-    case "oil":
-      return "OI";
-    case "ledge":
-      return "LG";
-    case "ramp":
-      return "RA";
-    case "checkpoint":
-      return "F";
-    case "battery":
-      return "BT";
-    case "start":
-      return "S>";
-    default:
-      return featureType.slice(0, 2).toUpperCase();
-  }
+  return formatFeatureLabel(feature);
 }
 
 function buildAuditFeatureFilterLabel(feature) {
   const fragment = document.createDocumentFragment();
-  const symbol = document.createElement("span");
-  symbol.className = "audit-filter-symbol";
-  symbol.textContent = getFeatureTypeSymbol(feature.id);
-  symbol.setAttribute("aria-hidden", "true");
-
   const text = document.createElement("span");
   text.textContent = feature.label;
-
-  fragment.append(symbol, text);
+  fragment.append(text);
   return fragment;
+}
+
+function countBoardLasers(tileMap) {
+  if (!tileMap) {
+    return 0;
+  }
+
+  let total = 0;
+  for (const tile of tileMap.values()) {
+    total += (tile.features || []).filter((feature) => feature.type === "laser").length;
+  }
+  return total;
+}
+
+function variantsConflict(leftVariantId, rightVariantId) {
+  const left = getVariantDefinition(leftVariantId);
+  return Boolean(left?.incompatibleWith?.includes(rightVariantId));
+}
+
+function getConflictingVariantIds(variantId) {
+  return VARIANT_DEFINITIONS
+    .filter((variant) => variant.id !== variantId && variantsConflict(variantId, variant.id))
+    .map((variant) => variant.id);
+}
+
+function showToast(message) {
+  const stack = document.getElementById("toast-stack");
+  if (!stack || !message) {
+    return;
+  }
+
+  const toast = document.createElement("div");
+  toast.className = "toast";
+  toast.textContent = message;
+  stack.appendChild(toast);
+
+  requestAnimationFrame(() => {
+    toast.classList.add("visible");
+  });
+
+  window.setTimeout(() => {
+    toast.classList.remove("visible");
+    window.setTimeout(() => {
+      toast.remove();
+    }, 220);
+  }, 2600);
+}
+
+function getVariantUnavailabilityReason(variantId, preferences = {}, pieceMap = cachedAssets?.pieceMap ?? null) {
+  const forcedConflictIds = getConflictingVariantIds(variantId).filter((conflictId) => (
+    getVariantPreferenceState(preferences, conflictId) === "forced"
+  ));
+  if (forcedConflictIds.length) {
+    return `Unavailable while ${forcedConflictIds.map((id) => getVariantDefinitionLabel(id)).join(", ")} is set to Must.`;
+  }
+
+  if (variantId === "extraDocks") {
+    if (!pieceMap) {
+      return null;
+    }
+    const expansionIds = getSelectedExpansionIds(preferences);
+    const physicalDockCount = getDockFaceGroups(
+      getAvailableDockIds(pieceMap, expansionIds),
+      pieceMap
+    ).length;
+    return physicalDockCount >= 2
+      ? null
+      : "Requires at least two physical docking bays in the selected sets.";
+  }
+
+  if (variantId === "cuttingFloor") {
+    if (currentScenario && countBoardLasers(currentScenario.goalTileMap) <= 0) {
+      return "Requires at least one board laser on the generated course.";
+    }
+    return null;
+  }
+
+  return null;
 }
 
 function getAuditBoardOptions(pieceMap) {
@@ -1565,6 +1413,23 @@ function getMeaningfulVariantReasons(scenario) {
     difficultyHigherReasons.push("Competitive Mode increases pressure on weaker starts");
   }
 
+  if (scenario.cuttingFloor && countBoardLasers(scenario.goalTileMap) > 0) {
+    difficultyHigherReasons.push("Cutting Floor makes board lasers hit harder");
+  }
+
+  if (scenario.setToKill) {
+    difficultyHigherReasons.push("Set to Kill makes open firing lanes more punishing");
+  }
+
+  if (scenario.setToStun) {
+    difficultyLowerReasons.push("Set to Stun softens robot-laser pressure");
+  }
+
+  if (scenario.upgradeWorld) {
+    difficultyHigherReasons.push("Upgrade World adds a bit more upgrade-planning overhead");
+    lengthLongerReasons.push("upgrade spaces become more tempting detours");
+  }
+
   if (scenario.lighterGame) {
     difficultyLowerReasons.push("A Lighter Game softens the board pressure");
     lengthShorterReasons.push("A Lighter Game trims some board friction");
@@ -1736,13 +1601,21 @@ function uniqueReasons(reasons = [], limit = 3) {
 
 function getOpeningDifficultyReasons(firstLeg, openingForcedDistance, openingFacingChanges, difficultyBand) {
   const reasons = [];
+  const overlap = firstLeg.averageOverlapPenalty ?? firstLeg.averageTrafficPenalty ?? 0;
+  const lateral = firstLeg.averageLateralThreat ?? 0;
+  const rear = firstLeg.averageRearThreat ?? 0;
 
   if (difficultyBand === "hard") {
     if (openingForcedDistance >= 3.5 || openingFacingChanges >= 2.2) {
       reasons.push("it forces several moves and facing changes before players can settle");
     }
-    if ((firstLeg.averageTrafficPenalty ?? 0) >= 18) {
+    if (overlap >= 18) {
       reasons.push("multiple starts crowd into the same early routes");
+    }
+    if (rear >= 22) {
+      reasons.push("rear pressure builds quickly on the opening lanes");
+    } else if (lateral >= 28) {
+      reasons.push("open side lanes leave several starts exposed while they settle");
     }
     if ((firstLeg.flagAreaScore ?? 0) >= 24) {
       reasons.push("Checkpoint 1 is surrounded by active board elements");
@@ -1751,7 +1624,9 @@ function getOpeningDifficultyReasons(firstLeg, openingForcedDistance, openingFac
     if (openingForcedDistance <= 1.4 && openingFacingChanges <= 1.1) {
       reasons.push("most starts can line up the first checkpoint without much reorientation");
     }
-    if ((firstLeg.averageTrafficPenalty ?? 0) <= 12) {
+    if (overlap <= 10 && rear <= 10) {
+      reasons.push("the dock launch leaves plenty of room before routes stack up");
+    } else if ((firstLeg.averageTrafficPenalty ?? 0) <= 12) {
       reasons.push("the dock launch does not create much early traffic");
     }
     if ((firstLeg.flagAreaScore ?? 0) <= 18) {
@@ -1761,8 +1636,12 @@ function getOpeningDifficultyReasons(firstLeg, openingForcedDistance, openingFac
     if (openingForcedDistance >= 2.5 || openingFacingChanges >= 1.4) {
       reasons.push("players still need to clean up a few awkward early angles");
     }
-    if ((firstLeg.averageTrafficPenalty ?? 0) >= 14) {
+    if (rear >= 16) {
+      reasons.push("the opening lanes create some tail pressure once robots get moving");
+    } else if (overlap >= 14) {
       reasons.push("the opening routes overlap enough to create some traffic");
+    } else if (lateral >= 20) {
+      reasons.push("a few starts stay exposed across open side lanes");
     }
     if ((firstLeg.flagAreaScore ?? 0) >= 20) {
       reasons.push("Checkpoint 1 asks for some care instead of being a free pickup");
@@ -1902,7 +1781,11 @@ function buildCourseExplanationHtml(scenario, noteParts = []) {
     if (firstLeg.difficultyScore >= 72 && (openingForcedDistance >= 3.5 || openingFacingChanges >= 2.2)) {
       difficultyReasons.push("the opening run includes several forced moves and facing changes");
     }
-    if (firstLeg.averageTrafficPenalty >= 18 || avgCongestion >= 18) {
+    if ((firstLeg.averageRearThreat ?? 0) >= 22) {
+      difficultyReasons.push("rear pressure builds quickly once the opening lanes fill up");
+    } else if ((firstLeg.averageOverlapPenalty ?? 0) >= 18) {
+      difficultyReasons.push("the dock routes crowd together almost immediately");
+    } else if (firstLeg.averageTrafficPenalty >= 18 || avgCongestion >= 18) {
       difficultyReasons.push("traffic builds up around key routes");
     }
     if (firstLeg.flagAreaScore >= 24) {
@@ -1925,7 +1808,9 @@ function buildCourseExplanationHtml(scenario, noteParts = []) {
     if (firstLeg.flagAreaScore <= 18) {
       difficultyReasons.push("checkpoint areas are not overly busy");
     }
-    if (firstLeg.averageTrafficPenalty <= 12 && avgCongestion <= 12) {
+    if ((firstLeg.averageOverlapPenalty ?? 0) <= 10 && (firstLeg.averageRearThreat ?? 0) <= 10 && avgCongestion <= 12) {
+      difficultyReasons.push("the opening stays roomy and traffic stays under control");
+    } else if (firstLeg.averageTrafficPenalty <= 12 && avgCongestion <= 12) {
       difficultyReasons.push("traffic stays under control");
     }
     if (avgBacktrack <= 0.6) {
@@ -1944,7 +1829,11 @@ function buildCourseExplanationHtml(scenario, noteParts = []) {
         difficultyReasons.push("the opening run includes a few forced moves and facing changes");
       }
     }
-    if (firstLeg.averageTrafficPenalty >= 14 || avgCongestion >= 14) {
+    if ((firstLeg.averageRearThreat ?? 0) >= 16) {
+      difficultyReasons.push("the opening lanes create some real tail pressure");
+    } else if ((firstLeg.averageOverlapPenalty ?? 0) >= 14) {
+      difficultyReasons.push("the opening routes crowd together enough to matter");
+    } else if (firstLeg.averageTrafficPenalty >= 14 || avgCongestion >= 14) {
       difficultyReasons.push("there is some route congestion around important lines");
     }
     if (boardHarshness.normalized >= 0.45 && boardHarshness.normalized < 0.62) {
@@ -2113,7 +2002,8 @@ function hasCheckpointBoardFeatures(scenario, featureFilter = null) {
 }
 
 function updateRulesNote(scenario) {
-  const rulesBlockEl = document.getElementById("rules-block");
+  const topRulesBlockEl = document.getElementById("rules-block-top");
+  const bottomRulesBlockEl = document.getElementById("rules-block-bottom");
   const topAnchorEl = document.getElementById("rules-anchor-top");
   const bottomAnchorEl = document.getElementById("rules-anchor-bottom");
   const checkpointNoteEl = document.getElementById("checkpoint-note");
@@ -2124,8 +2014,10 @@ function updateRulesNote(scenario) {
   const notes = [];
 
   if (!scenario) {
-    bottomAnchorEl?.appendChild(rulesBlockEl);
-    rulesBlockEl?.classList.add("hidden");
+    topAnchorEl?.appendChild(topRulesBlockEl);
+    bottomAnchorEl?.appendChild(bottomRulesBlockEl);
+    topRulesBlockEl?.classList.add("hidden");
+    bottomRulesBlockEl?.classList.add("hidden");
     checkpointNoteEl.textContent = "";
     checkpointNoteEl.classList.add("hidden");
     photoRulesNoteEl.textContent = "";
@@ -2145,6 +2037,10 @@ function updateRulesNote(scenario) {
 
   if (scenario.recoveryRule === "dynamic_archiving") {
     notes.push("Dynamic Archiving: No reboot tokens, robots archive when they end a register on a checkpoint or battery space (Rulebook p. 32).");
+  }
+
+  if (scenario.recoveryRule === "home_reboot") {
+    notes.push("Home Reboot: robots reboot at the token on the dock where the robot's starting archive token is located at. (Previous Robo Rally editions).");
   }
 
   const actFastRuleText = getActFastRuleText(scenario.actFastMode);
@@ -2184,12 +2080,28 @@ function updateRulesNote(scenario) {
     notes.push("A More Deadly Game: rebooting deals 3 damage instead of 2 (Rulebook p. 28).");
   }
 
+  if (scenario.cuttingFloor) {
+    notes.push("Cutting Floor: all board lasers deal double damage (ie. double board laser deals 4 damage).");
+  }
+
+  if (scenario.setToKill) {
+    notes.push("Set to Kill: robots' main lasers deal 1 extra damage (Altered from previous Robo Rally editions).");
+  }
+
+  if (scenario.setToStun) {
+    notes.push("Set to Stun: SPAM from robots' main lasers is immediately discarded to the damage discard pile.");
+  }
+
+  if (scenario.upgradeWorld) {
+    notes.push("Upgrade World: in addition to their usual effect, robots draw one upgrade card when activating batteries and chop shops (Altered from previous Robo Rally editions).");
+  }
+
   if (scenario.classicSharedDeck) {
     notes.push("Shared Deck: shuffle all players' decks as a combined programming deck, and spam cards go to hand instead of deck (Altered from previous Robo Rally editions).");
   }
 
   if (scenario.lighterGame) {
-    notes.push("A Lighter Game: upgrade cards are removed and battery spaces are inactive (Rulebook p. 32).");
+    notes.push("A Lighter Game: upgrade cards are removed and battery (and chop shop) spaces are inactive (Rulebook p. 32).");
   }
 
   if (scenario.lessForeshadowing) {
@@ -2212,18 +2124,21 @@ function updateRulesNote(scenario) {
     photoRulesNoteEl.classList.add("hidden");
   }
 
-  if (!notes.length) {
-    bottomAnchorEl?.appendChild(rulesBlockEl);
-    rulesBlockEl?.classList.toggle("hidden", !checkpointNotes.length && !photoNotes.length);
-    noteEl.textContent = "";
-    noteEl.classList.add("hidden");
+  bottomAnchorEl?.appendChild(bottomRulesBlockEl);
+  bottomRulesBlockEl?.classList.toggle("hidden", !checkpointNotes.length && !photoNotes.length);
+
+  if (notes.length) {
+    topAnchorEl?.appendChild(topRulesBlockEl);
+    topRulesBlockEl?.classList.remove("hidden");
+    noteEl.textContent = `SPECIAL RULES: ${notes.join(" ")}`;
+    noteEl.classList.remove("hidden");
     return;
   }
 
-  topAnchorEl?.appendChild(rulesBlockEl);
-  rulesBlockEl?.classList.remove("hidden");
-  noteEl.textContent = `SPECIAL RULES: ${notes.join(" ")}`;
-  noteEl.classList.remove("hidden");
+  topAnchorEl?.appendChild(topRulesBlockEl);
+  topRulesBlockEl?.classList.add("hidden");
+  noteEl.textContent = "";
+  noteEl.classList.add("hidden");
 }
 
 function describeAllowedVariants(preferences = {}) {
@@ -2248,7 +2163,7 @@ function describeAllowedVariants(preferences = {}) {
 
 function updateLegend(scenario) {
   const rebootTokenEl = document.getElementById("legend-reboot-token");
-  rebootTokenEl?.classList.toggle("hidden", scenario?.recoveryRule !== "reboot_tokens");
+  rebootTokenEl?.classList.toggle("hidden", !["reboot_tokens", "home_reboot"].includes(scenario?.recoveryRule));
 }
 
 function normalizeVariantState(value) {
@@ -2284,6 +2199,15 @@ function cycleVariantControlState(variantId) {
       ? "forced"
       : "off";
   setVariantControlState(variantId, next);
+  if (next === "forced") {
+    getConflictingVariantIds(variantId).forEach((conflictId) => {
+      if (getVariantControlState(conflictId) === "forced") {
+        setVariantControlState(conflictId, "off");
+        showToast(`${getVariantDefinitionLabel(conflictId)} was turned off because ${getVariantDefinitionLabel(variantId)} is set to Must.`);
+      }
+    });
+  }
+  updateVariantAvailability();
   updateVariantSummary();
 }
 
@@ -2299,7 +2223,11 @@ function chooseVariantEnabled(variantState, allowedChance = 0.5) {
 }
 
 function chooseRecoveryRule(preferences) {
+  const homeRebootState = getVariantPreferenceState(preferences, "homeReboot");
   const dynamicArchivingState = getVariantPreferenceState(preferences, "dynamicArchiving");
+  if (chooseVariantEnabled(homeRebootState, 0.18)) {
+    return "home_reboot";
+  }
   if (chooseVariantEnabled(dynamicArchivingState, 0.5)) {
     return "dynamic_archiving";
   }
@@ -2366,6 +2294,10 @@ function getVariantBaseChance(variantId, preferences = {}) {
     lessSpammyGame: { easy: 0.32, moderate: 0.22, hard: 0.14 },
     lessDeadlyGame: { easy: 0.3, moderate: 0.2, hard: 0.14 },
     moreDeadlyGame: { easy: 0.05, moderate: 0.14, hard: 0.26 },
+    cuttingFloor: { easy: 0.04, moderate: 0.12, hard: 0.2 },
+    setToKill: { easy: 0.05, moderate: 0.14, hard: 0.22 },
+    setToStun: { easy: 0.2, moderate: 0.14, hard: 0.08 },
+    upgradeWorld: { easy: 0.08, moderate: 0.14, hard: 0.18 },
     classicSharedDeck: { easy: 0.01, moderate: 0.07, hard: 0.2 },
     competitiveMode: { easy: 0.08, moderate: 0.16, hard: 0.22 },
     dynamicArchiving: { easy: 0.46, moderate: 0.4, hard: 0.34 },
@@ -2373,6 +2305,7 @@ function getVariantBaseChance(variantId, preferences = {}) {
     factoryRejects: { easy: 0.06, moderate: 0.14, hard: 0.22 },
     hazardousFlags: { easy: 0.08, moderate: 0.16, hard: 0.24 },
     movingTargets: { easy: 0.06, moderate: 0.14, hard: 0.22 },
+    homeReboot: { easy: 0.06, moderate: 0.12, hard: 0.18 },
     lessForeshadowing: { easy: 0.07, moderate: 0.16, hard: 0.24 },
     staggeredBoards: { easy: 0.5, moderate: 0.5, hard: 0.5 }
   };
@@ -2445,11 +2378,13 @@ function chooseVariantBundle(preferences = {}) {
     }
 
     let chance = entry.chance;
+    const forcedConflictIds = getConflictingVariantIds(entry.id).filter((variantId) => active[variantId] && getVariantPreferenceState(preferences, variantId) === "forced");
     if (
       (entry.id === "classicSharedDeck" && active.lessForeshadowing) ||
       (entry.id === "lessForeshadowing" && active.classicSharedDeck) ||
       (entry.id === "classicSharedDeck" && active.lessSpammyGame) ||
-      (entry.id === "lessSpammyGame" && active.classicSharedDeck)
+      (entry.id === "lessSpammyGame" && active.classicSharedDeck) ||
+      forcedConflictIds.length
     ) {
       chance = 0;
     }
@@ -2460,25 +2395,7 @@ function chooseVariantBundle(preferences = {}) {
     }
   }
 
-  return {
-    alignedLayout: !active.staggeredBoards,
-    actFast: active.actFast,
-    competitiveMode: active.competitiveMode,
-    extraDocks: active.extraDocks,
-    recoveryRule: active.dynamicArchiving ? "dynamic_archiving" : "reboot_tokens",
-    lighterGame: active.lighterGame,
-    lessSpammyGame: active.lessSpammyGame,
-    lessDeadlyGame: active.lessDeadlyGame,
-    moreDeadlyGame: active.moreDeadlyGame,
-    classicSharedDeck: active.classicSharedDeck,
-    factoryRejects: active.factoryRejects,
-    hazardousFlags: active.hazardousFlags,
-    movingTargets: active.movingTargets,
-    staggeredBoards: active.staggeredBoards,
-    lessForeshadowing: active.lessForeshadowing,
-    variantComplexityBudget: budget,
-    variantComplexityUsed: usedBudget
-  };
+  return buildVariantBundle(active, { budget, usedBudget });
 }
 
 function isVariantForced(preferences = {}, variantId) {
@@ -2771,19 +2688,7 @@ function getDockFaceGroups(dockIds, pieceMap) {
 }
 
 function variantIsAvailable(variantId, preferences = {}, pieceMap = cachedAssets?.pieceMap ?? null) {
-  if (variantId === "extraDocks") {
-    if (!pieceMap) {
-      return true;
-    }
-    const expansionIds = getSelectedExpansionIds(preferences);
-    const physicalDockCount = getDockFaceGroups(
-      getAvailableDockIds(pieceMap, expansionIds),
-      pieceMap
-    ).length;
-    return physicalDockCount >= 2;
-  }
-
-  return true;
+  return !getVariantUnavailabilityReason(variantId, preferences, pieceMap);
 }
 
 function updateVariantAvailability() {
@@ -2799,11 +2704,14 @@ function updateVariantAvailability() {
     button.disabled = !available;
 
     if (!available) {
+      const previousState = normalizeVariantState(button.dataset.state ?? variant.defaultState);
+      const reason = getVariantUnavailabilityReason(variant.id, preferences);
       setVariantControlState(variant.id, "off", button);
-      button.title = variant.id === "extraDocks"
-        ? "Requires at least two physical docking bays in the selected sets."
-        : button.title;
+      button.title = reason ?? button.title;
       button.setAttribute("aria-label", `${variant.label}: unavailable`);
+      if (previousState !== "off" && reason) {
+        showToast(`${variant.label} was turned off. ${reason}`);
+      }
     } else {
       button.title = getVariantStateCopy(variant.id, button.dataset.state ?? variant.defaultState).label;
       button.setAttribute("aria-label", `${variant.label}: ${button.title}`);
@@ -4150,6 +4058,74 @@ function placeRebootTokens(boardRects, pieceMap, tileMap, checkpoints, playerCou
   return tokens;
 }
 
+function canTraceRouteFromHomeRebootTile(tileMap, point, checkpoints = [], options = {}) {
+  return checkpoints.some((checkpoint) => {
+    const analysis = analyzeFlagLeg(tileMap, point, checkpoint, {
+      facings: FACINGS,
+      routesPerFacing: 1,
+      maxDistinctRoutes: 1,
+      maxExpansions: 8000,
+      playerCount: 1,
+      recoveryRule: "dynamic_archiving",
+      lessDeadlyGame: options.lessDeadlyGame
+    });
+
+    return Number.isFinite(analysis.summary.bestRouteScore);
+  });
+}
+
+function placeHomeRebootTokens(dockPlacements, pieceMap, starts = [], tileMap, checkpoints = [], options = {}) {
+  const tokens = [];
+  const startKeys = new Set(starts.map((start) => `${start.x},${start.y}`));
+
+  dockPlacements.forEach((dockPlacement, dockIndex) => {
+    const dockStarts = starts.filter((start) => pointOnPlacement(start, dockPlacement, pieceMap));
+    if (!dockStarts.length) {
+      return;
+    }
+
+    const piece = pieceMap[dockPlacement.pieceId];
+    const occupiedOffsets = getPlacementOccupiedOffsets(piece, dockPlacement.rotation ?? 0);
+    const candidatePoints = occupiedOffsets
+      .map((offset) => ({
+        x: dockPlacement.x + offset.x,
+        y: dockPlacement.y + offset.y
+      }))
+      .filter((point) => !startKeys.has(`${point.x},${point.y}`))
+      .filter((point) => {
+        const tile = tileMap?.get(`${point.x},${point.y}`) ?? { features: [] };
+        return !(tile.features || []).some((feature) => feature.type === "pit");
+      })
+      .filter((point) => canTraceRouteFromHomeRebootTile(tileMap, point, checkpoints, options));
+
+    if (!candidatePoints.length) {
+      return;
+    }
+
+    const dims = rotatedDimensions(piece, dockPlacement.rotation ?? 0);
+    const center = {
+      x: dockPlacement.x + (dims.width - 1) / 2,
+      y: dockPlacement.y + (dims.height - 1) / 2
+    };
+    const token = candidatePoints
+      .sort((left, right) => {
+        const leftDistance = Math.abs(left.x - center.x) + Math.abs(left.y - center.y);
+        const rightDistance = Math.abs(right.x - center.x) + Math.abs(right.y - center.y);
+        return leftDistance - rightDistance || left.y - right.y || left.x - right.x;
+      })[0];
+
+    tokens.push({
+      dockIndex,
+      pieceId: dockPlacement.pieceId,
+      x: token.x,
+      y: token.y,
+      startKeys: dockStarts.map((start) => `${start.x},${start.y}`)
+    });
+  });
+
+  return tokens;
+}
+
 function getFlagCandidates(placements, pieceMap) {
   const candidates = [];
 
@@ -4705,13 +4681,14 @@ function getFlagCandidateTilePenalty(candidate, tileMap, difficulty, preferences
     }
 
     let featurePenalty = getTilePenaltyForFeature(feature, {
-      batteryActive: !preferences.lighterGame
+      batteryActive: !preferences.lighterGame,
+      cuttingFloor: preferences.cuttingFloor
     });
 
     if (feature.type === "flamethrower") {
       featurePenalty += 5.5;
     } else if (feature.type === "laser") {
-      featurePenalty += 3.5 + (feature.damage || 1) * 0.5;
+      featurePenalty += 3.5 + getEffectiveLaserDamage(feature, preferences) * 0.5;
     } else if (feature.type === "push") {
       featurePenalty += 2.8;
     } else if (feature.type === "belt") {
@@ -4765,7 +4742,8 @@ function getFlagCandidateAreaPenalty(candidate, tileMap, difficulty, preferences
         }
 
         let featurePenalty = getTilePenaltyForFeature(feature, {
-          batteryActive: !preferences.lighterGame
+          batteryActive: !preferences.lighterGame,
+          cuttingFloor: preferences.cuttingFloor
         }) * (dist === 1 ? 0.32 : 0.16);
 
         if (feature.type === "portal" || feature.type === "teleporter") {
@@ -5584,20 +5562,38 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
         outliers: []
       }
     }
-    : adjustStartOutliersForCourseLength(firstLeg, totalLength);
+    : adjustStartOutliersForCourseLength(firstLeg, totalLength, tileMap, playerCount, {
+      lessDeadlyGame: options.lessDeadlyGame
+    });
+
+  const adjustedLegs = [
+    {
+      ...legs[0],
+      analysis: courseAdjustedFirstLeg
+    },
+    ...legs.slice(1)
+  ];
 
   return {
     starts,
     firstLeg: courseAdjustedFirstLeg,
-    legs,
+    legs: adjustedLegs,
     summary: {
-      totalDifficulty: Number(totalDifficulty.toFixed(2)),
+      totalDifficulty: Number((
+        adjustedLegs.reduce((sum, leg) => {
+          if (leg.analysis.summary.difficultyScore !== undefined) {
+            return sum + leg.analysis.summary.difficultyScore;
+          }
+
+          return sum + leg.analysis.summary.averageRouteScore + leg.analysis.summary.congestionScore - leg.analysis.summary.diversityScore * 0.2;
+        }, 0)
+      ).toFixed(2)),
       totalLength: Number(totalLength.toFixed(2))
     }
   };
 }
 
-function adjustStartOutliersForCourseLength(firstLeg, totalLength) {
+function adjustStartOutliersForCourseLength(firstLeg, totalLength, tileMap, playerCount, options = {}) {
   const reachable = firstLeg.starts.filter((item) => item.reachable && item.selectedRoute);
   if (reachable.length < 2) {
     return firstLeg;
@@ -5657,13 +5653,19 @@ function adjustStartOutliersForCourseLength(firstLeg, totalLength) {
       };
     });
 
-  return {
+  const updatedFirstLeg = {
     ...firstLeg,
     summary: {
       ...firstLeg.summary,
       outliers
     }
   };
+
+  return recomputeFirstLegPressure(tileMap, updatedFirstLeg, {
+    playerCount,
+    lessDeadlyGame: options.lessDeadlyGame,
+    excludedIndices: outliers.map((item) => item.index)
+  });
 }
 
 function computeUsableStarts(firstLeg, preferences = {}) {
@@ -6123,6 +6125,9 @@ function applyVariantDifficultyModifiers(raw, preferences = {}, boardHarshness =
   if (preferences.lessForeshadowing) {
     adjusted *= 1.1;
   }
+  if (preferences.cuttingFloor) {
+    adjusted += Math.min(10, countBoardLasers(preferences.goalTileMap) * 0.45);
+  }
   if (preferences.classicSharedDeck) {
     adjusted *= 1.11 + harshness.normalized * 0.11;
   }
@@ -6267,7 +6272,8 @@ function classifyCandidate(sequence, preferences, context = {}) {
     : summarizeMovingTargets(null, []);
   let difficultyRaw = applyVariantDifficultyModifiers(computeDifficultyRaw(sequence, checkpointPressure), {
     ...preferences,
-    movingTargetStats
+    movingTargetStats,
+    goalTileMap: context.goalTileMap ?? context.tileMap
   }, boardHarshness);
   if (preferences.competitiveMode) {
     difficultyRaw = Number((difficultyRaw + getCompetitiveModeDifficultyBonus(fairnessStdDev)).toFixed(2));
@@ -6460,6 +6466,9 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     `Course action score: ${summary.actionScore}`,
     `Flag area score: ${summary.flagAreaScore}`,
     `Average traffic penalty: ${summary.averageTrafficPenalty}`,
+    `Average overlap penalty: ${summary.averageOverlapPenalty ?? 0}`,
+    `Average lateral threat: ${summary.averageLateralThreat ?? 0}`,
+    `Average rear threat: ${summary.averageRearThreat ?? 0}`,
     `Route overlap score: ${summary.overlapScore}`,
     `Fairness score: ${summary.fairnessScore}`,
     `Overall course score: ${summary.overallScore}`,
@@ -6495,7 +6504,7 @@ function buildScenarioReport(scenario, selectedLegIndex) {
       ? ` reason ${formatOutlierReasons(outlierReasonByIndex.get(startAnalysis.index))}`
       : "";
     lines.push(
-      `Start #${startAnalysis.index + 1} ${usable} at (${startAnalysis.start.x}, ${startAnalysis.start.y}) route ${startAnalysis.selectedRouteIndex + 1}/${startAnalysis.routes.length} adjusted ${startAnalysis.adjustedScore} raw ${selected.score} traffic ${startAnalysis.trafficPenalty} overlapRaw ${startAnalysis.overlapPenalty} distance ${selected.distance} actions ${selected.actions} forced ${selected.forcedDistance} hazard ${selected.hazard}${outlierReason}`
+      `Start #${startAnalysis.index + 1} ${usable} at (${startAnalysis.start.x}, ${startAnalysis.start.y}) route ${startAnalysis.selectedRouteIndex + 1}/${startAnalysis.routes.length} adjusted ${startAnalysis.adjustedScore} raw ${selected.score} traffic ${startAnalysis.trafficPenalty} overlap ${startAnalysis.overlapPenalty} lateral ${startAnalysis.lateralThreat} rear ${startAnalysis.rearThreat ?? 0} scale ${startAnalysis.trafficScale ?? 0} distance ${selected.distance} actions ${selected.actions} forced ${selected.forcedDistance} hazard ${selected.hazard}${outlierReason}`
     );
   }
 
@@ -6827,15 +6836,14 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     variantComplexityUsed
   } = variantBundle;
   const actFastMode = actFast ? chooseActFastMode(preferences) : null;
-  const generationPreferences = {
+  const generationPreferences = applyVariantGenerationOptions({
     ...preferences,
     generationAttempt: attempt,
-    alignedLayout,
     actFast,
     actFastMode,
     competitiveMode,
     extraDocks
-  };
+  }, variantBundle);
   const dockConfigurations = weightedOrder(
     getDockConfigurations(availableDockIds, pieceMap, generationPreferences).map((dockIds) => (
       [...dockIds].sort((left, right) => getDockSelectionWeight(pieceMap[right], generationPreferences) - getDockSelectionWeight(pieceMap[left], generationPreferences))
@@ -6986,21 +6994,30 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       scenarioTileMap = resolved.tileMap;
       rebootTokens = recoveryRule === "reboot_tokens"
         ? placeRebootTokens(scenarioBoardRects, pieceMap, scenarioTileMap, checkpoints, preferences.playerCount)
-        : [];
+        : recoveryRule === "home_reboot"
+          ? placeHomeRebootTokens(scenarioDockPlacements, pieceMap, resolved.starts, scenarioTileMap, checkpoints, {
+            lessDeadlyGame
+          })
+          : [];
+      if (recoveryRule === "home_reboot") {
+        const dockCountWithStarts = scenarioDockPlacements.filter((dockPlacement) => (
+          resolved.starts.some((start) => pointOnPlacement(start, dockPlacement, pieceMap))
+        )).length;
+        if (rebootTokens.length < dockCountWithStarts) {
+          sequence = null;
+          break;
+        }
+      }
       goalTileMap = applyFlagOverrides(scenarioTileMap, checkpoints, { hazardousFlags, movingTargets });
+      if (variantBundle.cuttingFloor && countBoardLasers(goalTileMap) === 0) {
+        sequence = null;
+        break;
+      }
       activeStarts = filterStartsForGoals(resolved.starts, checkpoints);
-      sequence = analyzeFlagSequence(goalTileMap, activeStarts, checkpoints, preferences.playerCount, {
-        competitiveMode,
-        recoveryRule,
-        lessDeadlyGame,
-        lessSpammyGame,
-        moreDeadlyGame,
-        lighterGame,
-        hazardousFlags,
-        lessForeshadowing,
+      sequence = analyzeFlagSequence(goalTileMap, activeStarts, checkpoints, preferences.playerCount, applyVariantAnalysisOptions({
         rebootTokens,
         boardRects: scenarioBoardRects
-      });
+      }, variantBundle));
 
       const prunedDockPlacements = filterDockPlacementsWithReachableStarts(scenarioDockPlacements, sequence.firstLeg.starts, pieceMap);
       if (prunedDockPlacements.length && prunedDockPlacements.length !== scenarioDockPlacements.length) {
@@ -7038,6 +7055,10 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
 
       break;
     }
+    if (!sequence) {
+      staleRetries += 1;
+      continue;
+    }
     const metrics = classifyCandidate(sequence, {
       ...generationPreferences,
       actFast,
@@ -7054,7 +7075,8 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       boardPlacements: scenarioBoardPlacements,
       pieceMap,
       checkpoints,
-      tileMap: scenarioTileMap
+      tileMap: scenarioTileMap,
+      goalTileMap
     });
     scenarioPlacements = [
       ...scenarioBoardPlacements,
@@ -7063,7 +7085,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     ];
     const finalOverlayPlacements = scenarioPlacements.filter((placement) => placement.overlay);
     const movingTargetReentryMarkers = collectMovingTargetReentryMarkers(scenarioTileMap, checkpoints, movingTargets);
-    const scenario = {
+    const scenario = applyVariantScenarioState({
       pieceMap: assets.pieceMap,
       imageMap: assets.imageMap,
       placements: scenarioPlacements,
@@ -7077,21 +7099,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       playerCount: preferences.playerCount,
       actFast,
       actFastMode,
-      competitiveMode,
       extraDocks: scenarioDockPlacements.length > 1,
-      factoryRejects,
-      recoveryRule,
-      lessDeadlyGame,
-      lessSpammyGame,
-      moreDeadlyGame,
-      lighterGame,
-      classicSharedDeck,
-      hazardousFlags,
-      movingTargets,
-      staggeredBoards,
-      lessForeshadowing,
-      variantComplexityBudget,
-      variantComplexityUsed,
       mainBoardIds: scenarioBoardPlacements.map((placement) => placement.pieceId),
       mainRotations: scenarioBoardPlacements.map((placement) => placement.rotation),
       boardCount: scenarioBoardPlacements.length,
@@ -7115,7 +7123,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         lessSpammyGame,
         staggeredBoards
       }
-    };
+    }, variantBundle);
 
     if (!bestScenario || scenario.metrics.fitScore < bestScenario.metrics.fitScore) {
       bestScenario = scenario;
@@ -7147,6 +7155,9 @@ function serializeScenario(scenario) {
     lessDeadlyGame: scenario.lessDeadlyGame,
     lessSpammyGame: scenario.lessSpammyGame,
     moreDeadlyGame: scenario.moreDeadlyGame,
+    homeReboot: scenario.homeReboot,
+    cuttingFloor: scenario.cuttingFloor,
+    upgradeWorld: scenario.upgradeWorld,
     lighterGame: scenario.lighterGame,
     classicSharedDeck: scenario.classicSharedDeck,
     hazardousFlags: scenario.hazardousFlags,
@@ -7191,6 +7202,9 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
   const lessDeadlyGame = Boolean(snapshot.lessDeadlyGame);
   const lessSpammyGame = Boolean(snapshot.lessSpammyGame);
   const moreDeadlyGame = Boolean(snapshot.moreDeadlyGame);
+  const homeReboot = Boolean(snapshot.homeReboot || recoveryRule === "home_reboot");
+  const cuttingFloor = Boolean(snapshot.cuttingFloor);
+  const upgradeWorld = Boolean(snapshot.upgradeWorld);
   const lighterGame = Boolean(snapshot.lighterGame);
   const classicSharedDeck = Boolean(snapshot.classicSharedDeck);
   const hazardousFlags = Boolean(snapshot.hazardousFlags);
@@ -7199,7 +7213,6 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
   const lessForeshadowing = Boolean(snapshot.lessForeshadowing);
   const placements = snapshot.placements;
   const checkpoints = snapshot.checkpoints;
-  const rebootTokens = snapshot.rebootTokens || [];
   const boardPlacements = placements.filter((placement) => {
     const kind = assets.pieceMap[placement.pieceId]?.kind;
     return kind !== "dock" && !placement.overlay;
@@ -7214,20 +7227,29 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
   }
 
   const { tileMap, starts } = buildResolvedMap(placements, pieceMap);
+  const rebootTokens = recoveryRule === "home_reboot"
+    ? placeHomeRebootTokens(dockPlacements, pieceMap, starts, tileMap, checkpoints, {
+      lessDeadlyGame
+    })
+    : (snapshot.rebootTokens || []);
   const goalTileMap = applyFlagOverrides(tileMap, checkpoints, { hazardousFlags, movingTargets });
   const activeStarts = filterStartsForGoals(starts, checkpoints);
-  const sequence = analyzeFlagSequence(goalTileMap, activeStarts, checkpoints, snapshot.preferences.playerCount, {
+  const sequence = analyzeFlagSequence(goalTileMap, activeStarts, checkpoints, snapshot.preferences.playerCount, applyVariantAnalysisOptions({
+    rebootTokens,
+    boardRects
+  }, {
     competitiveMode,
     recoveryRule,
     lessDeadlyGame,
     lessSpammyGame,
     moreDeadlyGame,
+    homeReboot,
+    cuttingFloor,
+    upgradeWorld,
     lighterGame,
     hazardousFlags,
-    lessForeshadowing,
-    rebootTokens,
-    boardRects
-  });
+    lessForeshadowing
+  }));
   const metrics = classifyCandidate(sequence, {
     ...snapshot.preferences,
     actFast,
@@ -7235,9 +7257,11 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     recoveryRule,
     flagCount: checkpoints.length,
     classicSharedDeck,
+    cuttingFloor,
     factoryRejects,
     hazardousFlags,
     movingTargets,
+    upgradeWorld,
     lighterGame,
     lessSpammyGame,
     lessForeshadowing
@@ -7245,7 +7269,8 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     boardPlacements,
     pieceMap,
     checkpoints,
-    tileMap
+    tileMap,
+    goalTileMap
   });
   const movingTargetReentryMarkers = collectMovingTargetReentryMarkers(tileMap, checkpoints, movingTargets);
 
@@ -7270,6 +7295,9 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     lessDeadlyGame,
     lessSpammyGame,
     moreDeadlyGame,
+    homeReboot,
+    cuttingFloor,
+    upgradeWorld,
     lighterGame,
     classicSharedDeck,
     hazardousFlags,
@@ -7297,6 +7325,9 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
       recoveryRule,
       flagCount: checkpoints.length,
       classicSharedDeck,
+      homeReboot,
+      cuttingFloor,
+      upgradeWorld,
       hazardousFlags,
       movingTargets,
       lessSpammyGame,

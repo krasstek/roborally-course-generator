@@ -13,7 +13,7 @@
       "features": [
         {
           "type": "belt",
-          "dir": "W",
+          "dir": "E",
           "speed": 2,
           "turn": "right"
         }
