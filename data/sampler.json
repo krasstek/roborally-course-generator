@@ -543,7 +543,10 @@
       "features": [
         {
           "type": "ramp",
-          "dir": "S"
+          "dir": [
+            "S",
+            "E"
+          ]
         }
       ]
     },
@@ -1352,6 +1355,11 @@
       "y": 10,
       "features": [
         {
+          "type": "laser",
+          "dir": "S",
+          "damage": 3
+        },
+        {
           "type": "wall",
           "sides": [
             "N"
@@ -1490,6 +1498,11 @@
       "x": 9,
       "y": 11,
       "features": [
+        {
+          "type": "laser",
+          "dir": "S",
+          "damage": 3
+        },
         {
           "type": "wall",
           "sides": [

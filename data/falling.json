@@ -770,6 +770,14 @@
           "type": "belt",
           "dir": "E",
           "speed": 1
+        },
+        {
+          "type": "push",
+          "dir": "S",
+          "timing": [
+            2,
+            4
+          ]
         }
       ]
     },
@@ -878,6 +886,12 @@
           "type": "belt",
           "dir": "S",
           "speed": 1
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "W"
+          ]
         }
       ]
     },
@@ -976,6 +990,13 @@
           "type": "belt",
           "dir": "N",
           "speed": 1
+        },
+        {
+          "type": "crusher",
+          "timing": [
+            2,
+            5
+          ]
         }
       ]
     },

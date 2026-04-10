@@ -924,6 +924,11 @@
           "type": "belt",
           "dir": "E",
           "speed": 1
+        },
+        {
+          "type": "laser",
+          "dir": "S",
+          "damage": 1
         }
       ]
     },

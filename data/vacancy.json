@@ -59,6 +59,15 @@
       ]
     },
     {
+      "x": 4,
+      "y": 0,
+      "features": [
+        {
+          "type": "pit"
+        }
+      ]
+    },
+    {
       "x": 5,
       "y": 0,
       "features": [
@@ -672,6 +681,12 @@
           "type": "belt",
           "dir": "W",
           "speed": 1
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "S"
+          ]
         }
       ]
     },
@@ -758,6 +773,12 @@
           "type": "belt",
           "dir": "N",
           "speed": 1
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "E"
+          ]
         }
       ]
     },
