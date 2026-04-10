@@ -4,6 +4,7 @@
   "scripts": {
     "version:stamp": "node ./scripts/stamp-version.js",
     "verify:movement": "node --experimental-default-type=module ./scripts/verify-movement.js",
+    "score:damage": "node --experimental-default-type=module ./scripts/score-damage.js",
     "score:traffic": "node --experimental-default-type=module ./scripts/score-traffic.js",
     "predev": "npm run version:stamp",
     "dev": "serve -l tcp://127.0.0.1:3000 ."

@@ -266,6 +266,25 @@ const cases = [
     expected: { x: -1, y: 0, facing: "E", turnedSteps: 0 }
   },
   {
+    name: "repulsor overdrive doubles backward bounce distance",
+    tiles: [
+      tile(-2, 0),
+      tile(-1, 0),
+      tile(0, 0),
+      {
+        x: 1,
+        y: 0,
+        features: [{ type: "repulsor", sides: ["W"] }]
+      }
+    ],
+    start: { x: 0, y: 0, facing: "E" },
+    action: FORWARD,
+    options: {
+      repulsorOverdrive: true
+    },
+    expected: { x: -2, y: 0, facing: "E", turnedSteps: 0 }
+  },
+  {
     name: "gear resolves before crusher on the same tile",
     tiles: [
       {

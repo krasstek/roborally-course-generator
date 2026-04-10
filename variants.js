@@ -9,9 +9,14 @@ const VARIANT_COMPLEXITY = {
   lighterGame: 1,
   upgradeWorld: 1,
   lessSpammyGame: 1,
+  criticalSpam: 1,
+  criticalHaywire: 1,
+  permanentShutdown: 0,
   lessDeadlyGame: 1,
   moreDeadlyGame: 1,
   cuttingFloor: 1,
+  flamingOil: 1,
+  repulsorOverdrive: 0,
   setToKill: 1,
   setToStun: 0,
   classicSharedDeck: 3,
@@ -21,6 +26,7 @@ const VARIANT_COMPLEXITY = {
   lessForeshadowing: 1,
   extraDocks: 0,
   factoryRejects: 1,
+  startupSpinUp: 0,
   competitiveMode: 0,
   staggeredBoards: 0
 };
@@ -81,7 +87,40 @@ const VARIANT_DEFINITION_ROWS = [
     defaultState: "off",
     description: "Discard all SPAM cards from hand to your discard pile at the end of programming phase.",
     cost: VARIANT_COMPLEXITY.lessSpammyGame,
+    incompatibleWith: ["criticalSpam", "classicSharedDeck"],
     applyBundle: applyBooleanField("lessSpammyGame")
+  },
+  {
+    id: "criticalSpam",
+    label: "Critical Spam",
+    category: VARIANT_CATEGORIES.deck,
+    controlId: "variant-critical-spam",
+    defaultState: "off",
+    description: "SPAM is discarded to player discard pile instead of damage discard pile after resolution. Shutdown removes it normally.",
+    cost: VARIANT_COMPLEXITY.criticalSpam,
+    incompatibleWith: ["lessSpammyGame"],
+    applyBundle: applyBooleanField("criticalSpam")
+  },
+  {
+    id: "criticalHaywire",
+    label: "Critical Haywire",
+    category: VARIANT_CATEGORIES.deck,
+    controlId: "variant-critical-haywire",
+    defaultState: "off",
+    description: "Haywires placed on registers count against hand size when drawing cards at the start of programming.",
+    cost: VARIANT_COMPLEXITY.criticalHaywire,
+    applyBundle: applyBooleanField("criticalHaywire")
+  },
+  {
+    id: "permanentShutdown",
+    label: "Permanent Shutdown",
+    category: VARIANT_CATEGORIES.deck,
+    controlId: "variant-permanent-shutdown",
+    defaultState: "off",
+    description: "A player that has nothing but SPAM in hand after drawing cards has their robot destroyed and is out of the game.",
+    cost: VARIANT_COMPLEXITY.permanentShutdown,
+    requiresAnyOf: ["criticalSpam"],
+    applyBundle: applyBooleanField("permanentShutdown")
   },
   {
     id: "lessDeadlyGame",
@@ -89,7 +128,7 @@ const VARIANT_DEFINITION_ROWS = [
     category: VARIANT_CATEGORIES.danger,
     controlId: "variant-less-deadly-game",
     defaultState: "off",
-    description: "Treats board edges as walls while pit spaces remain pits.",
+    description: "Treats board edges as walls.",
     cost: VARIANT_COMPLEXITY.lessDeadlyGame,
     applyBundle: applyBooleanField("lessDeadlyGame")
   },
@@ -114,6 +153,36 @@ const VARIANT_DEFINITION_ROWS = [
     applyBundle: applyBooleanField("cuttingFloor")
   },
   {
+    id: "flamingOil",
+    label: "Flaming Oil",
+    category: VARIANT_CATEGORIES.danger,
+    controlId: "variant-flaming-oil",
+    defaultState: "off",
+    description: "The first oil contact each register deals 1 damage.",
+    cost: VARIANT_COMPLEXITY.flamingOil,
+    availability: {
+      type: "featureTypeAvailable",
+      featureType: "oil",
+      reason: "Requires oil slicks in the selected sets to be set to Must."
+    },
+    applyBundle: applyBooleanField("flamingOil")
+  },
+  {
+    id: "repulsorOverdrive",
+    label: "Repulsor Overdrive",
+    category: VARIANT_CATEGORIES.danger,
+    controlId: "variant-repulsor-overdrive",
+    defaultState: "off",
+    description: "Repulsors push robots twice the remaining movement.",
+    cost: VARIANT_COMPLEXITY.repulsorOverdrive,
+    availability: {
+      type: "featureTypeAvailable",
+      featureType: "repulsor",
+      reason: "Requires repulsor fields in the selected sets to be set to Must."
+    },
+    applyBundle: applyBooleanField("repulsorOverdrive")
+  },
+  {
     id: "setToKill",
     label: "Set to Kill",
     category: VARIANT_CATEGORIES.danger,
@@ -129,7 +198,7 @@ const VARIANT_DEFINITION_ROWS = [
     category: VARIANT_CATEGORIES.danger,
     controlId: "variant-set-to-stun",
     defaultState: "off",
-    description: "SPAM from robots' main lasers is immediately discarded to the damage discard pile.",
+    description: "SPAM from robots' main lasers is immediately discarded to the damage discard pile without effect.",
     cost: VARIANT_COMPLEXITY.setToStun,
     applyBundle: applyBooleanField("setToStun")
   },
@@ -187,6 +256,11 @@ const VARIANT_DEFINITION_ROWS = [
     defaultState: "off",
     description: "Adds an extra docking bay if the selected sets have one and the layout has room.",
     cost: VARIANT_COMPLEXITY.extraDocks,
+    availability: {
+      type: "physicalDockGroupsAtLeast",
+      count: 2,
+      reason: "Requires at least two physical docking bays in the selected sets."
+    },
     stateLabels: {
       off: { label: "No", shortLabel: "No" },
       allowed: { label: "Yes", shortLabel: "Yes" },
@@ -205,6 +279,16 @@ const VARIANT_DEFINITION_ROWS = [
     applyBundle: applyBooleanField("factoryRejects")
   },
   {
+    id: "startupSpinUp",
+    label: "Startup Spin-Up",
+    category: VARIANT_CATEGORIES.setup,
+    controlId: "variant-startup-spin-up",
+    defaultState: "off",
+    description: "During setup, robots can start with any facing.",
+    cost: VARIANT_COMPLEXITY.startupSpinUp,
+    applyBundle: applyBooleanField("startupSpinUp")
+  },
+  {
     id: "lessForeshadowing",
     label: "Less Foreshadowing",
     category: VARIANT_CATEGORIES.deck,
@@ -212,6 +296,7 @@ const VARIANT_DEFINITION_ROWS = [
     defaultState: "off",
     description: "Decks reshuffle every turn, reducing card-draw consistency.",
     cost: VARIANT_COMPLEXITY.lessForeshadowing,
+    incompatibleWith: ["classicSharedDeck"],
     applyBundle: applyBooleanField("lessForeshadowing")
   },
   {
@@ -222,6 +307,7 @@ const VARIANT_DEFINITION_ROWS = [
     defaultState: "off",
     description: "Players share one combined programming deck and spam cards go to hand.",
     cost: VARIANT_COMPLEXITY.classicSharedDeck,
+    incompatibleWith: ["lessSpammyGame", "lessForeshadowing"],
     applyBundle: applyBooleanField("classicSharedDeck")
   },
   {
@@ -261,6 +347,18 @@ export const VARIANT_DEFINITIONS = VARIANT_DEFINITION_ROWS
 export const VARIANT_CONTROL_IDS = Object.fromEntries(
   VARIANT_DEFINITIONS.map((variant) => [variant.id, variant.controlId])
 );
+
+export function getVariantDefinition(variantId) {
+  return VARIANT_DEFINITIONS.find((variant) => variant.id === variantId) ?? null;
+}
+
+export function getVariantRequirementIds(variantId) {
+  return getVariantDefinition(variantId)?.requiresAnyOf ?? [];
+}
+
+export function getVariantAvailabilityRule(variantId) {
+  return getVariantDefinition(variantId)?.availability ?? null;
+}
 
 export function getVariantDefinitionsByCategory() {
   return VARIANT_DEFINITIONS.reduce((groups, variant) => {
@@ -307,12 +405,18 @@ export function applyVariantAnalysisOptions(baseOptions = {}, variantBundle = {}
     recoveryRule: variantBundle.recoveryRule ?? baseOptions.recoveryRule,
     lessDeadlyGame: Boolean(variantBundle.lessDeadlyGame),
     lessSpammyGame: Boolean(variantBundle.lessSpammyGame),
+    criticalSpam: Boolean(variantBundle.criticalSpam),
+    criticalHaywire: Boolean(variantBundle.criticalHaywire),
+    permanentShutdown: Boolean(variantBundle.permanentShutdown),
     moreDeadlyGame: Boolean(variantBundle.moreDeadlyGame),
     cuttingFloor: Boolean(variantBundle.cuttingFloor),
+    flamingOil: Boolean(variantBundle.flamingOil),
+    repulsorOverdrive: Boolean(variantBundle.repulsorOverdrive),
     setToKill: Boolean(variantBundle.setToKill),
     setToStun: Boolean(variantBundle.setToStun),
     upgradeWorld: Boolean(variantBundle.upgradeWorld),
     lighterGame: Boolean(variantBundle.lighterGame),
+    startupSpinUp: Boolean(variantBundle.startupSpinUp),
     hazardousFlags: Boolean(variantBundle.hazardousFlags),
     movingTargets: Boolean(variantBundle.movingTargets),
     lessForeshadowing: Boolean(variantBundle.lessForeshadowing)

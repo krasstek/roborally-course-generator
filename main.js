@@ -31,6 +31,9 @@ const [
     getFeatureTypeSymbol
   },
   {
+    getVariantAvailabilityRule,
+    getVariantDefinition: getRegisteredVariantDefinition,
+    getVariantRequirementIds,
     VARIANT_CONTROL_IDS,
     VARIANT_DEFINITIONS,
     VARIANT_STATES,
@@ -249,6 +252,25 @@ function renderVariantControls() {
   }
 
   menuEl.replaceChildren();
+  const states = VARIANT_DEFINITIONS.map((variant) => normalizeVariantState(getVariantPreferenceState({}, variant.id)));
+  const bulkAllAllowed = states.every((state) => state === "allowed" || state === "forced");
+  const bulkRowEl = document.createElement("div");
+  bulkRowEl.className = "variant-rule";
+
+  const bulkNameEl = document.createElement("div");
+  bulkNameEl.className = "variant-rule-name";
+  bulkNameEl.textContent = bulkAllAllowed ? "Allow none" : "Allow all";
+
+  const bulkButtonEl = document.createElement("button");
+  bulkButtonEl.className = "variant-state";
+  bulkButtonEl.type = "button";
+  bulkButtonEl.dataset.variantAction = "toggle-all";
+  bulkButtonEl.textContent = bulkAllAllowed ? "No" : "Yes";
+  bulkButtonEl.title = bulkAllAllowed ? "Set all allowed variants to No" : "Set all disallowed variants to Yes";
+  bulkButtonEl.setAttribute("aria-label", bulkButtonEl.title);
+
+  bulkRowEl.append(bulkNameEl, bulkButtonEl);
+
   const items = VARIANT_DEFINITIONS.map((variant) => {
     const rowEl = document.createElement("div");
     rowEl.className = "variant-rule";
@@ -268,7 +290,7 @@ function renderVariantControls() {
     setVariantControlState(variant.id, variant.defaultState, buttonEl);
     return rowEl;
   });
-  menuEl.append(...items);
+  menuEl.append(bulkRowEl, ...items);
 }
 
 function getVariantDefinitionLabel(variantId) {
@@ -276,7 +298,7 @@ function getVariantDefinitionLabel(variantId) {
 }
 
 function getVariantDefinition(variantId) {
-  return VARIANT_DEFINITIONS.find((variant) => variant.id === variantId) ?? null;
+  return getRegisteredVariantDefinition(variantId);
 }
 
 function getVariantStateCopy(variantId, state) {
@@ -699,6 +721,38 @@ function countBoardLasers(tileMap) {
   return total;
 }
 
+function countFeatureTypeInTileMap(tileMap, featureType) {
+  if (!tileMap) {
+    return 0;
+  }
+
+  let total = 0;
+  for (const tile of tileMap.values()) {
+    total += (tile.features || []).filter((feature) => feature.type === featureType).length;
+  }
+  return total;
+}
+
+function countFeatureTypeInSelectedSets(featureType, pieceMap = cachedAssets?.pieceMap ?? null, preferences = {}) {
+  if (!pieceMap) {
+    return 0;
+  }
+
+  const expansionIds = getSelectedExpansionIds(preferences);
+  let total = 0;
+
+  for (const piece of Object.values(pieceMap)) {
+    if (expansionIds && !expansionIds.has(piece.expansionId)) {
+      continue;
+    }
+    for (const tile of piece.tiles || []) {
+      total += (tile.features || []).filter((feature) => feature.type === featureType).length;
+    }
+  }
+
+  return total;
+}
+
 function variantsConflict(leftVariantId, rightVariantId) {
   const left = getVariantDefinition(leftVariantId);
   return Boolean(left?.incompatibleWith?.includes(rightVariantId));
@@ -708,6 +762,26 @@ function getConflictingVariantIds(variantId) {
   return VARIANT_DEFINITIONS
     .filter((variant) => variant.id !== variantId && variantsConflict(variantId, variant.id))
     .map((variant) => variant.id);
+}
+
+function getMissingRequiredVariantIds(variantId, preferences = {}, activeVariants = null, options = {}) {
+  const selfState = options.selfState ?? getVariantPreferenceState(preferences, variantId);
+  if (selfState === "forced" && options.allowForcedOverride !== false) {
+    return [];
+  }
+
+  const requiredIds = getVariantRequirementIds(variantId);
+  if (!requiredIds.length) {
+    return [];
+  }
+
+  const satisfied = requiredIds.some((requiredId) => (
+    activeVariants
+      ? Boolean(activeVariants[requiredId])
+      : getVariantPreferenceState(preferences, requiredId) !== "off"
+  ));
+
+  return satisfied ? [] : requiredIds;
 }
 
 function showToast(message) {
@@ -741,7 +815,17 @@ function getVariantUnavailabilityReason(variantId, preferences = {}, pieceMap = 
     return `Unavailable while ${forcedConflictIds.map((id) => getVariantDefinitionLabel(id)).join(", ")} is set to Must.`;
   }
 
-  if (variantId === "extraDocks") {
+  const missingRequiredIds = getMissingRequiredVariantIds(variantId, preferences);
+  if (missingRequiredIds.length) {
+    return `Requires ${missingRequiredIds.map((id) => getVariantDefinitionLabel(id)).join(" or ")} unless ${getVariantDefinitionLabel(variantId)} is set to Must.`;
+  }
+
+  const availabilityRule = getVariantAvailabilityRule(variantId);
+  if (!availabilityRule) {
+    return null;
+  }
+
+  if (availabilityRule.type === "physicalDockGroupsAtLeast") {
     if (!pieceMap) {
       return null;
     }
@@ -750,16 +834,20 @@ function getVariantUnavailabilityReason(variantId, preferences = {}, pieceMap = 
       getAvailableDockIds(pieceMap, expansionIds),
       pieceMap
     ).length;
-    return physicalDockCount >= 2
+    return physicalDockCount >= availabilityRule.count
       ? null
-      : "Requires at least two physical docking bays in the selected sets.";
+      : availabilityRule.reason;
   }
 
-  if (variantId === "cuttingFloor") {
-    if (currentScenario && countBoardLasers(currentScenario.goalTileMap) <= 0) {
-      return "Requires at least one board laser on the generated course.";
+  if (availabilityRule.type === "featureTypeAvailable") {
+    const selfState = getVariantPreferenceState(preferences, variantId);
+    if (selfState !== "forced") {
+      return null;
     }
-    return null;
+
+    return countFeatureTypeInSelectedSets(availabilityRule.featureType, pieceMap, preferences) > 0
+      ? null
+      : availabilityRule.reason;
   }
 
   return null;
@@ -1417,12 +1505,24 @@ function getMeaningfulVariantReasons(scenario) {
     difficultyHigherReasons.push("Cutting Floor makes board lasers hit harder");
   }
 
+  if (scenario.flamingOil && countFeatureTypeInTileMap(scenario.goalTileMap, "oil") > 0) {
+    difficultyHigherReasons.push("Flaming Oil makes oil lanes much less forgiving");
+  }
+
+  if (scenario.repulsorOverdrive && countFeatureTypeInSelectedSets("repulsor", scenario.pieceMap, scenario.preferences) > 0) {
+    difficultyHigherReasons.push("Repulsor Overdrive makes repulsor lanes much harsher");
+  }
+
   if (scenario.setToKill) {
     difficultyHigherReasons.push("Set to Kill makes open firing lanes more punishing");
   }
 
   if (scenario.setToStun) {
     difficultyLowerReasons.push("Set to Stun softens robot-laser pressure");
+  }
+
+  if (scenario.startupSpinUp) {
+    difficultyLowerReasons.push("Startup Spin-Up softens opening-facing constraints");
   }
 
   if (scenario.upgradeWorld) {
@@ -1438,6 +1538,20 @@ function getMeaningfulVariantReasons(scenario) {
   if (scenario.lessSpammyGame) {
     difficultyLowerReasons.push("A Less SPAM-Y Game makes recovery cleaner");
     lengthShorterReasons.push("A Less SPAM-Y Game keeps turns moving");
+  }
+
+  if (scenario.criticalSpam) {
+    difficultyHigherReasons.push("Critical Spam makes damage pressure stick around longer");
+    lengthLongerReasons.push("lingering damage pressure can slow recovery");
+  }
+
+  if (scenario.criticalHaywire) {
+    difficultyHigherReasons.push("Critical Haywire makes damage more disruptive to planning");
+    lengthLongerReasons.push("damage recovery is less forgiving");
+  }
+
+  if (scenario.permanentShutdown && scenario.criticalSpam) {
+    difficultyHigherReasons.push("Permanent Shutdown raises the stakes on already dangerous boards");
   }
 
   return {
@@ -1902,6 +2016,42 @@ function updateVariantSummary() {
   const enabled = states.filter((entry) => entry.state !== "off");
   summaryEl.textContent = `${enabled.length} selected`;
   summaryEl.title = states.map((entry) => `${entry.label}: ${getVariantStateCopy(entry.id, entry.state).label}`).join(", ");
+
+  const bulkButton = document.querySelector('#variant-rules-menu [data-variant-action="toggle-all"]');
+  if (bulkButton) {
+    const allAllowed = states.every((entry) => entry.state === "allowed" || entry.state === "forced");
+    bulkButton.textContent = allAllowed ? "No" : "Yes";
+    bulkButton.title = allAllowed ? "Set all allowed variants to No" : "Set all disallowed variants to Yes";
+    bulkButton.setAttribute("aria-label", bulkButton.title);
+    const bulkName = bulkButton.parentElement?.querySelector(".variant-rule-name");
+    if (bulkName) {
+      bulkName.textContent = allAllowed ? "Allow none" : "Allow all";
+    }
+  }
+}
+
+function toggleAllVariantStates() {
+  const states = VARIANT_DEFINITIONS.map((variant) => ({
+    id: variant.id,
+    state: getVariantControlState(variant.id)
+  }));
+  const allAllowed = states.every((entry) => entry.state === "allowed" || entry.state === "forced");
+
+  states.forEach(({ id, state }) => {
+    if (allAllowed) {
+      if (state === "allowed") {
+        setVariantControlState(id, "off");
+      }
+      return;
+    }
+
+    if (state === "off") {
+      setVariantControlState(id, "allowed");
+    }
+  });
+
+  updateVariantAvailability();
+  updateVariantSummary();
 }
 
 function updateExpansionSummary() {
@@ -1969,6 +2119,150 @@ function hasMovingTargetsEffect(scenario) {
   return Boolean(scenario?.movingTargets && scenario?.movingTargetStats?.activeCount);
 }
 
+function getVariantImpactSummary(scenario) {
+  if (!scenario) {
+    return "";
+  }
+
+  const boardLaserCount = countBoardLasers(scenario.goalTileMap);
+  const repulsorCount = countFeatureTypeInTileMap(scenario.goalTileMap, "repulsor");
+  const batteryCount = countFeatureTypeInTileMap(scenario.goalTileMap, "battery");
+  const chopShopCount = countFeatureTypeInTileMap(scenario.goalTileMap, "chopShop");
+  const upgradeSpaceCount = batteryCount + chopShopCount;
+  const activeImpacts = [];
+  const idleImpacts = [];
+  const addImpact = (variantId, detail = "") => {
+    const label = getRegisteredVariantDefinition(variantId)?.label ?? variantId;
+    activeImpacts.push(detail ? `${label} (${detail})` : label);
+  };
+  const addIdle = (variantId, detail = "") => {
+    const label = getRegisteredVariantDefinition(variantId)?.label ?? variantId;
+    idleImpacts.push(detail ? `${label} (${detail})` : label);
+  };
+
+  if (scenario.actFast) {
+    addImpact("actFast");
+  }
+  if (scenario.lighterGame) {
+    if (upgradeSpaceCount > 0) {
+      addImpact("lighterGame", `${upgradeSpaceCount} inactive upgrade space${upgradeSpaceCount === 1 ? "" : "s"}`);
+    } else {
+      addIdle("lighterGame", "no batteries or chop shops on this course");
+    }
+  }
+  if (scenario.upgradeWorld) {
+    if (upgradeSpaceCount > 0) {
+      addImpact("upgradeWorld", `${upgradeSpaceCount} upgrade space${upgradeSpaceCount === 1 ? "" : "s"}`);
+    } else {
+      addIdle("upgradeWorld", "no batteries or chop shops on this course");
+    }
+  }
+  if (scenario.lessSpammyGame) {
+    addImpact("lessSpammyGame");
+  }
+  if (scenario.criticalSpam) {
+    addImpact("criticalSpam");
+  }
+  if (scenario.criticalHaywire) {
+    addImpact("criticalHaywire");
+  }
+  if (scenario.permanentShutdown) {
+    if (scenario.criticalSpam) {
+      addImpact("permanentShutdown");
+    } else {
+      addIdle("permanentShutdown", "mostly dormant without Critical Spam");
+    }
+  }
+  if (scenario.lessDeadlyGame) {
+    addImpact("lessDeadlyGame");
+  }
+  if (scenario.moreDeadlyGame) {
+    addImpact("moreDeadlyGame");
+  }
+  if (scenario.cuttingFloor) {
+    if (boardLaserCount > 0) {
+      addImpact("cuttingFloor", `${boardLaserCount} board laser${boardLaserCount === 1 ? "" : "s"}`);
+    } else {
+      addIdle("cuttingFloor", "no board lasers on this course");
+    }
+  }
+  if (scenario.flamingOil) {
+    const oilCount = countFeatureTypeInTileMap(scenario.goalTileMap, "oil");
+    if (oilCount > 0) {
+      addImpact("flamingOil", `${oilCount} oil slick${oilCount === 1 ? "" : "s"}`);
+    } else {
+      addIdle("flamingOil", "no oil slicks on this course");
+    }
+  }
+  if (scenario.repulsorOverdrive) {
+    if (repulsorCount > 0) {
+      addImpact("repulsorOverdrive", `${repulsorCount} repulsor field${repulsorCount === 1 ? "" : "s"}`);
+    } else {
+      addIdle("repulsorOverdrive", "no repulsor fields on this course");
+    }
+  }
+  if (scenario.setToKill) {
+    addImpact("setToKill");
+  }
+  if (scenario.setToStun) {
+    addImpact("setToStun");
+  }
+  if (scenario.recoveryRule === "dynamic_archiving") {
+    addImpact("dynamicArchiving");
+  }
+  if (scenario.recoveryRule === "home_reboot") {
+    addImpact("homeReboot");
+  }
+  if (scenario.hazardousFlags) {
+    if (hasHazardousFlagsEffect(scenario)) {
+      addImpact("hazardousFlags");
+    } else {
+      addIdle("hazardousFlags", "no hazardous checkpoint overlap on this course");
+    }
+  }
+  if (scenario.movingTargets) {
+    if (hasMovingTargetsEffect(scenario)) {
+      addImpact("movingTargets", `${scenario.movingTargetStats?.activeCount ?? 0} moving checkpoint${(scenario.movingTargetStats?.activeCount ?? 0) === 1 ? "" : "s"}`);
+    } else {
+      addIdle("movingTargets", "no checkpoints ended up on conveyors");
+    }
+  }
+  if (scenario.extraDocks) {
+    addImpact("extraDocks");
+  }
+  if (scenario.factoryRejects) {
+    addImpact("factoryRejects");
+  }
+  if (scenario.startupSpinUp) {
+    addImpact("startupSpinUp");
+  }
+  if (scenario.competitiveMode) {
+    addImpact("competitiveMode");
+  }
+  if (scenario.classicSharedDeck) {
+    addImpact("classicSharedDeck");
+  }
+  if (scenario.lessForeshadowing) {
+    addImpact("lessForeshadowing");
+  }
+  if (scenario.staggeredBoards) {
+    addImpact("staggeredBoards");
+  }
+
+  if (!activeImpacts.length && !idleImpacts.length) {
+    return "";
+  }
+
+  const parts = [];
+  if (activeImpacts.length) {
+    parts.push(`Variant impact on this course: ${activeImpacts.join(", ")}.`);
+  }
+  if (idleImpacts.length) {
+    parts.push(`Currently idle here: ${idleImpacts.join(", ")}.`);
+  }
+  return parts.join(" ");
+}
+
 function getActFastRuleText(mode) {
   switch (mode) {
     case "countdown_3m":
@@ -2008,9 +2302,11 @@ function updateRulesNote(scenario) {
   const bottomAnchorEl = document.getElementById("rules-anchor-bottom");
   const checkpointNoteEl = document.getElementById("checkpoint-note");
   const photoRulesNoteEl = document.getElementById("photo-rules-note");
+  const variantImpactNoteEl = document.getElementById("variant-impact-note");
   const noteEl = document.getElementById("rules-note");
   const checkpointNotes = [];
   const photoNotes = [];
+  const variantImpactNotes = [];
   const notes = [];
 
   if (!scenario) {
@@ -2022,6 +2318,8 @@ function updateRulesNote(scenario) {
     checkpointNoteEl.classList.add("hidden");
     photoRulesNoteEl.textContent = "";
     photoRulesNoteEl.classList.add("hidden");
+    variantImpactNoteEl.textContent = "";
+    variantImpactNoteEl.classList.add("hidden");
     noteEl.textContent = "";
     noteEl.classList.add("hidden");
     return;
@@ -2040,7 +2338,7 @@ function updateRulesNote(scenario) {
   }
 
   if (scenario.recoveryRule === "home_reboot") {
-    notes.push("Home Reboot: robots reboot at the token on the dock where the robot's starting archive token is located at. (Previous Robo Rally editions).");
+    notes.push("Home Reboot: robots reboot at the token on the dock where the robot's starting archive token is located at (Previous Robo Rally editions).");
   }
 
   const actFastRuleText = getActFastRuleText(scenario.actFastMode);
@@ -2060,6 +2358,11 @@ function updateRulesNote(scenario) {
     photoNotes.push("Board photos are for general layout reference only. With overlays, use the physical boards or Icon View for exact placement of walls, ledges, and other border elements.");
   }
 
+  const variantImpactSummary = getVariantImpactSummary(scenario);
+  if (variantImpactSummary) {
+    variantImpactNotes.push(variantImpactSummary);
+  }
+
   if (scenario.competitiveMode) {
     notes.push("Competitive Mode: before the game, players take turns blocking starting spaces. (Rulebook p. 32).");
   }
@@ -2076,6 +2379,18 @@ function updateRulesNote(scenario) {
     notes.push("A Less SPAM-Y Game: discard all SPAM cards from hand to your discard pile at the end of programming phase (Rulebook p. 32).");
   }
 
+  if (scenario.criticalSpam) {
+    notes.push("Critical Spam: SPAM is discarded to player discard pile instead of damage discard pile after resolution. Shutdown removes them normally (Patterned after previous Robo Rally editions).");
+  }
+
+  if (scenario.criticalHaywire) {
+    notes.push("Critical Haywire: haywires placed on registers are counted to hand size when drawing cards at the beginning of programming phase (Patterned after previous Robo Rally editions).");
+  }
+
+  if (scenario.permanentShutdown) {
+    notes.push("Permanent Shutdown: if you have nothing but SPAM in your hand after drawing cards at the beginning of programming phase, your robot is destroyed and you are out of the game. If only one robot is left, that player wins the game! (Patterned after previous Robo Rally editions).");
+  }
+
   if (scenario.moreDeadlyGame) {
     notes.push("A More Deadly Game: rebooting deals 3 damage instead of 2 (Rulebook p. 28).");
   }
@@ -2084,12 +2399,24 @@ function updateRulesNote(scenario) {
     notes.push("Cutting Floor: all board lasers deal double damage (ie. double board laser deals 4 damage).");
   }
 
+  if (scenario.flamingOil) {
+    notes.push("Flaming Oil: the first time in a register a robot enters, exits, or starts the register in an oil slick, they take 1 damage.");
+  }
+
+  if (scenario.repulsorOverdrive) {
+    notes.push("Repulsor Overdrive: repulsors push robots twice the amount of remaining movement.");
+  }
+
   if (scenario.setToKill) {
     notes.push("Set to Kill: robots' main lasers deal 1 extra damage (Altered from previous Robo Rally editions).");
   }
 
   if (scenario.setToStun) {
-    notes.push("Set to Stun: SPAM from robots' main lasers is immediately discarded to the damage discard pile.");
+    notes.push("Set to Stun: SPAM drawn as a result of robots main laser is immediately discarded to the damage discard pile without effect.");
+  }
+
+  if (scenario.startupSpinUp) {
+    notes.push("Startup Spin-Up: during setup, robots can start with any facing.");
   }
 
   if (scenario.upgradeWorld) {
@@ -2124,8 +2451,16 @@ function updateRulesNote(scenario) {
     photoRulesNoteEl.classList.add("hidden");
   }
 
+  if (variantImpactNotes.length) {
+    variantImpactNoteEl.textContent = variantImpactNotes.join(" ");
+    variantImpactNoteEl.classList.remove("hidden");
+  } else {
+    variantImpactNoteEl.textContent = "";
+    variantImpactNoteEl.classList.add("hidden");
+  }
+
   bottomAnchorEl?.appendChild(bottomRulesBlockEl);
-  bottomRulesBlockEl?.classList.toggle("hidden", !checkpointNotes.length && !photoNotes.length);
+  bottomRulesBlockEl?.classList.toggle("hidden", !checkpointNotes.length && !photoNotes.length && !variantImpactNotes.length);
 
   if (notes.length) {
     topAnchorEl?.appendChild(topRulesBlockEl);
@@ -2292,9 +2627,14 @@ function getVariantBaseChance(variantId, preferences = {}) {
     actFast: { easy: 0.08, moderate: 0.16, hard: 0.2 },
     lighterGame: { easy: 0.42, moderate: 0.28, hard: 0.18 },
     lessSpammyGame: { easy: 0.32, moderate: 0.22, hard: 0.14 },
+    criticalSpam: { easy: 0.08, moderate: 0.15, hard: 0.24 },
+    criticalHaywire: { easy: 0.08, moderate: 0.14, hard: 0.22 },
+    permanentShutdown: { easy: 0.02, moderate: 0.06, hard: 0.12 },
     lessDeadlyGame: { easy: 0.3, moderate: 0.2, hard: 0.14 },
     moreDeadlyGame: { easy: 0.05, moderate: 0.14, hard: 0.26 },
     cuttingFloor: { easy: 0.04, moderate: 0.12, hard: 0.2 },
+    flamingOil: { easy: 0.04, moderate: 0.1, hard: 0.18 },
+    repulsorOverdrive: { easy: 0.01, moderate: 0.03, hard: 0.06 },
     setToKill: { easy: 0.05, moderate: 0.14, hard: 0.22 },
     setToStun: { easy: 0.2, moderate: 0.14, hard: 0.08 },
     upgradeWorld: { easy: 0.08, moderate: 0.14, hard: 0.18 },
@@ -2303,6 +2643,7 @@ function getVariantBaseChance(variantId, preferences = {}) {
     dynamicArchiving: { easy: 0.46, moderate: 0.4, hard: 0.34 },
     extraDocks: { easy: 0.08, moderate: 0.2, hard: 0.26 },
     factoryRejects: { easy: 0.06, moderate: 0.14, hard: 0.22 },
+    startupSpinUp: { easy: 0.18, moderate: 0.14, hard: 0.1 },
     hazardousFlags: { easy: 0.08, moderate: 0.16, hard: 0.24 },
     movingTargets: { easy: 0.06, moderate: 0.14, hard: 0.22 },
     homeReboot: { easy: 0.06, moderate: 0.12, hard: 0.18 },
@@ -2370,7 +2711,15 @@ function chooseVariantBundle(preferences = {}) {
   const orderedEntries = weightedOrder(
     allowedEntries,
     (entry) => Math.max(0.01, entry.chance + Math.random() * 0.08)
-  );
+  ).sort((left, right) => {
+    if (left.id === "permanentShutdown" && right.id !== "permanentShutdown") {
+      return 1;
+    }
+    if (right.id === "permanentShutdown" && left.id !== "permanentShutdown") {
+      return -1;
+    }
+    return 0;
+  });
 
   for (const entry of orderedEntries) {
     if (usedBudget + entry.cost > budget) {
@@ -2379,11 +2728,11 @@ function chooseVariantBundle(preferences = {}) {
 
     let chance = entry.chance;
     const forcedConflictIds = getConflictingVariantIds(entry.id).filter((variantId) => active[variantId] && getVariantPreferenceState(preferences, variantId) === "forced");
+    const activeConflictIds = getConflictingVariantIds(entry.id).filter((variantId) => active[variantId]);
+    const missingRequiredIds = getMissingRequiredVariantIds(entry.id, preferences, active);
     if (
-      (entry.id === "classicSharedDeck" && active.lessForeshadowing) ||
-      (entry.id === "lessForeshadowing" && active.classicSharedDeck) ||
-      (entry.id === "classicSharedDeck" && active.lessSpammyGame) ||
-      (entry.id === "lessSpammyGame" && active.classicSharedDeck) ||
+      activeConflictIds.length ||
+      missingRequiredIds.length ||
       forcedConflictIds.length
     ) {
       chance = 0;
@@ -2706,11 +3055,16 @@ function updateVariantAvailability() {
     if (!available) {
       const previousState = normalizeVariantState(button.dataset.state ?? variant.defaultState);
       const reason = getVariantUnavailabilityReason(variant.id, preferences);
-      setVariantControlState(variant.id, "off", button);
+      const fallbackState = previousState === "forced" ? "allowed" : "off";
+      setVariantControlState(variant.id, fallbackState, button);
       button.title = reason ?? button.title;
       button.setAttribute("aria-label", `${variant.label}: unavailable`);
       if (previousState !== "off" && reason) {
-        showToast(`${variant.label} was turned off. ${reason}`);
+        showToast(
+          fallbackState === "allowed"
+            ? `${variant.label} was relaxed to Yes. ${reason}`
+            : `${variant.label} was turned off. ${reason}`
+        );
       }
     } else {
       button.title = getVariantStateCopy(variant.id, button.dataset.state ?? variant.defaultState).label;
@@ -4290,7 +4644,7 @@ function pointStartsClosedConveyorLoop(tileMap, point) {
   return false;
 }
 
-function getMovingCheckpointTrace(tileMap, point, cache = null) {
+function getMovingCheckpointTrace(tileMap, point, cache = null, options = {}) {
   if (!tileMap) {
     return {
       moving: false,
@@ -4356,7 +4710,13 @@ function getMovingCheckpointTrace(tileMap, point, cache = null) {
       if (feature.type === "checkpoint" || feature.type === "wall" || feature.type === "belt" || feature.type === "battery") {
         continue;
       }
-      hazardLoad += getTilePenaltyForFeature(feature, { batteryActive: true });
+      hazardLoad += getTilePenaltyForFeature(feature, {
+        batteryActive: true,
+        lessSpammyGame: options.lessSpammyGame,
+        criticalSpam: options.criticalSpam,
+        criticalHaywire: options.criticalHaywire,
+        permanentShutdown: options.permanentShutdown
+      });
     }
 
     const next = getConveyorSuccessor(tileMap, current);
@@ -4431,12 +4791,12 @@ function findMovingCheckpointReentryPoint(tileMap, point) {
   return { x: best.x, y: best.y };
 }
 
-function summarizeMovingTargets(tileMap, checkpoints = []) {
+function summarizeMovingTargets(tileMap, checkpoints = [], options = {}) {
   const traceCache = new Map();
   const active = checkpoints
     .map((checkpoint) => ({
       checkpoint,
-      trace: getMovingCheckpointTrace(tileMap, checkpoint, traceCache)
+      trace: getMovingCheckpointTrace(tileMap, checkpoint, traceCache, options)
     }))
     .filter((entry) => entry.trace.moving);
 
@@ -4682,7 +5042,10 @@ function getFlagCandidateTilePenalty(candidate, tileMap, difficulty, preferences
 
     let featurePenalty = getTilePenaltyForFeature(feature, {
       batteryActive: !preferences.lighterGame,
-      cuttingFloor: preferences.cuttingFloor
+      cuttingFloor: preferences.cuttingFloor,
+      criticalSpam: preferences.criticalSpam,
+      criticalHaywire: preferences.criticalHaywire,
+      permanentShutdown: preferences.permanentShutdown
     });
 
     if (feature.type === "flamethrower") {
@@ -4743,7 +5106,10 @@ function getFlagCandidateAreaPenalty(candidate, tileMap, difficulty, preferences
 
         let featurePenalty = getTilePenaltyForFeature(feature, {
           batteryActive: !preferences.lighterGame,
-          cuttingFloor: preferences.cuttingFloor
+          cuttingFloor: preferences.cuttingFloor,
+          criticalSpam: preferences.criticalSpam,
+          criticalHaywire: preferences.criticalHaywire,
+          permanentShutdown: preferences.permanentShutdown
         }) * (dist === 1 ? 0.32 : 0.16);
 
         if (feature.type === "portal" || feature.type === "teleporter") {
@@ -4801,7 +5167,7 @@ function getFlagCandidateWeight(candidate, tileMap, starts, preferences, sequenc
   }
 
   if (preferences.movingTargets) {
-    const trace = getMovingCheckpointTrace(tileMap, candidate, movingTargetTraceCache);
+    const trace = getMovingCheckpointTrace(tileMap, candidate, movingTargetTraceCache, preferences);
     if (trace.moving) {
       const baseBonus = difficulty === "easy"
         ? 0.9
@@ -4892,7 +5258,7 @@ function pickFlags(flagCandidates, flagCount, boardPlacements, dockPlacements, p
   const movingTargetTraceCache = preferences.movingTargets ? new Map() : null;
   const movingCandidates = preferences.movingTargets
     ? new Set(flagCandidates
-      .filter((candidate) => getMovingCheckpointTrace(tileMap, candidate, movingTargetTraceCache).moving)
+      .filter((candidate) => getMovingCheckpointTrace(tileMap, candidate, movingTargetTraceCache, preferences).moving)
       .map((candidate) => `${candidate.x},${candidate.y}`))
     : null;
   const requiresMovingTarget = Boolean(movingCandidates?.size);
@@ -5494,6 +5860,7 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
     recoveryRule: options.recoveryRule,
     lessDeadlyGame: options.lessDeadlyGame,
     moreDeadlyGame: options.moreDeadlyGame,
+    startupSpinUp: options.startupSpinUp,
     rebootTokens: options.rebootTokens,
     boardRects: options.boardRects
   });
@@ -6034,7 +6401,8 @@ function computeLaterCheckpointPressure(tileMap, checkpoints = [], preferences =
     .map((checkpoint) => scoreFlagArea(tileMap, checkpoint, {
       playerCount: preferences.playerCount,
       lessDeadlyGame: preferences.lessDeadlyGame,
-      lighterGame: preferences.lighterGame
+      lighterGame: preferences.lighterGame,
+      flamingOil: preferences.flamingOil
     }))
     .filter((score) => Number.isFinite(score));
 
@@ -6120,13 +6488,25 @@ function applyVariantDifficultyModifiers(raw, preferences = {}, boardHarshness =
     adjusted *= 0.96;
   }
   if (preferences.lessSpammyGame) {
-    adjusted *= 0.93;
+    adjusted *= 0.95;
+  }
+  if (preferences.criticalSpam) {
+    adjusted *= 1.03 + harshness.normalized * 0.035;
+  }
+  if (preferences.criticalHaywire) {
+    adjusted *= 1.035 + harshness.normalized * 0.04;
+  }
+  if (preferences.permanentShutdown && preferences.criticalSpam) {
+    adjusted *= 1.01 + harshness.normalized * 0.05;
   }
   if (preferences.lessForeshadowing) {
     adjusted *= 1.1;
   }
   if (preferences.cuttingFloor) {
     adjusted += Math.min(10, countBoardLasers(preferences.goalTileMap) * 0.45);
+  }
+  if (preferences.flamingOil) {
+    adjusted += Math.min(8, countFeatureTypeInTileMap(preferences.goalTileMap, "oil") * 0.38);
   }
   if (preferences.classicSharedDeck) {
     adjusted *= 1.11 + harshness.normalized * 0.11;
@@ -6191,7 +6571,13 @@ function computeLengthMetrics(sequence, flagCount, playerCount, boardCount, pref
     raw = Number((raw * 0.89).toFixed(2));
   }
   if (preferences.lessSpammyGame) {
-    raw = Number((raw * 0.95).toFixed(2));
+    raw = Number((raw * 0.97).toFixed(2));
+  }
+  if (preferences.criticalSpam) {
+    raw = Number((raw * (1.015 + harshness.normalized * 0.015)).toFixed(2));
+  }
+  if (preferences.criticalHaywire) {
+    raw = Number((raw * (1.015 + harshness.normalized * 0.02)).toFixed(2));
   }
   if (preferences.lessForeshadowing) {
     raw = Number((raw * 1.04).toFixed(2));
@@ -6268,8 +6654,8 @@ function classifyCandidate(sequence, preferences, context = {}) {
     preferences
   );
   const movingTargetStats = preferences.movingTargets
-    ? summarizeMovingTargets(context.tileMap, context.checkpoints)
-    : summarizeMovingTargets(null, []);
+    ? summarizeMovingTargets(context.tileMap, context.checkpoints, preferences)
+    : summarizeMovingTargets(null, [], preferences);
   let difficultyRaw = applyVariantDifficultyModifiers(computeDifficultyRaw(sequence, checkpointPressure), {
     ...preferences,
     movingTargetStats,
@@ -6421,6 +6807,7 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     `Sets: ${[...getSelectedExpansionIds(scenario.preferences)].map((id) => formatExpansionName(id)).join(", ") || "none"}`,
     `Allowed variants: ${describeAllowedVariants(scenario.preferences)}`,
     `Variant complexity: ${scenario.variantComplexityUsed ?? 0}/${scenario.variantComplexityBudget ?? 0}`,
+    `Variant impact: ${getVariantImpactSummary(scenario) || "none"}`,
     `Act Fast used: ${scenario.actFast ? scenario.actFastMode ?? "yes" : "no"}`,
     `Competitive Mode used: ${scenario.competitiveMode ? "yes" : "no"}`,
     `Extra Docks used: ${scenario.extraDocks ? "yes" : "no"}`,
@@ -6430,6 +6817,7 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     `A Less SPAM-Y Game used: ${scenario.lessSpammyGame ? "yes" : "no"}`,
     `A Less Deadly Game used: ${scenario.lessDeadlyGame ? "yes" : "no"}`,
     `A More Deadly Game used: ${scenario.moreDeadlyGame ? "yes" : "no"}`,
+    `Flaming Oil used: ${scenario.flamingOil ? "yes" : "no"}`,
     `Shared Deck used: ${scenario.classicSharedDeck ? "yes" : "no"}`,
     `Hazardous Flags used: ${scenario.hazardousFlags ? "yes" : "no"}`,
     `Moving Targets used: ${scenario.movingTargets ? "yes" : "no"}`,
@@ -6825,9 +7213,15 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     recoveryRule,
     lessDeadlyGame,
     lessSpammyGame,
+    criticalSpam,
+    criticalHaywire,
+    permanentShutdown,
+    startupSpinUp,
     moreDeadlyGame,
+    flamingOil,
     lighterGame,
     classicSharedDeck,
+    repulsorOverdrive,
     hazardousFlags,
     movingTargets,
     staggeredBoards,
@@ -6931,7 +7325,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
   const movingTargetsForced = isVariantForced(preferences, "movingTargets");
   const movingTargetTraceCache = movingTargets ? new Map() : null;
   const movingCheckpointCandidateCount = movingTargets
-    ? flagCandidates.filter((candidate) => getMovingCheckpointTrace(tileMap, candidate, movingTargetTraceCache).moving).length
+    ? flagCandidates.filter((candidate) => getMovingCheckpointTrace(tileMap, candidate, movingTargetTraceCache, generationPreferences).moving).length
     : 0;
 
   if (movingTargetsForced && movingCheckpointCandidateCount === 0) {
@@ -7065,7 +7459,14 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       actFastMode,
       flagCount,
       classicSharedDeck,
+      criticalSpam,
+      criticalHaywire,
+      permanentShutdown,
+      cuttingFloor: variantBundle.cuttingFloor,
+      flamingOil,
       factoryRejects,
+      repulsorOverdrive,
+      upgradeWorld: variantBundle.upgradeWorld,
       hazardousFlags,
       movingTargets,
       lighterGame,
@@ -7118,9 +7519,18 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         factoryRejects,
         flagCount,
         classicSharedDeck,
+        criticalSpam,
+        criticalHaywire,
+        permanentShutdown,
+        cuttingFloor: variantBundle.cuttingFloor,
+        flamingOil,
+        repulsorOverdrive,
+        upgradeWorld: variantBundle.upgradeWorld,
         hazardousFlags,
         movingTargets,
+        lighterGame,
         lessSpammyGame,
+        lessForeshadowing,
         staggeredBoards
       }
     }, variantBundle);
@@ -7154,9 +7564,15 @@ function serializeScenario(scenario) {
     recoveryRule: scenario.recoveryRule,
     lessDeadlyGame: scenario.lessDeadlyGame,
     lessSpammyGame: scenario.lessSpammyGame,
+    criticalSpam: scenario.criticalSpam,
+    criticalHaywire: scenario.criticalHaywire,
+    permanentShutdown: scenario.permanentShutdown,
+    startupSpinUp: scenario.startupSpinUp,
     moreDeadlyGame: scenario.moreDeadlyGame,
     homeReboot: scenario.homeReboot,
     cuttingFloor: scenario.cuttingFloor,
+    flamingOil: scenario.flamingOil,
+    repulsorOverdrive: scenario.repulsorOverdrive,
     upgradeWorld: scenario.upgradeWorld,
     lighterGame: scenario.lighterGame,
     classicSharedDeck: scenario.classicSharedDeck,
@@ -7201,9 +7617,15 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
   const factoryRejects = Boolean(snapshot.factoryRejects);
   const lessDeadlyGame = Boolean(snapshot.lessDeadlyGame);
   const lessSpammyGame = Boolean(snapshot.lessSpammyGame);
+  const criticalSpam = Boolean(snapshot.criticalSpam);
+  const criticalHaywire = Boolean(snapshot.criticalHaywire);
+  const permanentShutdown = Boolean(snapshot.permanentShutdown);
   const moreDeadlyGame = Boolean(snapshot.moreDeadlyGame);
   const homeReboot = Boolean(snapshot.homeReboot || recoveryRule === "home_reboot");
   const cuttingFloor = Boolean(snapshot.cuttingFloor);
+  const flamingOil = Boolean(snapshot.flamingOil);
+  const repulsorOverdrive = Boolean(snapshot.repulsorOverdrive);
+  const startupSpinUp = Boolean(snapshot.startupSpinUp);
   const upgradeWorld = Boolean(snapshot.upgradeWorld);
   const lighterGame = Boolean(snapshot.lighterGame);
   const classicSharedDeck = Boolean(snapshot.classicSharedDeck);
@@ -7242,9 +7664,15 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     recoveryRule,
     lessDeadlyGame,
     lessSpammyGame,
+    criticalSpam,
+    criticalHaywire,
+    permanentShutdown,
     moreDeadlyGame,
     homeReboot,
     cuttingFloor,
+    flamingOil,
+    repulsorOverdrive,
+    startupSpinUp,
     upgradeWorld,
     lighterGame,
     hazardousFlags,
@@ -7258,12 +7686,19 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     flagCount: checkpoints.length,
     classicSharedDeck,
     cuttingFloor,
+    flamingOil,
     factoryRejects,
     hazardousFlags,
     movingTargets,
+    startupSpinUp,
+    repulsorOverdrive,
     upgradeWorld,
     lighterGame,
     lessSpammyGame,
+    criticalSpam,
+    criticalHaywire,
+    permanentShutdown,
+    flamingOil,
     lessForeshadowing
   }, {
     boardPlacements,
@@ -7294,9 +7729,15 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     recoveryRule,
     lessDeadlyGame,
     lessSpammyGame,
+    criticalSpam,
+    criticalHaywire,
+    permanentShutdown,
+    startupSpinUp,
     moreDeadlyGame,
     homeReboot,
     cuttingFloor,
+    flamingOil,
+    repulsorOverdrive,
     upgradeWorld,
     lighterGame,
     classicSharedDeck,
@@ -7327,10 +7768,16 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
       classicSharedDeck,
       homeReboot,
       cuttingFloor,
+      flamingOil,
+      repulsorOverdrive,
+      startupSpinUp,
       upgradeWorld,
       hazardousFlags,
       movingTargets,
       lessSpammyGame,
+      criticalSpam,
+      criticalHaywire,
+      permanentShutdown,
       staggeredBoards
     },
     attempts: snapshot.attempts ?? 0
@@ -7666,6 +8113,11 @@ document.getElementById("board-audit-toggle").addEventListener("change", () => {
 document.getElementById("variant-rules-menu").addEventListener("click", (event) => {
   const button = event.target.closest(".variant-state");
   if (!button) {
+    return;
+  }
+
+  if (button.dataset.variantAction === "toggle-all") {
+    toggleAllVariantStates();
     return;
   }
 

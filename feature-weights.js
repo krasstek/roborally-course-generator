@@ -56,6 +56,45 @@ export function getEffectiveLaserDamage(feature, options = {}) {
   return options.cuttingFloor ? baseDamage * 2 : baseDamage;
 }
 
+export function getDamageDeckPressureMultipliers(options = {}) {
+  let hazard = 1;
+  let robotTraffic = 1;
+  let reboot = 1;
+
+  if (options.lessSpammyGame) {
+    hazard *= 0.88;
+    robotTraffic *= 0.92;
+    reboot *= 0.88;
+  }
+  if (options.criticalSpam) {
+    hazard *= 1.14;
+    robotTraffic *= 1.08;
+    reboot *= 1.15;
+  }
+  if (options.criticalHaywire) {
+    hazard *= 1.08;
+    robotTraffic *= 1.14;
+    reboot *= 1.08;
+  }
+  if (options.permanentShutdown && options.criticalSpam) {
+    hazard *= 1.08;
+    robotTraffic *= 1.06;
+    reboot *= 1.12;
+  }
+
+  return { hazard, robotTraffic, reboot };
+}
+
+function isDirectDamageFeature(feature) {
+  return (
+    feature?.type === "laser" ||
+    feature?.type === "flamethrower" ||
+    feature?.type === "crusher" ||
+    feature?.type === "trapdoor" ||
+    feature?.type === "homingMissile"
+  );
+}
+
 export function getBoardProfileDelta(feature) {
   const base = {
     hazardWeight: 0,
@@ -226,17 +265,27 @@ export function getTilePenaltyForFeature(feature, options = {}) {
     return 0;
   }
 
+  const repulsorMultiplier = options.repulsorOverdrive ? 1.7 : 1;
+  const oilMultiplier = options.flamingOil ? 1.85 : 1;
+
+  const damagePressure = getDamageDeckPressureMultipliers(options);
+  const scaleHazard = (value) => (
+    isDirectDamageFeature(feature)
+      ? Number((value * damagePressure.hazard).toFixed(2))
+      : value
+  );
+
   if (feature.type === "laser") {
-    return 3 + getEffectiveLaserDamage(feature, options);
+    return scaleHazard(3 + getEffectiveLaserDamage(feature, options));
   }
   if (feature.type === "flamethrower") {
-    return 5 * getTimingWeight(feature);
+    return scaleHazard(5 * getTimingWeight(feature));
   }
   if (feature.type === "push") {
     return 2 * getTimingWeight(feature);
   }
   if (feature.type === "trapdoor") {
-    return 6 * getTimingWeight(feature);
+    return scaleHazard(6 * getTimingWeight(feature));
   }
   if (feature.type === "gear") {
     return 1.5;
@@ -251,7 +300,7 @@ export function getTilePenaltyForFeature(feature, options = {}) {
     return RANDOMIZER_CONTROL_PENALTY;
   }
   if (feature.type === "oil") {
-    return 2.8;
+    return Number((2.8 * oilMultiplier).toFixed(2));
   }
   if (feature.type === "battery" && options.batteryActive) {
     return options.upgradeWorld ? -3 : -2;
@@ -260,14 +309,14 @@ export function getTilePenaltyForFeature(feature, options = {}) {
     return options.upgradeWorld ? -4.7 : -3.5;
   }
   if (feature.type === "repulsor") {
-    return 3.2;
+    return Number((3.2 * repulsorMultiplier).toFixed(2));
   }
   if (feature.type === "homingMissile") {
     if (!options.onEntrance) {
       return 0;
     }
     const playerCount = options.playerCount ?? 4;
-    return Math.max(1.5, 5 - playerCount * 0.45);
+    return scaleHazard(Math.max(1.5, 5 - playerCount * 0.45));
   }
   if (feature.type === "ledge") {
     return 0.8;
@@ -279,7 +328,7 @@ export function getTilePenaltyForFeature(feature, options = {}) {
     return 0.35;
   }
   if (feature.type === "crusher") {
-    return (options.rebootDamagePenalty ?? 8) * getTimingWeight(feature);
+    return scaleHazard((options.rebootDamagePenalty ?? 8) * getTimingWeight(feature));
   }
 
   return 0;
@@ -291,17 +340,24 @@ export function getFlagAreaFeatureScore(feature, dist, options = {}) {
   }
 
   const proximityWeight = dist === 0 ? 2.5 : dist === 1 ? 2 : 1;
+  const damagePressure = getDamageDeckPressureMultipliers(options);
+  const oilMultiplier = options.flamingOil ? 1.85 : 1;
+  const scaleHazard = (value) => (
+    isDirectDamageFeature(feature)
+      ? Number((value * damagePressure.hazard).toFixed(2))
+      : value
+  );
 
   if (feature.type === "wall") {
     const perSide = dist <= 1 ? FLAG_AREA_FEATURE_WEIGHTS.wallNear : FLAG_AREA_FEATURE_WEIGHTS.wallFar;
     return perSide * proximityWeight * Math.max(1, (feature.sides || []).length);
   }
   if (feature.type === "pit") return FLAG_AREA_FEATURE_WEIGHTS.pit * proximityWeight;
-  if (feature.type === "laser") return (FLAG_AREA_FEATURE_WEIGHTS.laserBase + getEffectiveLaserDamage(feature, options)) * proximityWeight;
-  if (feature.type === "flamethrower") return FLAG_AREA_FEATURE_WEIGHTS.flamethrower * getTimingWeight(feature) * proximityWeight;
+  if (feature.type === "laser") return scaleHazard((FLAG_AREA_FEATURE_WEIGHTS.laserBase + getEffectiveLaserDamage(feature, options)) * proximityWeight);
+  if (feature.type === "flamethrower") return scaleHazard(FLAG_AREA_FEATURE_WEIGHTS.flamethrower * getTimingWeight(feature) * proximityWeight);
   if (feature.type === "push") return FLAG_AREA_FEATURE_WEIGHTS.push * getTimingWeight(feature) * proximityWeight;
-  if (feature.type === "crusher") return FLAG_AREA_FEATURE_WEIGHTS.crusher * getTimingWeight(feature) * proximityWeight;
-  if (feature.type === "trapdoor") return FLAG_AREA_FEATURE_WEIGHTS.trapdoor * getTimingWeight(feature) * proximityWeight;
+  if (feature.type === "crusher") return scaleHazard(FLAG_AREA_FEATURE_WEIGHTS.crusher * getTimingWeight(feature) * proximityWeight);
+  if (feature.type === "trapdoor") return scaleHazard(FLAG_AREA_FEATURE_WEIGHTS.trapdoor * getTimingWeight(feature) * proximityWeight);
   if (feature.type === "belt") {
     return (feature.speed === 2 ? FLAG_AREA_FEATURE_WEIGHTS.beltFast : FLAG_AREA_FEATURE_WEIGHTS.beltSlow) * proximityWeight;
   }
@@ -309,14 +365,14 @@ export function getFlagAreaFeatureScore(feature, dist, options = {}) {
   if (feature.type === "portal") return FLAG_AREA_FEATURE_WEIGHTS.portal * proximityWeight;
   if (feature.type === "teleporter") return FLAG_AREA_FEATURE_WEIGHTS.teleporter * proximityWeight;
   if (feature.type === "randomizer") return FLAG_AREA_FEATURE_WEIGHTS.randomizer * proximityWeight;
-  if (feature.type === "oil") return FLAG_AREA_FEATURE_WEIGHTS.oil * proximityWeight;
+  if (feature.type === "oil") return Number((FLAG_AREA_FEATURE_WEIGHTS.oil * proximityWeight * oilMultiplier).toFixed(2));
   if (feature.type === "ledge") return FLAG_AREA_FEATURE_WEIGHTS.ledge * proximityWeight;
   if (feature.type === "ramp") return FLAG_AREA_FEATURE_WEIGHTS.ramp * proximityWeight;
   if (feature.type === "water") return FLAG_AREA_FEATURE_WEIGHTS.water * proximityWeight;
   if (feature.type === "battery" && options.batteryActive) return (options.upgradeWorld ? FLAG_AREA_FEATURE_WEIGHTS.battery * 1.45 : FLAG_AREA_FEATURE_WEIGHTS.battery) * proximityWeight;
   if (feature.type === "chopShop" && options.batteryActive) return (options.upgradeWorld ? FLAG_AREA_FEATURE_WEIGHTS.chopShop * 1.35 : FLAG_AREA_FEATURE_WEIGHTS.chopShop) * proximityWeight;
-  if (feature.type === "repulsor") return FLAG_AREA_FEATURE_WEIGHTS.repulsor * proximityWeight;
-  if (feature.type === "homingMissile") return FLAG_AREA_FEATURE_WEIGHTS.homingMissile * proximityWeight;
+  if (feature.type === "repulsor") return Number((FLAG_AREA_FEATURE_WEIGHTS.repulsor * proximityWeight * (options.repulsorOverdrive ? 1.7 : 1)).toFixed(2));
+  if (feature.type === "homingMissile") return scaleHazard(FLAG_AREA_FEATURE_WEIGHTS.homingMissile * proximityWeight);
 
   return 0;
 }

@@ -6,6 +6,7 @@ const [
   { rotatedDimensions },
   {
     FLAG_APPROACH_WEIGHTS,
+    getDamageDeckPressureMultipliers,
     getFlagAreaFeatureScore,
     getTilePenaltyForFeature
   }
@@ -55,6 +56,15 @@ const SCARCE_ACTIONS = new Map([
   ["BACK", { shortWindow: 5, shortPenalty: 12, longWindow: 9, longPenalty: 4 }],
   ["UTURN", { shortWindow: 5, shortPenalty: 13, longWindow: 9, longPenalty: 4.5 }]
 ]);
+const ROUTE_PATH_KEY_CACHE = new WeakMap();
+const ROUTE_TILE_SET_CACHE = new WeakMap();
+const ROUTE_EDGE_SET_CACHE = new WeakMap();
+const ROUTE_DIRECTIONS_CACHE = new WeakMap();
+const LINE_OF_SIGHT_CACHE = new WeakMap();
+const ROUTE_SIMILARITY_CACHE = new Map();
+const OVERLAP_PENALTY_CACHE = new Map();
+const LATERAL_THREAT_CACHE = new Map();
+const REAR_THREAT_CACHE = new Map();
 
 function tileKey(x, y) {
   return `${x},${y}`;
@@ -242,7 +252,8 @@ function getHomeRebootTokensForStart(start, rebootTokens = []) {
 }
 
 function getRebootDamagePenalty(options = {}) {
-  return options.moreDeadlyGame ? MORE_DEADLY_REBOOT_DAMAGE_PENALTY : REBOOT_DAMAGE_PENALTY;
+  const basePenalty = options.moreDeadlyGame ? MORE_DEADLY_REBOOT_DAMAGE_PENALTY : REBOOT_DAMAGE_PENALTY;
+  return Number((basePenalty * getDamageDeckPressureMultipliers(options).reboot).toFixed(2));
 }
 
 function isBatteryActive(options = {}) {
@@ -261,7 +272,13 @@ function getTilePenalty(tile, options = {}) {
       rebootDamagePenalty: getRebootDamagePenalty(options),
       playerCount: options.playerCount,
       cuttingFloor: options.cuttingFloor,
-      upgradeWorld: options.upgradeWorld
+      flamingOil: options.flamingOil,
+      repulsorOverdrive: options.repulsorOverdrive,
+      upgradeWorld: options.upgradeWorld,
+      lessSpammyGame: options.lessSpammyGame,
+      criticalSpam: options.criticalSpam,
+      criticalHaywire: options.criticalHaywire,
+      permanentShutdown: options.permanentShutdown
     });
   }
 
@@ -598,8 +615,11 @@ function moveOneStep(tileMap, state, dir, mode, options = {}, moveBudget = null)
       const repulsorPushDistance = mode === "manual"
         ? Math.max(1, moveBudget ?? 1)
         : 1;
+      const repulsorPushDistanceScaled = options.repulsorOverdrive
+        ? repulsorPushDistance * 2
+        : repulsorPushDistance;
 
-      for (let index = 0; index < repulsorPushDistance; index += 1) {
+      for (let index = 0; index < repulsorPushDistanceScaled; index += 1) {
         const bounce = moveOneStep(tileMap, workingState, reverseDir, "repulsor", options);
         traversed.push(...bounce.traversed);
         hazard += bounce.hazard;
@@ -1569,6 +1589,12 @@ function stdDev(values) {
 }
 
 function buildTileSet(route, goal) {
+  const goalKey = tileKey(goal.x, goal.y);
+  const cachedByGoal = ROUTE_TILE_SET_CACHE.get(route);
+  if (cachedByGoal?.has(goalKey)) {
+    return cachedByGoal.get(goalKey);
+  }
+
   const set = new Set();
 
   route.path.forEach((point, index) => {
@@ -1579,10 +1605,21 @@ function buildTileSet(route, goal) {
     set.add(tileKey(point.x, point.y));
   });
 
+  if (cachedByGoal) {
+    cachedByGoal.set(goalKey, set);
+  } else {
+    ROUTE_TILE_SET_CACHE.set(route, new Map([[goalKey, set]]));
+  }
+
   return set;
 }
 
 function buildEdgeSet(route) {
+  const cached = ROUTE_EDGE_SET_CACHE.get(route);
+  if (cached) {
+    return cached;
+  }
+
   const set = new Set();
 
   for (let index = 1; index < route.path.length; index += 1) {
@@ -1594,11 +1631,24 @@ function buildEdgeSet(route) {
     set.add(`${tileKey(from.x, from.y)}>${tileKey(to.x, to.y)}`);
   }
 
+  ROUTE_EDGE_SET_CACHE.set(route, set);
   return set;
 }
 
 function hasLineOfSight(tileMap, from, to) {
+  const fromKey = tileKey(from.x, from.y);
+  const toKey = tileKey(to.x, to.y);
+  const pairKey = fromKey <= toKey ? `${fromKey}|${toKey}` : `${toKey}|${fromKey}`;
+  let cache = LINE_OF_SIGHT_CACHE.get(tileMap);
+  if (!cache) {
+    cache = new Map();
+    LINE_OF_SIGHT_CACHE.set(tileMap, cache);
+  } else if (cache.has(pairKey)) {
+    return cache.get(pairKey);
+  }
+
   if (from.x !== to.x && from.y !== to.y) {
+    cache.set(pairKey, false);
     return false;
   }
 
@@ -1613,6 +1663,7 @@ function hasLineOfSight(tileMap, from, to) {
       const fromTile = tileMap.get(tileKey(from.x, y));
       const toTile = tileMap.get(tileKey(from.x, y + step));
       if (!canMoveBetween(tileMap, { x: from.x, y }, { x: from.x, y: y + step }, dir).ok) {
+        cache.set(pairKey, false);
         return false;
       }
 
@@ -1622,7 +1673,9 @@ function hasLineOfSight(tileMap, from, to) {
       }
     }
 
-    return elevation === 0 && maxElevation <= 0;
+    const visible = elevation === 0 && maxElevation <= 0;
+    cache.set(pairKey, visible);
+    return visible;
   }
 
   const dir = to.x > from.x ? "E" : "W";
@@ -1632,6 +1685,7 @@ function hasLineOfSight(tileMap, from, to) {
     const fromTile = tileMap.get(tileKey(x, from.y));
     const toTile = tileMap.get(tileKey(x + step, from.y));
     if (!canMoveBetween(tileMap, { x, y: from.y }, { x: x + step, y: from.y }, dir).ok) {
+      cache.set(pairKey, false);
       return false;
     }
 
@@ -1641,28 +1695,56 @@ function hasLineOfSight(tileMap, from, to) {
     }
   }
 
-  return elevation === 0 && maxElevation <= 0;
+  const visible = elevation === 0 && maxElevation <= 0;
+  cache.set(pairKey, visible);
+  return visible;
 }
 
 function getRouteDirectionAt(path, index) {
-  const current = path[index];
-  const next = path[index + 1];
-  if (next && !next.jump) {
-    const dir = directionBetween(current, next);
-    if (dir) {
-      return dir;
+  const cached = ROUTE_DIRECTIONS_CACHE.get(path);
+  if (cached) {
+    return cached[index] ?? null;
+  }
+
+  const directions = new Array(path.length).fill(null);
+  for (let pathIndex = 0; pathIndex < path.length; pathIndex += 1) {
+    const current = path[pathIndex];
+    const next = path[pathIndex + 1];
+    if (next && !next.jump) {
+      directions[pathIndex] = directionBetween(current, next);
+      continue;
+    }
+
+    const previous = path[pathIndex - 1];
+    if (previous && !current.jump) {
+      directions[pathIndex] = directionBetween(previous, current);
     }
   }
 
-  const previous = path[index - 1];
-  if (previous && !current.jump) {
-    const dir = directionBetween(previous, current);
-    if (dir) {
-      return dir;
-    }
+  ROUTE_DIRECTIONS_CACHE.set(path, directions);
+  return directions[index] ?? null;
+}
+
+function getRoutePathKey(route) {
+  const cached = ROUTE_PATH_KEY_CACHE.get(route);
+  if (cached) {
+    return cached;
   }
 
-  return null;
+  const key = route.path.map((point) => `${point.x},${point.y}${point.jump ? "j" : ""}`).join("|");
+  ROUTE_PATH_KEY_CACHE.set(route, key);
+  return key;
+}
+
+function getThreatOptionKey(options = {}) {
+  return [
+    options.setToKill ? 1 : 0,
+    options.setToStun ? 1 : 0,
+    options.lessSpammyGame ? 1 : 0,
+    options.criticalSpam ? 1 : 0,
+    options.criticalHaywire ? 1 : 0,
+    options.permanentShutdown ? 1 : 0
+  ].join("");
 }
 
 function isBehindAlongDir(lead, trailing, dir) {
@@ -1676,6 +1758,7 @@ function isBehindAlongDir(lead, trailing, dir) {
 function getRobotLaserThreatMultipliers(options = {}) {
   let lateral = 1;
   let rear = 1;
+  const damagePressure = getDamageDeckPressureMultipliers(options);
 
   if (options.setToKill) {
     lateral *= 1.18;
@@ -1686,12 +1769,20 @@ function getRobotLaserThreatMultipliers(options = {}) {
     rear *= 0.45;
   }
 
+  lateral *= damagePressure.robotTraffic;
+  rear *= damagePressure.robotTraffic;
+
   return { lateral, rear };
 }
 
 function lateralThreatPenalty(tileMap, routeA, routeB, options = {}) {
   if (!routeA || !routeB) {
     return 0;
+  }
+
+  const cacheKey = `${getRoutePathKey(routeA)}>${getRoutePathKey(routeB)}|${getThreatOptionKey(options)}`;
+  if (LATERAL_THREAT_CACHE.has(cacheKey)) {
+    return LATERAL_THREAT_CACHE.get(cacheKey);
   }
 
   let penalty = 0;
@@ -1727,12 +1818,19 @@ function lateralThreatPenalty(tileMap, routeA, routeB, options = {}) {
     }
   }
 
-  return Number(penalty.toFixed(2));
+  const rounded = Number(penalty.toFixed(2));
+  LATERAL_THREAT_CACHE.set(cacheKey, rounded);
+  return rounded;
 }
 
 function rearThreatPenalty(tileMap, routeA, routeB, options = {}) {
   if (!routeA || !routeB) {
     return 0;
+  }
+
+  const cacheKey = `${getRoutePathKey(routeA)}>${getRoutePathKey(routeB)}|${getThreatOptionKey(options)}`;
+  if (REAR_THREAT_CACHE.has(cacheKey)) {
+    return REAR_THREAT_CACHE.get(cacheKey);
   }
 
   let penalty = 0;
@@ -1772,7 +1870,9 @@ function rearThreatPenalty(tileMap, routeA, routeB, options = {}) {
     }
   }
 
-  return Number(penalty.toFixed(2));
+  const rounded = Number(penalty.toFixed(2));
+  REAR_THREAT_CACHE.set(cacheKey, rounded);
+  return rounded;
 }
 
 function routeThreatPenalty(tileMap, routeA, routeB, options = {}) {
@@ -1786,6 +1886,11 @@ function routeThreatPenalty(tileMap, routeA, routeB, options = {}) {
 function overlapPenalty(routeA, routeB, goal) {
   if (!routeA || !routeB) {
     return 0;
+  }
+
+  const cacheKey = `${getRoutePathKey(routeA)}>${getRoutePathKey(routeB)}|${tileKey(goal.x, goal.y)}`;
+  if (OVERLAP_PENALTY_CACHE.has(cacheKey)) {
+    return OVERLAP_PENALTY_CACHE.get(cacheKey);
   }
 
   let penalty = 0;
@@ -1816,10 +1921,22 @@ function overlapPenalty(routeA, routeB, goal) {
     }
   }
 
-  return Number(penalty.toFixed(2));
+  const rounded = Number(penalty.toFixed(2));
+  OVERLAP_PENALTY_CACHE.set(cacheKey, rounded);
+  return rounded;
 }
 
 function routeSimilarity(routeA, routeB, goal) {
+  const goalKey = tileKey(goal.x, goal.y);
+  const cacheKey = `${getRoutePathKey(routeA)}|${getRoutePathKey(routeB)}|${goalKey}`;
+  const reverseKey = `${getRoutePathKey(routeB)}|${getRoutePathKey(routeA)}|${goalKey}`;
+  if (ROUTE_SIMILARITY_CACHE.has(cacheKey)) {
+    return ROUTE_SIMILARITY_CACHE.get(cacheKey);
+  }
+  if (ROUTE_SIMILARITY_CACHE.has(reverseKey)) {
+    return ROUTE_SIMILARITY_CACHE.get(reverseKey);
+  }
+
   const tilesA = buildTileSet(routeA, goal);
   const tilesB = buildTileSet(routeB, goal);
 
@@ -1848,7 +1965,9 @@ function routeSimilarity(routeA, routeB, goal) {
   const edgeUnion = new Set([...edgesA, ...edgesB]).size;
   const edgeScore = edgeUnion ? sharedEdges / edgeUnion : 0;
 
-  return (tileScore * 0.65) + (edgeScore * 0.35);
+  const similarity = (tileScore * 0.65) + (edgeScore * 0.35);
+  ROUTE_SIMILARITY_CACHE.set(cacheKey, similarity);
+  return similarity;
 }
 
 function dedupeRoutes(routes) {
@@ -1856,7 +1975,7 @@ function dedupeRoutes(routes) {
   const out = [];
 
   for (const route of routes) {
-    const key = route.path.map((point) => `${point.x},${point.y}`).join("|");
+    const key = getRoutePathKey(route);
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(route);
@@ -2069,7 +2188,13 @@ export function scoreFlagArea(tileMap, goal, options = {}) {
         const featureScore = getFlagAreaFeatureScore(feature, dist, {
           batteryActive: isBatteryActive(options),
           cuttingFloor: options.cuttingFloor,
-          upgradeWorld: options.upgradeWorld
+          flamingOil: options.flamingOil,
+          repulsorOverdrive: options.repulsorOverdrive,
+          upgradeWorld: options.upgradeWorld,
+          lessSpammyGame: options.lessSpammyGame,
+          criticalSpam: options.criticalSpam,
+          criticalHaywire: options.criticalHaywire,
+          permanentShutdown: options.permanentShutdown
         });
         if (feature.type === "belt" && beltLeadsToGoal(tileMap, { x, y }, goal, options)) {
           score -= featureScore;
@@ -2289,14 +2414,23 @@ export function analyzeCourse(tileMap, starts, goal, options = {}) {
     const rebootTokens = options.recoveryRule === "home_reboot"
       ? getHomeRebootTokensForStart(start, options.rebootTokens)
       : options.rebootTokens;
-    const routes = enumerateRoutes(tileMap, start, goal, {
-      maxRoutes,
-      maxExpansions: options.maxExpansions,
-      recoveryRule: options.recoveryRule,
-      lessDeadlyGame: options.lessDeadlyGame,
-      rebootTokens,
-      boardRects: options.boardRects
-    });
+    const facings = options.startupSpinUp ? ROTATION_ORDER : [start.facing ?? "E"];
+    const routes = dedupeRoutes(facings.flatMap((facing) => (
+      enumerateRoutes(tileMap, {
+        ...start,
+        facing
+      }, goal, {
+        maxRoutes,
+        maxExpansions: options.maxExpansions,
+        recoveryRule: options.recoveryRule,
+        lessDeadlyGame: options.lessDeadlyGame,
+        rebootTokens,
+        boardRects: options.boardRects
+      }).map((route) => ({
+        ...route,
+        startFacing: facing
+      }))
+    ))).sort((left, right) => left.score - right.score).slice(0, maxRoutes);
 
     return {
       index,
