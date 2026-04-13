@@ -72,7 +72,7 @@ const ROUTE_SIMILARITY_CACHE = new Map();
 const OVERLAP_PENALTY_CACHE = new Map();
 const LATERAL_THREAT_CACHE = new Map();
 const REAR_THREAT_CACHE = new Map();
-const OUTLIER_REEVALUATION_PASSES = 4;
+const OUTLIER_REEVALUATION_PASSES = 3;
 const OUTLIER_MIN_ACTION_GAP = 4;
 
 function tileKey(x, y) {
@@ -2532,7 +2532,26 @@ export function analyzeCourse(tileMap, starts, goal, options = {}) {
         return flagged;
       })
       .map((item) => item.index));
-    const nextOutlierSet = new Set([...outlierSet, ...passOutlierSet]);
+    
+    const minActiveStarts = playerCount;
+const currentActiveCount = activeReachable.length;
+const maxNewDrops = Math.max(0, currentActiveCount - minActiveStarts);
+
+const candidateNewOutliers = activeReachable
+  .filter((item) => passOutlierSet.has(item.index) && !outlierSet.has(item.index))
+  .sort((left, right) => {
+    const leftSeverity =
+      Math.abs(left.adjustedScore - scoreMean) +
+      Math.max(0, left.bestActions - actionMean) * 2;
+    const rightSeverity =
+      Math.abs(right.adjustedScore - scoreMean) +
+      Math.max(0, right.bestActions - actionMean) * 2;
+    return rightSeverity - leftSeverity;
+  })
+  .slice(0, maxNewDrops)
+  .map((item) => item.index);
+
+const nextOutlierSet = new Set([...outlierSet, ...candidateNewOutliers]);
 
     if (sameSet(nextOutlierSet, outlierSet)) {
       outlierSet = nextOutlierSet;
