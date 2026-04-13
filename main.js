@@ -93,6 +93,7 @@ const MIN_LENGTH_RAW = 28;
 const MIN_SHARED_EDGE = 5;
 const DOCK_BRIDGE_GAP = 3;
 const MAX_DOCK_COUNT = 2;
+const OUTLIER_MIN_ACTION_GAP = 4;
 const OVERLAY_UPDATE_INTERVAL = 4;
 const BOARD_SELECTION_FALLBACK_ATTEMPT = 12;
 const BOARD_PROFILE_HAZARD_DENSITY_THRESHOLD = 0.16;
@@ -583,6 +584,10 @@ function getTuningDifficulty(difficultyPreference) {
   return difficultyPreference === "brutal" ? "hard" : (difficultyPreference ?? "moderate");
 }
 
+function isHardestDifficulty(preferences = {}) {
+  return preferences.difficulty === "brutal";
+}
+
 function formatOverlaySearchTarget(preferences = {}) {
   const parts = [];
   const lengthLabel = formatLengthLabel(preferences.length);
@@ -840,12 +845,15 @@ function getVariantUnavailabilityReason(variantId, preferences = {}, pieceMap = 
   }
 
   if (availabilityRule.type === "featureTypeAvailable") {
-    const selfState = getVariantPreferenceState(preferences, variantId);
-    if (selfState !== "forced") {
-      return null;
-    }
-
     return countFeatureTypeInSelectedSets(availabilityRule.featureType, pieceMap, preferences) > 0
+      ? null
+      : availabilityRule.reason;
+  }
+
+  if (availabilityRule.type === "featureTypesAnyAvailable") {
+    return (availabilityRule.featureTypes || []).some((featureType) => (
+      countFeatureTypeInSelectedSets(featureType, pieceMap, preferences) > 0
+    ))
       ? null
       : availabilityRule.reason;
   }
@@ -1351,6 +1359,15 @@ function describeLengthLead(scenario) {
   }
 
   return `The course plays ${describeCourseLengthText(scenario.metrics.lengthRaw)}`;
+}
+
+function escapeHtml(text) {
+  return String(text)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }
 
 function formatContributionLabel(id) {
@@ -2002,6 +2019,12 @@ function buildCourseExplanationHtml(scenario, noteParts = []) {
   parts.push(
     `<div><strong>Length:</strong> ${describeLengthLead(scenario)} because ${joinReasonParts(uniqueLengthReasons)}.</div>`
   );
+  const variantImpactSummary = getCourseNoteVariantImpactSummary(scenario);
+  if (variantImpactSummary) {
+    parts.push(
+      `<div><strong>Variant Impact:</strong> ${escapeHtml(variantImpactSummary)}</div>`
+    );
+  }
 
   return parts.join("");
 }
@@ -2263,6 +2286,15 @@ function getVariantImpactSummary(scenario) {
   return parts.join(" ");
 }
 
+function getCourseNoteVariantImpactSummary(scenario) {
+  const summary = getVariantImpactSummary(scenario);
+  if (!summary || !summary.includes("Variant impact on this course:")) {
+    return "";
+  }
+
+  return summary.replace(/^Variant impact on this course:\s*/, "");
+}
+
 function getActFastRuleText(mode) {
   switch (mode) {
     case "countdown_3m":
@@ -2302,11 +2334,9 @@ function updateRulesNote(scenario) {
   const bottomAnchorEl = document.getElementById("rules-anchor-bottom");
   const checkpointNoteEl = document.getElementById("checkpoint-note");
   const photoRulesNoteEl = document.getElementById("photo-rules-note");
-  const variantImpactNoteEl = document.getElementById("variant-impact-note");
   const noteEl = document.getElementById("rules-note");
   const checkpointNotes = [];
   const photoNotes = [];
-  const variantImpactNotes = [];
   const notes = [];
 
   if (!scenario) {
@@ -2318,8 +2348,6 @@ function updateRulesNote(scenario) {
     checkpointNoteEl.classList.add("hidden");
     photoRulesNoteEl.textContent = "";
     photoRulesNoteEl.classList.add("hidden");
-    variantImpactNoteEl.textContent = "";
-    variantImpactNoteEl.classList.add("hidden");
     noteEl.textContent = "";
     noteEl.classList.add("hidden");
     return;
@@ -2356,11 +2384,6 @@ function updateRulesNote(scenario) {
 
   if (getBoardViewMode() === BOARD_VIEW_MODES.photos && (scenario.overlayPlacements?.length ?? 0) > 0) {
     photoNotes.push("Board photos are for general layout reference only. With overlays, use the physical boards or Icon View for exact placement of walls, ledges, and other border elements.");
-  }
-
-  const variantImpactSummary = getVariantImpactSummary(scenario);
-  if (variantImpactSummary) {
-    variantImpactNotes.push(variantImpactSummary);
   }
 
   if (scenario.competitiveMode) {
@@ -2451,16 +2474,8 @@ function updateRulesNote(scenario) {
     photoRulesNoteEl.classList.add("hidden");
   }
 
-  if (variantImpactNotes.length) {
-    variantImpactNoteEl.textContent = variantImpactNotes.join(" ");
-    variantImpactNoteEl.classList.remove("hidden");
-  } else {
-    variantImpactNoteEl.textContent = "";
-    variantImpactNoteEl.classList.add("hidden");
-  }
-
   bottomAnchorEl?.appendChild(bottomRulesBlockEl);
-  bottomRulesBlockEl?.classList.toggle("hidden", !checkpointNotes.length && !photoNotes.length && !variantImpactNotes.length);
+  bottomRulesBlockEl?.classList.toggle("hidden", !checkpointNotes.length && !photoNotes.length);
 
   if (notes.length) {
     topAnchorEl?.appendChild(topRulesBlockEl);
@@ -2613,8 +2628,8 @@ function chooseLessForeshadowing(preferences) {
 function sampleVariantComplexityBudget(preferences = {}) {
   const difficulty = getTuningDifficulty(preferences.difficulty);
   const budgets = {
-    easy: [0, 0, 0, 1, 1, 1, 2],
-    moderate: [0, 0, 1, 1, 1, 2, 2, 3, 4],
+    easy: [0, 0, 0, 0, 1, 1, 1, 2],
+    moderate: [0, 0, 1, 1, 1, 2, 2, 3],
     hard: [0, 1, 2, 2, 3, 3, 4, 4, 5, 6]
   };
 
@@ -2622,6 +2637,21 @@ function sampleVariantComplexityBudget(preferences = {}) {
 }
 
 function getVariantBaseChance(variantId, preferences = {}) {
+  const hardestBlockedVariants = new Set([
+    "lighterGame",
+    "lessSpammyGame",
+    "lessDeadlyGame",
+    "setToStun",
+    "startupSpinUp"
+  ]);
+  if (
+    isHardestDifficulty(preferences) &&
+    hardestBlockedVariants.has(variantId) &&
+    getVariantPreferenceState(preferences, variantId) !== "forced"
+  ) {
+    return 0;
+  }
+
   const difficulty = getTuningDifficulty(preferences.difficulty);
   const byVariant = {
     actFast: { easy: 0.08, moderate: 0.16, hard: 0.2 },
@@ -2636,19 +2666,19 @@ function getVariantBaseChance(variantId, preferences = {}) {
     flamingOil: { easy: 0.04, moderate: 0.1, hard: 0.18 },
     repulsorOverdrive: { easy: 0.01, moderate: 0.03, hard: 0.06 },
     setToKill: { easy: 0.05, moderate: 0.14, hard: 0.22 },
-    setToStun: { easy: 0.2, moderate: 0.14, hard: 0.08 },
+    setToStun: { easy: 0.12, moderate: 0.14, hard: 0.08 },
     upgradeWorld: { easy: 0.08, moderate: 0.14, hard: 0.18 },
     classicSharedDeck: { easy: 0.01, moderate: 0.07, hard: 0.2 },
     competitiveMode: { easy: 0.08, moderate: 0.16, hard: 0.22 },
-    dynamicArchiving: { easy: 0.46, moderate: 0.4, hard: 0.34 },
+    dynamicArchiving: { easy: 0.24, moderate: 0.4, hard: 0.34 },
     extraDocks: { easy: 0.08, moderate: 0.2, hard: 0.26 },
     factoryRejects: { easy: 0.06, moderate: 0.14, hard: 0.22 },
-    startupSpinUp: { easy: 0.18, moderate: 0.14, hard: 0.1 },
+    startupSpinUp: { easy: 0.08, moderate: 0.14, hard: 0.1 },
     hazardousFlags: { easy: 0.08, moderate: 0.16, hard: 0.24 },
     movingTargets: { easy: 0.06, moderate: 0.14, hard: 0.22 },
     homeReboot: { easy: 0.06, moderate: 0.12, hard: 0.18 },
     lessForeshadowing: { easy: 0.07, moderate: 0.16, hard: 0.24 },
-    staggeredBoards: { easy: 0.5, moderate: 0.5, hard: 0.5 }
+    staggeredBoards: { easy: 0.18, moderate: 0.42, hard: 0.5 }
   };
 
   return byVariant[variantId]?.[difficulty] ?? 0.2;
@@ -2682,7 +2712,7 @@ function getLateEasyVariantRescueBonus(variantId, preferences = {}) {
   return easingVariants[variantId] ?? hardeningVariants[variantId] ?? 0;
 }
 
-function chooseVariantBundle(preferences = {}) {
+function chooseVariantBundle(preferences = {}, options = {}) {
   const definitions = VARIANT_DEFINITIONS.map((variant) => ({
     id: variant.id,
     cost: variant.cost,
@@ -2690,15 +2720,19 @@ function chooseVariantBundle(preferences = {}) {
   }));
   const active = Object.fromEntries(definitions.map((entry) => [entry.id, false]));
   let usedBudget = 0;
+  const pieceMap = options.pieceMap ?? cachedAssets?.pieceMap ?? null;
+  const collectionAvailableEntries = definitions.filter((entry) => (
+    variantIsAvailable(entry.id, preferences, pieceMap)
+  ));
 
-  const forcedEntries = definitions.filter((entry) => getVariantPreferenceState(preferences, entry.id) === "forced");
+  const forcedEntries = collectionAvailableEntries.filter((entry) => getVariantPreferenceState(preferences, entry.id) === "forced");
   forcedEntries.forEach((entry) => {
     active[entry.id] = true;
   });
 
   const sampledBudget = sampleVariantComplexityBudget(preferences);
   const budget = sampledBudget;
-  const allowedEntries = definitions
+  const allowedEntries = collectionAvailableEntries
     .filter((entry) => getVariantPreferenceState(preferences, entry.id) === "allowed")
     .map((entry) => ({
       ...entry,
@@ -3040,6 +3074,57 @@ function variantIsAvailable(variantId, preferences = {}, pieceMap = cachedAssets
   return !getVariantUnavailabilityReason(variantId, preferences, pieceMap);
 }
 
+function getVariantCourseUnavailabilityReason(variantId, tileMap) {
+  const availabilityRule = getVariantAvailabilityRule(variantId);
+  if (!availabilityRule) {
+    return null;
+  }
+
+  if (availabilityRule.type === "featureTypeAvailable") {
+    return countFeatureTypeInTileMap(tileMap, availabilityRule.featureType) > 0
+      ? null
+      : `No ${availabilityRule.featureType} features on this course.`;
+  }
+
+  if (availabilityRule.type === "featureTypesAnyAvailable") {
+    return (availabilityRule.featureTypes || []).some((featureType) => (
+      countFeatureTypeInTileMap(tileMap, featureType) > 0
+    ))
+      ? null
+      : `None of ${availabilityRule.featureTypes.join(", ")} are on this course.`;
+  }
+
+  return null;
+}
+
+function applyCourseVariantAvailability(variantBundle, tileMap, preferences = {}) {
+  const nextBundle = { ...variantBundle };
+  const blockedForced = [];
+
+  for (const variant of VARIANT_DEFINITIONS) {
+    if (!nextBundle[variant.id]) {
+      continue;
+    }
+
+    const unavailableReason = getVariantCourseUnavailabilityReason(variant.id, tileMap);
+    if (!unavailableReason) {
+      continue;
+    }
+
+    if (isVariantForced(preferences, variant.id)) {
+      blockedForced.push({ id: variant.id, reason: unavailableReason });
+      continue;
+    }
+
+    nextBundle[variant.id] = false;
+  }
+
+  return {
+    variantBundle: nextBundle,
+    blockedForced
+  };
+}
+
 function updateVariantAvailability() {
   const preferences = getPreferencesFromControls();
 
@@ -3055,15 +3140,13 @@ function updateVariantAvailability() {
     if (!available) {
       const previousState = normalizeVariantState(button.dataset.state ?? variant.defaultState);
       const reason = getVariantUnavailabilityReason(variant.id, preferences);
-      const fallbackState = previousState === "forced" ? "allowed" : "off";
+      const fallbackState = previousState === "forced" || previousState === "allowed" ? "allowed" : "off";
       setVariantControlState(variant.id, fallbackState, button);
       button.title = reason ?? button.title;
       button.setAttribute("aria-label", `${variant.label}: unavailable`);
-      if (previousState !== "off" && reason) {
+      if (previousState === "forced" && reason) {
         showToast(
-          fallbackState === "allowed"
-            ? `${variant.label} was relaxed to Yes. ${reason}`
-            : `${variant.label} was turned off. ${reason}`
+          `${variant.label} was relaxed to Yes. ${reason}`
         );
       }
     } else {
@@ -5852,14 +5935,29 @@ function filterDockPlacementsWithReachableStarts(dockPlacements, startAnalyses, 
   ));
 }
 
+function getRouteAnalysisVariantOptions(options = {}) {
+  return {
+    lessDeadlyGame: options.lessDeadlyGame,
+    moreDeadlyGame: options.moreDeadlyGame,
+    lighterGame: options.lighterGame,
+    upgradeWorld: options.upgradeWorld,
+    lessSpammyGame: options.lessSpammyGame,
+    criticalSpam: options.criticalSpam,
+    criticalHaywire: options.criticalHaywire,
+    permanentShutdown: options.permanentShutdown,
+    cuttingFloor: options.cuttingFloor,
+    flamingOil: options.flamingOil,
+    repulsorOverdrive: options.repulsorOverdrive
+  };
+}
+
 function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) {
   const firstLeg = analyzeCourse(tileMap, starts, flags[0], {
     maxRoutes: 4,
     flags,
     playerCount,
     recoveryRule: options.recoveryRule,
-    lessDeadlyGame: options.lessDeadlyGame,
-    moreDeadlyGame: options.moreDeadlyGame,
+    ...getRouteAnalysisVariantOptions(options),
     startupSpinUp: options.startupSpinUp,
     rebootTokens: options.rebootTokens,
     boardRects: options.boardRects
@@ -5891,8 +5989,7 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
       playerCount,
       maxExpansions: 18000,
       recoveryRule: options.recoveryRule,
-      lessDeadlyGame: options.lessDeadlyGame,
-      moreDeadlyGame: options.moreDeadlyGame,
+      ...getRouteAnalysisVariantOptions(options),
       rebootTokens: options.rebootTokens,
       boardRects: options.boardRects
     });
@@ -5930,7 +6027,7 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
       }
     }
     : adjustStartOutliersForCourseLength(firstLeg, totalLength, tileMap, playerCount, {
-      lessDeadlyGame: options.lessDeadlyGame
+      ...getRouteAnalysisVariantOptions(options)
     });
 
   const adjustedLegs = [
@@ -5961,77 +6058,146 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
 }
 
 function adjustStartOutliersForCourseLength(firstLeg, totalLength, tileMap, playerCount, options = {}) {
-  const reachable = firstLeg.starts.filter((item) => item.reachable && item.selectedRoute);
-  if (reachable.length < 2) {
-    return firstLeg;
-  }
-
-  const firstLegLength = firstLeg.summary.lengthScore || 0;
-  const safeTotalLength = Math.max(totalLength || 0, firstLegLength || 1);
-  const firstLegShare = firstLegLength / safeTotalLength;
-  const shortCourseFactor = clamp((160 - safeTotalLength) / 80, 0, 1);
-  const longCourseFactor = clamp((safeTotalLength - 190) / 80, 0, 1);
-  const firstLegShareFactor = clamp((firstLegShare - 0.24) / 0.34, 0, 1);
-  const thresholdScale = clamp(
-    1 - shortCourseFactor * 0.18 - firstLegShareFactor * 0.1 + longCourseFactor * 0.1,
-    0.78,
-    1.08
-  );
-
-  const adjustedScores = reachable.map((item) => item.adjustedScore);
-  const actions = reachable.map((item) => item.bestActions);
-  const scoreMean = adjustedScores.reduce((sum, value) => sum + value, 0) / adjustedScores.length;
-  const actionMean = actions.reduce((sum, value) => sum + value, 0) / actions.length;
-  const minActions = Math.min(...actions);
-  const scoreStdDev = Math.sqrt(adjustedScores.reduce((sum, value) => sum + (value - scoreMean) ** 2, 0) / adjustedScores.length);
-  const actionStdDev = Math.sqrt(actions.reduce((sum, value) => sum + (value - actionMean) ** 2, 0) / actions.length);
-  const scoreThreshold = Math.max(8, scoreStdDev * 1.6) * thresholdScale;
-  const actionThreshold = Math.max(2, actionStdDev * 1.05) * thresholdScale;
-
-  const outliers = reachable
-    .filter((item) => {
-      const scoreGap = Math.abs(item.adjustedScore - scoreMean);
-      const actionGap = item.bestActions - actionMean;
-      const minActionGap = item.bestActions - minActions;
-      return scoreGap > scoreThreshold || (actionGap > actionThreshold && minActionGap >= 4);
-    })
-    .map((item) => {
-      const scoreGap = Math.abs(item.adjustedScore - scoreMean);
-      const actionGap = item.bestActions - actionMean;
-      const minActionGap = item.bestActions - minActions;
-      return {
-        index: item.index,
-        score: item.adjustedScore,
-        delta: Number((item.adjustedScore - scoreMean).toFixed(2)),
-        actionDelta: Number((item.bestActions - actionMean).toFixed(2)),
-        reasons: {
-          scoreOutlier: scoreGap > scoreThreshold,
-          actionOutlier: actionGap > actionThreshold,
-          severeActionGap: minActionGap >= 4,
-          scoreGap: Number(scoreGap.toFixed(2)),
-          scoreThreshold: Number(scoreThreshold.toFixed(2)),
-          actionGap: Number(actionGap.toFixed(2)),
-          actionThreshold: Number(actionThreshold.toFixed(2)),
-          minActionGap: Number(minActionGap.toFixed(2)),
-          totalCourseLength: Number(safeTotalLength.toFixed(2)),
-          firstLegShare: Number(firstLegShare.toFixed(2)),
-          thresholdScale: Number(thresholdScale.toFixed(2))
-        }
-      };
-    });
-
-  const updatedFirstLeg = {
+  const baseFirstLeg = {
     ...firstLeg,
     summary: {
       ...firstLeg.summary,
-      outliers
+      outliers: []
     }
   };
-
-  return recomputeFirstLegPressure(tileMap, updatedFirstLeg, {
+  let currentFirstLeg = recomputeFirstLegPressure(tileMap, baseFirstLeg, {
     playerCount,
-    lessDeadlyGame: options.lessDeadlyGame,
-    excludedIndices: outliers.map((item) => item.index)
+    ...getRouteAnalysisVariantOptions(options),
+    excludedIndices: []
+  });
+  const outlierSet = new Set();
+  const outlierDiagnostics = new Map();
+
+  function setsEqual(left, right) {
+    return left.size === right.size && [...left].every((item) => right.has(item));
+  }
+
+  function buildOutlierList(sourceFirstLeg, activeReachable = null) {
+    const activeItems = activeReachable ?? sourceFirstLeg.starts.filter((item) => (
+      item.reachable && item.selectedRoute && !outlierSet.has(item.index)
+    ));
+    const adjustedScores = activeItems.map((item) => item.adjustedScore);
+    const actions = activeItems.map((item) => item.bestActions);
+    const scoreMean = adjustedScores.length
+      ? adjustedScores.reduce((sum, value) => sum + value, 0) / adjustedScores.length
+      : 0;
+    const actionMean = actions.length
+      ? actions.reduce((sum, value) => sum + value, 0) / actions.length
+      : 0;
+
+    return [...outlierSet]
+      .map((index) => {
+        const item = sourceFirstLeg.starts.find((candidate) => candidate.index === index);
+        if (!item) {
+          return null;
+        }
+
+        return {
+          index,
+          score: item.adjustedScore,
+          delta: Number((item.adjustedScore - scoreMean).toFixed(2)),
+          actionDelta: Number((item.bestActions - actionMean).toFixed(2)),
+          reasons: outlierDiagnostics.get(index) ?? null
+        };
+      })
+      .filter(Boolean);
+  }
+
+  for (let pass = 0; pass < 4; pass += 1) {
+    const activeReachable = currentFirstLeg.starts.filter((item) => (
+      item.reachable && item.selectedRoute && !outlierSet.has(item.index)
+    ));
+    if (activeReachable.length < 2) {
+      break;
+    }
+
+    const firstLegLength = currentFirstLeg.summary.lengthScore || 0;
+    const safeTotalLength = Math.max(totalLength || 0, firstLegLength || 1);
+    const firstLegShare = firstLegLength / safeTotalLength;
+    const shortCourseFactor = clamp((160 - safeTotalLength) / 80, 0, 1);
+    const longCourseFactor = clamp((safeTotalLength - 190) / 80, 0, 1);
+    const firstLegShareFactor = clamp((firstLegShare - 0.24) / 0.34, 0, 1);
+    const thresholdScale = clamp(
+      1 - shortCourseFactor * 0.18 - firstLegShareFactor * 0.1 + longCourseFactor * 0.1,
+      0.78,
+      1.08
+    );
+
+    const adjustedScores = activeReachable.map((item) => item.adjustedScore);
+    const actions = activeReachable.map((item) => item.bestActions);
+    const scoreMean = adjustedScores.reduce((sum, value) => sum + value, 0) / adjustedScores.length;
+    const actionMean = actions.reduce((sum, value) => sum + value, 0) / actions.length;
+    const minActions = Math.min(...actions);
+    const scoreStdDev = Math.sqrt(adjustedScores.reduce((sum, value) => sum + (value - scoreMean) ** 2, 0) / adjustedScores.length);
+    const actionStdDev = Math.sqrt(actions.reduce((sum, value) => sum + (value - actionMean) ** 2, 0) / actions.length);
+    const scoreThreshold = Math.max(8, scoreStdDev * 1.6) * thresholdScale;
+    const actionThreshold = Math.max(2, actionStdDev * 1.05) * thresholdScale;
+    const nextOutlierSet = new Set(outlierSet);
+
+    activeReachable.forEach((item) => {
+      const scoreGap = Math.abs(item.adjustedScore - scoreMean);
+      const actionGap = item.bestActions - actionMean;
+      const minActionGap = item.bestActions - minActions;
+      const scoreOutlier = scoreGap > scoreThreshold;
+      const actionOutlier = actionGap > actionThreshold;
+      const severeActionGap = minActionGap >= OUTLIER_MIN_ACTION_GAP;
+
+      if (!scoreOutlier && !(actionOutlier && severeActionGap)) {
+        return;
+      }
+
+      nextOutlierSet.add(item.index);
+      outlierDiagnostics.set(item.index, {
+        scoreOutlier,
+        actionOutlier,
+        severeActionGap,
+        scoreGap: Number(scoreGap.toFixed(2)),
+        scoreThreshold: Number(scoreThreshold.toFixed(2)),
+        actionGap: Number(actionGap.toFixed(2)),
+        actionThreshold: Number(actionThreshold.toFixed(2)),
+        minActionGap: Number(minActionGap.toFixed(2)),
+        minActionThreshold: OUTLIER_MIN_ACTION_GAP,
+        totalCourseLength: Number(safeTotalLength.toFixed(2)),
+        firstLegShare: Number(firstLegShare.toFixed(2)),
+        thresholdScale: Number(thresholdScale.toFixed(2)),
+        outlierPass: pass + 1
+      });
+    });
+
+    if (setsEqual(nextOutlierSet, outlierSet)) {
+      break;
+    }
+
+    outlierSet.clear();
+    nextOutlierSet.forEach((index) => outlierSet.add(index));
+    currentFirstLeg = recomputeFirstLegPressure(tileMap, {
+      ...baseFirstLeg,
+      summary: {
+        ...baseFirstLeg.summary,
+        outliers: buildOutlierList(currentFirstLeg, activeReachable)
+      }
+    }, {
+      playerCount,
+      ...getRouteAnalysisVariantOptions(options),
+      excludedIndices: [...outlierSet]
+    });
+  }
+
+  return recomputeFirstLegPressure(tileMap, {
+    ...baseFirstLeg,
+    summary: {
+      ...baseFirstLeg.summary,
+      outliers: buildOutlierList(currentFirstLeg)
+    }
+  }, {
+    playerCount,
+    ...getRouteAnalysisVariantOptions(options),
+    excludedIndices: [...outlierSet]
   });
 }
 
@@ -6795,7 +6961,10 @@ function buildScenarioReport(scenario, selectedLegIndex) {
       parts.push(`score gap ${reasons.scoreGap} > ${reasons.scoreThreshold}`);
     }
     if (reasons.actionOutlier && reasons.severeActionGap) {
-      parts.push(`actions gap ${reasons.actionGap} > ${reasons.actionThreshold} and best-gap ${reasons.minActionGap} >= 3`);
+      parts.push(`actions gap ${reasons.actionGap} > ${reasons.actionThreshold} and best-gap ${reasons.minActionGap} >= ${reasons.minActionThreshold ?? OUTLIER_MIN_ACTION_GAP}`);
+    }
+    if (reasons.outlierPass) {
+      parts.push(`pass ${reasons.outlierPass}`);
     }
 
     return parts.join("; ") || "reason unavailable";
@@ -6929,6 +7098,10 @@ function isDevViewEnabled() {
   return document.getElementById("dev-view")?.checked ?? true;
 }
 
+function isOutlierRoutesEnabled() {
+  return document.getElementById("show-outlier-routes")?.checked ?? false;
+}
+
 function isBoardAuditEnabled() {
   return document.getElementById("board-audit-toggle")?.checked ?? false;
 }
@@ -6941,6 +7114,7 @@ function updateDevView() {
   const enabled = isDevViewEnabled();
   document.getElementById("trace-leg-label")?.classList.toggle("hidden", !enabled);
   document.getElementById("report-panel")?.classList.toggle("hidden", !enabled);
+  document.getElementById("outlier-routes-toggle-label")?.classList.toggle("hidden", !enabled);
   document.getElementById("board-audit-toggle-label")?.classList.toggle("hidden", !enabled);
   document.getElementById("run-diagnostics")?.classList.add("hidden");
   updateBoardAuditVisibility();
@@ -7002,6 +7176,7 @@ function drawCanvasFailureNotice(canvas, message) {
 function getScenarioRenderState(scenario) {
   const legSelect = document.getElementById("leg-select");
   const devViewEnabled = isDevViewEnabled();
+  const showOutlierRoutes = isOutlierRoutesEnabled();
   const selectedLegValue = !devViewEnabled
     ? "none"
     : legSelect.value === "none"
@@ -7014,16 +7189,29 @@ function getScenarioRenderState(scenario) {
   const goal = selectedLegIndex === null
     ? scenario.checkpoints[0]
     : scenario.checkpoints[selectedLegIndex === 0 ? 0 : selectedLegIndex];
+  const outlierIndices = new Set((scenario.sequence.firstLeg.summary.outliers || []).map((item) => item.index));
   const renderAnalysis = selectedLegIndex === null
     ? null
     : selectedLegIndex === 0
-      ? scenario.sequence.firstLeg
+      ? showOutlierRoutes
+        ? scenario.sequence.firstLeg
+        : {
+          ...scenario.sequence.firstLeg,
+          starts: scenario.sequence.firstLeg.starts.filter((startAnalysis) => !outlierIndices.has(startAnalysis.index))
+        }
       : { routes: displayedLeg.analysis.distinctRoutes };
   const boardViewMode = getBoardViewMode();
   const iconBoardView = boardViewMode === BOARD_VIEW_MODES.icons;
   const unusableStartIndices = scenario.sequence.firstLeg.starts
     .filter((startAnalysis) => !scenario.metrics.usableStarts.some((item) => item.index === startAnalysis.index))
     .map((startAnalysis) => startAnalysis.index);
+  const startNumberByKey = new Map(scenario.sequence.firstLeg.starts.map((startAnalysis) => [
+    `${startAnalysis.start.x},${startAnalysis.start.y}`,
+    startAnalysis.index + 1
+  ]));
+  const startLabels = devViewEnabled
+    ? scenario.activeStarts.map((start) => startNumberByKey.get(`${start.x},${start.y}`) ?? "")
+    : [];
 
   return {
     devViewEnabled,
@@ -7031,6 +7219,7 @@ function getScenarioRenderState(scenario) {
     iconBoardView,
     renderAnalysis,
     selectedLegIndex,
+    startLabels,
     unusableStartIndices
   };
 }
@@ -7043,6 +7232,7 @@ function drawScenarioCanvas(scenario) {
     iconBoardView,
     renderAnalysis,
     selectedLegIndex,
+    startLabels,
     unusableStartIndices
   } = getScenarioRenderState(scenario);
   const canvas = document.getElementById("canvas");
@@ -7053,12 +7243,14 @@ function drawScenarioCanvas(scenario) {
     goals: scenario.checkpoints,
     reentryMarkers: hasMovingTargetsEffect(scenario) ? scenario.movingTargetReentryMarkers : [],
     starts: scenario.activeStarts,
+    startLabels,
     rebootTokens: scenario.rebootTokens,
     tileMap: scenario.goalTileMap,
     unusableStartIndices,
     edgeOutlineColor: scenario.lessDeadlyGame ? "#f2c230" : null,
     showBoardLabels: devViewEnabled && selectedLegIndex !== null && !iconBoardView,
     showStartFacing: devViewEnabled && selectedLegIndex !== null,
+    showAllStartMarkers: devViewEnabled,
     showWalls: iconBoardView || (devViewEnabled && selectedLegIndex !== null),
     showPieceImages: !iconBoardView,
     showFootprints: true,
@@ -7203,7 +7395,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
   const { pieceMap } = assets;
   const expansionIds = getSelectedExpansionIds(preferences);
   const availableDockIds = getEligibleDockIds(pieceMap, expansionIds, preferences);
-  const variantBundle = chooseVariantBundle(preferences);
+  const variantBundle = chooseVariantBundle(preferences, { pieceMap });
   const {
     alignedLayout,
     actFast,
@@ -7376,6 +7568,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     let activeStarts = filterStartsForGoals(starts, checkpoints);
     let rebootTokens = [];
     let sequence = null;
+    let effectiveVariantBundle = variantBundle;
 
     for (let pass = 0; pass < 4; pass += 1) {
       scenarioPlacements = [
@@ -7403,15 +7596,17 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         }
       }
       goalTileMap = applyFlagOverrides(scenarioTileMap, checkpoints, { hazardousFlags, movingTargets });
-      if (variantBundle.cuttingFloor && countBoardLasers(goalTileMap) === 0) {
+      const courseAvailability = applyCourseVariantAvailability(variantBundle, goalTileMap, preferences);
+      if (courseAvailability.blockedForced.length) {
         sequence = null;
         break;
       }
+      effectiveVariantBundle = courseAvailability.variantBundle;
       activeStarts = filterStartsForGoals(resolved.starts, checkpoints);
       sequence = analyzeFlagSequence(goalTileMap, activeStarts, checkpoints, preferences.playerCount, applyVariantAnalysisOptions({
         rebootTokens,
         boardRects: scenarioBoardRects
-      }, variantBundle));
+      }, effectiveVariantBundle));
 
       const prunedDockPlacements = filterDockPlacementsWithReachableStarts(scenarioDockPlacements, sequence.firstLeg.starts, pieceMap);
       if (prunedDockPlacements.length && prunedDockPlacements.length !== scenarioDockPlacements.length) {
@@ -7453,6 +7648,16 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       staleRetries += 1;
       continue;
     }
+    if (effectiveVariantBundle.extraDocks && scenarioDockPlacements.length <= 1) {
+      if (isVariantForced(preferences, "extraDocks")) {
+        staleRetries += 1;
+        continue;
+      }
+      effectiveVariantBundle = {
+        ...effectiveVariantBundle,
+        extraDocks: false
+      };
+    }
     const metrics = classifyCandidate(sequence, {
       ...generationPreferences,
       actFast,
@@ -7462,11 +7667,11 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       criticalSpam,
       criticalHaywire,
       permanentShutdown,
-      cuttingFloor: variantBundle.cuttingFloor,
-      flamingOil,
+      cuttingFloor: effectiveVariantBundle.cuttingFloor,
+      flamingOil: effectiveVariantBundle.flamingOil,
       factoryRejects,
-      repulsorOverdrive,
-      upgradeWorld: variantBundle.upgradeWorld,
+      repulsorOverdrive: effectiveVariantBundle.repulsorOverdrive,
+      upgradeWorld: effectiveVariantBundle.upgradeWorld,
       hazardousFlags,
       movingTargets,
       lighterGame,
@@ -7485,7 +7690,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       ...scenarioOverlayPlacements
     ];
     const finalOverlayPlacements = scenarioPlacements.filter((placement) => placement.overlay);
-    const movingTargetReentryMarkers = collectMovingTargetReentryMarkers(scenarioTileMap, checkpoints, movingTargets);
+    const movingTargetReentryMarkers = collectMovingTargetReentryMarkers(scenarioTileMap, checkpoints, effectiveVariantBundle.movingTargets);
     const scenario = applyVariantScenarioState({
       pieceMap: assets.pieceMap,
       imageMap: assets.imageMap,
@@ -7522,10 +7727,10 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         criticalSpam,
         criticalHaywire,
         permanentShutdown,
-        cuttingFloor: variantBundle.cuttingFloor,
-        flamingOil,
-        repulsorOverdrive,
-        upgradeWorld: variantBundle.upgradeWorld,
+        cuttingFloor: effectiveVariantBundle.cuttingFloor,
+        flamingOil: effectiveVariantBundle.flamingOil,
+        repulsorOverdrive: effectiveVariantBundle.repulsorOverdrive,
+        upgradeWorld: effectiveVariantBundle.upgradeWorld,
         hazardousFlags,
         movingTargets,
         lighterGame,
@@ -7533,7 +7738,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         lessForeshadowing,
         staggeredBoards
       }
-    }, variantBundle);
+    }, effectiveVariantBundle);
 
     if (!bestScenario || scenario.metrics.fitScore < bestScenario.metrics.fitScore) {
       bestScenario = scenario;
@@ -8101,6 +8306,12 @@ document.getElementById("course-explanation-toggle").addEventListener("click", (
 
 document.getElementById("dev-view").addEventListener("change", () => {
   updateDevView();
+  if (currentScenario) {
+    renderScenario(currentScenario);
+  }
+});
+
+document.getElementById("show-outlier-routes").addEventListener("change", () => {
   if (currentScenario) {
     renderScenario(currentScenario);
   }

@@ -50,12 +50,19 @@ const EDGE_BEHAVIOR = "pit";
 const REBOOT_DAMAGE_PENALTY = 8;
 const MORE_DEADLY_REBOOT_DAMAGE_PENALTY = 12;
 const REBOOT_TEMPO_PENALTY = 34;
-const SCARCE_ACTIONS = new Map([
-  ["WAIT", { shortWindow: 5, shortPenalty: 12, longWindow: 9, longPenalty: 4 }],
-  ["FORWARD_3", { shortWindow: 5, shortPenalty: 10, longWindow: 9, longPenalty: 3.5 }],
-  ["BACK", { shortWindow: 5, shortPenalty: 12, longWindow: 9, longPenalty: 4 }],
-  ["UTURN", { shortWindow: 5, shortPenalty: 13, longWindow: 9, longPenalty: 4.5 }]
+const HAND_DRAW_SIZE = 9;
+const REGISTER_COUNT = 5;
+const PROGRAM_CARD_COUNTS = new Map([
+  ["FORWARD", 4],
+  ["FORWARD_2", 3],
+  ["FORWARD_3", 1],
+  ["RIGHT", 4],
+  ["LEFT", 4],
+  ["UTURN", 1],
+  ["BACK", 1],
+  ["WAIT", 1]
 ]);
+const AGAIN_CARD_COUNT = 1;
 const ROUTE_PATH_KEY_CACHE = new WeakMap();
 const ROUTE_TILE_SET_CACHE = new WeakMap();
 const ROUTE_EDGE_SET_CACHE = new WeakMap();
@@ -65,6 +72,8 @@ const ROUTE_SIMILARITY_CACHE = new Map();
 const OVERLAP_PENALTY_CACHE = new Map();
 const LATERAL_THREAT_CACHE = new Map();
 const REAR_THREAT_CACHE = new Map();
+const OUTLIER_REEVALUATION_PASSES = 4;
+const OUTLIER_MIN_ACTION_GAP = 4;
 
 function tileKey(x, y) {
   return `${x},${y}`;
@@ -1331,36 +1340,55 @@ function buildTimeline(transitions, start) {
   return timeline;
 }
 
-function getActionPenalty(action) {
-  if (action.id === "WAIT") return 8;
+function getActionPenalty(action, options = {}) {
+  if (action.id === "WAIT") return options.lighterGame ? 7.5 : 5.75;
   if (action.id === "FORWARD") return 5;
   if (action.id === "FORWARD_2") return 7;
-  if (action.id === "FORWARD_3") return 9;
+  if (action.id === "FORWARD_3") return 9.5;
   if (action.id === "LEFT" || action.id === "RIGHT") return 6.5;
   if (action.id === "BACK") return 9.5;
   if (action.id === "UTURN") return 12;
   return 5;
 }
 
-function getScarceActionReusePenalty(history, actionId, options = {}) {
-  const scarcity = SCARCE_ACTIONS.get(actionId);
-  if (!scarcity) {
+function countAction(actions, actionId) {
+  return actions.filter((id) => id === actionId).length;
+}
+
+function getCardAvailabilityPressure(history, actionId, options = {}) {
+  const cardCount = PROGRAM_CARD_COUNTS.get(actionId);
+  if (!cardCount) {
     return 0;
   }
 
+  const registerWindow = [...history.slice(-(REGISTER_COUNT - 1)), actionId];
+  const handWindow = [...history.slice(-(HAND_DRAW_SIZE - 1)), actionId];
+  const registerCopies = countAction(registerWindow, actionId);
+  const handCopies = countAction(handWindow, actionId);
+  const previousActionId = history.at(-1);
+  const immediateAgainCopy = previousActionId === actionId ? AGAIN_CARD_COUNT : 0;
+  const registerCapacity = cardCount + immediateAgainCopy;
+  const handCapacity = cardCount + AGAIN_CARD_COUNT;
+  const repeatCopies = Math.max(0, handCopies - 1);
+  const registerOveruse = Math.max(0, registerCopies - registerCapacity);
+  const handOveruse = Math.max(0, handCopies - handCapacity);
   const lessForeshadowingFactor = options.lessForeshadowing ? 0.72 : 1;
+  let penalty = 0;
 
-  const shortRecent = history.slice(-scarcity.shortWindow);
-  if (shortRecent.includes(actionId)) {
-    return scarcity.shortPenalty * lessForeshadowingFactor;
+  if (cardCount === 1 && repeatCopies > 0) {
+    penalty += previousActionId === actionId ? 4.5 : 11;
+  } else if (cardCount === 3 && repeatCopies > 1) {
+    penalty += (repeatCopies - 1) * 1.8;
   }
 
-  const longRecent = history.slice(-scarcity.longWindow);
-  if (longRecent.includes(actionId)) {
-    return scarcity.longPenalty * lessForeshadowingFactor;
+  penalty += registerOveruse * 16;
+  penalty += handOveruse * 7;
+
+  if (actionId === "WAIT" && !options.lighterGame && previousActionId !== actionId) {
+    penalty = Math.max(0, penalty - 1.5);
   }
 
-  return 0;
+  return Number((penalty * lessForeshadowingFactor).toFixed(2));
 }
 
 function weightedDistance(distance, forcedDistance) {
@@ -1495,10 +1523,10 @@ function enumerateRoutes(tileMap, start, goal, options = {}) {
         continue;
       }
 
-      const actionPenalty = getActionPenalty(action);
+      const actionPenalty = getActionPenalty(action, options);
       const reversePenalty = action.id === "BACK" ? 2.5 : 0;
       const heavyMovePenalty = action.id === "FORWARD_2" ? 1.5 : action.id === "FORWARD_3" ? 3 : 0;
-      const scarceReusePenalty = getScarceActionReusePenalty(current.actionHistory, action.id, options);
+      const scarceReusePenalty = getCardAvailabilityPressure(current.actionHistory, action.id, options);
       const conveyorComplexity = scoreConveyorComplexity({
         transitions: [transition]
       }, goal);
@@ -2424,6 +2452,17 @@ export function analyzeCourse(tileMap, starts, goal, options = {}) {
         maxExpansions: options.maxExpansions,
         recoveryRule: options.recoveryRule,
         lessDeadlyGame: options.lessDeadlyGame,
+        moreDeadlyGame: options.moreDeadlyGame,
+        lighterGame: options.lighterGame,
+        upgradeWorld: options.upgradeWorld,
+        lessSpammyGame: options.lessSpammyGame,
+        criticalSpam: options.criticalSpam,
+        criticalHaywire: options.criticalHaywire,
+        permanentShutdown: options.permanentShutdown,
+        cuttingFloor: options.cuttingFloor,
+        flamingOil: options.flamingOil,
+        repulsorOverdrive: options.repulsorOverdrive,
+        playerCount,
         rebootTokens,
         boardRects: options.boardRects
       }).map((route) => ({
@@ -2452,7 +2491,7 @@ export function analyzeCourse(tileMap, starts, goal, options = {}) {
   let actionMean = average(activeReachable.map((item) => item.bestActions));
   let actionStdDev = stdDev(activeReachable.map((item) => item.bestActions));
 
-  for (let pass = 0; pass < 4; pass += 1) {
+  for (let pass = 0; pass < OUTLIER_REEVALUATION_PASSES; pass += 1) {
     selectAndScoreStartAnalyses(tileMap, startAnalyses, goal, playerCount, activeIndices, options);
 
     activeReachable = reachable.filter((item) => activeIndices.has(item.index));
@@ -2473,7 +2512,7 @@ export function analyzeCourse(tileMap, starts, goal, options = {}) {
         const minActionGap = item.bestActions - minActions;
         const scoreOutlier = scoreGap > scoreThreshold;
         const actionOutlier = actionGap > actionThreshold;
-        const severeActionGap = minActionGap >= 4;
+        const severeActionGap = minActionGap >= OUTLIER_MIN_ACTION_GAP;
         const flagged = scoreOutlier || (actionOutlier && severeActionGap);
 
         if (flagged) {
@@ -2485,7 +2524,8 @@ export function analyzeCourse(tileMap, starts, goal, options = {}) {
             scoreThreshold: Number(scoreThreshold.toFixed(2)),
             actionGap: Number(actionGap.toFixed(2)),
             actionThreshold: Number(actionThreshold.toFixed(2)),
-            minActionGap: Number(minActionGap.toFixed(2))
+            minActionGap: Number(minActionGap.toFixed(2)),
+            minActionThreshold: OUTLIER_MIN_ACTION_GAP
           });
         }
 
@@ -2504,6 +2544,11 @@ export function analyzeCourse(tileMap, starts, goal, options = {}) {
       .map((item) => item.index)
       .filter((index) => !outlierSet.has(index)));
   }
+
+  activeIndices = new Set(reachable
+    .map((item) => item.index)
+    .filter((index) => !outlierSet.has(index)));
+  selectAndScoreStartAnalyses(tileMap, startAnalyses, goal, playerCount, activeIndices, options);
 
   const finalSummary = summarizeFirstLegAnalyses(tileMap, startAnalyses, goal, flags, playerCount, options, outlierSet, outlierDiagnostics);
 
@@ -2564,6 +2609,17 @@ export function analyzeFlagLeg(tileMap, from, goal, options = {}) {
       maxExpansions: options.maxExpansions,
       recoveryRule: options.recoveryRule,
       lessDeadlyGame: options.lessDeadlyGame,
+      moreDeadlyGame: options.moreDeadlyGame,
+      lighterGame: options.lighterGame,
+      upgradeWorld: options.upgradeWorld,
+      lessSpammyGame: options.lessSpammyGame,
+      criticalSpam: options.criticalSpam,
+      criticalHaywire: options.criticalHaywire,
+      permanentShutdown: options.permanentShutdown,
+      cuttingFloor: options.cuttingFloor,
+      flamingOil: options.flamingOil,
+      repulsorOverdrive: options.repulsorOverdrive,
+      playerCount: options.playerCount,
       rebootTokens: options.rebootTokens,
       boardRects: options.boardRects
     });

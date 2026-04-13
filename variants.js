@@ -11,24 +11,24 @@ const VARIANT_COMPLEXITY = {
   lessSpammyGame: 1,
   criticalSpam: 1,
   criticalHaywire: 1,
-  permanentShutdown: 0,
+  permanentShutdown: 1,
   lessDeadlyGame: 1,
   moreDeadlyGame: 1,
   cuttingFloor: 1,
   flamingOil: 1,
-  repulsorOverdrive: 0,
+  repulsorOverdrive: 1,
   setToKill: 1,
-  setToStun: 0,
+  setToStun: 1,
   classicSharedDeck: 3,
   dynamicArchiving: 1,
   hazardousFlags: 2,
   movingTargets: 2,
   lessForeshadowing: 1,
-  extraDocks: 0,
+  extraDocks: 1,
   factoryRejects: 1,
-  startupSpinUp: 0,
-  competitiveMode: 0,
-  staggeredBoards: 0
+  startupSpinUp: 1,
+  competitiveMode: 1,
+  staggeredBoards: 1
 };
 
 const VARIANT_CATEGORIES = {
@@ -77,6 +77,11 @@ const VARIANT_DEFINITION_ROWS = [
     description: "Activating batteries and chop shops also draws an upgrade card.",
     cost: VARIANT_COMPLEXITY.upgradeWorld,
     incompatibleWith: ["lighterGame"],
+    availability: {
+      type: "featureTypesAnyAvailable",
+      featureTypes: ["battery", "chopShop"],
+      reason: "Requires batteries or chop shops in the selected sets."
+    },
     applyBundle: applyBooleanField("upgradeWorld")
   },
   {
@@ -150,6 +155,11 @@ const VARIANT_DEFINITION_ROWS = [
     defaultState: "off",
     description: "All board lasers deal double damage.",
     cost: VARIANT_COMPLEXITY.cuttingFloor,
+    availability: {
+      type: "featureTypeAvailable",
+      featureType: "laser",
+      reason: "Requires board lasers in the selected sets."
+    },
     applyBundle: applyBooleanField("cuttingFloor")
   },
   {
@@ -163,7 +173,7 @@ const VARIANT_DEFINITION_ROWS = [
     availability: {
       type: "featureTypeAvailable",
       featureType: "oil",
-      reason: "Requires oil slicks in the selected sets to be set to Must."
+      reason: "Requires oil slicks in the selected sets."
     },
     applyBundle: applyBooleanField("flamingOil")
   },
@@ -178,7 +188,7 @@ const VARIANT_DEFINITION_ROWS = [
     availability: {
       type: "featureTypeAvailable",
       featureType: "repulsor",
-      reason: "Requires repulsor fields in the selected sets to be set to Must."
+      reason: "Requires repulsor fields in the selected sets."
     },
     applyBundle: applyBooleanField("repulsorOverdrive")
   },

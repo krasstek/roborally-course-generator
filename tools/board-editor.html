@@ -423,9 +423,9 @@
 
         <p class="small-note">
           Click a tile to add the selected feature. Most same-type tile features
-          replace earlier ones on that tile. Walls, ledges, repulsors, and lasers
-          can still accumulate. Use “Erase feature” to remove only the selected
-          type, or “Erase tile” to wipe the tile entirely.
+          replace earlier ones on that tile. Walls, ledges, repulsors, lasers,
+          and ramps can still accumulate. Use “Erase feature” to remove only the
+          selected type, or “Erase tile” to wipe the tile entirely.
         </p>
       </div>
 
@@ -823,7 +823,7 @@
       const exists = tile.features.some(f => sameFeature(f, normalizedFeature));
       if (exists) return;
 
-      const sameTypeStacks = new Set(["wall", "ledge", "repulsor", "laser"]);
+      const sameTypeStacks = new Set(["wall", "ledge", "repulsor", "laser", "ramp"]);
       if (!sameTypeStacks.has(normalizedFeature.type)) {
         tile.features = tile.features.filter(f => f.type !== normalizedFeature.type);
       }

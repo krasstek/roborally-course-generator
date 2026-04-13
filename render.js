@@ -1059,7 +1059,8 @@ function drawStarts(
   unusableStartIndices = new Set(),
   showFacing = true,
   visibleFeatureTypes = null,
-  showAllStartMarkers = false
+  showAllStartMarkers = false,
+  startLabels = []
 ) {
   if (visibleFeatureTypes && !visibleFeatureTypes.has("start")) {
     return;
@@ -1090,10 +1091,16 @@ function drawStarts(
       ctx.stroke();
     }
 
-    if (showAllStartMarkers && !unusableStartIndices.has(index)) {
+    const startLabel = startLabels[index] ?? (showAllStartMarkers ? "S" : "");
+
+    if (startLabel) {
       ctx.fillStyle = "#ffffff";
       ctx.font = "bold 12px sans-serif";
-      ctx.fillText("S", badgeLeft + badgeSize * 0.32, badgeTop + badgeSize * 0.67);
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(String(startLabel), badgeLeft + badgeSize / 2, badgeTop + badgeSize / 2 + 0.5);
+      ctx.textAlign = "start";
+      ctx.textBaseline = "alphabetic";
     }
 
     if (showFacing) {
@@ -1380,6 +1387,7 @@ export function render(canvas, pieces, imageMap = {}, options = {}) {
   const showFootprints = options.showFootprints ?? true;
   const showFeatureIcons = options.showFeatureIcons ?? false;
   const showAllStartMarkers = options.showAllStartMarkers ?? (showFeatureIcons || !showPieceImages);
+  const startLabels = options.startLabels ?? [];
   const edgeOutlineColor = options.edgeOutlineColor ?? null;
   const visibleFeatureTypes = options.visibleFeatureTypes
     ? new Set(options.visibleFeatureTypes)
@@ -1417,7 +1425,8 @@ export function render(canvas, pieces, imageMap = {}, options = {}) {
     unusableStartIndices,
     showStartFacing,
     visibleFeatureTypes,
-    showAllStartMarkers
+    showAllStartMarkers,
+    startLabels
   );
   drawRebootTokens(ctx, options.rebootTokens || [], bounds, tileSize, margin);
   drawRoutes(ctx, options.analysis, bounds, tileSize, margin);
