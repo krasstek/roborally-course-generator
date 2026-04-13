@@ -468,9 +468,9 @@
       "features": [
         {
           "type": "belt",
-          "dir": "E",
+          "dir": "S",
           "speed": 1,
-          "turn": "left"
+          "turn": "right"
         },
         {
           "type": "wall",
@@ -965,11 +965,6 @@
       "x": 0,
       "y": 7,
       "features": [
-        {
-          "type": "laser",
-          "dir": "W",
-          "damage": 2
-        },
         {
           "type": "laser",
           "dir": "W",
@@ -1581,7 +1576,7 @@
       "features": [
         {
           "type": "belt",
-          "dir": "W",
+          "dir": "E",
           "speed": 1,
           "turn": "right"
         }
