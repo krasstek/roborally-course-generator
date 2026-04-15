@@ -1,0 +1,256 @@
+{
+  "id": "toasted",
+  "name": "Toasted (A)",
+  "kind": "small",
+  "width": 6,
+  "height": 6,
+  "mergeMode": "base",
+  "starts": [],
+  "tiles": [
+    {
+      "x": 1,
+      "y": 0,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "SE",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 0,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "NE",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 1,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "NW",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 1,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "SE",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 1,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "cw"
+        },
+        {
+          "type": "laser",
+          "dir": "NE",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 1,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "SW",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 2,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "ccw"
+        },
+        {
+          "type": "laser",
+          "dir": "NW",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 2,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "NE",
+          "damage": 1
+        },
+        {
+          "type": "battery"
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 2,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "SE",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 2,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "SW",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 3,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "NE",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 3,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "NW",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 3,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "SW",
+          "damage": 1
+        },
+        {
+          "type": "battery"
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 3,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "ccw"
+        },
+        {
+          "type": "laser",
+          "dir": "SE",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 0,
+      "y": 4,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "NE",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 4,
+      "features": [
+        {
+          "type": "gear",
+          "rotation": "cw"
+        },
+        {
+          "type": "laser",
+          "dir": "SW",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 3,
+      "y": 4,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "NW",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 5,
+      "y": 4,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "SE",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 5,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "SW",
+          "damage": 1
+        }
+      ]
+    },
+    {
+      "x": 4,
+      "y": 5,
+      "features": [
+        {
+          "type": "laser",
+          "dir": "NW",
+          "damage": 1
+        }
+      ]
+    }
+  ],
+  "expansionId": "rr-dice",
+  "physicalBoardId": "confusion-toasted",
+  "image": "./assets/boards/toasted.jpg"
+}

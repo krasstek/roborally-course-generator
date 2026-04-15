@@ -2533,9 +2533,11 @@ export function analyzeCourse(tileMap, starts, goal, options = {}) {
       })
       .map((item) => item.index));
     
-    const minActiveStarts = playerCount;
+const minActiveStarts = playerCount;
 const currentActiveCount = activeReachable.length;
-const maxNewDrops = Math.max(0, currentActiveCount - minActiveStarts);
+const alreadyDroppedCount = reachable.length - currentActiveCount;
+const maxTotalDrops = Math.max(0, reachable.length - minActiveStarts);
+const remainingDropBudget = Math.max(0, maxTotalDrops - alreadyDroppedCount);
 
 const candidateNewOutliers = activeReachable
   .filter((item) => passOutlierSet.has(item.index) && !outlierSet.has(item.index))
@@ -2548,10 +2550,18 @@ const candidateNewOutliers = activeReachable
       Math.max(0, right.bestActions - actionMean) * 2;
     return rightSeverity - leftSeverity;
   })
-  .slice(0, maxNewDrops)
+  .slice(0, remainingDropBudget)
   .map((item) => item.index);
 
 const nextOutlierSet = new Set([...outlierSet, ...candidateNewOutliers]);
+
+const nextActiveCount = reachable.filter((item) => !nextOutlierSet.has(item.index)).length;
+if (nextActiveCount < playerCount) {
+  throw new Error(
+    `Outlier pruning dropped too many starts: ` +
+    `${nextActiveCount} active for ${playerCount} players.`
+  );
+}
 
     if (sameSet(nextOutlierSet, outlierSet)) {
       outlierSet = nextOutlierSet;

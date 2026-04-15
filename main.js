@@ -143,10 +143,12 @@ const PIECE_DATA_FILES = [
   "coliseum",
   "coming-and-going",
   "concentric",
+  "confusion",
   "convergence",
   "docking-bay-a",
   "docking-bay-b",
   "double-helix",
+  "double-zap",
   "doubles",
   "energize",
   "fireball-factory",
@@ -162,6 +164,7 @@ const PIECE_DATA_FILES = [
   "locked",
   "meeple",
   "mergers",
+  "merry-go-round",
   "mb-docking-bay-a",
   "mb-docking-bay-b",
   "mb-tile-1a",
@@ -202,19 +205,24 @@ const PIECE_DATA_FILES = [
   "portal-palace",
   "pushy",
   "sampler",
+  "spin-class",
   "sidewinder",
   "steps",
   "stop-and-go",
   "straight-a-ways",
+  "styx",
   "tabula-rasa",
   "tempest",
+  "the-abyss",
   "the-h",
   "the-keep",
   "the-o-ring",
   "the-oval",
+  "the-pits",
   "the-wave",
   "the-x",
   "the-zone",
+  "toasted",
   "transition",
   "trench-run",
   "vacancy",
@@ -624,7 +632,8 @@ function formatExpansionName(expansionId) {
     "thrills-and-spills": "Thrills & Spills",
     "master-builder": "Master Builder",
     "wet-and-wild": "Wet & Wild",
-    "chaos-and-carnage": "Chaos & Carnage"
+    "chaos-and-carnage": "Chaos & Carnage",
+    "rr-dice": "Robo Rally Dice"
   };
 
   return labels[expansionId] ?? titleCaseWords(expansionId);
@@ -2087,6 +2096,9 @@ function updateExpansionSummary() {
   if (document.getElementById("expansion-roborally").checked) {
     enabled.push(formatExpansionName("roborally"));
   }
+  if (document.getElementById("expansion-rr-dice").checked) {
+    enabled.push(formatExpansionName("rr-dice"));
+  }
   if (document.getElementById("expansion-30th-anniversary").checked) {
     enabled.push(formatExpansionName("30th-anniversary"));
   }
@@ -2832,6 +2844,7 @@ function getPreferencesFromControls() {
     length: document.getElementById("length").value,
     selectedExpansions: {
       roborally: document.getElementById("expansion-roborally").checked,
+      "rr-dice": document.getElementById("expansion-rr-dice").checked,
       "30th-anniversary": document.getElementById("expansion-30th-anniversary").checked,
       "master-builder": document.getElementById("expansion-master-builder").checked,
       "thrills-and-spills": document.getElementById("expansion-thrills-and-spills").checked,
@@ -2853,6 +2866,7 @@ function applyPreferencesToControls(preferences) {
   document.getElementById("difficulty").value = preferences.difficulty ?? "any";
   document.getElementById("length").value = preferences.length ?? "any";
   document.getElementById("expansion-roborally").checked = preferences.selectedExpansions?.roborally ?? true;
+  document.getElementById("expansion-rr-dice").checked = preferences.selectedExpansions?.["rr-dice"] ?? false;
   document.getElementById("expansion-30th-anniversary").checked = preferences.selectedExpansions?.["30th-anniversary"] ?? false;
   document.getElementById("expansion-master-builder").checked = preferences.selectedExpansions?.["master-builder"] ?? false;
   document.getElementById("expansion-thrills-and-spills").checked = preferences.selectedExpansions?.["thrills-and-spills"] ?? false;
@@ -8343,6 +8357,10 @@ document.getElementById("expansion-roborally").addEventListener("change", () => 
 });
 
 document.getElementById("expansion-30th-anniversary").addEventListener("change", () => {
+  updateExpansionSummary();
+});
+
+document.getElementById("expansion-rr-dice").addEventListener("change", () => {
   updateExpansionSummary();
 });
 
