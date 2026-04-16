@@ -19,7 +19,7 @@ const VARIANT_COMPLEXITY = {
   repulsorOverdrive: 1,
   setToKill: 1,
   setToStun: 1,
-  classicSharedDeck: 3,
+  classicSharedDeck: 2,
   dynamicArchiving: 1,
   hazardousFlags: 2,
   movingTargets: 2,

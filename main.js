@@ -94,6 +94,7 @@ const MIN_SHARED_EDGE = 5;
 const DOCK_BRIDGE_GAP = 3;
 const MAX_DOCK_COUNT = 2;
 const OUTLIER_MIN_ACTION_GAP = 4;
+const START_CAPACITY_HARD_FAILURES = new Set(["usable-starts", "reachable-starts"]);
 const OVERLAY_UPDATE_INTERVAL = 4;
 const BOARD_SELECTION_FALLBACK_ATTEMPT = 12;
 const BOARD_PROFILE_HAZARD_DENSITY_THRESHOLD = 0.16;
@@ -5663,7 +5664,7 @@ function createBoardPlacements(pieceMap, lengthPreference, preferences, guidance
 
   if (!shouldForceFilteredSubset) {
     for (let attempt = 0; attempt < 24; attempt += 1) {
-      const candidateBoardIds = sampleMany(mainBoardIds, boardCount);
+      const candidateBoardIds = sampleDistinctBoardFaces(mainBoardIds, boardCount, pieceMap);
       if (candidateBoardIds.length !== boardCount) {
         continue;
       }
@@ -5944,14 +5945,6 @@ function buildDockSummaries(boardPlacements, dockPlacements, pieceMap) {
   }));
 }
 
-function filterDockPlacementsWithReachableStarts(dockPlacements, startAnalyses, pieceMap) {
-  return dockPlacements.filter((dockPlacement) => (
-    (startAnalyses || []).some((startAnalysis) => (
-      startAnalysis.reachable && pointOnPlacement(startAnalysis.start, dockPlacement, pieceMap)
-    ))
-  ));
-}
-
 function getRouteAnalysisVariantOptions(options = {}) {
   return {
     lessDeadlyGame: options.lessDeadlyGame,
@@ -6132,6 +6125,9 @@ function adjustStartOutliersForCourseLength(firstLeg, totalLength, tileMap, play
     if (activeReachable.length < 2) {
       break;
     }
+    if (activeReachable.length <= playerCount) {
+      break;
+    }
 
     const firstLegLength = currentFirstLeg.summary.lengthScore || 0;
     const safeTotalLength = Math.max(totalLength || 0, firstLegLength || 1);
@@ -6155,6 +6151,14 @@ function adjustStartOutliersForCourseLength(firstLeg, totalLength, tileMap, play
     const scoreThreshold = Math.max(8, scoreStdDev * 1.6) * thresholdScale;
     const actionThreshold = Math.max(2, actionStdDev * 1.05) * thresholdScale;
     const nextOutlierSet = new Set(outlierSet);
+    const reachableCount = currentFirstLeg.starts.filter((item) => item.reachable && item.selectedRoute).length;
+    const alreadyDroppedCount = reachableCount - activeReachable.length;
+    const maxTotalDrops = Math.max(0, reachableCount - playerCount);
+    const remainingDropBudget = Math.max(0, maxTotalDrops - alreadyDroppedCount);
+    if (remainingDropBudget <= 0) {
+      break;
+    }
+    const candidateNewOutliers = [];
 
     activeReachable.forEach((item) => {
       const scoreGap = Math.abs(item.adjustedScore - scoreMean);
@@ -6168,23 +6172,34 @@ function adjustStartOutliersForCourseLength(firstLeg, totalLength, tileMap, play
         return;
       }
 
-      nextOutlierSet.add(item.index);
-      outlierDiagnostics.set(item.index, {
-        scoreOutlier,
-        actionOutlier,
-        severeActionGap,
-        scoreGap: Number(scoreGap.toFixed(2)),
-        scoreThreshold: Number(scoreThreshold.toFixed(2)),
-        actionGap: Number(actionGap.toFixed(2)),
-        actionThreshold: Number(actionThreshold.toFixed(2)),
-        minActionGap: Number(minActionGap.toFixed(2)),
-        minActionThreshold: OUTLIER_MIN_ACTION_GAP,
-        totalCourseLength: Number(safeTotalLength.toFixed(2)),
-        firstLegShare: Number(firstLegShare.toFixed(2)),
-        thresholdScale: Number(thresholdScale.toFixed(2)),
-        outlierPass: pass + 1
+      candidateNewOutliers.push({
+        index: item.index,
+        severity: scoreGap + Math.max(0, actionGap) * 2,
+        diagnostics: {
+          scoreOutlier,
+          actionOutlier,
+          severeActionGap,
+          scoreGap: Number(scoreGap.toFixed(2)),
+          scoreThreshold: Number(scoreThreshold.toFixed(2)),
+          actionGap: Number(actionGap.toFixed(2)),
+          actionThreshold: Number(actionThreshold.toFixed(2)),
+          minActionGap: Number(minActionGap.toFixed(2)),
+          minActionThreshold: OUTLIER_MIN_ACTION_GAP,
+          totalCourseLength: Number(safeTotalLength.toFixed(2)),
+          firstLegShare: Number(firstLegShare.toFixed(2)),
+          thresholdScale: Number(thresholdScale.toFixed(2)),
+          outlierPass: pass + 1
+        }
       });
     });
+
+    candidateNewOutliers
+      .sort((left, right) => right.severity - left.severity)
+      .slice(0, remainingDropBudget)
+      .forEach((item) => {
+        nextOutlierSet.add(item.index);
+        outlierDiagnostics.set(item.index, item.diagnostics);
+      });
 
     if (setsEqual(nextOutlierSet, outlierSet)) {
       break;
@@ -6225,6 +6240,10 @@ function computeUsableStarts(firstLeg, preferences = {}) {
 
   const outlierSet = new Set(firstLeg.summary.outliers.map((item) => item.index));
   return firstLeg.starts.filter((startAnalysis) => startAnalysis.reachable && !outlierSet.has(startAnalysis.index));
+}
+
+function hasStartCapacityHardFailure(scenario) {
+  return (scenario?.metrics?.hardFailures || []).some((failure) => START_CAPACITY_HARD_FAILURES.has(failure));
 }
 
 function computeCompetitiveBlockImpact(firstLeg, playerCount = 4) {
@@ -6378,6 +6397,45 @@ function collectTrackedRouteTileKeys(sequence, usableStarts = []) {
   });
 
   return keys;
+}
+
+function placementTouchesTrackedRoute(placement, pieceMap, routeTileKeys) {
+  const piece = pieceMap[placement.pieceId];
+  if (!piece || !routeTileKeys?.size) {
+    return false;
+  }
+
+  return getPlacementOccupiedOffsets(piece, placement.rotation ?? 0).some(({ x, y }) => (
+    routeTileKeys.has(`${placement.x + x},${placement.y + y}`)
+  ));
+}
+
+function pruneUnusedDockPlacements(dockPlacements, pieceMap, sequence, usableStarts, checkpoints) {
+  if ((dockPlacements?.length ?? 0) <= 1) {
+    return {
+      dockPlacements,
+      pruned: false
+    };
+  }
+
+  const routeTileKeys = collectTrackedRouteTileKeys(sequence, usableStarts);
+  const keptDockPlacements = dockPlacements.filter((dockPlacement) => (
+    usableStarts.some((startAnalysis) => pointOnPlacement(startAnalysis.start, dockPlacement, pieceMap)) ||
+    checkpoints.some((checkpoint) => pointOnPlacement(checkpoint, dockPlacement, pieceMap)) ||
+    placementTouchesTrackedRoute(dockPlacement, pieceMap, routeTileKeys)
+  ));
+
+  if (!keptDockPlacements.length) {
+    return {
+      dockPlacements,
+      pruned: false
+    };
+  }
+
+  return {
+    dockPlacements: keptDockPlacements,
+    pruned: keptDockPlacements.length !== dockPlacements.length
+  };
 }
 
 function overlayTouchesTrackedPlay(overlayPlacement, pieceMap, routeTileKeys, checkpoints = [], radius = 2) {
@@ -6663,6 +6721,10 @@ function computeBoardHarshness(boardPlacements = [], pieceMap = {}) {
   };
 }
 
+function getSharedDeckPlayerPressure(playerCount = 4) {
+  return clamp(((playerCount || 4) - 2) / 4, 0, 1);
+}
+
 function applyVariantDifficultyModifiers(raw, preferences = {}, boardHarshness = null) {
   let adjusted = raw;
   const harshness = boardHarshness ?? computeBoardHarshness();
@@ -6692,7 +6754,12 @@ function applyVariantDifficultyModifiers(raw, preferences = {}, boardHarshness =
     adjusted += Math.min(8, countFeatureTypeInTileMap(preferences.goalTileMap, "oil") * 0.38);
   }
   if (preferences.classicSharedDeck) {
-    adjusted *= 1.11 + harshness.normalized * 0.11;
+    const sharedDeckPressure = getSharedDeckPlayerPressure(preferences.playerCount);
+    adjusted *= (
+      1.04 +
+      sharedDeckPressure * 0.07 +
+      harshness.normalized * (0.04 + sharedDeckPressure * 0.07)
+    );
   }
   if (preferences.factoryRejects) {
     adjusted *= 1.06;
@@ -6731,6 +6798,13 @@ function getCompetitiveModeDifficultyBonus(fairnessStdDev = 0) {
   return Number(Math.max(0.5, 3 - (fairnessStdDev - 16) * 0.3).toFixed(2));
 }
 
+function computeDifficultyLengthLoad(totalDifficulty = 0, flagCount = 0) {
+  const baselineDifficulty = Math.max(75, flagCount * 55);
+  const baselineLoad = Math.min(totalDifficulty, baselineDifficulty) * 0.025;
+  const pressureLoad = Math.min(Math.max(0, totalDifficulty - baselineDifficulty), 260) * 0.075;
+  return Number((baselineLoad + pressureLoad).toFixed(2));
+}
+
 function computeLengthMetrics(sequence, flagCount, playerCount, boardCount, preferences = {}, boardHarshness = null) {
   const first = sequence.firstLeg.summary;
   const later = sequence.legs.slice(1);
@@ -6743,34 +6817,50 @@ function computeLengthMetrics(sequence, flagCount, playerCount, boardCount, pref
   const distanceLoad = totalRouteDistance * 0.75;
   const congestionLoad = totalCongestion * 0.12;
   const flagAreaLoad = first.flagAreaScore * 0.08;
-  const difficultyLoad = sequence.summary.totalDifficulty * 0.03;
+  const difficultyLoad = computeDifficultyLengthLoad(sequence.summary.totalDifficulty, flagCount);
   const movingTargetLoad = preferences.movingTargetStats?.lengthBonus ?? 0;
   const routeLoad = actionLoad + distanceLoad;
   const frictionLoad = congestionLoad + flagAreaLoad + difficultyLoad + movingTargetLoad;
   const harshness = boardHarshness ?? computeBoardHarshness();
+  let compactnessRaw = Number((checkpointLoad + playerLoad + routeLoad + congestionLoad + flagAreaLoad + movingTargetLoad).toFixed(2));
   let raw = Number((checkpointLoad + playerLoad + routeLoad + frictionLoad).toFixed(2));
 
   if (preferences.lighterGame) {
+    compactnessRaw = Number((compactnessRaw * 0.89).toFixed(2));
     raw = Number((raw * 0.89).toFixed(2));
   }
   if (preferences.lessSpammyGame) {
+    compactnessRaw = Number((compactnessRaw * 0.97).toFixed(2));
     raw = Number((raw * 0.97).toFixed(2));
   }
   if (preferences.criticalSpam) {
-    raw = Number((raw * (1.015 + harshness.normalized * 0.015)).toFixed(2));
+    const multiplier = 1.015 + harshness.normalized * 0.015;
+    compactnessRaw = Number((compactnessRaw * multiplier).toFixed(2));
+    raw = Number((raw * multiplier).toFixed(2));
   }
   if (preferences.criticalHaywire) {
-    raw = Number((raw * (1.015 + harshness.normalized * 0.02)).toFixed(2));
+    const multiplier = 1.015 + harshness.normalized * 0.02;
+    compactnessRaw = Number((compactnessRaw * multiplier).toFixed(2));
+    raw = Number((raw * multiplier).toFixed(2));
   }
   if (preferences.lessForeshadowing) {
+    compactnessRaw = Number((compactnessRaw * 1.04).toFixed(2));
     raw = Number((raw * 1.04).toFixed(2));
   }
   if (preferences.classicSharedDeck) {
-    raw = Number((raw * (1.03 + harshness.normalized * 0.05)).toFixed(2));
+    const sharedDeckPressure = getSharedDeckPlayerPressure(playerCount);
+    const multiplier = (
+      1.01 +
+      sharedDeckPressure * 0.02 +
+      harshness.normalized * (0.015 + sharedDeckPressure * 0.035)
+    );
+    compactnessRaw = Number((compactnessRaw * multiplier).toFixed(2));
+    raw = Number((raw * multiplier).toFixed(2));
   }
 
   return {
     raw,
+    compactnessRaw,
     inputs: {
       flagCount,
       playerCount: playerCount || 4,
@@ -6804,6 +6894,10 @@ function bandDistance(value, band, thresholds) {
   if (value < low) return low - value;
   if (value >= high) return value - high;
   return 0;
+}
+
+function shouldUseCompactLengthFit(preferences = {}) {
+  return preferences.length === "short" && getTuningDifficulty(preferences.difficulty) === "hard";
 }
 
 function getMovingTargetVolatilityPenalty(stats = {}, fairnessStdDev = 0, preferences = {}) {
@@ -6856,12 +6950,15 @@ function classifyCandidate(sequence, preferences, context = {}) {
     boardHarshness
   );
   const lengthRaw = lengthMetrics.raw;
+  const lengthFitRaw = shouldUseCompactLengthFit(preferences)
+    ? lengthMetrics.compactnessRaw
+    : lengthRaw;
 
   const difficultyThresholds = getDifficultyThresholds();
   const lengthThresholds = getLengthThresholds();
 
   const hardFailures = [];
-  if (lengthRaw < MIN_LENGTH_RAW) {
+  if (lengthFitRaw < MIN_LENGTH_RAW) {
     hardFailures.push("too-short");
   }
   if (usableStarts.length < preferences.playerCount) {
@@ -6901,7 +6998,7 @@ function classifyCandidate(sequence, preferences, context = {}) {
   }
 
   const difficultyFit = bandDistance(difficultyRaw, preferences.difficulty, difficultyThresholds);
-  const lengthFit = bandDistance(lengthRaw, preferences.length, lengthThresholds);
+  const lengthFit = bandDistance(lengthFitRaw, preferences.length, lengthThresholds);
   const difficultyDirection = preferences.difficulty === "any"
     ? "matched"
     : difficultyRaw < difficultyThresholds[preferences.difficulty][0]
@@ -6911,9 +7008,9 @@ function classifyCandidate(sequence, preferences, context = {}) {
         : "matched";
   const lengthDirection = preferences.length === "any"
     ? "matched"
-    : lengthRaw < lengthThresholds[preferences.length][0]
+    : lengthFitRaw < lengthThresholds[preferences.length][0]
       ? "low"
-      : lengthRaw >= lengthThresholds[preferences.length][1]
+      : lengthFitRaw >= lengthThresholds[preferences.length][1]
         ? "high"
         : "matched";
   const fairnessPenalty = preferences.competitiveMode
@@ -6944,6 +7041,7 @@ function classifyCandidate(sequence, preferences, context = {}) {
     usableStarts,
     difficultyRaw,
     lengthRaw,
+    lengthFitRaw,
     difficultyFit,
     difficultyDirection,
     lengthMetrics,
@@ -7625,13 +7723,19 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         boardRects: scenarioBoardRects
       }, effectiveVariantBundle));
 
-      const prunedDockPlacements = filterDockPlacementsWithReachableStarts(scenarioDockPlacements, sequence.firstLeg.starts, pieceMap);
-      if (prunedDockPlacements.length && prunedDockPlacements.length !== scenarioDockPlacements.length) {
-        scenarioDockPlacements = prunedDockPlacements;
+      const usableStarts = computeUsableStarts(sequence.firstLeg, { competitiveMode });
+      const prunedDocks = pruneUnusedDockPlacements(
+        scenarioDockPlacements,
+        pieceMap,
+        sequence,
+        usableStarts,
+        checkpoints
+      );
+      if (prunedDocks.pruned) {
+        scenarioDockPlacements = prunedDocks.dockPlacements;
         continue;
       }
 
-      const usableStarts = computeUsableStarts(sequence.firstLeg, { competitiveMode });
       const prunedBoards = pruneUnusedBoardPlacements(
         scenarioBoardPlacements,
         scenarioOverlayPlacements,
@@ -7757,7 +7861,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       }
     }, effectiveVariantBundle);
 
-    if (!bestScenario || scenario.metrics.fitScore < bestScenario.metrics.fitScore) {
+    if (!hasStartCapacityHardFailure(scenario) && (!bestScenario || scenario.metrics.fitScore < bestScenario.metrics.fitScore)) {
       bestScenario = scenario;
       staleRetries = 0;
     } else {
@@ -8048,7 +8152,7 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
 
     scenario.attempts = attempt;
 
-    if (!bestScenario || scenario.metrics.fitScore < bestScenario.metrics.fitScore) {
+    if (!hasStartCapacityHardFailure(scenario) && (!bestScenario || scenario.metrics.fitScore < bestScenario.metrics.fitScore)) {
       bestScenario = scenario;
     }
 
