@@ -63,6 +63,7 @@ const PROGRAM_CARD_COUNTS = new Map([
   ["WAIT", 1]
 ]);
 const AGAIN_CARD_COUNT = 1;
+const AGAIN_USE_PENALTY = 11;
 const ROUTE_PATH_KEY_CACHE = new WeakMap();
 const ROUTE_TILE_SET_CACHE = new WeakMap();
 const ROUTE_EDGE_SET_CACHE = new WeakMap();
@@ -72,8 +73,26 @@ const ROUTE_SIMILARITY_CACHE = new Map();
 const OVERLAP_PENALTY_CACHE = new Map();
 const LATERAL_THREAT_CACHE = new Map();
 const REAR_THREAT_CACHE = new Map();
+const ROUTE_PAIR_CACHE_LIMIT = 2500;
 const OUTLIER_REEVALUATION_PASSES = 3;
 const OUTLIER_MIN_ACTION_GAP = 4;
+
+function setBoundedCacheValue(cache, key, value, limit = ROUTE_PAIR_CACHE_LIMIT) {
+  if (cache.has(key)) {
+    cache.delete(key);
+  } else if (cache.size >= limit) {
+    cache.delete(cache.keys().next().value);
+  }
+
+  cache.set(key, value);
+}
+
+export function clearAnalysisCaches() {
+  ROUTE_SIMILARITY_CACHE.clear();
+  OVERLAP_PENALTY_CACHE.clear();
+  LATERAL_THREAT_CACHE.clear();
+  REAR_THREAT_CACHE.clear();
+}
 
 function tileKey(x, y) {
   return `${x},${y}`;
@@ -650,6 +669,7 @@ function moveOneStep(tileMap, state, dir, mode, options = {}, moveBudget = null)
             distance,
             forcedDistance,
             spentMove: true,
+            repulsed: true,
             rampAscent: false
           };
         }
@@ -671,6 +691,7 @@ function moveOneStep(tileMap, state, dir, mode, options = {}, moveBudget = null)
         distance,
         forcedDistance,
         spentMove: true,
+        repulsed: true,
         rampAscent: false
       };
     }
@@ -1217,6 +1238,9 @@ export function simulateAction(tileMap, startState, action, options = {}) {
       state.x = step.state.x;
       state.y = step.state.y;
       state.facing = step.state.facing;
+      if (step.repulsed) {
+        break;
+      }
       remainingSteps -= 1 + (step.rampAscent ? 1 : 0);
     }
     }
@@ -1355,6 +1379,18 @@ function countAction(actions, actionId) {
   return actions.filter((id) => id === actionId).length;
 }
 
+function countImmediateRepeats(actions) {
+  let count = 0;
+
+  for (let index = 1; index < actions.length; index += 1) {
+    if (actions[index] === actions[index - 1]) {
+      count += 1;
+    }
+  }
+
+  return count;
+}
+
 function getCardAvailabilityPressure(history, actionId, options = {}) {
   const cardCount = PROGRAM_CARD_COUNTS.get(actionId);
   if (!cardCount) {
@@ -1366,23 +1402,32 @@ function getCardAvailabilityPressure(history, actionId, options = {}) {
   const registerCopies = countAction(registerWindow, actionId);
   const handCopies = countAction(handWindow, actionId);
   const previousActionId = history.at(-1);
-  const immediateAgainCopy = previousActionId === actionId ? AGAIN_CARD_COUNT : 0;
+  const usesAgain = previousActionId === actionId;
+  const immediateAgainCopy = usesAgain ? AGAIN_CARD_COUNT : 0;
   const registerCapacity = cardCount + immediateAgainCopy;
   const handCapacity = cardCount + AGAIN_CARD_COUNT;
   const repeatCopies = Math.max(0, handCopies - 1);
   const registerOveruse = Math.max(0, registerCopies - registerCapacity);
   const handOveruse = Math.max(0, handCopies - handCapacity);
+  const registerAgainOveruse = Math.max(0, countImmediateRepeats(registerWindow) - AGAIN_CARD_COUNT);
+  const handAgainOveruse = Math.max(0, countImmediateRepeats(handWindow) - AGAIN_CARD_COUNT);
   const lessForeshadowingFactor = options.lessForeshadowing ? 0.72 : 1;
   let penalty = 0;
 
+  if (usesAgain) {
+    penalty += AGAIN_USE_PENALTY;
+  }
+
   if (cardCount === 1 && repeatCopies > 0) {
-    penalty += previousActionId === actionId ? 4.5 : 11;
+    penalty += usesAgain ? 0 : 11;
   } else if (cardCount === 3 && repeatCopies > 1) {
     penalty += (repeatCopies - 1) * 1.8;
   }
 
   penalty += registerOveruse * 16;
   penalty += handOveruse * 7;
+  penalty += registerAgainOveruse * 16;
+  penalty += handAgainOveruse * 7;
 
   if (actionId === "WAIT" && !options.lighterGame && previousActionId !== actionId) {
     penalty = Math.max(0, penalty - 1.5);
@@ -1436,7 +1481,9 @@ function routeTouchesPit(tileMap, route) {
 function scoreRoute(route, goal) {
   const goalReached = route.finalState.x === goal.x && route.finalState.y === goal.y;
   const conveyorComplexity = scoreConveyorComplexity(route, goal);
-  const score = route.actions * 5 + weightedDistance(route.distance, route.forcedDistance) + route.hazard + route.rebootPenalty + conveyorComplexity;
+  const score = Number.isFinite(route.baseCost)
+    ? route.baseCost
+    : route.actions * 5 + weightedDistance(route.distance, route.forcedDistance) + route.hazard + route.rebootPenalty + conveyorComplexity;
   const rebootCount = route.transitions.filter((transition) => transition.rebooted).length;
 
   return {
@@ -1847,7 +1894,7 @@ function lateralThreatPenalty(tileMap, routeA, routeB, options = {}) {
   }
 
   const rounded = Number(penalty.toFixed(2));
-  LATERAL_THREAT_CACHE.set(cacheKey, rounded);
+  setBoundedCacheValue(LATERAL_THREAT_CACHE, cacheKey, rounded);
   return rounded;
 }
 
@@ -1899,7 +1946,7 @@ function rearThreatPenalty(tileMap, routeA, routeB, options = {}) {
   }
 
   const rounded = Number(penalty.toFixed(2));
-  REAR_THREAT_CACHE.set(cacheKey, rounded);
+  setBoundedCacheValue(REAR_THREAT_CACHE, cacheKey, rounded);
   return rounded;
 }
 
@@ -1950,7 +1997,7 @@ function overlapPenalty(routeA, routeB, goal) {
   }
 
   const rounded = Number(penalty.toFixed(2));
-  OVERLAP_PENALTY_CACHE.set(cacheKey, rounded);
+  setBoundedCacheValue(OVERLAP_PENALTY_CACHE, cacheKey, rounded);
   return rounded;
 }
 
@@ -1994,7 +2041,7 @@ function routeSimilarity(routeA, routeB, goal) {
   const edgeScore = edgeUnion ? sharedEdges / edgeUnion : 0;
 
   const similarity = (tileScore * 0.65) + (edgeScore * 0.35);
-  ROUTE_SIMILARITY_CACHE.set(cacheKey, similarity);
+  setBoundedCacheValue(ROUTE_SIMILARITY_CACHE, cacheKey, similarity);
   return similarity;
 }
 

@@ -404,7 +404,8 @@ export function applyVariantGenerationOptions(baseOptions = {}, variantBundle = 
     alignedLayout: variantBundle.alignedLayout ?? baseOptions.alignedLayout,
     actFast: Boolean(variantBundle.actFast),
     competitiveMode: Boolean(variantBundle.competitiveMode),
-    extraDocks: Boolean(variantBundle.extraDocks)
+    extraDocks: Boolean(variantBundle.extraDocks),
+    recoveryRule: variantBundle.recoveryRule ?? baseOptions.recoveryRule
   };
 }
 

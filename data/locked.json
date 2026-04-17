@@ -96,7 +96,7 @@
         },
         {
           "type": "portal",
-          "id": "4"
+          "id": "locked-4"
         }
       ]
     },
@@ -305,7 +305,7 @@
       "features": [
         {
           "type": "portal",
-          "id": "3"
+          "id": "locked-3"
         }
       ]
     },
@@ -480,7 +480,7 @@
       "features": [
         {
           "type": "portal",
-          "id": "1"
+          "id": "locked-1"
         }
       ]
     },
@@ -517,7 +517,7 @@
       "features": [
         {
           "type": "portal",
-          "id": "4"
+          "id": "locked-4"
         }
       ]
     },
@@ -789,7 +789,7 @@
       "features": [
         {
           "type": "portal",
-          "id": "2"
+          "id": "locked-2"
         }
       ]
     },
@@ -826,7 +826,7 @@
       "features": [
         {
           "type": "portal",
-          "id": "3"
+          "id": "locked-3"
         }
       ]
     },
@@ -1162,7 +1162,7 @@
       "features": [
         {
           "type": "portal",
-          "id": "1"
+          "id": "locked-1"
         }
       ]
     },
@@ -1242,7 +1242,7 @@
       "features": [
         {
           "type": "portal",
-          "id": "2"
+          "id": "locked-2"
         }
       ]
     },

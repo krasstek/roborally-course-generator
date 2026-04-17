@@ -45,7 +45,7 @@
       "features": [
         {
           "type": "portal",
-          "id": "1"
+          "id": "sampler-1"
         }
       ]
     },
@@ -357,7 +357,7 @@
       "features": [
         {
           "type": "portal",
-          "id": "1"
+          "id": "sampler-1"
         },
         {
           "type": "ledge",

@@ -1,4 +1,4 @@
-const APP_VERSION = "20260416122230";
+const APP_VERSION = "20260417110029";
 const STATIC_CACHE = `roborally-static-${APP_VERSION}`;
 const RUNTIME_CACHE = `roborally-runtime-${APP_VERSION}`;
 
@@ -121,72 +121,8 @@ const DATA_ASSETS = [
   "winding"
 ].map((name) => `./data/${name}.json?v=${APP_VERSION}`);
 
-const BOARD_IMAGES = [
-  "all-roads.jpeg",
-  "assembly.jpg",
-  "black-gold.jpg",
-  "blueprint.jpeg",
-  "cactus.jpeg",
-  "chasm.jpg",
-  "circles.jpg",
-  "circuit-trap.jpeg",
-  "coliseum.jpg",
-  "coming-and-going.jpeg",
-  "concentric.JPG",
-  "confusion.jpg",
-  "convergence.jpg",
-  "docking-bay-a.jpeg",
-  "docking-bay-b.jpg",
-  "double-helix.JPG",
-  "double-zap.jpg",
-  "doubles.jpg",
-  "energize.jpeg",
-  "falling.JPG",
-  "fireball-factory.jpg",
-  "flood-zone.jpg",
-  "gauntlet-of-fire.jpeg",
-  "gear-box.jpg",
-  "in-and-out.jpeg",
-  "labyrinth.jpg",
-  "laser-maze.jpeg",
-  "links.jpg",
-  "locked.jpg",
-  "mb-docking-bay-a.jpeg",
-  "mb-docking-bay-b.jpeg",
-  "meeple.jpg",
-  "mergers.jpg",
-  "merry-go-round.jpg",
-  "misdirection.jpeg",
-  "portal-palace.jpeg",
-  "pushy.jpg",
-  "sampler.JPG",
-  "sidewinder.jpeg",
-  "spin-class.jpg",
-  "steps.jpeg",
-  "stop-and-go.jpg",
-  "straight-a-ways.JPG",
-  "styx.jpg",
-  "tabula-rasa.jpg",
-  "tempest.jpeg",
-  "the-abyss.jpg",
-  "the-h.jpeg",
-  "the-keep.jpeg",
-  "the-o-ring.jpg",
-  "the-oval.jpg",
-  "the-pits.jpg",
-  "the-wave.jpeg",
-  "the-x.jpg",
-  "the-zone.jpg",
-  "toasted.jpg",
-  "transition.jpg",
-  "trench-run.jpg",
-  "vacancy.JPG",
-  "water-park.jpeg",
-  "whirlpool.jpeg",
-  "winding.jpeg"
-].map((name) => `./assets/boards/${name}?v=${APP_VERSION}`);
-
-const PRECACHE_URLS = [...CORE_ASSETS, ...DATA_ASSETS, ...BOARD_IMAGES];
+const PRECACHE_URLS = [...CORE_ASSETS, ...DATA_ASSETS];
+const RUNTIME_CACHE_LIMIT = 80;
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -250,10 +186,21 @@ async function staleWhileRevalidate(request, cacheName) {
     .then((response) => {
       if (response.ok) {
         cache.put(request, response.clone());
+        trimCache(cacheName, RUNTIME_CACHE_LIMIT).catch(() => null);
       }
       return response;
     })
     .catch(() => null);
 
   return cached || networkPromise || fetch(request);
+}
+
+async function trimCache(cacheName, maxEntries) {
+  const cache = await caches.open(cacheName);
+  const keys = await cache.keys();
+  if (keys.length <= maxEntries) {
+    return;
+  }
+
+  await Promise.all(keys.slice(0, keys.length - maxEntries).map((request) => cache.delete(request)));
 }

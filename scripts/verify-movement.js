@@ -119,8 +119,41 @@ function runCase(testCase) {
   return { pass, actual, expected, result };
 }
 
+function runSequenceCase(testCase) {
+  const tileMap = buildTileMap(testCase.tiles);
+  const portalMap = new Map();
+  let state = testCase.start;
+  const transitions = [];
+
+  for (const action of testCase.actions) {
+    const result = simulateAction(tileMap, state, action, {
+      ...(testCase.options ?? {}),
+      portalMap
+    });
+    transitions.push(result);
+    state = result.to;
+  }
+
+  const actual = {
+    x: state.x,
+    y: state.y,
+    facing: state.facing,
+    path: transitions.flatMap((transition) => transition.traversed.map((point) => `${point.x},${point.y}`))
+  };
+
+  const expected = testCase.expected;
+  const pass = actual.x === expected.x &&
+    actual.y === expected.y &&
+    actual.facing === expected.facing &&
+    JSON.stringify(actual.path) === JSON.stringify(expected.path);
+
+  return { pass, actual, expected, transitions };
+}
+
 const WAIT = { id: "WAIT", type: "wait" };
 const FORWARD = { id: "FORWARD", type: "move", relative: "forward", steps: 1 };
+const BACK = { id: "BACK", type: "move", relative: "back", steps: 1 };
+const FORWARD_3 = { id: "FORWARD_3", type: "move", relative: "forward", steps: 3 };
 
 const cases = [
   {
@@ -134,6 +167,16 @@ const cases = [
     expected: { x: 1, y: 0, facing: "W", turnedSteps: 1 }
   },
   {
+    name: "left bend does not rotate when carried off the bend",
+    tiles: [
+      belt(0, 0, "N", 1, "left"),
+      tile(0, -1)
+    ],
+    start: { x: 0, y: 0, facing: "N" },
+    action: WAIT,
+    expected: { x: 0, y: -1, facing: "N", turnedSteps: 0 }
+  },
+  {
     name: "left turn does not rotate when entering from belt-relative right side",
     tiles: [
       belt(2, 0, "W"),
@@ -142,6 +185,17 @@ const cases = [
     start: { x: 2, y: 0, facing: "N" },
     action: WAIT,
     expected: { x: 1, y: 0, facing: "N", turnedSteps: 0 }
+  },
+  {
+    name: "fast conveyor through a right bend rotates on bend entry",
+    tiles: [
+      belt(0, 0, "W", 2),
+      belt(-1, 0, "N", 2, "right"),
+      tile(-1, -1)
+    ],
+    start: { x: 0, y: 0, facing: "W" },
+    action: WAIT,
+    expected: { x: -1, y: -1, facing: "N", turnedSteps: 1 }
   },
   {
     name: "both turn rotates clockwise from belt-relative right side",
@@ -163,6 +217,57 @@ const cases = [
     start: { x: 0, y: 0, facing: "E" },
     action: FORWARD,
     expected: { x: 1, y: 0, facing: "E", turnedSteps: 0 }
+  },
+  {
+    name: "manual movement resolves before conveyor phases",
+    tiles: [
+      tile(-1, 0),
+      belt(0, 0, "E"),
+      tile(1, 0)
+    ],
+    start: { x: -1, y: 0, facing: "E" },
+    action: FORWARD,
+    expected: { x: 1, y: 0, facing: "E", turnedSteps: 0 }
+  },
+  {
+    name: "fast conveyor resolves before regular conveyor",
+    tiles: [
+      belt(0, 0, "E", 2),
+      belt(1, 0, "E"),
+      tile(2, 0)
+    ],
+    start: { x: 0, y: 0, facing: "N" },
+    action: WAIT,
+    expected: { x: 2, y: 0, facing: "N", turnedSteps: 0 }
+  },
+  {
+    name: "water conveyor resolves after regular non-water conveyor phase",
+    tiles: [
+      tile(0, 0, [
+        { type: "belt", dir: "E", speed: 1 },
+        { type: "water" }
+      ]),
+      belt(1, 0, "E"),
+      tile(2, 0)
+    ],
+    start: { x: 0, y: 0, facing: "N" },
+    action: WAIT,
+    expected: { x: 1, y: 0, facing: "N", turnedSteps: 0 }
+  },
+  {
+    name: "backup onto right bend exits along bend direction without exit rotation",
+    tiles: [
+      tile(0, 0),
+      belt(-1, 0, "W"),
+      belt(-2, 0, "N", 1, "right"),
+      tile(-2, 1, [
+        { type: "belt", dir: "E", speed: 1, turn: "right" }
+      ]),
+      tile(-1, 1)
+    ],
+    start: { x: -2, y: 0, facing: "N" },
+    action: BACK,
+    expected: { x: -1, y: 1, facing: "N", turnedSteps: 0 }
   },
   {
     name: "belt without turn does not rotate on corner entry",
@@ -230,6 +335,23 @@ const cases = [
     start: { x: 0, y: 0, facing: "E" },
     action: FORWARD,
     expected: { x: -1, y: 0, facing: "E", turnedSteps: 0 }
+  },
+  {
+    name: "repulsor consumes remaining multi-step movement after bounce",
+    tiles: [
+      tile(-3, 0),
+      tile(-2, 0),
+      tile(-1, 0),
+      tile(0, 0),
+      {
+        x: 1,
+        y: 0,
+        features: [{ type: "repulsor", sides: ["W"] }]
+      }
+    ],
+    start: { x: 0, y: 0, facing: "E" },
+    action: FORWARD_3,
+    expected: { x: -3, y: 0, facing: "E", turnedSteps: 0 }
   },
   {
     name: "pushes still trigger repulsors",
@@ -308,6 +430,27 @@ const cases = [
   }
 ];
 
+const sequenceCases = [
+  {
+    name: "west conveyor turn then backup onto east-exiting bend does not continue south",
+    tiles: [
+      tile(2, 1),
+      belt(1, 1, "W"),
+      belt(0, 1, "N", 1, "right"),
+      belt(0, 2, "E", 1, "right"),
+      belt(1, 2, "N")
+    ],
+    start: { x: 2, y: 1, facing: "W" },
+    actions: [FORWARD, BACK],
+    expected: {
+      x: 1,
+      y: 2,
+      facing: "N",
+      path: ["1,1", "0,1", "0,2", "1,2"]
+    }
+  }
+];
+
 let failures = 0;
 
 for (const testCase of cases) {
@@ -324,9 +467,23 @@ for (const testCase of cases) {
   console.error(`  actual:   ${JSON.stringify(outcome.actual)}`);
 }
 
+for (const testCase of sequenceCases) {
+  const outcome = runSequenceCase(testCase);
+
+  if (outcome.pass) {
+    console.log(`PASS ${testCase.name}`);
+    continue;
+  }
+
+  failures += 1;
+  console.error(`FAIL ${testCase.name}`);
+  console.error(`  expected: ${JSON.stringify(outcome.expected)}`);
+  console.error(`  actual:   ${JSON.stringify(outcome.actual)}`);
+}
+
 if (failures > 0) {
   process.exitCode = 1;
   console.error(`\n${failures} movement verification case(s) failed.`);
 } else {
-  console.log(`\nAll ${cases.length} movement verification cases passed.`);
+  console.log(`\nAll ${cases.length + sequenceCases.length} movement verification cases passed.`);
 }
