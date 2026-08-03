@@ -147,9 +147,9 @@
       "features": [
         {
           "type": "belt",
-          "dir": "E",
+          "dir": "W",
           "speed": 2,
-          "turn": "right"
+          "turn": "left"
         }
       ]
     },
