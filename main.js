@@ -256,6 +256,12 @@ let courseExplanationState = {
   scenarioRef: null,
   manualOpen: null
 };
+let routeInspectionState = {
+  legIndex: null,
+  routeId: null,
+  kind: null,
+  key: null
+};
 let lastRenderDiagnostics = {
   blankFallbackTriggered: false
 };
@@ -763,6 +769,20 @@ function summarizeFeature(feature) {
   return formatFeatureLabel(feature);
 }
 
+function appendAuditReadoutLine(readout, text, options = {}) {
+  const line = document.createElement("div");
+
+  if (options.strong) {
+    const strong = document.createElement("strong");
+    strong.textContent = text;
+    line.append(strong);
+  } else {
+    line.textContent = text;
+  }
+
+  readout.append(line);
+}
+
 function buildAuditFeatureFilterLabel(feature) {
   const fragment = document.createDocumentFragment();
   const text = document.createElement("span");
@@ -1048,13 +1068,16 @@ function drawAuditRenderHover(canvas, piece, hoverTile = null) {
 function updateAuditReadout(assets) {
   const readout = document.getElementById("audit-readout");
   const piece = getAuditPiece(assets);
+  readout.replaceChildren();
+
   if (!piece) {
-    readout.innerHTML = "<strong>Tile Readout</strong>Select a board to inspect.";
+    appendAuditReadoutLine(readout, "Tile Readout", { strong: true });
+    appendAuditReadoutLine(readout, "Select a board to inspect.");
     return;
   }
 
   const lines = [
-    `<strong>${piece.name}</strong>`,
+    piece.name,
     `${piece.width}x${piece.height} tiles`,
     `${formatExpansionName(piece.expansionId ?? "unknown")}`
   ];
@@ -1081,7 +1104,9 @@ function updateAuditReadout(assets) {
     lines.push("Hover a tile in either pane to inspect its encoding.");
   }
 
-  readout.innerHTML = lines.map((line) => `<div>${line}</div>`).join("");
+  lines.forEach((line, index) => {
+    appendAuditReadoutLine(readout, line, { strong: index === 0 });
+  });
 }
 
 function renderBoardAudit(assets) {
@@ -1359,7 +1384,7 @@ function updateSetupSummary(scenario) {
     fitNoteEl.classList.add("hidden");
   }
 
-  const explanationHtml = buildCourseExplanationHtml(scenario, noteParts);
+  const explanationHtml = buildCourseExplanationHtml(scenario, noteParts) + buildCourseDiagnosticsHtml(scenario, noteParts);
   const autoOpenExplanation = noteParts.length > 0;
   const explanationVisible = courseExplanationState.manualOpen ?? autoOpenExplanation;
   explanationCopyEl.innerHTML = explanationHtml;
@@ -1940,6 +1965,83 @@ function describeLengthDrivers(scenario, lengthBand, contributionEntries, length
   }
 
   return uniqueReasons(reasons, 3);
+}
+
+
+function formatDiagnosticNumber(value) {
+  return Number.isFinite(value) ? Number(value.toFixed(1)) : "n/a";
+}
+
+function getLegDifficultyValue(leg) {
+  if (leg.analysis.summary.difficultyScore !== undefined) {
+    return leg.analysis.summary.difficultyScore;
+  }
+
+  return (leg.analysis.summary.averageRouteScore || 0) +
+    (leg.analysis.summary.congestionScore || 0) -
+    (leg.analysis.summary.diversityScore || 0) * 0.2;
+}
+
+function getLegLengthValue(leg) {
+  if (leg.analysis.summary.lengthScore !== undefined) {
+    return leg.analysis.summary.lengthScore;
+  }
+
+  return leg.analysis.summary.averageRouteDistance || 0;
+}
+
+function formatLegLabel(leg) {
+  return leg.from === "dock" ? "Dock -> 1" : `${leg.from} -> ${leg.to}`;
+}
+
+function buildCourseDiagnosticsHtml(scenario, noteParts = []) {
+  if (!scenario?.sequence?.legs?.length) {
+    return "";
+  }
+
+  const hardest = scenario.sequence.legs
+    .map((leg) => ({ leg, value: getLegDifficultyValue(leg) }))
+    .sort((left, right) => right.value - left.value)[0];
+  const longest = scenario.sequence.legs
+    .map((leg) => ({ leg, value: getLegLengthValue(leg) }))
+    .sort((left, right) => right.value - left.value)[0];
+  const dangerous = scenario.checkpoints
+    .map((checkpoint, index) => ({
+      index,
+      checkpoint,
+      value: scoreFlagArea(scenario.goalTileMap, checkpoint, {
+        playerCount: scenario.playerCount,
+        ...getRouteAnalysisVariantOptions(scenario.preferences)
+      })
+    }))
+    .sort((left, right) => right.value - left.value)[0];
+  const discardedStarts = scenario.sequence.firstLeg.summary.outliers || [];
+  const fitParts = [];
+  if (scenario.preferences.difficulty !== "any") {
+    fitParts.push(scenario.metrics.difficultyFit === 0
+      ? "difficulty matched"
+      : `${scenario.metrics.difficultyDirection === "low" ? "too easy" : "too hard"} by ${formatDiagnosticNumber(scenario.metrics.difficultyFit)}`);
+  }
+  if (scenario.preferences.length !== "any") {
+    fitParts.push(scenario.metrics.lengthFit === 0
+      ? "length matched"
+      : `${scenario.metrics.lengthDirection === "low" ? "too short" : "too long"} by ${formatDiagnosticNumber(scenario.metrics.lengthFit)}`);
+  }
+  if (!fitParts.length) {
+    fitParts.push("no target bands requested");
+  }
+
+  const diagnostics = [
+    ["Hardest leg", `${formatLegLabel(hardest.leg)} (${formatDiagnosticNumber(hardest.value)})`],
+    ["Longest leg", `${formatLegLabel(longest.leg)} (${formatDiagnosticNumber(longest.value)})`],
+    ["Checkpoint risk", dangerous ? `#${dangerous.index + 1} (${formatDiagnosticNumber(dangerous.value)})` : "n/a"],
+    ["Discarded starts", discardedStarts.length ? discardedStarts.map((item) => `#${item.index + 1}`).join(", ") : "none"],
+    ["Fit", fitParts.join("; ")]
+  ];
+
+  return `\n<div class="diagnostics-grid">${diagnostics.map(([label, value]) => (
+    `<div class="diagnostic-line"><span class="diagnostic-label">${escapeHtml(label)}</span><span class="diagnostic-value">${escapeHtml(value)}</span></div>`
+  )).join("")}</div>`;
 }
 
 function buildCourseExplanationHtml(scenario, noteParts = []) {
@@ -4777,7 +4879,15 @@ function getConveyorPredecessors(tileMap, point) {
   return predecessors;
 }
 
-function pointStartsClosedConveyorLoop(tileMap, point) {
+function getMovingTraceStepLimit(tileMap, options = {}) {
+  if (Number.isFinite(options.maxTraceSteps)) {
+    return Math.max(1, options.maxTraceSteps);
+  }
+
+  return Math.min(180, Math.max(48, tileMap?.size ?? 48));
+}
+
+function pointStartsClosedConveyorLoop(tileMap, point, options = {}) {
   if (!tileMap) {
     return false;
   }
@@ -4792,7 +4902,9 @@ function pointStartsClosedConveyorLoop(tileMap, point) {
   const visited = new Set();
   let current = { x: point.x, y: point.y };
 
-  for (let step = 0; step < 24; step += 1) {
+  const maxTraceSteps = getMovingTraceStepLimit(tileMap, options);
+
+  for (let step = 0; step < maxTraceSteps; step += 1) {
     const key = `${current.x},${current.y}`;
     if (visited.has(key)) {
       return key === startKey;
@@ -4823,12 +4935,13 @@ function getMovingCheckpointTrace(tileMap, point, cache = null, options = {}) {
     };
   }
 
-  const cacheKey = `${point.x},${point.y}`;
+  const maxTraceSteps = getMovingTraceStepLimit(tileMap, options);
+  const cacheKey = `${point.x},${point.y}:${maxTraceSteps}`;
   if (cache?.has(cacheKey)) {
     return cache.get(cacheKey);
   }
 
-  const startTile = tileMap.get(cacheKey);
+  const startTile = tileMap.get(`${point.x},${point.y}`);
   const startBelt = getTileBelt(startTile);
   if (!startBelt || !CARDINAL_DIRS[startBelt.dir]) {
     const result = {
@@ -4852,7 +4965,7 @@ function getMovingCheckpointTrace(tileMap, point, cache = null, options = {}) {
   let fastCount = 0;
   let hazardLoad = 0;
 
-  for (let step = 0; step < 24; step += 1) {
+  for (let step = 0; step < maxTraceSteps; step += 1) {
     const key = `${current.x},${current.y}`;
     if (visited.has(key)) {
       wraps = true;
@@ -4918,7 +5031,7 @@ function findMovingCheckpointReentryPoint(tileMap, point) {
     return { x: point.x, y: point.y };
   }
 
-  if (pointStartsClosedConveyorLoop(tileMap, point)) {
+  if (pointStartsClosedConveyorLoop(tileMap, point, { maxTraceSteps: getMovingTraceStepLimit(tileMap) })) {
     return { x: point.x, y: point.y };
   }
 
@@ -4999,17 +5112,17 @@ function summarizeMovingTargets(tileMap, checkpoints = [], options = {}) {
   }
 
   const difficultyBonus = Number((
-    active.length * 3.8 +
-    Math.max(0, totalPathLength - active.length) * 1.15 +
-    totalTurns * 0.8 +
-    fastSegments * 0.55 +
-    totalHazardLoad * 0.16
+    active.length * 1.6 +
+    Math.max(0, totalPathLength - active.length) * 0.42 +
+    totalTurns * 0.3 +
+    fastSegments * 0.22 +
+    totalHazardLoad * 0.08
   ).toFixed(2));
   const lengthBonus = Number((
-    active.length * 1.9 +
-    Math.max(0, totalPathLength - active.length) * 0.72 +
-    totalTurns * 0.35 +
-    wrapCount * 0.45
+    active.length * 0.75 +
+    Math.max(0, totalPathLength - active.length) * 0.25 +
+    totalTurns * 0.14 +
+    wrapCount * 0.2
   ).toFixed(2));
 
   return {
@@ -5023,6 +5136,91 @@ function summarizeMovingTargets(tileMap, checkpoints = [], options = {}) {
     difficultyBonus,
     lengthBonus
   };
+}
+
+function moveCheckpointOneConveyorStep(tileMap, point, eligibleSpeed, reentry) {
+  const tile = tileMap?.get(`${point.x},${point.y}`);
+  const belt = getTileBelt(tile);
+  if (!belt || belt.speed !== eligibleSpeed || !CARDINAL_DIRS[belt.dir]) {
+    return { ...point };
+  }
+
+  const next = getConveyorSuccessor(tileMap, point);
+  if (!next) {
+    return { ...reentry };
+  }
+
+  return next;
+}
+
+function advanceMovingCheckpointRegister(tileMap, point, reentry) {
+  let current = { ...point };
+
+  for (let step = 0; step < 2; step += 1) {
+    const next = moveCheckpointOneConveyorStep(tileMap, current, 2, reentry);
+    if (next.x === current.x && next.y === current.y) {
+      break;
+    }
+    current = next;
+  }
+
+  current = moveCheckpointOneConveyorStep(tileMap, current, 1, reentry);
+  return current;
+}
+
+function buildMovingCheckpointTimeline(tileMap, checkpoint, id, options = {}) {
+  const trace = getMovingCheckpointTrace(tileMap, checkpoint, null, {
+    ...options,
+    maxTraceSteps: options.maxTraceSteps ?? getMovingTraceStepLimit(tileMap)
+  });
+  if (!trace.moving) {
+    return null;
+  }
+
+  const reentry = findMovingCheckpointReentryPoint(tileMap, checkpoint);
+  const reentryTrace = getMovingCheckpointTrace(tileMap, reentry, null, {
+    ...options,
+    maxTraceSteps: options.maxTraceSteps ?? getMovingTraceStepLimit(tileMap)
+  });
+  const maxActions = options.maxActions ?? 16;
+  const positions = [{ x: checkpoint.x, y: checkpoint.y }];
+  const seen = new Map([[`${checkpoint.x},${checkpoint.y}`, 0]]);
+  let current = { x: checkpoint.x, y: checkpoint.y };
+  let periodStart = null;
+  let periodLength = null;
+
+  for (let action = 1; action <= maxActions; action += 1) {
+    current = advanceMovingCheckpointRegister(tileMap, current, reentry);
+    positions.push({ x: current.x, y: current.y });
+    const key = `${current.x},${current.y}`;
+    if (seen.has(key)) {
+      periodStart = seen.get(key);
+      periodLength = action - periodStart;
+      break;
+    }
+    seen.set(key, action);
+  }
+
+  return {
+    id,
+    reentry,
+    positions,
+    displayPositions: reentryTrace.coverage?.length ? reentryTrace.coverage : trace.coverage?.length ? trace.coverage : positions,
+    periodStart: periodStart ?? Math.max(0, positions.length - 1),
+    periodLength: periodLength ?? 0,
+    maxActions,
+    trace
+  };
+}
+
+function buildMovingTargetTimelines(tileMap, checkpoints = [], enabled = false, options = {}) {
+  if (!enabled || !tileMap || !checkpoints.length) {
+    return [];
+  }
+
+  return checkpoints.map((checkpoint, index) => (
+    buildMovingCheckpointTimeline(tileMap, checkpoint, index + 1, options)
+  ));
 }
 
 function collectMovingTargetReentryMarkers(tileMap, checkpoints = [], enabled = false) {
@@ -6068,6 +6266,12 @@ function getRouteAnalysisVariantOptions(options = {}) {
 }
 
 function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) {
+  const movingTargetTimelines = options.movingTargetTimelines ?? buildMovingTargetTimelines(
+    tileMap,
+    flags,
+    options.movingTargets,
+    { maxActions: options.movingTargetMaxActions ?? 16 }
+  );
   const firstLeg = analyzeCourse(tileMap, starts, flags[0], {
     maxRoutes: 4,
     flags,
@@ -6076,7 +6280,8 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
     ...getRouteAnalysisVariantOptions(options),
     startupSpinUp: options.startupSpinUp,
     rebootTokens: options.rebootTokens,
-    boardRects: options.boardRects
+    boardRects: options.boardRects,
+    dynamicGoal: movingTargetTimelines[0] ?? null
   });
 
   const legs = [
@@ -6102,12 +6307,16 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
       routesPerFacing: 3,
       maxDistinctRoutes: 4,
       previousLegRoutes,
+      startStates: previousLegRoutes
+        .map((route) => route?.finalState)
+        .filter(Boolean),
       playerCount,
       maxExpansions: 18000,
       recoveryRule: options.recoveryRule,
       ...getRouteAnalysisVariantOptions(options),
       rebootTokens: options.rebootTokens,
-      boardRects: options.boardRects
+      boardRects: options.boardRects,
+      dynamicGoal: movingTargetTimelines[index] ?? null
     });
 
     legs.push({
@@ -6134,6 +6343,13 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
 
     return sum + leg.analysis.summary.averageRouteDistance;
   }, 0);
+  const totalActions = legs.reduce((sum, leg) => {
+    if (leg.analysis.summary.actionScore !== undefined) {
+      return sum + leg.analysis.summary.actionScore;
+    }
+
+    return sum + (leg.analysis.summary.averageRouteActions || 0);
+  }, 0);
   const courseAdjustedFirstLeg = options.competitiveMode
     ? {
       ...firstLeg,
@@ -6143,7 +6359,8 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
       }
     }
     : adjustStartOutliersForCourseLength(firstLeg, totalLength, tileMap, playerCount, {
-      ...getRouteAnalysisVariantOptions(options)
+      ...getRouteAnalysisVariantOptions(options),
+      totalActions
     });
 
   const adjustedLegs = [
@@ -6158,6 +6375,7 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
     starts,
     firstLeg: courseAdjustedFirstLeg,
     legs: adjustedLegs,
+    movingTargetTimelines,
     summary: {
       totalDifficulty: Number((
         adjustedLegs.reduce((sum, leg) => {
@@ -6236,15 +6454,23 @@ function adjustStartOutliersForCourseLength(firstLeg, totalLength, tileMap, play
     }
 
     const firstLegLength = currentFirstLeg.summary.lengthScore || 0;
+    const firstLegActions = currentFirstLeg.summary.actionScore || 0;
     const safeTotalLength = Math.max(totalLength || 0, firstLegLength || 1);
+    const safeTotalActions = Math.max(options.totalActions || 0, firstLegActions || 1);
     const firstLegShare = firstLegLength / safeTotalLength;
-    const shortCourseFactor = clamp((160 - safeTotalLength) / 80, 0, 1);
-    const longCourseFactor = clamp((safeTotalLength - 190) / 80, 0, 1);
+    const firstLegActionShare = firstLegActions / safeTotalActions;
+    const shortCourseFactor = clamp((24 - safeTotalActions) / 14, 0, 1);
+    const longCourseFactor = clamp((safeTotalActions - 34) / 18, 0, 1);
     const firstLegShareFactor = clamp((firstLegShare - 0.24) / 0.34, 0, 1);
+    const firstLegActionShareFactor = clamp((firstLegActionShare - 0.28) / 0.34, 0, 1);
     const thresholdScale = clamp(
-      1 - shortCourseFactor * 0.18 - firstLegShareFactor * 0.1 + longCourseFactor * 0.1,
-      0.78,
-      1.08
+      1 - shortCourseFactor * 0.34 - firstLegShareFactor * 0.1 - firstLegActionShareFactor * 0.16 + longCourseFactor * 0.14,
+      0.58,
+      1.12
+    );
+    const severeActionThreshold = Math.max(
+      2,
+      Math.round(OUTLIER_MIN_ACTION_GAP - shortCourseFactor * 2 - firstLegActionShareFactor)
     );
 
     const adjustedScores = activeReachable.map((item) => item.adjustedScore);
@@ -6272,7 +6498,7 @@ function adjustStartOutliersForCourseLength(firstLeg, totalLength, tileMap, play
       const minActionGap = item.bestActions - minActions;
       const scoreOutlier = scoreGap > scoreThreshold;
       const actionOutlier = actionGap > actionThreshold;
-      const severeActionGap = minActionGap >= OUTLIER_MIN_ACTION_GAP;
+      const severeActionGap = minActionGap >= severeActionThreshold;
 
       if (!scoreOutlier && !(actionOutlier && severeActionGap)) {
         return;
@@ -6290,9 +6516,11 @@ function adjustStartOutliersForCourseLength(firstLeg, totalLength, tileMap, play
           actionGap: Number(actionGap.toFixed(2)),
           actionThreshold: Number(actionThreshold.toFixed(2)),
           minActionGap: Number(minActionGap.toFixed(2)),
-          minActionThreshold: OUTLIER_MIN_ACTION_GAP,
+          minActionThreshold: severeActionThreshold,
           totalCourseLength: Number(safeTotalLength.toFixed(2)),
+          totalCourseActions: Number(safeTotalActions.toFixed(2)),
           firstLegShare: Number(firstLegShare.toFixed(2)),
+          firstLegActionShare: Number(firstLegActionShare.toFixed(2)),
           thresholdScale: Number(thresholdScale.toFixed(2)),
           outlierPass: pass + 1
         }
@@ -7031,12 +7259,12 @@ function getMovingTargetVolatilityPenalty(stats = {}, fairnessStdDev = 0, prefer
 
   const playerScale = Math.max(1, (preferences.playerCount ?? 4) / 4);
   const raw = (
-    stats.activeCount * 4.5 +
-    Math.max(0, stats.totalPathLength - stats.activeCount) * 0.95 +
-    stats.totalTurns * 0.8 +
-    stats.fastSegments * 0.7 +
-    stats.wrapCount * 1.2 +
-    Math.max(0, fairnessStdDev - 6) * 0.35
+    stats.activeCount * 2 +
+    Math.max(0, stats.totalPathLength - stats.activeCount) * 0.35 +
+    stats.totalTurns * 0.3 +
+    stats.fastSegments * 0.28 +
+    stats.wrapCount * 0.5 +
+    Math.max(0, fairnessStdDev - 6) * 0.16
   ) * playerScale;
 
   return Number(raw.toFixed(2));
@@ -7209,6 +7437,39 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     return parts.join("; ") || "reason unavailable";
   }
 
+  function describeMovingTargetHit(route) {
+    if (!route?.movingTarget || !route.hitTarget) {
+      return null;
+    }
+
+    const flagLabel = route.movingTarget.checkpointId ?? "?";
+    const spaceLabel = route.movingTarget.space ?? "?";
+    return `flag ${flagLabel} space ${spaceLabel} (${route.hitTarget.x},${route.hitTarget.y}) after ${route.actions} register${route.actions === 1 ? "" : "s"}`;
+  }
+
+  function describeLegMovingTargetHits(leg) {
+    if (leg.analysis.starts) {
+      return leg.analysis.starts
+        .map((startAnalysis) => {
+          const description = describeMovingTargetHit(startAnalysis.selectedRoute);
+          return description ? `start #${startAnalysis.index + 1} -> ${description}` : null;
+        })
+        .filter(Boolean);
+    }
+
+    return (leg.analysis.distinctRoutes || [])
+      .map((route, index) => {
+        const description = describeMovingTargetHit(route);
+        return description ? `route ${index + 1} -> ${description}` : null;
+      })
+      .filter(Boolean);
+  }
+
+  const movingTargetHitLines = scenario.sequence.legs
+    .flatMap((leg) => describeLegMovingTargetHits(leg).map((description) => (
+      `Leg ${leg.from} -> ${leg.to}: ${description}`
+    )));
+
   const lines = [
     `Requested: ${scenario.preferences.playerCount} players, ${formatDifficultyLabel(scenario.preferences.difficulty)} difficulty, ${formatLengthLabel(scenario.preferences.length)} length`,
     `Layout mode: ${scenario.preferences.alignedLayout ? "aligned" : "freeform"}`,
@@ -7256,6 +7517,9 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     scenario.movingTargetReentryMarkers?.length
       ? `Moving target re-entry: ${scenario.movingTargetReentryMarkers.map((marker) => `${marker.label}(${marker.x},${marker.y})`).join(", ")}`
       : "Moving target re-entry: none",
+    movingTargetHitLines.length
+      ? `Moving target hits: ${movingTargetHitLines.join("; ")}`
+      : "Moving target hits: none",
     `Fairness stddev: ${scenario.metrics.fairnessStdDev}`,
     `Course difficulty score: ${summary.difficultyScore}`,
     `Course length score: ${summary.lengthScore}`,
@@ -7273,6 +7537,9 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     summary.outliers.length
       ? `Outlier starts: ${summary.outliers.map((item) => `#${item.index + 1} (${item.delta > 0 ? "+" : ""}${item.delta}; ${formatOutlierReasons(item.reasons)})`).join(", ")}`
       : "Outlier starts: none",
+    summary.outliers.length
+      ? "Outlier adjusted scores are pass-context estimates from the pruning pass where the start was dropped; compare final adjusted scores only between usable starts."
+      : "",
     "",
     "Leg summaries:",
     ...scenario.sequence.legs.map((leg) => {
@@ -7299,8 +7566,9 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     const outlierReason = usable === "outlier"
       ? ` reason ${formatOutlierReasons(outlierReasonByIndex.get(startAnalysis.index))}`
       : "";
+    const adjustedLabel = usable === "outlier" ? "outlierEstimate" : "finalAdjusted";
     lines.push(
-      `Start #${startAnalysis.index + 1} ${usable} at (${startAnalysis.start.x}, ${startAnalysis.start.y}) route ${startAnalysis.selectedRouteIndex + 1}/${startAnalysis.routes.length} adjusted ${startAnalysis.adjustedScore} raw ${selected.score} traffic ${startAnalysis.trafficPenalty} overlap ${startAnalysis.overlapPenalty} lateral ${startAnalysis.lateralThreat} rear ${startAnalysis.rearThreat ?? 0} scale ${startAnalysis.trafficScale ?? 0} distance ${selected.distance} actions ${selected.actions} forced ${selected.forcedDistance} hazard ${selected.hazard}${outlierReason}`
+      `Start #${startAnalysis.index + 1} ${usable} at (${startAnalysis.start.x}, ${startAnalysis.start.y}) route ${startAnalysis.selectedRouteIndex + 1}/${startAnalysis.routes.length} ${adjustedLabel} ${startAnalysis.adjustedScore} raw ${selected.score} traffic ${startAnalysis.trafficPenalty} overlap ${startAnalysis.overlapPenalty} lateral ${startAnalysis.lateralThreat} rear ${startAnalysis.rearThreat ?? 0} scale ${startAnalysis.trafficScale ?? 0} distance ${selected.distance} actions ${selected.actions} forced ${selected.forcedDistance} hazard ${selected.hazard}${selected.movingTarget ? ` hit flag ${selected.movingTarget.checkpointId} space ${selected.movingTarget.space ?? "?"}` : ""}${outlierReason}`
     );
   }
 
@@ -7339,6 +7607,150 @@ function isDevViewEnabled() {
 
 function isOutlierRoutesEnabled() {
   return document.getElementById("show-outlier-routes")?.checked ?? false;
+}
+
+
+function getLegRouteEntries(scenario, legIndex, options = {}) {
+  const leg = scenario?.sequence?.legs?.[legIndex];
+  if (!leg) {
+    return [];
+  }
+
+  if (legIndex === 0) {
+    const outlierInfoByIndex = new Map((scenario.sequence.firstLeg.summary.outliers || []).map((item) => [item.index, item]));
+    return leg.analysis.starts
+      .filter((startAnalysis) => startAnalysis.routes?.length && startAnalysis.selectedRoute)
+      .filter((startAnalysis) => options.includeOutliers || !outlierInfoByIndex.has(startAnalysis.index))
+      .map((startAnalysis) => ({
+        id: `start:${startAnalysis.index}`,
+        label: `Start ${startAnalysis.index + 1}`,
+        route: startAnalysis.selectedRoute,
+        startAnalysis,
+        outlierInfo: outlierInfoByIndex.get(startAnalysis.index) ?? null
+      }));
+  }
+
+  return (leg.analysis.distinctRoutes || []).map((route, index) => ({
+    id: `route:${index}`,
+    label: `Route ${index + 1}`,
+    route,
+    routeIndex: index
+  }));
+}
+
+function getFocusedRouteEntry(scenario, legIndex) {
+  if (routeInspectionState.legIndex !== legIndex || !routeInspectionState.routeId) {
+    return null;
+  }
+
+  return getLegRouteEntries(scenario, legIndex, { includeOutliers: isOutlierRoutesEnabled() })
+    .find((entry) => entry.id === routeInspectionState.routeId) ?? null;
+}
+
+function formatRouteActions(route) {
+  const actions = (route?.transitions || []).map((transition) => transition.action).filter(Boolean);
+  return actions.length ? actions.join(" -> ") : "none";
+}
+
+function formatRouteDetail(entry) {
+  const route = entry?.route;
+  if (!route) {
+    return [];
+  }
+
+  const lines = [
+    `${entry.label}: ${route.actions} register${route.actions === 1 ? "" : "s"}, distance ${route.distance}, forced ${route.forcedDistance}, raw score ${route.score}`,
+    `Actions: ${formatRouteActions(route)}`
+  ];
+
+  if (route.hazard || route.rebootCount || route.conveyorComplexity) {
+    lines.push(`Pressure: hazard ${route.hazard}, conveyor ${route.conveyorComplexity}, reboots ${route.rebootCount}`);
+  }
+
+  if (route.movingTarget?.space && route.hitTarget) {
+    lines.push(`Moving target: flag ${route.movingTarget.checkpointId} space ${route.movingTarget.space} at (${route.hitTarget.x}, ${route.hitTarget.y})`);
+  }
+
+  if (entry.startAnalysis) {
+    const startStatus = entry.outlierInfo ? "outlier" : "usable";
+    const trafficPenalty = entry.startAnalysis.trafficPenalty ?? 0;
+    const adjustedLabel = entry.outlierInfo ? "Outlier pass estimate" : "Final adjusted score";
+    lines.push(`${adjustedLabel}: ${entry.startAnalysis.adjustedScore} (${startStatus}; raw ${route.score} + traffic ${trafficPenalty})`);
+    lines.push(`Traffic: overlap ${entry.startAnalysis.overlapPenalty}, lateral ${entry.startAnalysis.lateralThreat}, rear ${entry.startAnalysis.rearThreat ?? 0}`);
+    if (entry.outlierInfo) {
+      lines.push(`Not comparable with final usable-start adjusted scores; this was measured in the pruning pass where it dropped.`);
+      lines.push(`Outlier delta: score ${entry.outlierInfo.delta}, actions ${entry.outlierInfo.actionDelta}`);
+    }
+  }
+
+  return lines;
+}
+
+function getCheckpointInspectionLines(scenario, checkpointIndex) {
+  const checkpoint = scenario.checkpoints[checkpointIndex];
+  if (!checkpoint) {
+    return [];
+  }
+
+  const incomingLeg = scenario.sequence.legs[checkpointIndex];
+  const areaScore = scoreFlagArea(scenario.goalTileMap, checkpoint, {
+    playerCount: scenario.playerCount,
+    ...getRouteAnalysisVariantOptions(scenario.preferences)
+  });
+  const lines = [
+    `Checkpoint ${checkpointIndex + 1}: (${checkpoint.x}, ${checkpoint.y})`,
+    `Incoming leg: ${incomingLeg ? formatLegLabel(incomingLeg) : "n/a"}`,
+    `Area risk: ${areaScore}`
+  ];
+
+  if (incomingLeg?.analysis?.summary) {
+    const summary = incomingLeg.analysis.summary;
+    if (summary.difficultyScore !== undefined) {
+      lines.push(`Route profile: difficulty ${summary.difficultyScore}, length ${summary.lengthScore}, traffic ${summary.averageTrafficPenalty}`);
+    } else {
+      lines.push(`Route profile: ${summary.distinctRouteCount} distinct routes, average length ${summary.averageRouteDistance}, congestion ${summary.congestionScore}`);
+    }
+  }
+
+  const timeline = scenario.movingTargetTimelines?.[checkpointIndex];
+  if (timeline?.positions?.length > 1) {
+    lines.push(`Moving target: re-entry (${timeline.reentry.x}, ${timeline.reentry.y}), ${timeline.displayPositions?.length ?? timeline.positions.length} path spaces`);
+  }
+
+  return lines;
+}
+
+function updateInspectionDetail(scenario, selectedLegIndex) {
+  const detailEl = document.getElementById("inspection-detail");
+  if (!detailEl) {
+    return;
+  }
+
+  const visible = Boolean(scenario && isDevViewEnabled() && routeInspectionState.kind);
+  detailEl.classList.toggle("hidden", !visible);
+  detailEl.replaceChildren();
+  if (!visible) {
+    return;
+  }
+
+  const focused = selectedLegIndex === null ? null : getFocusedRouteEntry(scenario, selectedLegIndex);
+  const lines = routeInspectionState.kind === "start" && focused
+    ? formatRouteDetail(focused)
+    : routeInspectionState.kind === "checkpoint"
+      ? getCheckpointInspectionLines(scenario, Number(routeInspectionState.key))
+      : [];
+
+  lines.forEach((line, index) => {
+    const row = document.createElement("div");
+    if (index === 0) {
+      const strong = document.createElement("strong");
+      strong.textContent = line;
+      row.append(strong);
+    } else {
+      row.textContent = line;
+    }
+    detailEl.append(row);
+  });
 }
 
 function isBoardAuditEnabled() {
@@ -7412,6 +7824,91 @@ function drawCanvasFailureNotice(canvas, message) {
   ctx.fillText("Try rerolling. If it happens again, inspect the generated scenario.", 36, 152);
 }
 
+
+function getCanvasTileFromEvent(event) {
+  const canvas = document.getElementById("canvas");
+  const state = canvas?.__roborallyRenderState;
+  if (!canvas || !state) {
+    return null;
+  }
+
+  const rect = canvas.getBoundingClientRect();
+  if (!rect.width || !rect.height) {
+    return null;
+  }
+
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  const canvasX = (event.clientX - rect.left) * scaleX;
+  const canvasY = (event.clientY - rect.top) * scaleY;
+  const tileX = Math.floor((canvasX - state.margin) / state.tileSize) + state.bounds.minX;
+  const tileY = Math.floor((canvasY - state.margin) / state.tileSize) + state.bounds.minY;
+
+  if (tileX < state.bounds.minX || tileX > state.bounds.maxX || tileY < state.bounds.minY || tileY > state.bounds.maxY) {
+    return null;
+  }
+
+  return { x: tileX, y: tileY };
+}
+
+function getInspectableAtTile(scenario, tile) {
+  if (!scenario || !tile) {
+    return null;
+  }
+
+  const startAnalysis = scenario.sequence.firstLeg.starts.find((analysis) => (
+    analysis.start.x === tile.x && analysis.start.y === tile.y
+  ));
+  if (startAnalysis) {
+    return {
+      kind: "start",
+      key: String(startAnalysis.index),
+      legIndex: 0,
+      routeId: startAnalysis.selectedRoute ? `start:${startAnalysis.index}` : null
+    };
+  }
+
+  const checkpointIndex = scenario.checkpoints.findIndex((checkpoint) => (
+    checkpoint.x === tile.x && checkpoint.y === tile.y
+  ));
+  if (checkpointIndex >= 0) {
+    return {
+      kind: "checkpoint",
+      key: String(checkpointIndex),
+      legIndex: checkpointIndex,
+      routeId: null
+    };
+  }
+
+  return null;
+}
+
+function sameInspection(left, right) {
+  return Boolean(left && right && left.kind === right.kind && left.key === right.key);
+}
+
+function clearRouteInspection(options = {}) {
+  const legIndex = options.preserveLeg ? routeInspectionState.legIndex : null;
+  routeInspectionState = { legIndex, routeId: null, kind: null, key: null };
+  const legSelect = document.getElementById("leg-select");
+  if (legSelect) {
+    legSelect.value = legIndex === null ? "none" : String(legIndex);
+  }
+}
+
+function applyRouteInspection(inspection) {
+  const legSelect = document.getElementById("leg-select");
+  if (!inspection || sameInspection(routeInspectionState, inspection)) {
+    clearRouteInspection({ preserveLeg: true });
+    return;
+  }
+
+  routeInspectionState = inspection;
+  if (legSelect) {
+    legSelect.value = String(inspection.legIndex);
+  }
+}
+
 function getScenarioRenderState(scenario) {
   const legSelect = document.getElementById("leg-select");
   const devViewEnabled = isDevViewEnabled();
@@ -7429,16 +7926,24 @@ function getScenarioRenderState(scenario) {
     ? scenario.checkpoints[0]
     : scenario.checkpoints[selectedLegIndex === 0 ? 0 : selectedLegIndex];
   const outlierIndices = new Set((scenario.sequence.firstLeg.summary.outliers || []).map((item) => item.index));
+  const focusedRoute = selectedLegIndex === null ? null : getFocusedRouteEntry(scenario, selectedLegIndex);
   const renderAnalysis = selectedLegIndex === null
     ? null
-    : selectedLegIndex === 0
-      ? showOutlierRoutes
-        ? scenario.sequence.firstLeg
-        : {
+    : focusedRoute
+      ? selectedLegIndex === 0
+        ? {
           ...scenario.sequence.firstLeg,
-          starts: scenario.sequence.firstLeg.starts.filter((startAnalysis) => !outlierIndices.has(startAnalysis.index))
+          starts: focusedRoute.startAnalysis ? [focusedRoute.startAnalysis] : []
         }
-      : { routes: displayedLeg.analysis.distinctRoutes };
+        : { routes: [focusedRoute.route] }
+      : selectedLegIndex === 0
+        ? showOutlierRoutes
+          ? scenario.sequence.firstLeg
+          : {
+            ...scenario.sequence.firstLeg,
+            starts: scenario.sequence.firstLeg.starts.filter((startAnalysis) => !outlierIndices.has(startAnalysis.index))
+          }
+        : { routes: displayedLeg.analysis.distinctRoutes };
   const boardViewMode = getBoardViewMode();
   const iconBoardView = boardViewMode === BOARD_VIEW_MODES.icons;
   const unusableStartIndices = scenario.sequence.firstLeg.starts
@@ -7483,13 +7988,16 @@ function drawScenarioCanvas(scenario, options = {}) {
     analysis: renderAnalysis,
     goals: scenario.checkpoints,
     reentryMarkers: hasMovingTargetsEffect(scenario) ? scenario.movingTargetReentryMarkers : [],
+    movingTargetTimelines: hasMovingTargetsEffect(scenario) ? scenario.movingTargetTimelines : [],
+    showMovingTargetDetails: devViewEnabled,
+    showMovingTargetHits: devViewEnabled,
     starts: scenario.activeStarts,
     startLabels,
     rebootTokens: scenario.rebootTokens,
     tileMap: scenario.goalTileMap,
     unusableStartIndices,
     edgeOutlineColor: scenario.lessDeadlyGame ? "#f2c230" : null,
-    showBoardLabels: devViewEnabled && selectedLegIndex !== null && !iconBoardView,
+    showBoardLabels: false,
     showStartFacing: devViewEnabled && selectedLegIndex !== null,
     showAllStartMarkers: devViewEnabled,
     showWalls: iconBoardView || (devViewEnabled && selectedLegIndex !== null),
@@ -7503,7 +8011,7 @@ function drawScenarioCanvas(scenario, options = {}) {
   if (!options.skipBlankCheck && !canvasHasVisibleCourse(canvas)) {
     render(canvas, scenario.pieceMap, scenario.imageMap, {
       ...renderOptions,
-      showBoardLabels: true,
+      showBoardLabels: false,
       showStartFacing: true,
       showWalls: true,
       showPieceImages: false,
@@ -7580,6 +8088,7 @@ function renderScenario(scenario) {
       : "none";
   legSelect.value = selectedLegValue;
   const renderState = drawScenarioCanvas(scenario);
+  updateInspectionDetail(scenario, renderState.selectedLegIndex);
 
   if (renderState.devViewEnabled) {
     document.getElementById("report").textContent = buildScenarioReport(scenario, renderState.selectedLegIndex ?? 0);
@@ -7943,6 +8452,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       ...scenarioOverlayPlacements
     ];
     const finalOverlayPlacements = scenarioPlacements.filter((placement) => placement.overlay);
+    const movingTargetTimelines = sequence.movingTargetTimelines ?? [];
     const movingTargetReentryMarkers = collectMovingTargetReentryMarkers(scenarioTileMap, checkpoints, effectiveVariantBundle.movingTargets);
     const scenario = applyVariantScenarioState({
       pieceMap: assets.pieceMap,
@@ -7967,6 +8477,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       sequence,
       metrics,
       movingTargetStats: metrics.movingTargetStats,
+      movingTargetTimelines,
       movingTargetReentryMarkers,
       preferences: {
         ...generationPreferences,
@@ -8166,6 +8677,7 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     tileMap,
     goalTileMap
   });
+  const movingTargetTimelines = sequence.movingTargetTimelines ?? [];
   const movingTargetReentryMarkers = collectMovingTargetReentryMarkers(tileMap, checkpoints, movingTargets);
 
   return {
@@ -8214,6 +8726,7 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     sequence,
     metrics,
     movingTargetStats: metrics.movingTargetStats,
+    movingTargetTimelines,
     movingTargetReentryMarkers,
     preferences: {
       ...snapshot.preferences,
@@ -8511,6 +9024,18 @@ document.getElementById("reroll").addEventListener("click", () => {
 document.getElementById("about-button").addEventListener("click", () => {
   openAboutDialog();
 });
+document.getElementById("canvas")?.addEventListener("click", (event) => {
+  if (!currentScenario || !isDevViewEnabled()) {
+    return;
+  }
+
+  const tile = getCanvasTileFromEvent(event);
+  const inspection = getInspectableAtTile(currentScenario, tile);
+  applyRouteInspection(inspection);
+  renderScenario(currentScenario);
+});
+
+
 
 document.getElementById("run-diagnostics").addEventListener("click", () => {
   runDiagnostics().catch((error) => {
@@ -8536,6 +9061,7 @@ document.getElementById("about-dialog").addEventListener("click", (event) => {
 });
 
 document.getElementById("leg-select").addEventListener("change", () => {
+  routeInspectionState = { legIndex: null, routeId: null, kind: null, key: null };
   if (currentScenario) {
     renderScenario(currentScenario);
   }
@@ -8573,6 +9099,7 @@ document.getElementById("dev-view").addEventListener("change", () => {
 });
 
 document.getElementById("show-outlier-routes").addEventListener("change", () => {
+  routeInspectionState = { legIndex: null, routeId: null, kind: null, key: null };
   if (currentScenario) {
     renderScenario(currentScenario);
   }

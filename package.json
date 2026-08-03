@@ -10,6 +10,9 @@
     "dev": "serve -l tcp://127.0.0.1:3000 ."
   },
   "devDependencies": {
-    "serve": "^14.2.4"
+    "serve": "14.2.6"
+  },
+  "overrides": {
+    "fast-uri": "3.1.2"
   }
 }

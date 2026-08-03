@@ -1152,6 +1152,69 @@ function drawGoals(ctx, goals, bounds, tileSize, margin) {
   }
 }
 
+function drawMovingTargetPaths(ctx, timelines = [], bounds, tileSize, margin, options = {}) {
+  const active = (timelines || []).filter((timeline) => (
+    timeline?.positions?.length > 1 || timeline?.displayPositions?.length > 1
+  ));
+  if (!active.length) {
+    return;
+  }
+
+  const showDetails = Boolean(options.showDetails);
+  if (!showDetails) {
+    return;
+  }
+
+  ctx.save();
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+
+  for (const timeline of active) {
+    const displayPositions = timeline.displayPositions?.length
+      ? timeline.displayPositions
+      : timeline.positions || [];
+    const timedPositions = timeline.positions || [];
+
+    if (showDetails && timedPositions.length > 1) {
+      ctx.strokeStyle = "rgba(43, 122, 214, 0.42)";
+      ctx.lineWidth = 3;
+      ctx.setLineDash([5, 5]);
+      ctx.beginPath();
+      timedPositions.forEach((point, index) => {
+        const px = margin + (point.x - bounds.minX) * tileSize + tileSize / 2;
+        const py = margin + (point.y - bounds.minY) * tileSize + tileSize / 2;
+        if (index === 0) {
+          ctx.moveTo(px, py);
+        } else {
+          ctx.lineTo(px, py);
+        }
+      });
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    displayPositions.forEach((point, index) => {
+      const cx = margin + (point.x - bounds.minX) * tileSize + tileSize / 2;
+      const cy = margin + (point.y - bounds.minY) * tileSize + tileSize / 2;
+      const radius = tileSize * 0.18;
+      ctx.fillStyle = "rgba(255, 255, 255, 0.92)";
+      ctx.strokeStyle = "rgba(18, 63, 122, 0.92)";
+      ctx.lineWidth = 1.7;
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.fillStyle = "#123f7a";
+      ctx.font = "bold 9px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(String(index + 1), cx, cy);
+    });
+  }
+
+  ctx.restore();
+}
 function drawReentryMarkers(ctx, markers, bounds, tileSize, margin) {
   for (const marker of markers || []) {
     const left = margin + (marker.x - bounds.minX) * tileSize;
@@ -1223,7 +1286,7 @@ function drawRebootTokens(ctx, rebootTokens, bounds, tileSize, margin) {
   }
 }
 
-function drawRoutes(ctx, analysis, bounds, tileSize, margin) {
+function drawRoutes(ctx, analysis, bounds, tileSize, margin, options = {}) {
   if (!analysis) return;
 
   const palette = ["#0d6efd", "#198754", "#dc3545", "#6f42c1", "#fd7e14", "#20c997"];
@@ -1270,6 +1333,31 @@ function drawRoutes(ctx, analysis, bounds, tileSize, margin) {
       const py = margin + (transition.to.y - bounds.minY) * tileSize + tileSize - 6;
       ctx.fillText(label, px, py);
     });
+
+    if (options.showMovingTargetHits && selectedRoute.hitTarget && selectedRoute.movingTarget) {
+      const hx = margin + (selectedRoute.hitTarget.x - bounds.minX) * tileSize + tileSize / 2;
+      const hy = margin + (selectedRoute.hitTarget.y - bounds.minY) * tileSize + tileSize / 2;
+      ctx.save();
+      ctx.strokeStyle = color;
+      ctx.fillStyle = "rgba(255, 255, 255, 0.92)";
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(hx, hy, tileSize * 0.28, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = color;
+      ctx.font = "bold 10px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(
+        selectedRoute.movingTarget.space
+          ? String(selectedRoute.movingTarget.space)
+          : `H${selectedRoute.movingTarget.checkpointId ?? ""}`,
+        hx,
+        hy
+      );
+      ctx.restore();
+    }
   }
 
   ctx.restore();
@@ -1378,7 +1466,16 @@ export function render(canvas, pieces, imageMap = {}, options = {}) {
     const piece = pieces[placement.pieceId];
     return piece?.kind !== "dock" && !placement.overlay;
   }).length;
-  const bounds = getBounds(footprints, starts, options.goals || (options.goal ? [options.goal] : []));
+  const movingTargetPoints = (options.movingTargetTimelines || [])
+    .flatMap((timeline) => [
+      ...(timeline?.positions || []),
+      ...(timeline?.displayPositions || [])
+    ]);
+  const bounds = getBounds(
+    footprints,
+    starts,
+    [...(options.goals || (options.goal ? [options.goal] : [])), ...movingTargetPoints]
+  );
   const unusableStartIndices = new Set(options.unusableStartIndices || []);
   const showBoardLabels = options.showBoardLabels ?? true;
   const showStartFacing = options.showStartFacing ?? true;
@@ -1398,6 +1495,7 @@ export function render(canvas, pieces, imageMap = {}, options = {}) {
 
   const gridWidth = bounds.maxX - bounds.minX + 1;
   const gridHeight = bounds.maxY - bounds.minY + 1;
+  canvas.__roborallyRenderState = { bounds, tileSize, margin };
 
   canvas.width = gridWidth * tileSize + margin * 2;
   canvas.height = gridHeight * tileSize + margin * 2;
@@ -1429,7 +1527,12 @@ export function render(canvas, pieces, imageMap = {}, options = {}) {
     startLabels
   );
   drawRebootTokens(ctx, options.rebootTokens || [], bounds, tileSize, margin);
-  drawRoutes(ctx, options.analysis, bounds, tileSize, margin);
+  drawMovingTargetPaths(ctx, options.movingTargetTimelines || [], bounds, tileSize, margin, {
+    showDetails: options.showMovingTargetDetails
+  });
+  drawRoutes(ctx, options.analysis, bounds, tileSize, margin, {
+    showMovingTargetHits: options.showMovingTargetHits
+  });
   drawGoals(ctx, options.goals || (options.goal ? [options.goal] : []), bounds, tileSize, margin);
   drawReentryMarkers(ctx, options.reentryMarkers || [], bounds, tileSize, margin);
   if (edgeOutlineColor) {

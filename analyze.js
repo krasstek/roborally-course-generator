@@ -49,7 +49,10 @@ const ROTATION_ORDER = ["N", "E", "S", "W"];
 const EDGE_BEHAVIOR = "pit";
 const REBOOT_DAMAGE_PENALTY = 8;
 const MORE_DEADLY_REBOOT_DAMAGE_PENALTY = 12;
-const REBOOT_TEMPO_PENALTY = 34;
+const REBOOT_TEMPO_PENALTY = 14;
+// Reboots also jump the route to an archive/reboot token. This small extra cost
+// mirrors portal/teleporter readability friction without re-counting damage or tempo.
+const REBOOT_DISCONTINUITY_PENALTY = 3;
 const HAND_DRAW_SIZE = 9;
 const REGISTER_COUNT = 5;
 const PROGRAM_CARD_COUNTS = new Map([
@@ -282,6 +285,10 @@ function getHomeRebootTokensForStart(start, rebootTokens = []) {
 function getRebootDamagePenalty(options = {}) {
   const basePenalty = options.moreDeadlyGame ? MORE_DEADLY_REBOOT_DAMAGE_PENALTY : REBOOT_DAMAGE_PENALTY;
   return Number((basePenalty * getDamageDeckPressureMultipliers(options).reboot).toFixed(2));
+}
+
+function getRebootRoutePenalty() {
+  return REBOOT_TEMPO_PENALTY + REBOOT_DISCONTINUITY_PENALTY;
 }
 
 function isBatteryActive(options = {}) {
@@ -722,7 +729,7 @@ function moveOneStep(tileMap, state, dir, mode, options = {}, moveBudget = null)
         traversed: [{ x: next.x, y: next.y }],
         conveyorSteps: [],
         hazard: getRebootDamagePenalty(options),
-        rebootPenalty: REBOOT_TEMPO_PENALTY,
+        rebootPenalty: getRebootRoutePenalty(),
         distance: 1,
         forcedDistance: mode === "belt" || mode === "push" || mode === "repulsor" ? 1 : 0,
         spentMove: true,
@@ -859,7 +866,7 @@ function resolveCrashOrReboot(tileMap, state, destination, traversed, options = 
       traversed,
       conveyorSteps: [],
       hazard: getRebootDamagePenalty(options),
-      rebootPenalty: REBOOT_TEMPO_PENALTY,
+      rebootPenalty: getRebootRoutePenalty(),
       distance,
       forcedDistance: mode === "belt" || mode === "push" ? distance : 0,
       spentMove: true,
@@ -1133,7 +1140,7 @@ function resolveCrusherPhase(tileMap, state, options = {}) {
       traversed: [{ x: state.x, y: state.y }],
       conveyorSteps: [],
       hazard: getRebootDamagePenalty(options),
-      rebootPenalty: REBOOT_TEMPO_PENALTY,
+      rebootPenalty: getRebootRoutePenalty(),
       distance: 0,
       forcedDistance: 0,
       crashed: false,
@@ -1479,8 +1486,9 @@ function routeTouchesPit(tileMap, route) {
 }
 
 function scoreRoute(route, goal) {
-  const goalReached = route.finalState.x === goal.x && route.finalState.y === goal.y;
-  const conveyorComplexity = scoreConveyorComplexity(route, goal);
+  const scoringGoal = route.hitTarget ?? goal;
+  const goalReached = route.finalState.x === scoringGoal.x && route.finalState.y === scoringGoal.y;
+  const conveyorComplexity = scoreConveyorComplexity(route, scoringGoal);
   const score = Number.isFinite(route.baseCost)
     ? route.baseCost
     : route.actions * 5 + weightedDistance(route.distance, route.forcedDistance) + route.hazard + route.rebootPenalty + conveyorComplexity;
@@ -1505,9 +1513,64 @@ function createQueueEntry(route, goal) {
   };
 }
 
+function getDynamicGoalPosition(dynamicGoal, actionCount) {
+  const positions = dynamicGoal?.positions;
+  if (!Array.isArray(positions) || !positions.length) {
+    return null;
+  }
+
+  if (actionCount < positions.length) {
+    return positions[actionCount];
+  }
+
+  if (dynamicGoal.periodStart !== undefined && dynamicGoal.periodLength > 0) {
+    const periodStart = dynamicGoal.periodStart;
+    const offset = (actionCount - periodStart) % dynamicGoal.periodLength;
+    return positions[periodStart + offset] ?? positions.at(-1);
+  }
+
+  return positions.at(-1);
+}
+
+function getRouteTarget(goal, actionCount, options = {}) {
+  return getDynamicGoalPosition(options.dynamicGoal, actionCount) ?? goal;
+}
+
+function getDynamicGoalSpace(dynamicGoal, point) {
+  const displayPositions = dynamicGoal?.displayPositions ?? dynamicGoal?.positions ?? [];
+  const index = displayPositions.findIndex((candidate) => (
+    candidate.x === point?.x && candidate.y === point?.y
+  ));
+
+  return index >= 0 ? index + 1 : null;
+}
+
+function routeReachesGoal(route, goal, options = {}) {
+  const target = getRouteTarget(goal, route.actions, options);
+  return route.finalState.x === target.x && route.finalState.y === target.y;
+}
+
+function getSearchStateKey(state, actionCount, options = {}) {
+  if (!options.dynamicGoal) {
+    return stateKey(state);
+  }
+
+  const { periodStart = 0, periodLength = 0, positions = [] } = options.dynamicGoal;
+  const phase = periodLength > 0 && actionCount >= periodStart
+    ? `${periodStart}+${(actionCount - periodStart) % periodLength}`
+    : String(Math.min(actionCount, Math.max(0, positions.length - 1)));
+
+  return `${stateKey(state)}@${phase}`;
+}
+
 function enumerateRoutes(tileMap, start, goal, options = {}) {
+  const dynamicGoalActive = Boolean(options.dynamicGoal);
   const maxRoutes = options.maxRoutes ?? 2;
-  const maxExpansions = options.maxExpansions ?? 30000;
+  const requestedMaxExpansions = options.maxExpansions ?? 30000;
+  const maxExpansions = dynamicGoalActive
+    ? Math.min(requestedMaxExpansions, options.dynamicGoal?.maxExpansions ?? 8000)
+    : requestedMaxExpansions;
+  const maxActions = options.dynamicGoal?.maxActions ?? options.maxActions ?? (dynamicGoalActive ? 16 : Infinity);
   const startState = {
     x: start.x,
     y: start.y,
@@ -1526,10 +1589,10 @@ function enumerateRoutes(tileMap, start, goal, options = {}) {
       rebootPenalty: 0,
       baseCost: 0,
       actionHistory: [],
-      visited: new Set([stateKey(startState)])
+      visited: new Set([getSearchStateKey(startState, 0, options)])
     }, goal)
   ];
-  const bestCostByState = new Map([[stateKey(startState), 0]]);
+  const bestCostByState = new Map([[getSearchStateKey(startState, 0, options), 0]]);
 
   const completed = [];
   let expansions = 0;
@@ -1537,16 +1600,18 @@ function enumerateRoutes(tileMap, start, goal, options = {}) {
   while (queue.length && completed.length < maxRoutes && expansions < maxExpansions) {
     queue.sort((a, b) => a.estimate - b.estimate);
     const current = queue.shift();
-    const currentStateId = stateKey(current.finalState);
+    const currentStateId = getSearchStateKey(current.finalState, current.actions, options);
     const knownBest = bestCostByState.get(currentStateId);
 
     if (knownBest !== undefined && current.baseCost > knownBest + 0.001) {
       continue;
     }
 
-    if (current.finalState.x === goal.x && current.finalState.y === goal.y) {
+    if (routeReachesGoal(current, goal, options)) {
       const timeline = buildTimeline(current.transitions, startState);
-      const routeScore = scoreRoute(current, goal);
+      const hitTarget = getRouteTarget(goal, current.actions, options);
+      const hitSpace = getDynamicGoalSpace(options.dynamicGoal, hitTarget);
+      const routeScore = scoreRoute({ ...current, hitTarget }, goal);
       if ((options.recoveryRule === "dynamic_archiving" || !options.recoveryRule) && routeTouchesPit(tileMap, { path: timeline })) {
         continue;
       }
@@ -1554,12 +1619,26 @@ function enumerateRoutes(tileMap, start, goal, options = {}) {
         path: timeline,
         transitions: current.transitions,
         finalState: current.finalState,
+        hitTarget,
+        movingTarget: options.dynamicGoal
+          ? {
+            checkpointId: options.dynamicGoal.id ?? null,
+            position: hitTarget,
+            space: hitSpace,
+            actions: current.actions,
+            positions: options.dynamicGoal.positions ?? [],
+            displayPositions: options.dynamicGoal.displayPositions ?? options.dynamicGoal.positions ?? []
+          }
+          : null,
         ...routeScore
       });
       continue;
     }
 
     expansions += 1;
+    if (current.actions >= maxActions) {
+      continue;
+    }
 
     for (const action of ACTIONS) {
       const transition = simulateAction(tileMap, current.finalState, action, {
@@ -1581,7 +1660,8 @@ function enumerateRoutes(tileMap, start, goal, options = {}) {
       const destinations = transition.rebootChoices?.length ? transition.rebootChoices : [transition.to];
 
       for (const destination of destinations) {
-        const nextStateKey = stateKey(destination);
+        const nextActionCount = current.actions + 1;
+        const nextStateKey = getSearchStateKey(destination, nextActionCount, options);
         if (current.visited.has(nextStateKey)) {
           continue;
         }
@@ -1592,7 +1672,7 @@ function enumerateRoutes(tileMap, start, goal, options = {}) {
         const nextRoute = {
           finalState: destination,
           transitions: [...current.transitions, transitionForDestination],
-          actions: current.actions + 1,
+          actions: nextActionCount,
           distance: current.distance + transition.distance,
           forcedDistance: current.forcedDistance + transition.forcedDistance,
           hazard: current.hazard + transition.hazard,
@@ -2511,7 +2591,8 @@ export function analyzeCourse(tileMap, starts, goal, options = {}) {
         repulsorOverdrive: options.repulsorOverdrive,
         playerCount,
         rebootTokens,
-        boardRects: options.boardRects
+        boardRects: options.boardRects,
+        dynamicGoal: options.dynamicGoal
       }).map((route) => ({
         ...route,
         startFacing: facing
@@ -2675,12 +2756,20 @@ export function analyzeFlagLeg(tileMap, from, goal, options = {}) {
   const trafficScale = computeLegTrafficScale(options.playerCount ?? 4);
   const allRoutes = [];
 
-  facings.forEach((facing) => {
-    const routes = enumerateRoutes(tileMap, {
+  const routeStarts = Array.isArray(options.startStates) && options.startStates.length
+    ? options.startStates.map((state) => ({
+      x: state.x,
+      y: state.y,
+      facing: state.facing ?? "E"
+    }))
+    : facings.map((facing) => ({
       x: from.x,
       y: from.y,
       facing
-    }, goal, {
+    }));
+
+  routeStarts.forEach((routeStart) => {
+    const routes = enumerateRoutes(tileMap, routeStart, goal, {
       maxRoutes: routesPerFacing,
       maxExpansions: options.maxExpansions,
       recoveryRule: options.recoveryRule,
@@ -2697,13 +2786,15 @@ export function analyzeFlagLeg(tileMap, from, goal, options = {}) {
       repulsorOverdrive: options.repulsorOverdrive,
       playerCount: options.playerCount,
       rebootTokens: options.rebootTokens,
-      boardRects: options.boardRects
+      boardRects: options.boardRects,
+      dynamicGoal: options.dynamicGoal
     });
 
     routes.forEach((route) => {
       allRoutes.push({
         ...route,
-        startFacing: facing
+        startFacing: routeStart.facing,
+        routeStart
       });
     });
   });
