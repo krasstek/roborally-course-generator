@@ -8,7 +8,7 @@
   <meta name="mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="mobile-web-app-title" content="RoboRally" />
   <meta name="application-name" content="RoboRally Course Generator" />
-  <meta name="app-version" content="20260803210256" />
+  <meta name="app-version" content="20260804105821" />
   <title>RoboRally Course Generator</title>
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="icon" type="image/png" sizes="16x16" href="./assets/icons/favicon-16.png" />
@@ -1157,6 +1157,15 @@
             <option value="icons">Icon View</option>
           </select>
         </label>
+        <label title="Controls whether Master Builder small boards and tokens and Robo Rally Dice small boards may be placed as overlays.">
+          Overlays
+          <select id="overlay-mode" title="Controls whether Master Builder small boards and tokens and Robo Rally Dice small boards may be placed as overlays.">
+            <option value="yes" selected>Yes</option>
+            <option value="tokens">Tokens</option>
+            <option value="boards">Boards</option>
+            <option value="no">No</option>
+          </select>
+        </label>
         <label class="variant-field">
           Sets
           <details class="variant-picker">
@@ -1256,6 +1265,7 @@
       <canvas id="canvas"></canvas>
       <div class="meta-strip">
         <span class="pill">Orange square: prohibited starting space</span>
+        <span id="legend-pay-to-win-start" class="pill hidden">Green square: Pay to Win starting energy cost</span>
         <span class="pill">Yellow flag: checkpoint</span>
         <span id="legend-reboot-token" class="pill hidden">Green marker: reboot token</span>
       </div>

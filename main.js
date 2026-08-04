@@ -650,6 +650,36 @@ function isHardestDifficulty(preferences = {}) {
   return preferences.difficulty === "brutal";
 }
 
+const OVERLAY_MODES = {
+  no: "no",
+  tokens: "tokens",
+  boards: "boards",
+  yes: "yes"
+};
+
+function normalizeOverlayMode(mode) {
+  return Object.prototype.hasOwnProperty.call(OVERLAY_MODES, mode) ? mode : OVERLAY_MODES.yes;
+}
+
+function formatOverlayMode(mode) {
+  return {
+    no: "No",
+    tokens: "Tokens",
+    boards: "Boards",
+    yes: "Yes"
+  }[normalizeOverlayMode(mode)];
+}
+
+function shouldUseBoardOverlays(preferences = {}) {
+  const mode = normalizeOverlayMode(preferences.overlayMode);
+  return mode === OVERLAY_MODES.yes || mode === OVERLAY_MODES.boards;
+}
+
+function shouldUseMiniOverlays(preferences = {}) {
+  const mode = normalizeOverlayMode(preferences.overlayMode);
+  return mode === OVERLAY_MODES.yes || mode === OVERLAY_MODES.tokens;
+}
+
 function formatOverlaySearchTarget(preferences = {}) {
   const parts = [];
   const lengthLabel = formatLengthLabel(preferences.length);
@@ -1613,6 +1643,10 @@ function getMeaningfulVariantReasons(scenario) {
     difficultyHigherReasons.push("Competitive Mode increases pressure on weaker starts");
   }
 
+  if (scenario.payToWin && (scenario.sequence.firstLeg.summary.payToWin?.active)) {
+    difficultyHigherReasons.push("Pay to Win makes starting position choice part of the energy economy");
+  }
+
   if (scenario.cuttingFloor && countBoardLasers(scenario.goalTileMap) > 0) {
     difficultyHigherReasons.push("Cutting Floor makes board lasers hit harder");
   }
@@ -2434,6 +2468,10 @@ function getVariantImpactSummary(scenario) {
   if (scenario.competitiveMode) {
     addImpact("competitiveMode");
   }
+  if (scenario.payToWin) {
+    const pricedStarts = (scenario.sequence.firstLeg.starts || []).filter((start) => Number.isFinite(start.energyCost));
+    addImpact("payToWin", `${pricedStarts.length} priced start${pricedStarts.length === 1 ? "" : "s"}`);
+  }
   if (scenario.classicSharedDeck) {
     addImpact("classicSharedDeck");
   }
@@ -2562,6 +2600,10 @@ function updateRulesNote(scenario) {
     notes.push("Competitive Mode: before the game, players take turns blocking starting spaces. (Rulebook p. 32).");
   }
 
+  if (scenario.payToWin) {
+    notes.push("Pay to Win: green starting spaces show the starting energy cost for choosing that space.");
+  }
+
   if (scenario.factoryRejects) {
     notes.push("Factory Rejects: hand size is 7 instead of 9 (Altered from previous Robo Rally editions).");
   }
@@ -2685,7 +2727,9 @@ function describeAllowedVariants(preferences = {}) {
 
 function updateLegend(scenario) {
   const rebootTokenEl = document.getElementById("legend-reboot-token");
+  const payToWinStartEl = document.getElementById("legend-pay-to-win-start");
   rebootTokenEl?.classList.toggle("hidden", !["reboot_tokens", "home_reboot"].includes(scenario?.recoveryRule));
+  payToWinStartEl?.classList.toggle("hidden", !scenario?.payToWin);
 }
 
 function normalizeVariantState(value) {
@@ -2842,6 +2886,7 @@ function getVariantBaseChance(variantId, preferences = {}) {
     upgradeWorld: { easy: 0.08, moderate: 0.14, hard: 0.18 },
     classicSharedDeck: { easy: 0.01, moderate: 0.07, hard: 0.2 },
     competitiveMode: { easy: 0.08, moderate: 0.16, hard: 0.22 },
+    payToWin: { easy: 0.1, moderate: 0.18, hard: 0.2 },
     dynamicArchiving: { easy: 0.24, moderate: 0.4, hard: 0.34 },
     extraDocks: { easy: 0.08, moderate: 0.2, hard: 0.26 },
     factoryRejects: { easy: 0.06, moderate: 0.14, hard: 0.22 },
@@ -2875,6 +2920,7 @@ function getLateEasyVariantRescueBonus(variantId, preferences = {}) {
     moreDeadlyGame: -0.12,
     classicSharedDeck: -0.08,
     competitiveMode: -0.05,
+    payToWin: -0.04,
     factoryRejects: -0.08,
     hazardousFlags: -0.08,
     movingTargets: -0.1,
@@ -2899,6 +2945,9 @@ function chooseVariantBundle(preferences = {}, options = {}) {
 
   const forcedEntries = collectionAvailableEntries.filter((entry) => getVariantPreferenceState(preferences, entry.id) === "forced");
   forcedEntries.forEach((entry) => {
+    if (getConflictingVariantIds(entry.id).some((conflictId) => active[conflictId])) {
+      return;
+    }
     active[entry.id] = true;
   });
 
@@ -2999,6 +3048,7 @@ function getPreferencesFromControls() {
     playerCount: Number(document.getElementById("player-count").value),
     difficulty: document.getElementById("difficulty").value,
     length: document.getElementById("length").value,
+    overlayMode: normalizeOverlayMode(document.getElementById("overlay-mode")?.value),
     selectedExpansions: {
       roborally: document.getElementById("expansion-roborally").checked,
       "rr-dice": document.getElementById("expansion-rr-dice").checked,
@@ -3022,6 +3072,7 @@ function applyPreferencesToControls(preferences) {
   document.getElementById("player-count").value = String(preferences.playerCount ?? 4);
   document.getElementById("difficulty").value = preferences.difficulty ?? "any";
   document.getElementById("length").value = preferences.length ?? "any";
+  document.getElementById("overlay-mode").value = normalizeOverlayMode(preferences.overlayMode);
   document.getElementById("expansion-roborally").checked = preferences.selectedExpansions?.roborally ?? true;
   document.getElementById("expansion-rr-dice").checked = preferences.selectedExpansions?.["rr-dice"] ?? false;
   document.getElementById("expansion-30th-anniversary").checked = preferences.selectedExpansions?.["30th-anniversary"] ?? false;
@@ -4264,15 +4315,23 @@ function getAlignedOverlayPlacements(overlayPiece, structuralPlacements, dockPla
 }
 
 function chooseOverlayPlacements(structuralPlacements, dockPlacements, pieceMap, preferences, expansionIds) {
+  if (normalizeOverlayMode(preferences.overlayMode) === OVERLAY_MODES.no) {
+    return [];
+  }
+
   const usedStructuralBoards = new Set(
     structuralPlacements.map((placement) => getPhysicalBoardId(pieceMap[placement.pieceId]))
   );
   const overlayIds = getAvailableOverlayIds(pieceMap, expansionIds);
-  const miniOverlayIds = overlayIds.filter((overlayId) => isMiniOverlayPiece(pieceMap[overlayId]));
-  const boardOverlayIds = overlayIds.filter((overlayId) => (
-    !isMiniOverlayPiece(pieceMap[overlayId]) &&
-    !usedStructuralBoards.has(getPhysicalBoardId(pieceMap[overlayId]))
-  ));
+  const miniOverlayIds = shouldUseMiniOverlays(preferences)
+    ? overlayIds.filter((overlayId) => isMiniOverlayPiece(pieceMap[overlayId]))
+    : [];
+  const boardOverlayIds = shouldUseBoardOverlays(preferences)
+    ? overlayIds.filter((overlayId) => (
+      !isMiniOverlayPiece(pieceMap[overlayId]) &&
+      !usedStructuralBoards.has(getPhysicalBoardId(pieceMap[overlayId]))
+    ))
+    : [];
 
   const largeBoardCount = structuralPlacements.filter((placement) => {
     const piece = pieceMap[placement.pieceId];
@@ -6265,6 +6324,177 @@ function getRouteAnalysisVariantOptions(options = {}) {
   };
 }
 
+function getPayToWinTrafficScaleMultiplier(playerCount = 4) {
+  return clamp((playerCount || 4) / 4, 0.5, 1);
+}
+
+function getPayToWinAnalysisOptions(options = {}, playerCount = 4) {
+  return options.payToWin
+    ? {
+      ...options,
+      trafficScaleMultiplier: getPayToWinTrafficScaleMultiplier(playerCount)
+    }
+    : options;
+}
+
+function getPayToWinRemovalBias(options = {}) {
+  let bias = 0;
+  if (options.length === "short") {
+    bias += 1;
+  } else if (options.length === "long") {
+    bias -= 1;
+  }
+
+  if (options.difficulty === "easy") {
+    bias += 1;
+  } else if (options.difficulty === "hard" || options.difficulty === "brutal") {
+    bias -= 1;
+  }
+
+  return bias;
+}
+
+function getPayToWinCostEntries(firstLeg, excludedIndices = new Set()) {
+  const activeStarts = (firstLeg.starts || []).filter((item) => (
+    item.reachable &&
+    item.selectedRoute &&
+    Number.isFinite(item.adjustedScore) &&
+    !excludedIndices.has(item.index)
+  ));
+
+  if (!activeStarts.length) {
+    return { entries: [], costUnit: 1, minScore: 0, maxScore: 0 };
+  }
+
+  const adjustedScores = activeStarts.map((item) => item.adjustedScore);
+  const minScore = Math.min(...adjustedScores);
+  const maxScore = Math.max(...adjustedScores);
+  const costUnit = Math.max(1, minScore / 10);
+  const entries = activeStarts.map((item) => ({
+    startAnalysis: item,
+    index: item.index,
+    adjustedScore: item.adjustedScore,
+    energyCost: Math.max(0, Math.floor((maxScore - item.adjustedScore) / costUnit))
+  }));
+
+  return {
+    entries,
+    costUnit: Number(costUnit.toFixed(2)),
+    minScore,
+    maxScore
+  };
+}
+
+function choosePayToWinPruneEntry(entries, options = {}) {
+  if (!entries.length) {
+    return null;
+  }
+
+  const bias = getPayToWinRemovalBias(options);
+  if (bias > 0) {
+    return [...entries].sort((left, right) => right.adjustedScore - left.adjustedScore || left.index - right.index)[0];
+  }
+  if (bias < 0) {
+    return [...entries].sort((left, right) => left.adjustedScore - right.adjustedScore || left.index - right.index)[0];
+  }
+
+  const meanScore = averageValues(entries.map((entry) => entry.adjustedScore));
+  return [...entries].sort((left, right) => (
+    Math.abs(right.adjustedScore - meanScore) - Math.abs(left.adjustedScore - meanScore) ||
+    left.adjustedScore - right.adjustedScore ||
+    left.index - right.index
+  ))[0];
+}
+
+function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {}) {
+  const baseFirstLeg = {
+    ...firstLeg,
+    summary: {
+      ...firstLeg.summary,
+      outliers: []
+    }
+  };
+  const analysisOptions = getPayToWinAnalysisOptions({
+    ...getRouteAnalysisVariantOptions(options),
+    payToWin: true
+  }, playerCount);
+  const excludedIndices = new Set();
+  const pruned = [];
+  let currentFirstLeg = recomputeFirstLegPressure(tileMap, baseFirstLeg, {
+    playerCount,
+    ...analysisOptions,
+    excludedIndices: []
+  });
+
+  for (let pass = 0; pass < 12; pass += 1) {
+    const costState = getPayToWinCostEntries(currentFirstLeg, excludedIndices);
+    const expensiveEntries = costState.entries.filter((entry) => entry.energyCost >= 5);
+    if (!expensiveEntries.length) {
+      break;
+    }
+
+    const removed = choosePayToWinPruneEntry(costState.entries, options);
+    if (!removed) {
+      break;
+    }
+
+    excludedIndices.add(removed.index);
+    pruned.push({
+      index: removed.index,
+      score: removed.adjustedScore,
+      energyCost: removed.energyCost,
+      pass: pass + 1,
+      reason: getPayToWinRemovalBias(options) > 0
+        ? "removed weakest start for a short/easier setup"
+        : getPayToWinRemovalBias(options) < 0
+          ? "removed strongest start for a long/harder setup"
+          : "removed start farthest from the remaining mean"
+    });
+
+    currentFirstLeg = recomputeFirstLegPressure(tileMap, baseFirstLeg, {
+      playerCount,
+      ...analysisOptions,
+      excludedIndices: [...excludedIndices]
+    });
+  }
+
+  const finalCostState = getPayToWinCostEntries(currentFirstLeg, excludedIndices);
+  const costByIndex = new Map(finalCostState.entries.map((entry) => [entry.index, entry.energyCost]));
+  const activeScores = finalCostState.entries.map((entry) => entry.adjustedScore);
+  const meanScore = activeScores.length ? averageValues(activeScores) : 0;
+  const outliers = pruned.map((item) => ({
+    index: item.index,
+    score: item.score,
+    delta: Number((item.score - meanScore).toFixed(2)),
+    actionDelta: 0,
+    reasons: {
+      payToWinPruned: true,
+      energyCost: item.energyCost,
+      outlierPass: item.pass,
+      removalReason: item.reason,
+      costThreshold: 5
+    }
+  }));
+
+  return {
+    ...currentFirstLeg,
+    starts: currentFirstLeg.starts.map((startAnalysis) => ({
+      ...startAnalysis,
+      energyCost: costByIndex.has(startAnalysis.index) ? costByIndex.get(startAnalysis.index) : null
+    })),
+    summary: {
+      ...currentFirstLeg.summary,
+      outliers,
+      payToWin: {
+        active: true,
+        costUnit: finalCostState.costUnit,
+        pruned,
+        trafficScaleMultiplier: getPayToWinTrafficScaleMultiplier(playerCount)
+      }
+    }
+  };
+}
+
 function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) {
   const movingTargetTimelines = options.movingTargetTimelines ?? buildMovingTargetTimelines(
     tileMap,
@@ -6272,7 +6502,7 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
     options.movingTargets,
     { maxActions: options.movingTargetMaxActions ?? 16 }
   );
-  const firstLeg = analyzeCourse(tileMap, starts, flags[0], {
+  const firstLeg = analyzeCourse(tileMap, starts, flags[0], getPayToWinAnalysisOptions({
     maxRoutes: 4,
     flags,
     playerCount,
@@ -6281,8 +6511,9 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
     startupSpinUp: options.startupSpinUp,
     rebootTokens: options.rebootTokens,
     boardRects: options.boardRects,
-    dynamicGoal: movingTargetTimelines[0] ?? null
-  });
+    dynamicGoal: movingTargetTimelines[0] ?? null,
+    payToWin: options.payToWin
+  }, playerCount));
 
   const legs = [
     {
@@ -6358,10 +6589,16 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
         outliers: []
       }
     }
-    : adjustStartOutliersForCourseLength(firstLeg, totalLength, tileMap, playerCount, {
-      ...getRouteAnalysisVariantOptions(options),
-      totalActions
-    });
+    : options.payToWin
+      ? applyPayToWinStartPricing(firstLeg, tileMap, playerCount, {
+        ...options,
+        totalActions,
+        totalLength
+      })
+      : adjustStartOutliersForCourseLength(firstLeg, totalLength, tileMap, playerCount, {
+        ...getRouteAnalysisVariantOptions(options),
+        totalActions
+      });
 
   const adjustedLegs = [
     {
@@ -7424,6 +7661,12 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     }
 
     const parts = [];
+    if (reasons.payToWinPruned) {
+      parts.push(`Pay to Win cost ${reasons.energyCost} >= ${reasons.costThreshold ?? 5}`);
+    }
+    if (reasons.removalReason) {
+      parts.push(reasons.removalReason);
+    }
     if (reasons.scoreOutlier) {
       parts.push(`score gap ${reasons.scoreGap} > ${reasons.scoreThreshold}`);
     }
@@ -7479,6 +7722,7 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     `Variant impact: ${getVariantImpactSummary(scenario) || "none"}`,
     `Act Fast used: ${scenario.actFast ? scenario.actFastMode ?? "yes" : "no"}`,
     `Competitive Mode used: ${scenario.competitiveMode ? "yes" : "no"}`,
+    `Pay to Win used: ${scenario.payToWin ? "yes" : "no"}`,
     `Extra Docks used: ${scenario.extraDocks ? "yes" : "no"}`,
     `Factory Rejects used: ${scenario.factoryRejects ? "yes" : "no"}`,
     `Recovery used: ${scenario.recoveryRule}`,
@@ -7494,6 +7738,7 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     `Staggered Boards used: ${scenario.staggeredBoards ? "yes" : "no"}`,
     `Accepted after ${scenario.attempts} attempt(s)`,
     `Board count: ${scenario.boardCount}`,
+    `Overlays requested: ${formatOverlayMode(scenario.preferences.overlayMode)}`,
     `Boards: ${scenario.mainBoardIds.map((pieceId, index) => `${pieceId}@${scenario.mainRotations[index]}`).join(", ")}`,
     `Flags: ${scenario.checkpoints.map((flag, index) => `#${index + 1}(${flag.x},${flag.y})`).join(", ")}`,
     scenario.rebootTokens?.length
@@ -7514,6 +7759,9 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     scenario.metrics.competitiveBlockImpact
       ? `Competitive block impact: strongStarts ${scenario.metrics.competitiveBlockImpact.strongStartCount}, remainingAfterBlocks ${scenario.metrics.competitiveBlockImpact.remainingStartCount}, bestDelta ${scenario.metrics.competitiveBlockImpact.bestScoreDelta}, topBandDelta ${scenario.metrics.competitiveBlockImpact.topBandDelta}, strongRemoved ${scenario.metrics.competitiveBlockImpact.strongStartsRemoved}, meaningful ${scenario.metrics.competitiveBlockImpact.meaningful ? "yes" : "no"}`
       : "Competitive block impact: n/a",
+    summary.payToWin?.active
+      ? `Pay to Win costs: unit ${summary.payToWin.costUnit}, trafficScale ${summary.payToWin.trafficScaleMultiplier}, pruned ${summary.payToWin.pruned.length ? summary.payToWin.pruned.map((item) => `#${item.index + 1}(${item.energyCost}E; pass ${item.pass})`).join(", ") : "none"}`
+      : "Pay to Win costs: n/a",
     scenario.movingTargetReentryMarkers?.length
       ? `Moving target re-entry: ${scenario.movingTargetReentryMarkers.map((marker) => `${marker.label}(${marker.x},${marker.y})`).join(", ")}`
       : "Moving target re-entry: none",
@@ -7567,8 +7815,11 @@ function buildScenarioReport(scenario, selectedLegIndex) {
       ? ` reason ${formatOutlierReasons(outlierReasonByIndex.get(startAnalysis.index))}`
       : "";
     const adjustedLabel = usable === "outlier" ? "outlierEstimate" : "finalAdjusted";
+    const energyCost = scenario.payToWin && startAnalysis.energyCost !== null && startAnalysis.energyCost !== undefined
+      ? ` energy ${startAnalysis.energyCost}`
+      : "";
     lines.push(
-      `Start #${startAnalysis.index + 1} ${usable} at (${startAnalysis.start.x}, ${startAnalysis.start.y}) route ${startAnalysis.selectedRouteIndex + 1}/${startAnalysis.routes.length} ${adjustedLabel} ${startAnalysis.adjustedScore} raw ${selected.score} traffic ${startAnalysis.trafficPenalty} overlap ${startAnalysis.overlapPenalty} lateral ${startAnalysis.lateralThreat} rear ${startAnalysis.rearThreat ?? 0} scale ${startAnalysis.trafficScale ?? 0} distance ${selected.distance} actions ${selected.actions} forced ${selected.forcedDistance} hazard ${selected.hazard}${selected.movingTarget ? ` hit flag ${selected.movingTarget.checkpointId} space ${selected.movingTarget.space ?? "?"}` : ""}${outlierReason}`
+      `Start #${startAnalysis.index + 1} ${usable} at (${startAnalysis.start.x}, ${startAnalysis.start.y}) route ${startAnalysis.selectedRouteIndex + 1}/${startAnalysis.routes.length} ${adjustedLabel} ${startAnalysis.adjustedScore}${energyCost} raw ${selected.score} traffic ${startAnalysis.trafficPenalty} overlap ${startAnalysis.overlapPenalty} lateral ${startAnalysis.lateralThreat} rear ${startAnalysis.rearThreat ?? 0} scale ${startAnalysis.trafficScale ?? 0} distance ${selected.distance} actions ${selected.actions} forced ${selected.forcedDistance} hazard ${selected.hazard}${selected.movingTarget ? ` hit flag ${selected.movingTarget.checkpointId} space ${selected.movingTarget.space ?? "?"}` : ""}${outlierReason}`
     );
   }
 
@@ -7676,6 +7927,9 @@ function formatRouteDetail(entry) {
     const trafficPenalty = entry.startAnalysis.trafficPenalty ?? 0;
     const adjustedLabel = entry.outlierInfo ? "Outlier pass estimate" : "Final adjusted score";
     lines.push(`${adjustedLabel}: ${entry.startAnalysis.adjustedScore} (${startStatus}; raw ${route.score} + traffic ${trafficPenalty})`);
+    if (entry.startAnalysis.energyCost !== null && entry.startAnalysis.energyCost !== undefined) {
+      lines.push(`Pay to Win: costs ${entry.startAnalysis.energyCost} starting energy`);
+    }
     lines.push(`Traffic: overlap ${entry.startAnalysis.overlapPenalty}, lateral ${entry.startAnalysis.lateralThreat}, rear ${entry.startAnalysis.rearThreat ?? 0}`);
     if (entry.outlierInfo) {
       lines.push(`Not comparable with final usable-start adjusted scores; this was measured in the pruning pass where it dropped.`);
@@ -7953,8 +8207,15 @@ function getScenarioRenderState(scenario) {
     `${startAnalysis.start.x},${startAnalysis.start.y}`,
     startAnalysis.index + 1
   ]));
+  const energyCostByKey = new Map(scenario.sequence.firstLeg.starts.map((startAnalysis) => [
+    `${startAnalysis.start.x},${startAnalysis.start.y}`,
+    startAnalysis.energyCost
+  ]));
   const startLabels = devViewEnabled
     ? scenario.activeStarts.map((start) => startNumberByKey.get(`${start.x},${start.y}`) ?? "")
+    : [];
+  const startEnergyCosts = scenario.payToWin
+    ? scenario.activeStarts.map((start) => energyCostByKey.get(`${start.x},${start.y}`))
     : [];
 
   return {
@@ -7964,6 +8225,7 @@ function getScenarioRenderState(scenario) {
     renderAnalysis,
     selectedLegIndex,
     startLabels,
+    startEnergyCosts,
     unusableStartIndices
   };
 }
@@ -7979,6 +8241,7 @@ function drawScenarioCanvas(scenario, options = {}) {
     renderAnalysis,
     selectedLegIndex,
     startLabels,
+    startEnergyCosts,
     unusableStartIndices
   } = getScenarioRenderState(scenario);
   const canvas = document.getElementById("canvas");
@@ -7993,6 +8256,7 @@ function drawScenarioCanvas(scenario, options = {}) {
     showMovingTargetHits: devViewEnabled,
     starts: scenario.activeStarts,
     startLabels,
+    startEnergyCosts,
     rebootTokens: scenario.rebootTokens,
     tileMap: scenario.goalTileMap,
     unusableStartIndices,
@@ -8155,6 +8419,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     alignedLayout,
     actFast,
     competitiveMode,
+    payToWin,
     extraDocks,
     factoryRejects,
     recoveryRule,
@@ -8183,6 +8448,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     actFast,
     actFastMode,
     competitiveMode,
+    payToWin,
     extraDocks
   }, variantBundle);
   const dockConfigurations = weightedOrder(
@@ -8361,10 +8627,12 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       activeStarts = filterStartsForGoals(resolved.starts, checkpoints);
       sequence = analyzeFlagSequence(goalTileMap, activeStarts, checkpoints, preferences.playerCount, applyVariantAnalysisOptions({
         rebootTokens,
-        boardRects: scenarioBoardRects
+        boardRects: scenarioBoardRects,
+        difficulty: generationPreferences.difficulty,
+        length: generationPreferences.length
       }, effectiveVariantBundle));
 
-      const usableStarts = computeUsableStarts(sequence.firstLeg, { competitiveMode });
+      const usableStarts = computeUsableStarts(sequence.firstLeg, { competitiveMode, payToWin: effectiveVariantBundle.payToWin });
       const prunedDocks = pruneUnusedDockPlacements(
         scenarioDockPlacements,
         pieceMap,
@@ -8436,6 +8704,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       upgradeWorld: effectiveVariantBundle.upgradeWorld,
       hazardousFlags,
       movingTargets,
+      payToWin: effectiveVariantBundle.payToWin,
       lighterGame,
       lessSpammyGame,
       lessForeshadowing
@@ -8468,6 +8737,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       playerCount: preferences.playerCount,
       actFast,
       actFastMode,
+      payToWin: effectiveVariantBundle.payToWin,
       extraDocks: scenarioDockPlacements.length > 1,
       mainBoardIds: scenarioBoardPlacements.map((placement) => placement.pieceId),
       mainRotations: scenarioBoardPlacements.map((placement) => placement.rotation),
@@ -8481,6 +8751,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       movingTargetReentryMarkers,
       preferences: {
         ...generationPreferences,
+        overlayMode: normalizeOverlayMode(generationPreferences.overlayMode),
         actFast,
         actFastMode,
         competitiveMode,
@@ -8497,6 +8768,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         upgradeWorld: effectiveVariantBundle.upgradeWorld,
         hazardousFlags,
         movingTargets,
+        payToWin: effectiveVariantBundle.payToWin,
         lighterGame,
         lessSpammyGame,
         lessForeshadowing,
@@ -8528,6 +8800,7 @@ function serializeScenario(scenario) {
     actFast: scenario.actFast,
     actFastMode: scenario.actFastMode,
     competitiveMode: scenario.competitiveMode,
+    payToWin: scenario.payToWin,
     extraDocks: scenario.extraDocks,
     factoryRejects: scenario.factoryRejects,
     recoveryRule: scenario.recoveryRule,
@@ -8583,6 +8856,7 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
   const actFastMode = snapshot.actFastMode ?? null;
   const recoveryRule = snapshot.recoveryRule ?? "reboot_tokens";
   const competitiveMode = Boolean(snapshot.competitiveMode);
+  const payToWin = Boolean(snapshot.payToWin);
   const factoryRejects = Boolean(snapshot.factoryRejects);
   const lessDeadlyGame = Boolean(snapshot.lessDeadlyGame);
   const lessSpammyGame = Boolean(snapshot.lessSpammyGame);
@@ -8628,9 +8902,12 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
   const activeStarts = filterStartsForGoals(starts, checkpoints);
   const sequence = analyzeFlagSequence(goalTileMap, activeStarts, checkpoints, snapshot.preferences.playerCount, applyVariantAnalysisOptions({
     rebootTokens,
-    boardRects
+    boardRects,
+    difficulty: snapshot.preferences.difficulty,
+    length: snapshot.preferences.length
   }, {
     competitiveMode,
+    payToWin,
     recoveryRule,
     lessDeadlyGame,
     lessSpammyGame,
@@ -8660,6 +8937,7 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     factoryRejects,
     hazardousFlags,
     movingTargets,
+    payToWin,
     startupSpinUp,
     repulsorOverdrive,
     upgradeWorld,
@@ -8695,6 +8973,7 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     actFast,
     actFastMode,
     competitiveMode,
+    payToWin,
     extraDocks,
     factoryRejects,
     recoveryRule,
@@ -8730,9 +9009,11 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     movingTargetReentryMarkers,
     preferences: {
       ...snapshot.preferences,
+      overlayMode: normalizeOverlayMode(snapshot.preferences.overlayMode),
       actFast,
       actFastMode,
       competitiveMode,
+      payToWin,
       extraDocks,
       factoryRejects,
       recoveryRule,

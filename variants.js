@@ -28,6 +28,7 @@ const VARIANT_COMPLEXITY = {
   factoryRejects: 1,
   startupSpinUp: 1,
   competitiveMode: 1,
+  payToWin: 1,
   staggeredBoards: 1
 };
 
@@ -65,7 +66,7 @@ const VARIANT_DEFINITION_ROWS = [
     defaultState: "off",
     description: "Removes upgrade cards and makes battery spaces inactive.",
     cost: VARIANT_COMPLEXITY.lighterGame,
-    incompatibleWith: ["upgradeWorld"],
+    incompatibleWith: ["upgradeWorld", "payToWin"],
     applyBundle: applyBooleanField("lighterGame")
   },
   {
@@ -328,7 +329,19 @@ const VARIANT_DEFINITION_ROWS = [
     defaultState: "off",
     description: "Before the game, players block starting spaces with energy cubes before choosing from the remaining starts.",
     cost: VARIANT_COMPLEXITY.competitiveMode,
+    incompatibleWith: ["payToWin"],
     applyBundle: applyBooleanField("competitiveMode")
+  },
+  {
+    id: "payToWin",
+    label: "Pay to Win",
+    category: VARIANT_CATEGORIES.setup,
+    controlId: "variant-pay-to-win",
+    defaultState: "off",
+    description: "Better starting spaces cost starting energy instead of being automatically pruned as outliers.",
+    cost: VARIANT_COMPLEXITY.payToWin,
+    incompatibleWith: ["competitiveMode", "lighterGame"],
+    applyBundle: applyBooleanField("payToWin")
   },
   {
     id: "staggeredBoards",
@@ -404,6 +417,7 @@ export function applyVariantGenerationOptions(baseOptions = {}, variantBundle = 
     alignedLayout: variantBundle.alignedLayout ?? baseOptions.alignedLayout,
     actFast: Boolean(variantBundle.actFast),
     competitiveMode: Boolean(variantBundle.competitiveMode),
+    payToWin: Boolean(variantBundle.payToWin),
     extraDocks: Boolean(variantBundle.extraDocks),
     recoveryRule: variantBundle.recoveryRule ?? baseOptions.recoveryRule
   };
@@ -413,6 +427,7 @@ export function applyVariantAnalysisOptions(baseOptions = {}, variantBundle = {}
   return {
     ...baseOptions,
     competitiveMode: Boolean(variantBundle.competitiveMode),
+    payToWin: Boolean(variantBundle.payToWin),
     recoveryRule: variantBundle.recoveryRule ?? baseOptions.recoveryRule,
     lessDeadlyGame: Boolean(variantBundle.lessDeadlyGame),
     lessSpammyGame: Boolean(variantBundle.lessSpammyGame),

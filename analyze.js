@@ -1720,12 +1720,15 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
-function computeTrafficPairScale(playerCount, routeCapableStarts) {
+function computeTrafficPairScale(playerCount, routeCapableStarts, options = {}) {
   if (playerCount <= 1 || routeCapableStarts <= 1) {
     return 0;
   }
 
-  return Number(clamp((playerCount - 1) / (routeCapableStarts - 1), 0, 1).toFixed(3));
+  const multiplier = Number.isFinite(options.trafficScaleMultiplier)
+    ? options.trafficScaleMultiplier
+    : 1;
+  return Number((clamp((playerCount - 1) / (routeCapableStarts - 1), 0, 1) * multiplier).toFixed(3));
 }
 
 function computeLegTrafficScale(playerCount) {
@@ -2411,7 +2414,7 @@ function selectAndScoreStartAnalyses(tileMap, startAnalyses, goal, playerCount, 
       .map((analysis) => analysis.index)
   );
   const routeCapableStarts = startAnalyses.filter((analysis) => analysis.routes.length && activeSet.has(analysis.index)).length;
-  const trafficScale = computeTrafficPairScale(playerCount, routeCapableStarts);
+  const trafficScale = computeTrafficPairScale(playerCount, routeCapableStarts, options);
   const selectedRouteIndices = assignRoutesWithOverlap(tileMap, startAnalyses, goal, trafficScale, activeSet, options);
 
   startAnalyses.forEach((analysis, index) => {

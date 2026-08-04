@@ -1,4 +1,4 @@
-const APP_VERSION = "20260803210256";
+const APP_VERSION = "20260804105821";
 const STATIC_CACHE = `roborally-static-${APP_VERSION}`;
 const RUNTIME_CACHE = `roborally-runtime-${APP_VERSION}`;
 
@@ -192,7 +192,17 @@ async function staleWhileRevalidate(request, cacheName) {
     })
     .catch(() => null);
 
-  return cached || networkPromise || fetch(request);
+  if (cached) {
+    networkPromise.catch(() => null);
+    return cached;
+  }
+
+  const response = await networkPromise;
+  return response || new Response("Offline and no cached response available.", {
+    status: 504,
+    statusText: "Gateway Timeout",
+    headers: { "Content-Type": "text/plain; charset=utf-8" }
+  });
 }
 
 async function trimCache(cacheName, maxEntries) {

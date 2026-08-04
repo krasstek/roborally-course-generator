@@ -1060,7 +1060,8 @@ function drawStarts(
   showFacing = true,
   visibleFeatureTypes = null,
   showAllStartMarkers = false,
-  startLabels = []
+  startLabels = [],
+  startEnergyCosts = []
 ) {
   if (visibleFeatureTypes && !visibleFeatureTypes.has("start")) {
     return;
@@ -1075,12 +1076,24 @@ function drawStarts(
     const badgeLeft = px + (tileSize - badgeSize) / 2;
     const badgeTop = py + (tileSize - badgeSize) / 2;
 
+    const rawEnergyCost = startEnergyCosts[index];
+    const energyCost = Number(rawEnergyCost);
+    const hasEnergyCost = rawEnergyCost !== null && rawEnergyCost !== undefined && Number.isFinite(energyCost);
+
     if (unusableStartIndices.has(index)) {
-      ctx.fillStyle = "rgba(232, 137, 28, 0.88)";
+      ctx.fillStyle = "rgba(232, 92, 62, 0.9)";
       ctx.fillRect(badgeLeft, badgeTop, badgeSize, badgeSize);
-      ctx.strokeStyle = "#8a4b10";
-      ctx.lineWidth = 1.25;
+      ctx.strokeStyle = "#8c1f17";
+      ctx.lineWidth = 1.8;
       ctx.strokeRect(badgeLeft, badgeTop, badgeSize, badgeSize);
+    } else if (hasEnergyCost) {
+      ctx.fillStyle = "rgba(21, 132, 86, 0.92)";
+      ctx.beginPath();
+      ctx.roundRect(badgeLeft, badgeTop, badgeSize, badgeSize, 8);
+      ctx.fill();
+      ctx.strokeStyle = "#0c4f35";
+      ctx.lineWidth = 1.35;
+      ctx.stroke();
     } else if (showAllStartMarkers) {
       ctx.fillStyle = "rgba(52, 120, 246, 0.9)";
       ctx.beginPath();
@@ -1091,7 +1104,8 @@ function drawStarts(
       ctx.stroke();
     }
 
-    const startLabel = startLabels[index] ?? (showAllStartMarkers ? "S" : "");
+    const explicitStartLabel = startLabels[index];
+    const startLabel = explicitStartLabel ?? (hasEnergyCost ? String(energyCost) : showAllStartMarkers ? "S" : "");
 
     if (startLabel) {
       ctx.fillStyle = "#ffffff";
@@ -1099,6 +1113,26 @@ function drawStarts(
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(String(startLabel), badgeLeft + badgeSize / 2, badgeTop + badgeSize / 2 + 0.5);
+      ctx.textAlign = "start";
+      ctx.textBaseline = "alphabetic";
+    }
+
+    if (hasEnergyCost && explicitStartLabel) {
+      const costRadius = tileSize * 0.16;
+      const costX = px + tileSize - costRadius - 3;
+      const costY = py + costRadius + 3;
+      ctx.fillStyle = "rgba(21, 132, 86, 0.96)";
+      ctx.strokeStyle = "#0c4f35";
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.arc(costX, costY, costRadius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "bold 9px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(String(energyCost), costX, costY + 0.5);
       ctx.textAlign = "start";
       ctx.textBaseline = "alphabetic";
     }
@@ -1485,6 +1519,7 @@ export function render(canvas, pieces, imageMap = {}, options = {}) {
   const showFeatureIcons = options.showFeatureIcons ?? false;
   const showAllStartMarkers = options.showAllStartMarkers ?? (showFeatureIcons || !showPieceImages);
   const startLabels = options.startLabels ?? [];
+  const startEnergyCosts = options.startEnergyCosts ?? [];
   const edgeOutlineColor = options.edgeOutlineColor ?? null;
   const visibleFeatureTypes = options.visibleFeatureTypes
     ? new Set(options.visibleFeatureTypes)
@@ -1524,7 +1559,8 @@ export function render(canvas, pieces, imageMap = {}, options = {}) {
     showStartFacing,
     visibleFeatureTypes,
     showAllStartMarkers,
-    startLabels
+    startLabels,
+    startEnergyCosts
   );
   drawRebootTokens(ctx, options.rebootTokens || [], bounds, tileSize, margin);
   drawMovingTargetPaths(ctx, options.movingTargetTimelines || [], bounds, tileSize, margin, {
