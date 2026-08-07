@@ -4,7 +4,7 @@ const versionedPath = (path) => `${path}${VERSION_SUFFIX}`;
 
 const [
   { render },
-  { analyzeCourse, analyzeFlagLeg, analyzeGoalApproaches, clearAnalysisCaches, recomputeFirstLegPressure, scoreFlagArea },
+  { analyzeCourse, analyzeFullCourse, analyzeFlagLeg, analyzeGoalApproaches, clearAnalysisCaches, recomputeFirstLegPressure, scoreFlagArea },
   {
     buildMainFootprintTiles,
     buildResolvedMap,
@@ -93,8 +93,7 @@ const MIN_LENGTH_RAW = 28;
 const MIN_SHARED_EDGE = 5;
 const DOCK_BRIDGE_GAP = 3;
 const MAX_DOCK_COUNT = 2;
-const OUTLIER_MIN_ACTION_GAP = 4;
-const START_CAPACITY_HARD_FAILURES = new Set(["usable-starts", "reachable-starts"]);
+const START_CAPACITY_HARD_FAILURES = new Set(["usable-starts", "reachable-starts", "normal-start-balance"]);
 const OVERLAY_UPDATE_INTERVAL = 4;
 const SCENARIO_RENDER_INTERVAL_MS = 125;
 const BOARD_SELECTION_FALLBACK_ATTEMPT = 12;
@@ -1987,6 +1986,9 @@ function describeLengthDrivers(scenario, lengthBand, contributionEntries, length
     if ((contributions.congestionLoad ?? 0) >= 2.2) {
       reasons.push("some congestion adds time without turning it into a slog");
     }
+    if (scenario.metrics.routeDrama?.penalty > 0 && scenario.metrics.routeDrama?.score < 5) {
+      reasons.push("the expected routes stay fairly separate, so livelier alternatives score better");
+    }
   }
 
   reasons.push(...lengthVariantReasons);
@@ -2134,6 +2136,9 @@ function buildCourseExplanationHtml(scenario, noteParts = []) {
     if (avgBacktrack >= 1.2) {
       difficultyReasons.push("later legs force route overlap and backtracking");
     }
+    if (scenario.metrics.routeDrama?.level === "moderate" || scenario.metrics.routeDrama?.level === "high") {
+      difficultyReasons.push("expected robot paths cross and converge often enough to create table interaction");
+    }
     difficultyReasons.push(...difficultyVariantReasons);
     if (!difficultyReasons.length) {
       difficultyReasons.push("multiple route and hazard pressures stack up across the course");
@@ -2175,6 +2180,9 @@ function buildCourseExplanationHtml(scenario, noteParts = []) {
     }
     if (avgBacktrack >= 0.8 && avgBacktrack < 1.6) {
       difficultyReasons.push("later legs create some overlap and repositioning");
+    }
+    if (scenario.metrics.routeDrama?.level === "moderate" || scenario.metrics.routeDrama?.level === "high") {
+      difficultyReasons.push("expected robot paths cross and converge enough to create table interaction");
     }
     if (!difficultyReasons.length) {
       difficultyReasons.push("it mixes manageable hazards with a few spots that still need planning");
@@ -6406,7 +6414,16 @@ function choosePayToWinPruneEntry(entries, options = {}) {
   ))[0];
 }
 
-function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {}) {
+function getActivePruningStarts(firstLeg, excludedIndices = new Set()) {
+  return (firstLeg.starts || []).filter((item) => (
+    item.reachable &&
+    item.selectedRoute &&
+    Number.isFinite(item.adjustedScore) &&
+    !excludedIndices.has(item.index)
+  ));
+}
+
+function runIterativeStartBalancing(firstLeg, tileMap, playerCount, analysisOptions = {}, chooser, options = {}) {
   const baseFirstLeg = {
     ...firstLeg,
     summary: {
@@ -6414,41 +6431,33 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
       outliers: []
     }
   };
-  const analysisOptions = getPayToWinAnalysisOptions({
-    ...getRouteAnalysisVariantOptions(options),
-    payToWin: true
-  }, playerCount);
-  const excludedIndices = new Set();
-  const pruned = [];
+  const excludedIndices = new Set(options.initialExcludedIndices ?? []);
+  const removals = [];
   let currentFirstLeg = recomputeFirstLegPressure(tileMap, baseFirstLeg, {
     playerCount,
     ...analysisOptions,
-    excludedIndices: []
+    excludedIndices: [...excludedIndices]
   });
 
-  for (let pass = 0; pass < 12; pass += 1) {
-    const costState = getPayToWinCostEntries(currentFirstLeg, excludedIndices);
-    const expensiveEntries = costState.entries.filter((entry) => entry.energyCost >= 5);
-    if (!expensiveEntries.length) {
+  for (let pass = 0; pass < (options.maxPasses ?? 12); pass += 1) {
+    const activeStarts = getActivePruningStarts(currentFirstLeg, excludedIndices);
+    const removal = chooser({
+      baseFirstLeg,
+      currentFirstLeg,
+      activeStarts,
+      excludedIndices,
+      removals,
+      pass: pass + 1
+    });
+
+    if (!removal || excludedIndices.has(removal.index)) {
       break;
     }
 
-    const removed = choosePayToWinPruneEntry(costState.entries, options);
-    if (!removed) {
-      break;
-    }
-
-    excludedIndices.add(removed.index);
-    pruned.push({
-      index: removed.index,
-      score: removed.adjustedScore,
-      energyCost: removed.energyCost,
-      pass: pass + 1,
-      reason: getPayToWinRemovalBias(options) > 0
-        ? "removed weakest start for a short/easier setup"
-        : getPayToWinRemovalBias(options) < 0
-          ? "removed strongest start for a long/harder setup"
-          : "removed start farthest from the remaining mean"
+    excludedIndices.add(removal.index);
+    removals.push({
+      ...removal,
+      pass: pass + 1
     });
 
     currentFirstLeg = recomputeFirstLegPressure(tileMap, baseFirstLeg, {
@@ -6458,6 +6467,52 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
     });
   }
 
+  return {
+    baseFirstLeg,
+    currentFirstLeg,
+    excludedIndices,
+    removals
+  };
+}
+
+function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {}) {
+  const analysisOptions = getPayToWinAnalysisOptions({
+    ...getRouteAnalysisVariantOptions(options),
+    payToWin: true
+  }, playerCount);
+  const bias = getPayToWinRemovalBias(options);
+  const result = runIterativeStartBalancing(
+    firstLeg,
+    tileMap,
+    playerCount,
+    analysisOptions,
+    ({ currentFirstLeg, excludedIndices }) => {
+      const costState = getPayToWinCostEntries(currentFirstLeg, excludedIndices);
+      const expensiveEntries = costState.entries.filter((entry) => entry.energyCost >= 5);
+      if (!expensiveEntries.length) {
+        return null;
+      }
+
+      const removed = choosePayToWinPruneEntry(costState.entries, options);
+      if (!removed) {
+        return null;
+      }
+
+      return {
+        index: removed.index,
+        score: removed.adjustedScore,
+        energyCost: removed.energyCost,
+        reason: bias > 0
+          ? "removed weakest start for a short/easier setup"
+          : bias < 0
+            ? "removed strongest start for a long/harder setup"
+            : "removed start farthest from the remaining mean"
+      };
+    },
+    { maxPasses: 12 }
+  );
+
+  const { currentFirstLeg, excludedIndices, removals: pruned } = result;
   const finalCostState = getPayToWinCostEntries(currentFirstLeg, excludedIndices);
   const costByIndex = new Map(finalCostState.entries.map((entry) => [entry.index, entry.energyCost]));
   const activeScores = finalCostState.entries.map((entry) => entry.adjustedScore);
@@ -6495,6 +6550,19 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
   };
 }
 
+function getExpectedRouteTileSet(route, goal = null) {
+  const goalKey = goal ? `${goal.x},${goal.y}` : null;
+  const set = new Set();
+  (route?.path || []).forEach((point, index, path) => {
+    const key = `${point.x},${point.y}`;
+    if (goalKey && index === path.length - 1 && key === goalKey) {
+      return;
+    }
+    set.add(key);
+  });
+  return set;
+}
+
 function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) {
   const movingTargetTimelines = options.movingTargetTimelines ?? buildMovingTargetTimelines(
     tileMap,
@@ -6502,8 +6570,10 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
     options.movingTargets,
     { maxActions: options.movingTargetMaxActions ?? 16 }
   );
-  const firstLeg = analyzeCourse(tileMap, starts, flags[0], getPayToWinAnalysisOptions({
-    maxRoutes: 4,
+  const firstLeg = analyzeFullCourse(tileMap, starts, flags, getPayToWinAnalysisOptions({
+    maxRoutes: 2,
+    maxActions: Math.max(24, flags.length * 18 + 8),
+    maxExpansions: 52000,
     flags,
     playerCount,
     recoveryRule: options.recoveryRule,
@@ -6511,7 +6581,7 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
     startupSpinUp: options.startupSpinUp,
     rebootTokens: options.rebootTokens,
     boardRects: options.boardRects,
-    dynamicGoal: movingTargetTimelines[0] ?? null,
+    dynamicGoals: movingTargetTimelines,
     payToWin: options.payToWin
   }, playerCount));
 
@@ -6523,41 +6593,13 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
     }
   ];
 
-  let previousLegRoutes = firstLeg.starts
-    .map((start) => start.selectedRoute)
-    .filter(Boolean);
-
-  for (let index = 1; index < flags.length; index += 1) {
-    const allowedFacings = [...new Set(
-      previousLegRoutes
-        .map((route) => route?.finalState?.facing)
-        .filter((facing) => FACINGS.includes(facing))
-    )];
-    const analysis = analyzeFlagLeg(tileMap, flags[index - 1], flags[index], {
-      facings: allowedFacings.length ? allowedFacings : FACINGS,
-      routesPerFacing: 3,
-      maxDistinctRoutes: 4,
-      previousLegRoutes,
-      startStates: previousLegRoutes
-        .map((route) => route?.finalState)
-        .filter(Boolean),
-      playerCount,
-      maxExpansions: 18000,
-      recoveryRule: options.recoveryRule,
-      ...getRouteAnalysisVariantOptions(options),
-      rebootTokens: options.rebootTokens,
-      boardRects: options.boardRects,
-      dynamicGoal: movingTargetTimelines[index] ?? null
-    });
-
+  (firstLeg.expectedLegAnalyses || []).forEach((analysis, index) => {
     legs.push({
-      from: index,
-      to: index + 1,
+      from: index + 1,
+      to: index + 2,
       analysis
     });
-
-    previousLegRoutes = analysis.distinctRoutes;
-  }
+  });
 
   const totalDifficulty = legs.reduce((sum, leg) => {
     if (leg.analysis.summary.difficultyScore !== undefined) {
@@ -6605,7 +6647,11 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
       ...legs[0],
       analysis: courseAdjustedFirstLeg
     },
-    ...legs.slice(1)
+    ...(courseAdjustedFirstLeg.expectedLegAnalyses || []).map((analysis, index) => ({
+      from: index + 1,
+      to: index + 2,
+      analysis
+    }))
   ];
 
   return {
@@ -6623,184 +6669,101 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
           return sum + leg.analysis.summary.averageRouteScore + leg.analysis.summary.congestionScore - leg.analysis.summary.diversityScore * 0.2;
         }, 0)
       ).toFixed(2)),
-      totalLength: Number(totalLength.toFixed(2))
+      totalLength: Number((
+        adjustedLegs.reduce((sum, leg) => {
+          if (leg.analysis.summary.lengthScore !== undefined) {
+            return sum + leg.analysis.summary.lengthScore;
+          }
+
+          return sum + leg.analysis.summary.averageRouteDistance;
+        }, 0)
+      ).toFixed(2))
     }
   };
 }
 
 function adjustStartOutliersForCourseLength(firstLeg, totalLength, tileMap, playerCount, options = {}) {
-  const baseFirstLeg = {
-    ...firstLeg,
-    summary: {
-      ...firstLeg.summary,
-      outliers: []
-    }
-  };
-  let currentFirstLeg = recomputeFirstLegPressure(tileMap, baseFirstLeg, {
+  const analysisOptions = getRouteAnalysisVariantOptions(options);
+  const initialReachableCount = (firstLeg.starts || []).filter((item) => item.reachable && item.selectedRoute).length;
+  const maxNormalRemovals = Math.max(0, initialReachableCount - playerCount);
+
+  const result = runIterativeStartBalancing(
+    firstLeg,
+    tileMap,
     playerCount,
-    ...getRouteAnalysisVariantOptions(options),
-    excludedIndices: []
-  });
-  const outlierSet = new Set();
-  const outlierDiagnostics = new Map();
-
-  function setsEqual(left, right) {
-    return left.size === right.size && [...left].every((item) => right.has(item));
-  }
-
-  function buildOutlierList(sourceFirstLeg, activeReachable = null) {
-    const activeItems = activeReachable ?? sourceFirstLeg.starts.filter((item) => (
-      item.reachable && item.selectedRoute && !outlierSet.has(item.index)
-    ));
-    const adjustedScores = activeItems.map((item) => item.adjustedScore);
-    const actions = activeItems.map((item) => item.bestActions);
-    const scoreMean = adjustedScores.length
-      ? adjustedScores.reduce((sum, value) => sum + value, 0) / adjustedScores.length
-      : 0;
-    const actionMean = actions.length
-      ? actions.reduce((sum, value) => sum + value, 0) / actions.length
-      : 0;
-
-    return [...outlierSet]
-      .map((index) => {
-        const item = sourceFirstLeg.starts.find((candidate) => candidate.index === index);
-        if (!item) {
-          return null;
-        }
-
-        return {
-          index,
-          score: item.adjustedScore,
-          delta: Number((item.adjustedScore - scoreMean).toFixed(2)),
-          actionDelta: Number((item.bestActions - actionMean).toFixed(2)),
-          reasons: outlierDiagnostics.get(index) ?? null
-        };
-      })
-      .filter(Boolean);
-  }
-
-  for (let pass = 0; pass < 4; pass += 1) {
-    const activeReachable = currentFirstLeg.starts.filter((item) => (
-      item.reachable && item.selectedRoute && !outlierSet.has(item.index)
-    ));
-    if (activeReachable.length < 2) {
-      break;
-    }
-    if (activeReachable.length <= playerCount) {
-      break;
-    }
-
-    const firstLegLength = currentFirstLeg.summary.lengthScore || 0;
-    const firstLegActions = currentFirstLeg.summary.actionScore || 0;
-    const safeTotalLength = Math.max(totalLength || 0, firstLegLength || 1);
-    const safeTotalActions = Math.max(options.totalActions || 0, firstLegActions || 1);
-    const firstLegShare = firstLegLength / safeTotalLength;
-    const firstLegActionShare = firstLegActions / safeTotalActions;
-    const shortCourseFactor = clamp((24 - safeTotalActions) / 14, 0, 1);
-    const longCourseFactor = clamp((safeTotalActions - 34) / 18, 0, 1);
-    const firstLegShareFactor = clamp((firstLegShare - 0.24) / 0.34, 0, 1);
-    const firstLegActionShareFactor = clamp((firstLegActionShare - 0.28) / 0.34, 0, 1);
-    const thresholdScale = clamp(
-      1 - shortCourseFactor * 0.34 - firstLegShareFactor * 0.1 - firstLegActionShareFactor * 0.16 + longCourseFactor * 0.14,
-      0.58,
-      1.12
-    );
-    const severeActionThreshold = Math.max(
-      2,
-      Math.round(OUTLIER_MIN_ACTION_GAP - shortCourseFactor * 2 - firstLegActionShareFactor)
-    );
-
-    const adjustedScores = activeReachable.map((item) => item.adjustedScore);
-    const actions = activeReachable.map((item) => item.bestActions);
-    const scoreMean = adjustedScores.reduce((sum, value) => sum + value, 0) / adjustedScores.length;
-    const actionMean = actions.reduce((sum, value) => sum + value, 0) / actions.length;
-    const minActions = Math.min(...actions);
-    const scoreStdDev = Math.sqrt(adjustedScores.reduce((sum, value) => sum + (value - scoreMean) ** 2, 0) / adjustedScores.length);
-    const actionStdDev = Math.sqrt(actions.reduce((sum, value) => sum + (value - actionMean) ** 2, 0) / actions.length);
-    const scoreThreshold = Math.max(8, scoreStdDev * 1.6) * thresholdScale;
-    const actionThreshold = Math.max(2, actionStdDev * 1.05) * thresholdScale;
-    const nextOutlierSet = new Set(outlierSet);
-    const reachableCount = currentFirstLeg.starts.filter((item) => item.reachable && item.selectedRoute).length;
-    const alreadyDroppedCount = reachableCount - activeReachable.length;
-    const maxTotalDrops = Math.max(0, reachableCount - playerCount);
-    const remainingDropBudget = Math.max(0, maxTotalDrops - alreadyDroppedCount);
-    if (remainingDropBudget <= 0) {
-      break;
-    }
-    const candidateNewOutliers = [];
-
-    activeReachable.forEach((item) => {
-      const scoreGap = Math.abs(item.adjustedScore - scoreMean);
-      const actionGap = item.bestActions - actionMean;
-      const minActionGap = item.bestActions - minActions;
-      const scoreOutlier = scoreGap > scoreThreshold;
-      const actionOutlier = actionGap > actionThreshold;
-      const severeActionGap = minActionGap >= severeActionThreshold;
-
-      if (!scoreOutlier && !(actionOutlier && severeActionGap)) {
-        return;
+    analysisOptions,
+    ({ currentFirstLeg, activeStarts, excludedIndices }) => {
+      if (activeStarts.length <= playerCount) {
+        return null;
       }
 
-      candidateNewOutliers.push({
-        index: item.index,
-        severity: scoreGap + Math.max(0, actionGap) * 2,
+      const costState = getPayToWinCostEntries(currentFirstLeg, excludedIndices);
+      const badEntries = costState.entries.filter((entry) => entry.energyCost >= 3);
+      if (!badEntries.length) {
+        return null;
+      }
+
+      const removed = [...badEntries].sort((left, right) => (
+        right.energyCost - left.energyCost ||
+        left.adjustedScore - right.adjustedScore ||
+        left.index - right.index
+      ))[0];
+      return {
+        index: removed.index,
+        score: removed.adjustedScore,
+        actions: removed.startAnalysis.bestActions,
+        implicitCost: removed.energyCost,
         diagnostics: {
-          scoreOutlier,
-          actionOutlier,
-          severeActionGap,
-          scoreGap: Number(scoreGap.toFixed(2)),
-          scoreThreshold: Number(scoreThreshold.toFixed(2)),
-          actionGap: Number(actionGap.toFixed(2)),
-          actionThreshold: Number(actionThreshold.toFixed(2)),
-          minActionGap: Number(minActionGap.toFixed(2)),
-          minActionThreshold: severeActionThreshold,
-          totalCourseLength: Number(safeTotalLength.toFixed(2)),
-          totalCourseActions: Number(safeTotalActions.toFixed(2)),
-          firstLegShare: Number(firstLegShare.toFixed(2)),
-          firstLegActionShare: Number(firstLegActionShare.toFixed(2)),
-          thresholdScale: Number(thresholdScale.toFixed(2)),
-          outlierPass: pass + 1
+          normalBalancePruned: true,
+          implicitCost: removed.energyCost,
+          costThreshold: 3,
+          costUnit: costState.costUnit,
+          removalReason: "removed hidden start-cost outlier",
+          totalCourseLength: Number((totalLength || 0).toFixed(2)),
+          totalCourseActions: Number((options.totalActions || 0).toFixed(2))
         }
-      });
-    });
+      };
+    },
+    { maxPasses: maxNormalRemovals }
+  );
 
-    candidateNewOutliers
-      .sort((left, right) => right.severity - left.severity)
-      .slice(0, remainingDropBudget)
-      .forEach((item) => {
-        nextOutlierSet.add(item.index);
-        outlierDiagnostics.set(item.index, item.diagnostics);
-      });
-
-    if (setsEqual(nextOutlierSet, outlierSet)) {
-      break;
-    }
-
-    outlierSet.clear();
-    nextOutlierSet.forEach((index) => outlierSet.add(index));
-    currentFirstLeg = recomputeFirstLegPressure(tileMap, {
-      ...baseFirstLeg,
-      summary: {
-        ...baseFirstLeg.summary,
-        outliers: buildOutlierList(currentFirstLeg, activeReachable)
-      }
-    }, {
-      playerCount,
-      ...getRouteAnalysisVariantOptions(options),
-      excludedIndices: [...outlierSet]
-    });
-  }
+  const finalCostState = getPayToWinCostEntries(result.currentFirstLeg, result.excludedIndices);
+  const remainingBadEntries = finalCostState.entries.filter((entry) => entry.energyCost >= 3);
+  const badLimit = Math.ceil((playerCount || 1) * 0.25);
+  const shouldReject = remainingBadEntries.length > 0 && remainingBadEntries.length <= badLimit;
+  const activeScores = finalCostState.entries.map((entry) => entry.adjustedScore);
+  const meanScore = activeScores.length ? averageValues(activeScores) : 0;
+  const outliers = result.removals.map((item) => ({
+    index: item.index,
+    score: item.score,
+    delta: Number((item.score - meanScore).toFixed(2)),
+    actionDelta: 0,
+    reasons: item.diagnostics ?? null
+  }));
 
   return recomputeFirstLegPressure(tileMap, {
-    ...baseFirstLeg,
+    ...result.baseFirstLeg,
     summary: {
-      ...baseFirstLeg.summary,
-      outliers: buildOutlierList(currentFirstLeg)
+      ...result.baseFirstLeg.summary,
+      outliers,
+      normalStartBalance: {
+        active: true,
+        costUnit: finalCostState.costUnit,
+        pruned: result.removals,
+        remainingBadStarts: remainingBadEntries.map((entry) => ({
+          index: entry.index,
+          implicitCost: entry.energyCost,
+          score: entry.adjustedScore
+        })),
+        badCostThreshold: 3,
+        badLimit,
+        reject: shouldReject
+      }
     }
   }, {
     playerCount,
-    ...getRouteAnalysisVariantOptions(options),
-    excludedIndices: [...outlierSet]
+    ...analysisOptions,
+    excludedIndices: [...result.excludedIndices]
   });
 }
 
@@ -7507,6 +7470,159 @@ function getMovingTargetVolatilityPenalty(stats = {}, fairnessStdDev = 0, prefer
   return Number(raw.toFixed(2));
 }
 
+function getFullCourseExpectedRoutes(sequence) {
+  return (sequence?.firstLeg?.starts || [])
+    .filter((startAnalysis) => startAnalysis.reachable && startAnalysis.fullCourseRoute)
+    .map((startAnalysis) => ({
+      startIndex: startAnalysis.index,
+      route: startAnalysis.fullCourseRoute
+    }));
+}
+
+function getRouteDramaProfile(sequence, preferences = {}) {
+  const entries = getFullCourseExpectedRoutes(sequence);
+  if (entries.length <= 1) {
+    return {
+      level: "none",
+      score: 0,
+      penalty: 0,
+      crossings: 0,
+      sharedTiles: 0,
+      sharedTilePairs: 0,
+      reverseEdges: 0,
+      pairCount: 0
+    };
+  }
+
+  let sharedTilePairs = 0;
+  let reverseEdges = 0;
+  const sharedTiles = new Set();
+
+  function routeTileIndex(route) {
+    const map = new Map();
+    (route.path || []).forEach((point, index) => {
+      const key = `${point.x},${point.y}`;
+      if (!map.has(key)) {
+        map.set(key, []);
+      }
+      map.get(key).push(index);
+    });
+    return map;
+  }
+
+  function routeEdges(route) {
+    const edges = new Set();
+    const path = route.path || [];
+    for (let index = 1; index < path.length; index += 1) {
+      const from = path[index - 1];
+      const to = path[index];
+      if (to.jump) {
+        continue;
+      }
+      edges.add(`${from.x},${from.y}>${to.x},${to.y}`);
+    }
+    return edges;
+  }
+
+  const indexed = entries.map((entry) => ({
+    ...entry,
+    tiles: routeTileIndex(entry.route),
+    edges: routeEdges(entry.route)
+  }));
+
+  for (let left = 0; left < indexed.length; left += 1) {
+    for (let right = left + 1; right < indexed.length; right += 1) {
+      for (const [key, leftIndices] of indexed[left].tiles.entries()) {
+        const rightIndices = indexed[right].tiles.get(key);
+        if (!rightIndices) {
+          continue;
+        }
+        sharedTiles.add(key);
+        sharedTilePairs += 1;
+      }
+
+      for (const edge of indexed[left].edges) {
+        const [from, to] = edge.split(">");
+        if (indexed[right].edges.has(`${to}>${from}`)) {
+          reverseEdges += 1;
+        }
+      }
+    }
+  }
+
+  const pairCount = (entries.length * (entries.length - 1)) / 2;
+  const normalizedShared = pairCount ? sharedTilePairs / pairCount : 0;
+  const normalizedReverse = pairCount ? reverseEdges / pairCount : 0;
+  const score = Number(Math.min(40, normalizedShared * 2.2 + normalizedReverse * 1.6).toFixed(2));
+  const target = preferences.length === "short" || preferences.difficulty === "easy"
+    ? 2.5
+    : preferences.length === "long" || preferences.difficulty === "hard" || preferences.difficulty === "brutal"
+      ? 7
+      : 5;
+  const weakPenaltyScale = preferences.length === "short" || preferences.difficulty === "easy" ? 0.35 : 1;
+  const weakPenalty = Math.max(0, target - score) * weakPenaltyScale;
+  const excessivePenalty = Math.max(0, score - 20) * 0.45;
+  const penalty = Number((weakPenalty + excessivePenalty).toFixed(2));
+  const level = score >= 14 ? "high" : score >= 7 ? "moderate" : score >= 3 ? "low" : "none";
+
+  return {
+    level,
+    score,
+    penalty,
+    crossings: sharedTilePairs,
+    sharedTiles: sharedTiles.size,
+    sharedTilePairs,
+    reverseEdges,
+    pairCount
+  };
+}
+
+function getFinalLegAnticlimax(sequence, preferences = {}) {
+  const finalLeg = sequence?.legs?.at(-1);
+  if (!finalLeg || sequence.legs.length <= 1) {
+    return {
+      active: false,
+      fastestActions: null,
+      penalty: 0,
+      routeCount: 0
+    };
+  }
+
+  const routes = finalLeg.analysis?.distinctRoutes || finalLeg.analysis?.routes || [];
+  const actions = routes
+    .map((route) => route.actions)
+    .filter(Number.isFinite);
+  if (!actions.length) {
+    return {
+      active: false,
+      fastestActions: null,
+      penalty: 0,
+      routeCount: 0
+    };
+  }
+
+  const fastestActions = Math.min(...actions);
+  const shortfall = Math.max(0, 5 - fastestActions);
+  const lengthScale = preferences.length === "short"
+    ? 0.25
+    : preferences.length === "long"
+      ? 1.25
+      : 0.85;
+  const difficultyScale = preferences.difficulty === "easy"
+    ? 0.55
+    : preferences.difficulty === "hard" || preferences.difficulty === "brutal"
+      ? 1.15
+      : 0.9;
+  const penalty = Number((shortfall * shortfall * 3.5 * lengthScale * difficultyScale).toFixed(2));
+
+  return {
+    active: penalty > 0,
+    fastestActions,
+    penalty,
+    routeCount: routes.length
+  };
+}
+
 function classifyCandidate(sequence, preferences, context = {}) {
   const usableStarts = computeUsableStarts(sequence.firstLeg, preferences);
   const boardHarshness = computeBoardHarshness(context.boardPlacements, context.pieceMap);
@@ -7556,6 +7672,10 @@ function classifyCandidate(sequence, preferences, context = {}) {
 
   if (sequence.firstLeg.summary.reachableStarts < preferences.playerCount) {
     hardFailures.push("reachable-starts");
+  }
+
+  if (sequence.firstLeg.summary.normalStartBalance?.reject) {
+    hardFailures.push("normal-start-balance");
   }
 
   if (preferences.competitiveMode && (
@@ -7617,12 +7737,16 @@ function classifyCandidate(sequence, preferences, context = {}) {
     fairnessStdDev,
     preferences
   );
+  const finalLegAnticlimax = getFinalLegAnticlimax(sequence, preferences);
+  const routeDrama = getRouteDramaProfile(sequence, preferences);
   const fitScore = (
     difficultyFit * 1.2 +
     lengthFit +
     fairnessPenalty * 0.5 +
     competitiveBlockPenalty +
     movingTargetVolatilityPenalty +
+    finalLegAnticlimax.penalty +
+    routeDrama.penalty +
     Math.max(0, preferences.playerCount - usableStarts.length) * 20
   );
 
@@ -7641,6 +7765,8 @@ function classifyCandidate(sequence, preferences, context = {}) {
     checkpointPressure,
     movingTargetStats,
     movingTargetVolatilityPenalty,
+    finalLegAnticlimax,
+    routeDrama,
     acceptable: hardFailures.length === 0 && difficultyFit === 0 && lengthFit === 0,
     hardFailures,
     fitScore: Number(fitScore.toFixed(2))
@@ -7664,14 +7790,11 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     if (reasons.payToWinPruned) {
       parts.push(`Pay to Win cost ${reasons.energyCost} >= ${reasons.costThreshold ?? 5}`);
     }
+    if (reasons.normalBalancePruned) {
+      parts.push(`hidden start cost ${reasons.implicitCost} >= ${reasons.costThreshold ?? 3}`);
+    }
     if (reasons.removalReason) {
       parts.push(reasons.removalReason);
-    }
-    if (reasons.scoreOutlier) {
-      parts.push(`score gap ${reasons.scoreGap} > ${reasons.scoreThreshold}`);
-    }
-    if (reasons.actionOutlier && reasons.severeActionGap) {
-      parts.push(`actions gap ${reasons.actionGap} > ${reasons.actionThreshold} and best-gap ${reasons.minActionGap} >= ${reasons.minActionThreshold ?? OUTLIER_MIN_ACTION_GAP}`);
     }
     if (reasons.outlierPass) {
       parts.push(`pass ${reasons.outlierPass}`);
@@ -7756,12 +7879,21 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     `Length contributions: flags ${scenario.metrics.lengthMetrics.contributions.checkpointLoad}, players ${scenario.metrics.lengthMetrics.contributions.playerLoad}, actions ${scenario.metrics.lengthMetrics.contributions.actionLoad}, distance ${scenario.metrics.lengthMetrics.contributions.distanceLoad}, congestion ${scenario.metrics.lengthMetrics.contributions.congestionLoad}, flagArea ${scenario.metrics.lengthMetrics.contributions.flagAreaLoad}, difficulty ${scenario.metrics.lengthMetrics.contributions.difficultyLoad}, moving-targets ${scenario.metrics.lengthMetrics.contributions.movingTargetLoad}, act-fast ${scenario.metrics.lengthMetrics.contributions.actFastLoad}`,
     `Moving target profile: active ${scenario.movingTargetStats?.activeCount ?? 0}, pathTiles ${scenario.movingTargetStats?.totalPathLength ?? 0}, uniqueCoverage ${scenario.movingTargetStats?.coverageTiles ?? 0}, turns ${scenario.movingTargetStats?.totalTurns ?? 0}, fastSegments ${scenario.movingTargetStats?.fastSegments ?? 0}, difficultyBonus ${scenario.movingTargetStats?.difficultyBonus ?? 0}, lengthBonus ${scenario.movingTargetStats?.lengthBonus ?? 0}`,
     `Moving target volatility penalty: ${scenario.metrics.movingTargetVolatilityPenalty ?? 0}`,
+    scenario.metrics.finalLegAnticlimax?.active
+      ? `Final leg anticlimax penalty: ${scenario.metrics.finalLegAnticlimax.penalty} (fastest expected route ${scenario.metrics.finalLegAnticlimax.fastestActions} registers)`
+      : "Final leg anticlimax penalty: none",
+    scenario.metrics.routeDrama
+      ? `Route drama: ${scenario.metrics.routeDrama.level}, score ${scenario.metrics.routeDrama.score}, penalty ${scenario.metrics.routeDrama.penalty}, sharedTiles ${scenario.metrics.routeDrama.sharedTiles}, crossings ${scenario.metrics.routeDrama.crossings}, reverseEdges ${scenario.metrics.routeDrama.reverseEdges}`
+      : "Route drama: n/a",
     scenario.metrics.competitiveBlockImpact
       ? `Competitive block impact: strongStarts ${scenario.metrics.competitiveBlockImpact.strongStartCount}, remainingAfterBlocks ${scenario.metrics.competitiveBlockImpact.remainingStartCount}, bestDelta ${scenario.metrics.competitiveBlockImpact.bestScoreDelta}, topBandDelta ${scenario.metrics.competitiveBlockImpact.topBandDelta}, strongRemoved ${scenario.metrics.competitiveBlockImpact.strongStartsRemoved}, meaningful ${scenario.metrics.competitiveBlockImpact.meaningful ? "yes" : "no"}`
       : "Competitive block impact: n/a",
     summary.payToWin?.active
       ? `Pay to Win costs: unit ${summary.payToWin.costUnit}, trafficScale ${summary.payToWin.trafficScaleMultiplier}, pruned ${summary.payToWin.pruned.length ? summary.payToWin.pruned.map((item) => `#${item.index + 1}(${item.energyCost}E; pass ${item.pass})`).join(", ") : "none"}`
       : "Pay to Win costs: n/a",
+    summary.normalStartBalance?.active
+      ? `Normal start balance: unit ${summary.normalStartBalance.costUnit}, pruned ${summary.normalStartBalance.pruned.length ? summary.normalStartBalance.pruned.map((item) => `#${item.index + 1}(cost ${item.implicitCost}; pass ${item.pass})`).join(", ") : "none"}, remainingBad ${summary.normalStartBalance.remainingBadStarts.length}, reject ${summary.normalStartBalance.reject ? "yes" : "no"}`
+      : "Normal start balance: n/a",
     scenario.movingTargetReentryMarkers?.length
       ? `Moving target re-entry: ${scenario.movingTargetReentryMarkers.map((marker) => `${marker.label}(${marker.x},${marker.y})`).join(", ")}`
       : "Moving target re-entry: none",
@@ -7777,6 +7909,12 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     `Average overlap penalty: ${summary.averageOverlapPenalty ?? 0}`,
     `Average lateral threat: ${summary.averageLateralThreat ?? 0}`,
     `Average rear threat: ${summary.averageRearThreat ?? 0}`,
+    summary.courseContinuationWeighted
+      ? `Start full-course continuation: mean ${summary.courseContinuationMean}, weighted into start scores`
+      : "Start full-course continuation: n/a",
+    summary.fullCourseTraffic
+      ? `Full-course route pressure: passes ${summary.fullCourseTraffic.passes}, switches ${summary.fullCourseTraffic.routeSwitches}, avgPenalty ${summary.fullCourseTraffic.averagePenalty}`
+      : "Full-course route pressure: n/a",
     `Route overlap score: ${summary.overlapScore}`,
     `Fairness score: ${summary.fairnessScore}`,
     `Overall course score: ${summary.overallScore}`,
@@ -7795,7 +7933,9 @@ function buildScenarioReport(scenario, selectedLegIndex) {
         return `Leg ${leg.from} -> ${leg.to}: difficulty ${leg.analysis.summary.difficultyScore}, length ${leg.analysis.summary.lengthScore}`;
       }
 
-      return `Leg ${leg.from} -> ${leg.to}: routes ${leg.analysis.summary.routeCount}, distinct ${leg.analysis.summary.distinctRouteCount}, avgScore ${leg.analysis.summary.averageRouteScore}, avgLength ${leg.analysis.summary.averageRouteDistance}, diversity ${leg.analysis.summary.diversityScore}, congestion ${leg.analysis.summary.congestionScore}, backtrack ${leg.analysis.summary.crossLegOverlap}`;
+      return leg.analysis.summary.expectedRobotPaths
+        ? `Leg ${leg.from} -> ${leg.to}: expectedPaths ${leg.analysis.summary.expectedRouteCount}, avgScore ${leg.analysis.summary.averageRouteScore}, avgLength ${leg.analysis.summary.averageRouteDistance}, congestion ${leg.analysis.summary.congestionScore}, backtrack ${leg.analysis.summary.crossLegOverlap}`
+        : `Leg ${leg.from} -> ${leg.to}: routes ${leg.analysis.summary.routeCount}, distinct ${leg.analysis.summary.distinctRouteCount}, avgScore ${leg.analysis.summary.averageRouteScore}, avgLength ${leg.analysis.summary.averageRouteDistance}, diversity ${leg.analysis.summary.diversityScore}, congestion ${leg.analysis.summary.congestionScore}, backtrack ${leg.analysis.summary.crossLegOverlap}`;
     }),
     "",
     "Per-start best routes:"
@@ -7818,8 +7958,11 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     const energyCost = scenario.payToWin && startAnalysis.energyCost !== null && startAnalysis.energyCost !== undefined
       ? ` energy ${startAnalysis.energyCost}`
       : "";
+    const courseEstimate = startAnalysis.courseEstimate
+      ? ` courseAdj ${startAnalysis.courseScoreAdjustment ?? 0} courseScore ${startAnalysis.courseEstimate.totalScore} courseActions ${startAnalysis.courseEstimate.totalActions} courseTraffic ${startAnalysis.courseEstimate.fullCourseTrafficPenalty ?? 0} courseRoute ${(startAnalysis.courseEstimate.selectedRouteIndex ?? 0) + 1}/${startAnalysis.courseEstimate.candidateCount ?? 1}`
+      : "";
     lines.push(
-      `Start #${startAnalysis.index + 1} ${usable} at (${startAnalysis.start.x}, ${startAnalysis.start.y}) route ${startAnalysis.selectedRouteIndex + 1}/${startAnalysis.routes.length} ${adjustedLabel} ${startAnalysis.adjustedScore}${energyCost} raw ${selected.score} traffic ${startAnalysis.trafficPenalty} overlap ${startAnalysis.overlapPenalty} lateral ${startAnalysis.lateralThreat} rear ${startAnalysis.rearThreat ?? 0} scale ${startAnalysis.trafficScale ?? 0} distance ${selected.distance} actions ${selected.actions} forced ${selected.forcedDistance} hazard ${selected.hazard}${selected.movingTarget ? ` hit flag ${selected.movingTarget.checkpointId} space ${selected.movingTarget.space ?? "?"}` : ""}${outlierReason}`
+      `Start #${startAnalysis.index + 1} ${usable} at (${startAnalysis.start.x}, ${startAnalysis.start.y}) route ${startAnalysis.selectedRouteIndex + 1}/${startAnalysis.routes.length} ${adjustedLabel} ${startAnalysis.adjustedScore}${energyCost}${courseEstimate} raw ${selected.score} traffic ${startAnalysis.trafficPenalty} overlap ${startAnalysis.overlapPenalty} lateral ${startAnalysis.lateralThreat} rear ${startAnalysis.rearThreat ?? 0} scale ${startAnalysis.trafficScale ?? 0} distance ${selected.distance} actions ${selected.actions} forced ${selected.forcedDistance} hazard ${selected.hazard}${selected.movingTarget ? ` hit flag ${selected.movingTarget.checkpointId} space ${selected.movingTarget.space ?? "?"}` : ""}${outlierReason}`
     );
   }
 
@@ -7883,7 +8026,7 @@ function getLegRouteEntries(scenario, legIndex, options = {}) {
 
   return (leg.analysis.distinctRoutes || []).map((route, index) => ({
     id: `route:${index}`,
-    label: `Route ${index + 1}`,
+    label: Number.isFinite(route.startIndex) ? `Start ${route.startIndex + 1}` : `Route ${index + 1}`,
     route,
     routeIndex: index
   }));
@@ -7930,6 +8073,11 @@ function formatRouteDetail(entry) {
     if (entry.startAnalysis.energyCost !== null && entry.startAnalysis.energyCost !== undefined) {
       lines.push(`Pay to Win: costs ${entry.startAnalysis.energyCost} starting energy`);
     }
+    if (entry.startAnalysis.courseEstimate) {
+      lines.push(`Full-course estimate: ${entry.startAnalysis.courseEstimate.totalActions} registers, score ${entry.startAnalysis.courseEstimate.totalScore}, adjustment ${entry.startAnalysis.courseScoreAdjustment ?? 0}`);
+      lines.push(`Full-course route pressure: candidate ${(entry.startAnalysis.courseEstimate.selectedRouteIndex ?? 0) + 1}/${entry.startAnalysis.courseEstimate.candidateCount ?? 1}, penalty ${entry.startAnalysis.courseEstimate.fullCourseTrafficPenalty ?? 0}`);
+      lines.push("Map route: selected start's expected path through all checkpoints");
+    }
     lines.push(`Traffic: overlap ${entry.startAnalysis.overlapPenalty}, lateral ${entry.startAnalysis.lateralThreat}, rear ${entry.startAnalysis.rearThreat ?? 0}`);
     if (entry.outlierInfo) {
       lines.push(`Not comparable with final usable-start adjusted scores; this was measured in the pruning pass where it dropped.`);
@@ -7961,8 +8109,30 @@ function getCheckpointInspectionLines(scenario, checkpointIndex) {
     const summary = incomingLeg.analysis.summary;
     if (summary.difficultyScore !== undefined) {
       lines.push(`Route profile: difficulty ${summary.difficultyScore}, length ${summary.lengthScore}, traffic ${summary.averageTrafficPenalty}`);
+      const incomingStarts = scenario.sequence.firstLeg.starts
+        .filter((startAnalysis) => startAnalysis.reachable && startAnalysis.selectedRoute)
+        .map((startAnalysis) => ({
+          startIndex: startAnalysis.index,
+          actions: startAnalysis.selectedRoute.actions,
+          score: startAnalysis.selectedRoute.score
+        }));
+      if (incomingStarts.length) {
+        const fastest = [...incomingStarts].sort((left, right) => left.actions - right.actions || left.score - right.score)[0];
+        const slowest = [...incomingStarts].sort((left, right) => right.actions - left.actions || right.score - left.score)[0];
+        const hardest = [...incomingStarts].sort((left, right) => right.score - left.score || right.actions - left.actions)[0];
+        lines.push(`Expected incoming starts: ${incomingStarts.length}, fastest Start ${fastest.startIndex + 1} (${fastest.actions} registers), slowest Start ${slowest.startIndex + 1} (${slowest.actions}), hardest Start ${hardest.startIndex + 1} (score ${hardest.score})`);
+      }
     } else {
-      lines.push(`Route profile: ${summary.distinctRouteCount} distinct routes, average length ${summary.averageRouteDistance}, congestion ${summary.congestionScore}`);
+      lines.push(summary.expectedRobotPaths
+        ? `Route profile: ${summary.expectedRouteCount} expected robot paths, average length ${summary.averageRouteDistance}, congestion ${summary.congestionScore}`
+        : `Route profile: ${summary.distinctRouteCount} distinct routes, average length ${summary.averageRouteDistance}, congestion ${summary.congestionScore}`);
+      const incomingRoutes = incomingLeg.analysis.distinctRoutes || [];
+      if (summary.expectedRobotPaths && incomingRoutes.length) {
+        const fastest = [...incomingRoutes].sort((left, right) => left.actions - right.actions || left.score - right.score)[0];
+        const slowest = [...incomingRoutes].sort((left, right) => right.actions - left.actions || right.score - left.score)[0];
+        const hardest = [...incomingRoutes].sort((left, right) => right.score - left.score || right.actions - left.actions)[0];
+        lines.push(`Expected incoming starts: ${incomingRoutes.length}, fastest Start ${(fastest.startIndex ?? 0) + 1} (${fastest.actions} registers), slowest Start ${(slowest.startIndex ?? 0) + 1} (${slowest.actions}), hardest Start ${(hardest.startIndex ?? 0) + 1} (score ${hardest.score})`);
+      }
     }
   }
 
@@ -8163,6 +8333,16 @@ function applyRouteInspection(inspection) {
   }
 }
 
+function getFullCourseStartRenderAnalysis(firstLeg, starts) {
+  return {
+    ...firstLeg,
+    starts: starts.map((startAnalysis) => ({
+      ...startAnalysis,
+      selectedRoute: startAnalysis.fullCourseRoute ?? startAnalysis.selectedRoute
+    }))
+  };
+}
+
 function getScenarioRenderState(scenario) {
   const legSelect = document.getElementById("leg-select");
   const devViewEnabled = isDevViewEnabled();
@@ -8184,19 +8364,21 @@ function getScenarioRenderState(scenario) {
   const renderAnalysis = selectedLegIndex === null
     ? null
     : focusedRoute
-      ? selectedLegIndex === 0
-        ? {
-          ...scenario.sequence.firstLeg,
-          starts: focusedRoute.startAnalysis ? [focusedRoute.startAnalysis] : []
-        }
-        : { routes: [focusedRoute.route] }
-      : selectedLegIndex === 0
-        ? showOutlierRoutes
-          ? scenario.sequence.firstLeg
-          : {
+      ? selectedLegIndex === 0 && focusedRoute.startAnalysis?.fullCourseRoute
+        ? { routes: [focusedRoute.startAnalysis.fullCourseRoute] }
+        : selectedLegIndex === 0
+          ? {
             ...scenario.sequence.firstLeg,
-            starts: scenario.sequence.firstLeg.starts.filter((startAnalysis) => !outlierIndices.has(startAnalysis.index))
+            starts: focusedRoute.startAnalysis ? [focusedRoute.startAnalysis] : []
           }
+          : { routes: [focusedRoute.route] }
+      : selectedLegIndex === 0
+        ? getFullCourseStartRenderAnalysis(
+          scenario.sequence.firstLeg,
+          showOutlierRoutes
+            ? scenario.sequence.firstLeg.starts
+            : scenario.sequence.firstLeg.starts.filter((startAnalysis) => !outlierIndices.has(startAnalysis.index))
+        )
         : { routes: displayedLeg.analysis.distinctRoutes };
   const boardViewMode = getBoardViewMode();
   const iconBoardView = boardViewMode === BOARD_VIEW_MODES.icons;

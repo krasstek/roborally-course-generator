@@ -49,7 +49,8 @@ const ROTATION_ORDER = ["N", "E", "S", "W"];
 const EDGE_BEHAVIOR = "pit";
 const REBOOT_DAMAGE_PENALTY = 8;
 const MORE_DEADLY_REBOOT_DAMAGE_PENALTY = 12;
-const REBOOT_TEMPO_PENALTY = 14;
+const REGISTER_TEMPO_COST = 6.4;
+const REBOOT_AVERAGE_LOST_REGISTERS = 2;
 // Reboots also jump the route to an archive/reboot token. This small extra cost
 // mirrors portal/teleporter readability friction without re-counting damage or tempo.
 const REBOOT_DISCONTINUITY_PENALTY = 3;
@@ -77,8 +78,6 @@ const OVERLAP_PENALTY_CACHE = new Map();
 const LATERAL_THREAT_CACHE = new Map();
 const REAR_THREAT_CACHE = new Map();
 const ROUTE_PAIR_CACHE_LIMIT = 2500;
-const OUTLIER_REEVALUATION_PASSES = 3;
-const OUTLIER_MIN_ACTION_GAP = 4;
 
 function setBoundedCacheValue(cache, key, value, limit = ROUTE_PAIR_CACHE_LIMIT) {
   if (cache.has(key)) {
@@ -287,8 +286,16 @@ function getRebootDamagePenalty(options = {}) {
   return Number((basePenalty * getDamageDeckPressureMultipliers(options).reboot).toFixed(2));
 }
 
-function getRebootRoutePenalty() {
-  return REBOOT_TEMPO_PENALTY + REBOOT_DISCONTINUITY_PENALTY;
+function getRegisterPosition(actionCount) {
+  return ((Math.max(1, actionCount) - 1) % REGISTER_COUNT) + 1;
+}
+
+function getRebootRoutePenalty(actionCount = null) {
+  const lostRegisters = Number.isFinite(actionCount)
+    ? REGISTER_COUNT - getRegisterPosition(actionCount)
+    : REBOOT_AVERAGE_LOST_REGISTERS;
+
+  return Number((lostRegisters * REGISTER_TEMPO_COST + REBOOT_DISCONTINUITY_PENALTY).toFixed(2));
 }
 
 function isBatteryActive(options = {}) {
@@ -1314,8 +1321,11 @@ export function simulateAction(tileMap, startState, action, options = {}) {
     state.facing = pushed.state.facing;
   }
 
+  let gearTurned = false;
   if (!crashed && !rebooted) {
+    const facingBeforeGear = state.facing;
     const rotated = applyEndOfStepRotation(tileMap, state);
+    gearTurned = rotated.facing !== facingBeforeGear;
     state.x = rotated.x;
     state.y = rotated.y;
     state.facing = rotated.facing;
@@ -1343,6 +1353,7 @@ export function simulateAction(tileMap, startState, action, options = {}) {
     rebootChoices,
     traversed,
     conveyorSteps,
+    gearTurned,
     hazard,
     rebootPenalty,
     distance,
@@ -1372,14 +1383,14 @@ function buildTimeline(transitions, start) {
 }
 
 function getActionPenalty(action, options = {}) {
-  if (action.id === "WAIT") return options.lighterGame ? 7.5 : 5.75;
-  if (action.id === "FORWARD") return 5;
-  if (action.id === "FORWARD_2") return 7;
-  if (action.id === "FORWARD_3") return 9.5;
-  if (action.id === "LEFT" || action.id === "RIGHT") return 6.5;
-  if (action.id === "BACK") return 9.5;
-  if (action.id === "UTURN") return 12;
-  return 5;
+  if (action.id === "WAIT") return options.lighterGame ? REGISTER_TEMPO_COST + 1.5 : REGISTER_TEMPO_COST - 0.25;
+  if (action.id === "FORWARD") return REGISTER_TEMPO_COST;
+  if (action.id === "FORWARD_2") return REGISTER_TEMPO_COST + 0.35;
+  if (action.id === "FORWARD_3") return REGISTER_TEMPO_COST + 0.85;
+  if (action.id === "LEFT" || action.id === "RIGHT") return REGISTER_TEMPO_COST + 0.45;
+  if (action.id === "BACK") return REGISTER_TEMPO_COST + 1.15;
+  if (action.id === "UTURN") return REGISTER_TEMPO_COST + 1.9;
+  return REGISTER_TEMPO_COST;
 }
 
 function countAction(actions, actionId) {
@@ -1404,37 +1415,52 @@ function getCardAvailabilityPressure(history, actionId, options = {}) {
     return 0;
   }
 
-  const registerWindow = [...history.slice(-(REGISTER_COUNT - 1)), actionId];
+  const registerIndex = history.length % REGISTER_COUNT;
+  const currentTurnHistory = history.slice(history.length - registerIndex);
+  const currentTurnWindow = [...currentTurnHistory, actionId];
   const handWindow = [...history.slice(-(HAND_DRAW_SIZE - 1)), actionId];
-  const registerCopies = countAction(registerWindow, actionId);
-  const handCopies = countAction(handWindow, actionId);
   const previousActionId = history.at(-1);
-  const usesAgain = previousActionId === actionId;
-  const immediateAgainCopy = usesAgain ? AGAIN_CARD_COUNT : 0;
-  const registerCapacity = cardCount + immediateAgainCopy;
-  const handCapacity = cardCount + AGAIN_CARD_COUNT;
+  const immediateRepeatInTurn = registerIndex > 0 && previousActionId === actionId;
+  const turnCopies = countAction(currentTurnWindow, actionId);
+  const handCopies = countAction(handWindow, actionId);
+  const turnNaturalOveruse = Math.max(0, turnCopies - cardCount);
+  const usesAgain = immediateRepeatInTurn && turnNaturalOveruse > 0;
+  const turnOveruse = Math.max(0, turnCopies - cardCount - (usesAgain ? AGAIN_CARD_COUNT : 0));
+  const handOveruse = Math.max(0, handCopies - cardCount - AGAIN_CARD_COUNT);
   const repeatCopies = Math.max(0, handCopies - 1);
-  const registerOveruse = Math.max(0, registerCopies - registerCapacity);
-  const handOveruse = Math.max(0, handCopies - handCapacity);
-  const registerAgainOveruse = Math.max(0, countImmediateRepeats(registerWindow) - AGAIN_CARD_COUNT);
-  const handAgainOveruse = Math.max(0, countImmediateRepeats(handWindow) - AGAIN_CARD_COUNT);
+  const priorTurnEnd = history.length - registerIndex;
+  const priorTurnHistory = registerIndex === 0
+    ? history.slice(Math.max(0, priorTurnEnd - REGISTER_COUNT), priorTurnEnd)
+    : [];
+  const priorTurnCopies = countAction(priorTurnHistory, actionId);
   const lessForeshadowingFactor = options.lessForeshadowing ? 0.72 : 1;
   let penalty = 0;
 
+  // Again is a single card. It can copy the previous register inside the same
+  // five-register program, but it cannot make register 1 copy register 5 from
+  // the previous turn. Multi-copy cards do not need Again just because they are
+  // played consecutively.
   if (usesAgain) {
     penalty += AGAIN_USE_PENALTY;
   }
 
-  if (cardCount === 1 && repeatCopies > 0) {
-    penalty += usesAgain ? 0 : 11;
-  } else if (cardCount === 3 && repeatCopies > 1) {
-    penalty += (repeatCopies - 1) * 1.8;
+  if (turnOveruse > 0) {
+    penalty += turnOveruse * (cardCount === 1 ? 22 : 15);
   }
 
-  penalty += registerOveruse * 16;
+  if (cardCount === 1 && repeatCopies > 0 && !usesAgain) {
+    penalty += 8;
+  } else if (cardCount === 3 && repeatCopies > 1) {
+    penalty += (repeatCopies - 1) * 1.2;
+  }
+
+  if (registerIndex === 0 && priorTurnCopies > 0 && !options.lessForeshadowing) {
+    penalty += cardCount === 1
+      ? 10
+      : Math.max(0, priorTurnCopies - Math.max(1, cardCount - 2)) * 2.5;
+  }
+
   penalty += handOveruse * 7;
-  penalty += registerAgainOveruse * 16;
-  penalty += handAgainOveruse * 7;
 
   if (actionId === "WAIT" && !options.lighterGame && previousActionId !== actionId) {
     penalty = Math.max(0, penalty - 1.5);
@@ -1445,7 +1471,7 @@ function getCardAvailabilityPressure(history, actionId, options = {}) {
 
 function weightedDistance(distance, forcedDistance) {
   const manualDistance = Math.max(0, distance - forcedDistance);
-  return manualDistance * 2 + forcedDistance * 0.7;
+  return Number((manualDistance * 0.75 + forcedDistance * 0.55).toFixed(2));
 }
 
 function scoreConveyorStep(step, goal) {
@@ -1475,6 +1501,9 @@ function scoreConveyorComplexity(route, goal) {
   for (const transition of route.transitions) {
     for (const step of transition.conveyorSteps || []) {
       score += scoreConveyorStep(step, goal);
+    }
+    if (transition.gearTurned) {
+      score += 0.55;
     }
   }
 
@@ -1650,8 +1679,8 @@ function enumerateRoutes(tileMap, start, goal, options = {}) {
       }
 
       const actionPenalty = getActionPenalty(action, options);
-      const reversePenalty = action.id === "BACK" ? 2.5 : 0;
-      const heavyMovePenalty = action.id === "FORWARD_2" ? 1.5 : action.id === "FORWARD_3" ? 3 : 0;
+      const reversePenalty = action.id === "BACK" ? 1.4 : 0;
+      const heavyMovePenalty = action.id === "FORWARD_2" ? 0.25 : action.id === "FORWARD_3" ? 0.75 : 0;
       const scarceReusePenalty = getCardAvailabilityPressure(current.actionHistory, action.id, options);
       const conveyorComplexity = scoreConveyorComplexity({
         transitions: [transition]
@@ -1661,6 +1690,9 @@ function enumerateRoutes(tileMap, start, goal, options = {}) {
 
       for (const destination of destinations) {
         const nextActionCount = current.actions + 1;
+        const transitionRebootPenalty = transition.rebooted
+          ? getRebootRoutePenalty(nextActionCount)
+          : (transition.rebootPenalty || 0);
         const nextStateKey = getSearchStateKey(destination, nextActionCount, options);
         if (current.visited.has(nextStateKey)) {
           continue;
@@ -1676,8 +1708,8 @@ function enumerateRoutes(tileMap, start, goal, options = {}) {
           distance: current.distance + transition.distance,
           forcedDistance: current.forcedDistance + transition.forcedDistance,
           hazard: current.hazard + transition.hazard,
-          rebootPenalty: current.rebootPenalty + (transition.rebootPenalty || 0),
-          baseCost: current.baseCost + transition.hazard + (transition.rebootPenalty || 0) + weightedDistance(transition.distance, transition.forcedDistance) + actionPenalty + reversePenalty + heavyMovePenalty + scarceReusePenalty + conveyorComplexity,
+          rebootPenalty: current.rebootPenalty + transitionRebootPenalty,
+          baseCost: current.baseCost + transition.hazard + transitionRebootPenalty + weightedDistance(transition.distance, transition.forcedDistance) + actionPenalty + reversePenalty + heavyMovePenalty + scarceReusePenalty + conveyorComplexity,
           actionHistory: nextActionHistory,
           visited: new Set([...current.visited, nextStateKey])
         };
@@ -1696,6 +1728,278 @@ function enumerateRoutes(tileMap, start, goal, options = {}) {
 
   return completed;
 }
+
+function getFullCourseDynamicGoal(options = {}, checkpointIndex) {
+  return Array.isArray(options.dynamicGoals)
+    ? options.dynamicGoals[checkpointIndex] ?? null
+    : null;
+}
+
+function getFullCourseTarget(flags, checkpointIndex, actionCount, options = {}) {
+  const goal = flags[checkpointIndex];
+  return getDynamicGoalPosition(getFullCourseDynamicGoal(options, checkpointIndex), actionCount) ?? goal;
+}
+
+function fullCourseRouteReachesNextCheckpoint(route, flags, options = {}) {
+  const target = getFullCourseTarget(flags, route.checkpointIndex, route.actions, options);
+  return route.finalState.x === target.x && route.finalState.y === target.y;
+}
+
+function getFullCourseSearchStateKey(state, actionCount, checkpointIndex, options = {}) {
+  const dynamicGoal = getFullCourseDynamicGoal(options, checkpointIndex);
+  const registerPhase = actionCount % REGISTER_COUNT;
+  if (!dynamicGoal) {
+    return `${stateKey(state)}@cp${checkpointIndex}@r${registerPhase}`;
+  }
+
+  const { periodStart = 0, periodLength = 0, positions = [] } = dynamicGoal;
+  const phase = periodLength > 0 && actionCount >= periodStart
+    ? `${periodStart}+${(actionCount - periodStart) % periodLength}`
+    : String(Math.min(actionCount, Math.max(0, positions.length - 1)));
+
+  return `${stateKey(state)}@cp${checkpointIndex}@r${registerPhase}@${phase}`;
+}
+
+function estimateFullCourseRoute(route, flags, options = {}) {
+  if (route.checkpointIndex >= flags.length) {
+    return route.baseCost;
+  }
+
+  const target = getFullCourseTarget(flags, route.checkpointIndex, route.actions, options);
+  let remainingDistance = heuristic(route.finalState, target);
+  for (let index = route.checkpointIndex + 1; index < flags.length; index += 1) {
+    remainingDistance += heuristic(flags[index - 1], flags[index]);
+  }
+
+  return route.baseCost + remainingDistance * 4.6;
+}
+
+function createFullCourseQueueEntry(route, flags, options = {}) {
+  return {
+    ...route,
+    estimate: estimateFullCourseRoute(route, flags, options)
+  };
+}
+
+function makeCheckpointHit(route, flags, options = {}) {
+  const checkpointIndex = route.checkpointIndex;
+  const dynamicGoal = getFullCourseDynamicGoal(options, checkpointIndex);
+  const hitTarget = getFullCourseTarget(flags, checkpointIndex, route.actions, options);
+  return {
+    checkpointIndex,
+    checkpointId: flags[checkpointIndex]?.id ?? checkpointIndex + 1,
+    action: route.actions,
+    state: cloneState(route.finalState),
+    position: hitTarget,
+    movingTarget: dynamicGoal
+      ? {
+        checkpointId: dynamicGoal.id ?? flags[checkpointIndex]?.id ?? checkpointIndex + 1,
+        position: hitTarget,
+        space: getDynamicGoalSpace(dynamicGoal, hitTarget),
+        actions: route.actions,
+        positions: dynamicGoal.positions ?? [],
+        displayPositions: dynamicGoal.displayPositions ?? dynamicGoal.positions ?? []
+      }
+      : null,
+    distance: route.distance,
+    forcedDistance: route.forcedDistance,
+    hazard: route.hazard,
+    rebootPenalty: route.rebootPenalty,
+    baseCost: route.baseCost
+  };
+}
+
+function enumerateFullCourseRoutes(tileMap, start, flags, options = {}) {
+  if (!Array.isArray(flags) || !flags.length) {
+    return [];
+  }
+
+  const maxRoutes = options.maxRoutes ?? 2;
+  const maxActions = options.maxActions ?? Math.max(24, flags.length * 18 + 8);
+  const maxExpansions = options.maxExpansions ?? 45000;
+  const startState = {
+    x: start.x,
+    y: start.y,
+    facing: start.facing ?? "E"
+  };
+  const portalMap = buildPortalMap(tileMap);
+  const initialRoute = {
+    finalState: startState,
+    initialState: startState,
+    transitions: [],
+    actions: 0,
+    distance: 0,
+    forcedDistance: 0,
+    hazard: 0,
+    rebootPenalty: 0,
+    baseCost: 0,
+    checkpointIndex: 0,
+    checkpointHits: [],
+    actionHistory: [],
+    visited: new Set([getFullCourseSearchStateKey(startState, 0, 0, options)])
+  };
+  const queue = [createFullCourseQueueEntry(initialRoute, flags, options)];
+  const bestCostByState = new Map([[getFullCourseSearchStateKey(startState, 0, 0, options), 0]]);
+  const completed = [];
+  let expansions = 0;
+
+  while (queue.length && completed.length < maxRoutes && expansions < maxExpansions) {
+    queue.sort((a, b) => a.estimate - b.estimate);
+    const current = queue.shift();
+    const currentStateId = getFullCourseSearchStateKey(current.finalState, current.actions, current.checkpointIndex, options);
+    const knownBest = bestCostByState.get(currentStateId);
+
+    if (knownBest !== undefined && current.baseCost > knownBest + 0.001) {
+      continue;
+    }
+
+    if (current.checkpointIndex >= flags.length) {
+      const timeline = buildTimeline(current.transitions, startState);
+      const finalGoal = flags.at(-1);
+      const routeScore = scoreRoute({ ...current, path: timeline, hitTarget: current.checkpointHits.at(-1)?.position ?? finalGoal }, finalGoal);
+      if ((options.recoveryRule === "dynamic_archiving" || !options.recoveryRule) && routeTouchesPit(tileMap, { path: timeline })) {
+        continue;
+      }
+      completed.push({
+        path: timeline,
+        transitions: current.transitions,
+        finalState: current.finalState,
+        initialState: startState,
+        checkpointHits: current.checkpointHits,
+        actionHistory: current.actionHistory,
+        fullCourse: true,
+        ...routeScore
+      });
+      continue;
+    }
+
+    expansions += 1;
+    if (current.actions >= maxActions) {
+      continue;
+    }
+
+    const currentTarget = getFullCourseTarget(flags, current.checkpointIndex, current.actions, options);
+    const dynamicGoal = getFullCourseDynamicGoal(options, current.checkpointIndex);
+
+    for (const action of ACTIONS) {
+      const transition = simulateAction(tileMap, current.finalState, action, {
+        ...options,
+        portalMap
+      });
+      if (transition.crashed || transition.blocked) {
+        continue;
+      }
+
+      const actionPenalty = getActionPenalty(action, options);
+      const reversePenalty = action.id === "BACK" ? 1.4 : 0;
+      const heavyMovePenalty = action.id === "FORWARD_2" ? 0.25 : action.id === "FORWARD_3" ? 0.75 : 0;
+      const scarceReusePenalty = getCardAvailabilityPressure(current.actionHistory, action.id, options);
+      const conveyorComplexity = scoreConveyorComplexity({ transitions: [transition] }, currentTarget);
+      const nextActionHistory = [...current.actionHistory, action.id].slice(-9);
+      const destinations = transition.rebootChoices?.length ? transition.rebootChoices : [transition.to];
+
+      for (const destination of destinations) {
+        const nextActionCount = current.actions + 1;
+        const transitionRebootPenalty = transition.rebooted
+          ? getRebootRoutePenalty(nextActionCount)
+          : (transition.rebootPenalty || 0);
+        const transitionForDestination = transition.rebootChoices?.length
+          ? { ...transition, to: destination }
+          : transition;
+        let nextRoute = {
+          finalState: destination,
+          initialState: startState,
+          transitions: [...current.transitions, transitionForDestination],
+          actions: nextActionCount,
+          distance: current.distance + transition.distance,
+          forcedDistance: current.forcedDistance + transition.forcedDistance,
+          hazard: current.hazard + transition.hazard,
+          rebootPenalty: current.rebootPenalty + transitionRebootPenalty,
+          baseCost: current.baseCost + transition.hazard + transitionRebootPenalty + weightedDistance(transition.distance, transition.forcedDistance) + actionPenalty + reversePenalty + heavyMovePenalty + scarceReusePenalty + conveyorComplexity,
+          checkpointIndex: current.checkpointIndex,
+          checkpointHits: current.checkpointHits,
+          actionHistory: nextActionHistory,
+          visited: current.visited
+        };
+
+        if (fullCourseRouteReachesNextCheckpoint(nextRoute, flags, options)) {
+          const hit = makeCheckpointHit(nextRoute, flags, options);
+          nextRoute = {
+            ...nextRoute,
+            checkpointIndex: nextRoute.checkpointIndex + 1,
+            checkpointHits: [...nextRoute.checkpointHits, hit]
+          };
+        }
+
+        const nextStateKey = getFullCourseSearchStateKey(nextRoute.finalState, nextActionCount, nextRoute.checkpointIndex, options);
+        if (current.visited.has(nextStateKey)) {
+          continue;
+        }
+
+        const priorBest = bestCostByState.get(nextStateKey);
+        if (priorBest !== undefined && nextRoute.baseCost >= priorBest - 0.001) {
+          continue;
+        }
+
+        bestCostByState.set(nextStateKey, nextRoute.baseCost);
+        queue.push(createFullCourseQueueEntry({
+          ...nextRoute,
+          visited: new Set([...current.visited, nextStateKey])
+        }, flags, options));
+      }
+    }
+  }
+
+  return completed;
+}
+
+function getMetricDelta(end, start, key) {
+  return Number(((end?.[key] ?? 0) - (start?.[key] ?? 0)).toFixed(2));
+}
+
+function sliceFullCourseRoute(fullRoute, legIndex, flags) {
+  const hit = fullRoute.checkpointHits?.[legIndex];
+  if (!hit) {
+    return null;
+  }
+
+  const previousHit = legIndex > 0 ? fullRoute.checkpointHits[legIndex - 1] : null;
+  const startAction = previousHit?.action ?? 0;
+  const endAction = hit.action;
+  const startState = previousHit?.state ?? fullRoute.initialState ?? fullRoute.path?.[0] ?? fullRoute.finalState;
+  const transitions = (fullRoute.transitions || []).slice(startAction, endAction);
+  const path = buildTimeline(transitions, startState);
+  const actionCount = Math.max(0, endAction - startAction);
+  const metricStart = previousHit ?? { distance: 0, forcedDistance: 0, hazard: 0, rebootPenalty: 0, baseCost: 0 };
+  const distance = getMetricDelta(hit, metricStart, "distance");
+  const forcedDistance = getMetricDelta(hit, metricStart, "forcedDistance");
+  const hazard = getMetricDelta(hit, metricStart, "hazard");
+  const rebootPenalty = getMetricDelta(hit, metricStart, "rebootPenalty");
+  const baseCost = getMetricDelta(hit, metricStart, "baseCost");
+  const goal = flags[legIndex];
+
+  return {
+    path,
+    transitions,
+    finalState: hit.state,
+    initialState: startState,
+    hitTarget: hit.position,
+    movingTarget: hit.movingTarget,
+    checkpointHit: hit,
+    actions: actionCount,
+    absoluteActions: hit.action,
+    distance,
+    forcedDistance,
+    hazard,
+    rebootPenalty,
+    rebootCount: transitions.filter((transition) => transition.rebooted).length,
+    conveyorComplexity: scoreConveyorComplexity({ transitions }, hit.position ?? goal),
+    score: baseCost,
+    goalReached: true,
+    fullCourseLeg: true
+  };
+}
+
 
 function average(values) {
   if (!values.length) return 0;
@@ -2036,8 +2340,8 @@ function rearThreatPenalty(tileMap, routeA, routeB, options = {}) {
 function routeThreatPenalty(tileMap, routeA, routeB, options = {}) {
   return Number((
     lateralThreatPenalty(tileMap, routeA, routeB, options) +
-    rearThreatPenalty(tileMap, routeA, routeB, options) +
-    rearThreatPenalty(tileMap, routeB, routeA, options)
+    rearThreatPenalty(tileMap, routeA, routeB, options) * 0.45 +
+    rearThreatPenalty(tileMap, routeB, routeA, options) * 0.12
   ).toFixed(2));
 }
 
@@ -2201,8 +2505,8 @@ function averagePairwiseThreat(tileMap, routes, options = {}) {
     for (let j = i + 1; j < routes.length; j += 1) {
       values.push(
         lateralThreatPenalty(tileMap, routes[i], routes[j], options) +
-        rearThreatPenalty(tileMap, routes[i], routes[j], options) +
-        rearThreatPenalty(tileMap, routes[j], routes[i], options)
+        rearThreatPenalty(tileMap, routes[i], routes[j], options) * 0.45 +
+        rearThreatPenalty(tileMap, routes[j], routes[i], options) * 0.12
       );
     }
   }
@@ -2220,8 +2524,8 @@ function averageCrossLegThreat(tileMap, routes, previousLegRoutes, options = {})
     for (const previous of previousLegRoutes) {
       values.push(
         lateralThreatPenalty(tileMap, route, previous, options) +
-        rearThreatPenalty(tileMap, route, previous, options) +
-        rearThreatPenalty(tileMap, previous, route, options)
+        rearThreatPenalty(tileMap, route, previous, options) * 0.45 +
+        rearThreatPenalty(tileMap, previous, route, options) * 0.12
       );
     }
   }
@@ -2451,8 +2755,8 @@ function selectAndScoreStartAnalyses(tileMap, startAnalyses, goal, playerCount, 
       overlap += overlapPenalty(analysis.selectedRoute, other.selectedRoute, goal) * trafficScale;
       lateralThreat += lateralThreatPenalty(tileMap, analysis.selectedRoute, other.selectedRoute, options) * trafficScale;
       rearThreat += (
-        rearThreatPenalty(tileMap, analysis.selectedRoute, other.selectedRoute, options) +
-        rearThreatPenalty(tileMap, other.selectedRoute, analysis.selectedRoute, options)
+        rearThreatPenalty(tileMap, analysis.selectedRoute, other.selectedRoute, options) * 0.45 +
+        rearThreatPenalty(tileMap, other.selectedRoute, analysis.selectedRoute, options) * 0.12
       ) * trafficScale;
     }
 
@@ -2462,7 +2766,8 @@ function selectAndScoreStartAnalyses(tileMap, startAnalyses, goal, playerCount, 
     analysis.routeThreat = Number((analysis.lateralThreat + analysis.rearThreat).toFixed(2));
     analysis.trafficScale = trafficScale;
     analysis.trafficPenalty = Number((Math.sqrt(analysis.overlapPenalty) + analysis.routeThreat * 0.16).toFixed(2));
-    analysis.adjustedScore = Number((analysis.bestScore + analysis.trafficPenalty).toFixed(2));
+    analysis.courseScoreAdjustment = Number(analysis.courseScoreAdjustment ?? 0);
+    analysis.adjustedScore = Number((analysis.bestScore + analysis.trafficPenalty + analysis.courseScoreAdjustment).toFixed(2));
   });
 
   return {
@@ -2612,105 +2917,16 @@ export function analyzeCourse(tileMap, starts, goal, options = {}) {
 
   selectAndScoreStartAnalyses(tileMap, startAnalyses, goal, playerCount, null, options);
 
-  const reachable = startAnalyses.filter((item) => item.reachable && item.selectedRoute);
-  let activeIndices = new Set(reachable.map((item) => item.index));
-  let outlierSet = new Set();
-  const outlierDiagnostics = new Map();
-  let activeReachable = reachable;
-  let scoreMean = average(activeReachable.map((item) => item.adjustedScore));
-  let scoreStdDev = stdDev(activeReachable.map((item) => item.adjustedScore));
-  let actionMean = average(activeReachable.map((item) => item.bestActions));
-  let actionStdDev = stdDev(activeReachable.map((item) => item.bestActions));
-
-  for (let pass = 0; pass < OUTLIER_REEVALUATION_PASSES; pass += 1) {
-    selectAndScoreStartAnalyses(tileMap, startAnalyses, goal, playerCount, activeIndices, options);
-
-    activeReachable = reachable.filter((item) => activeIndices.has(item.index));
-    const adjustedScores = activeReachable.map((item) => item.adjustedScore);
-    const actions = activeReachable.map((item) => item.bestActions);
-    scoreMean = average(adjustedScores);
-    scoreStdDev = stdDev(adjustedScores);
-    actionMean = average(actions);
-    actionStdDev = stdDev(actions);
-    const minActions = actions.length ? Math.min(...actions) : 0;
-
-    const passOutlierSet = new Set(activeReachable
-      .filter((item) => {
-        const scoreThreshold = Math.max(8, scoreStdDev * 1.6);
-        const actionThreshold = Math.max(2, actionStdDev * 1.05);
-        const scoreGap = Math.abs(item.adjustedScore - scoreMean);
-        const actionGap = item.bestActions - actionMean;
-        const minActionGap = item.bestActions - minActions;
-        const scoreOutlier = scoreGap > scoreThreshold;
-        const actionOutlier = actionGap > actionThreshold;
-        const severeActionGap = minActionGap >= OUTLIER_MIN_ACTION_GAP;
-        const flagged = scoreOutlier || (actionOutlier && severeActionGap);
-
-        if (flagged) {
-          outlierDiagnostics.set(item.index, {
-            scoreOutlier,
-            actionOutlier,
-            severeActionGap,
-            scoreGap: Number(scoreGap.toFixed(2)),
-            scoreThreshold: Number(scoreThreshold.toFixed(2)),
-            actionGap: Number(actionGap.toFixed(2)),
-            actionThreshold: Number(actionThreshold.toFixed(2)),
-            minActionGap: Number(minActionGap.toFixed(2)),
-            minActionThreshold: OUTLIER_MIN_ACTION_GAP
-          });
-        }
-
-        return flagged;
-      })
-      .map((item) => item.index));
-    
-const minActiveStarts = playerCount;
-const currentActiveCount = activeReachable.length;
-const alreadyDroppedCount = reachable.length - currentActiveCount;
-const maxTotalDrops = Math.max(0, reachable.length - minActiveStarts);
-const remainingDropBudget = Math.max(0, maxTotalDrops - alreadyDroppedCount);
-
-const candidateNewOutliers = activeReachable
-  .filter((item) => passOutlierSet.has(item.index) && !outlierSet.has(item.index))
-  .sort((left, right) => {
-    const leftSeverity =
-      Math.abs(left.adjustedScore - scoreMean) +
-      Math.max(0, left.bestActions - actionMean) * 2;
-    const rightSeverity =
-      Math.abs(right.adjustedScore - scoreMean) +
-      Math.max(0, right.bestActions - actionMean) * 2;
-    return rightSeverity - leftSeverity;
-  })
-  .slice(0, remainingDropBudget)
-  .map((item) => item.index);
-
-const nextOutlierSet = new Set([...outlierSet, ...candidateNewOutliers]);
-
-const nextActiveCount = reachable.filter((item) => !nextOutlierSet.has(item.index)).length;
-if (nextActiveCount < playerCount) {
-  throw new Error(
-    `Outlier pruning dropped too many starts: ` +
-    `${nextActiveCount} active for ${playerCount} players.`
+  const finalSummary = summarizeFirstLegAnalyses(
+    tileMap,
+    startAnalyses,
+    goal,
+    flags,
+    playerCount,
+    options,
+    new Set(),
+    new Map()
   );
-}
-
-    if (sameSet(nextOutlierSet, outlierSet)) {
-      outlierSet = nextOutlierSet;
-      break;
-    }
-
-    outlierSet = nextOutlierSet;
-    activeIndices = new Set(reachable
-      .map((item) => item.index)
-      .filter((index) => !outlierSet.has(index)));
-  }
-
-  activeIndices = new Set(reachable
-    .map((item) => item.index)
-    .filter((index) => !outlierSet.has(index)));
-  selectAndScoreStartAnalyses(tileMap, startAnalyses, goal, playerCount, activeIndices, options);
-
-  const finalSummary = summarizeFirstLegAnalyses(tileMap, startAnalyses, goal, flags, playerCount, options, outlierSet, outlierDiagnostics);
 
   return {
     goal,
@@ -2719,10 +2935,405 @@ if (nextActiveCount < playerCount) {
   };
 }
 
+
+function summarizeExpectedFullCourseLegRoutes(routes, previousRoutes, goal, playerCount = 4) {
+  const routeScores = routes.map((route) => route.score).filter(Number.isFinite);
+  const routeDistances = routes.map((route) => route.distance).filter(Number.isFinite);
+  const routeActions = routes.map((route) => route.actions).filter(Number.isFinite);
+  const intraLegOverlap = averagePairwiseOverlap(routes, goal);
+  const crossLegOverlap = averageCrossLegOverlap(routes, previousRoutes, goal);
+  const trafficScale = routes.length > 1
+    ? clamp((playerCount - 1) / Math.max(1, routes.length - 1), 0, 1)
+    : 0;
+  const missingRoutePenalty = Math.max(0, playerCount - routes.length) * 10;
+  const diversityScore = Number(Math.max(
+    0,
+    routes.length * 12 - intraLegOverlap * (18 + 12 * trafficScale) - crossLegOverlap * (8 + 8 * trafficScale)
+  ).toFixed(2));
+  const congestionScore = Number((
+    intraLegOverlap * (18 + 24 * trafficScale) +
+    crossLegOverlap * (8 + 16 * trafficScale) +
+    missingRoutePenalty
+  ).toFixed(2));
+
+  return {
+    routeCount: routes.length,
+    distinctRouteCount: routes.length,
+    expectedRouteCount: routes.length,
+    expectedRobotPaths: true,
+    fullCourseSlices: true,
+    bestRouteScore: routeScores.length ? Math.min(...routeScores) : Infinity,
+    bestDistance: routeDistances.length ? Math.min(...routeDistances) : Infinity,
+    averageRouteScore: Number(average(routeScores).toFixed(2)),
+    averageRouteDistance: Number(average(routeDistances).toFixed(2)),
+    averageRouteActions: Number(average(routeActions).toFixed(2)),
+    routeSpread: routeScores.length > 1 ? Number((Math.max(...routeScores) - Math.min(...routeScores)).toFixed(2)) : 0,
+    intraLegOverlap: Number(intraLegOverlap.toFixed(2)),
+    crossLegOverlap: Number(crossLegOverlap.toFixed(2)),
+    intraLegThreat: 0,
+    crossLegThreat: 0,
+    diversityScore,
+    congestionScore
+  };
+}
+
+
+function prepareFullCourseCandidate(route, flags) {
+  if (!route) {
+    return null;
+  }
+
+  const legRoutes = flags.map((_, legIndex) => sliceFullCourseRoute(route, legIndex, flags));
+  route.legRoutes = legRoutes;
+  return route;
+}
+
+function getFullRouteTrafficPenalty(tileMap, route, selectedRoutes, goal, options = {}) {
+  if (!route || !selectedRoutes.length) {
+    return 0;
+  }
+
+  const playerCount = options.playerCount ?? selectedRoutes.length + 1;
+  const trafficScale = computeTrafficPairScale(playerCount, selectedRoutes.length + 1, options);
+  let overlap = 0;
+  let lateralThreat = 0;
+  let rearThreat = 0;
+
+  for (const other of selectedRoutes) {
+    if (!other || other === route) {
+      continue;
+    }
+
+    overlap += overlapPenalty(route, other, goal) * trafficScale;
+    lateralThreat += lateralThreatPenalty(tileMap, route, other, options) * trafficScale;
+    rearThreat += (
+      rearThreatPenalty(tileMap, route, other, options) * 0.45 +
+      rearThreatPenalty(tileMap, other, route, options) * 0.12
+    ) * trafficScale;
+  }
+
+  // This is intentionally softer than first-leg traffic scoring. Full-course
+  // alternatives should spread robots when the cost is close, without turning
+  // route choice into an expensive multiplayer solver or favoring silly detours.
+  return Number((Math.sqrt(overlap) * 0.55 + lateralThreat * 0.035 + rearThreat * 0.03).toFixed(2));
+}
+
+function selectFullCourseRoutesForStarts(tileMap, startAnalyses, flags, options = {}) {
+  const finalGoal = flags.at(-1);
+  const excludedIndices = new Set(options.excludedIndices ?? []);
+  const reachable = startAnalyses.filter((analysis) => (
+    analysis.reachable &&
+    analysis.fullCourseRoutes?.length &&
+    !excludedIndices.has(analysis.index)
+  ));
+  if (reachable.length <= 1) {
+    return {
+      starts: startAnalyses,
+      selectionPasses: 0,
+      routeSwitches: 0,
+      averageTrafficPenalty: 0
+    };
+  }
+
+  const maxPasses = Math.max(1, Math.min(3, options.fullCourseTrafficPasses ?? 2));
+  let routeSwitches = 0;
+  let actualPasses = 0;
+  let selectedByIndex = new Map(reachable.map((analysis) => [analysis.index, analysis.fullCourseRoutes[0]]));
+
+  for (let pass = 0; pass < maxPasses; pass += 1) {
+    actualPasses = pass + 1;
+    let changed = false;
+    for (const analysis of reachable) {
+      const otherRoutes = reachable
+        .filter((other) => other.index !== analysis.index)
+        .map((other) => selectedByIndex.get(other.index))
+        .filter(Boolean);
+      let bestRoute = selectedByIndex.get(analysis.index) ?? analysis.fullCourseRoutes[0];
+      let bestValue = Infinity;
+
+      for (const candidate of analysis.fullCourseRoutes) {
+        const trafficPenalty = getFullRouteTrafficPenalty(tileMap, candidate, otherRoutes, finalGoal, options);
+        const rawGap = Math.max(0, candidate.score - analysis.fullCourseRoutes[0].score);
+        const value = candidate.score + trafficPenalty + rawGap * 0.18;
+        if (value < bestValue - 0.001) {
+          bestValue = value;
+          bestRoute = candidate;
+        }
+      }
+
+      if (bestRoute !== selectedByIndex.get(analysis.index)) {
+        selectedByIndex.set(analysis.index, bestRoute);
+        changed = true;
+        routeSwitches += 1;
+      }
+    }
+
+    if (!changed) {
+      break;
+    }
+  }
+
+  const selectedRoutes = reachable
+    .map((analysis) => selectedByIndex.get(analysis.index))
+    .filter(Boolean);
+  const trafficValues = reachable.map((analysis) => {
+    const route = selectedByIndex.get(analysis.index);
+    const otherRoutes = selectedRoutes.filter((other) => other !== route);
+    return getFullRouteTrafficPenalty(tileMap, route, otherRoutes, finalGoal, options);
+  });
+  const trafficByIndex = new Map(reachable.map((analysis, index) => [analysis.index, trafficValues[index] ?? 0]));
+
+  return {
+    starts: startAnalyses.map((analysis) => {
+      const selectedRoute = selectedByIndex.get(analysis.index) ?? analysis.fullCourseRoute;
+      if (!selectedRoute) {
+        return analysis;
+      }
+
+      return {
+        ...analysis,
+        fullCourseRoute: selectedRoute,
+        fullCourseTrafficPenalty: trafficByIndex.get(analysis.index) ?? 0,
+        fullCourseRouteIndex: analysis.fullCourseRoutes.indexOf(selectedRoute)
+      };
+    }),
+    selectionPasses: actualPasses,
+    routeSwitches,
+    averageTrafficPenalty: Number(average(trafficValues).toFixed(2))
+  };
+}
+
+function buildStartAnalysisForSelectedFullRoute(analysis, flags) {
+  const fullRoute = analysis.fullCourseRoute;
+  const legRoutes = fullRoute?.legRoutes ?? [];
+  const firstLegRoute = legRoutes[0] ?? null;
+  const continuationScore = fullRoute && firstLegRoute
+    ? Number((fullRoute.score - firstLegRoute.score).toFixed(2))
+    : 0;
+  const continuationActions = fullRoute && firstLegRoute
+    ? Math.max(0, fullRoute.actions - firstLegRoute.actions)
+    : 0;
+  const continuationDistance = fullRoute && firstLegRoute
+    ? Number((fullRoute.distance - firstLegRoute.distance).toFixed(2))
+    : 0;
+
+  return {
+    ...analysis,
+    reachable: Boolean(firstLegRoute && fullRoute),
+    routes: firstLegRoute ? [firstLegRoute] : [],
+    selectedRouteIndex: 0,
+    selectedRoute: firstLegRoute,
+    bestScore: firstLegRoute?.score ?? Infinity,
+    bestDistance: firstLegRoute?.distance ?? Infinity,
+    bestActions: firstLegRoute?.actions ?? Infinity,
+    courseEstimate: fullRoute
+      ? {
+        continuationScore,
+        continuationActions,
+        continuationDistance,
+        totalScore: fullRoute.score,
+        totalActions: fullRoute.actions,
+        totalDistance: fullRoute.distance,
+        fullCourseTrafficPenalty: analysis.fullCourseTrafficPenalty ?? 0,
+        selectedRouteIndex: analysis.fullCourseRouteIndex ?? 0,
+        candidateCount: analysis.fullCourseRoutes?.length ?? 0,
+        legs: legRoutes.map((route, legIndex) => ({
+          flag: legIndex + 1,
+          score: route?.score ?? null,
+          actions: route?.actions ?? null,
+          absoluteActions: route?.absoluteActions ?? null,
+          distance: route?.distance ?? null,
+          movingTarget: route?.movingTarget ?? null,
+          reachable: Boolean(route)
+        }))
+      }
+      : null,
+    courseScoreAdjustment: 0
+  };
+}
+
+function buildExpectedLegAnalysesFromFullRoutes(startAnalyses, flags, playerCount) {
+  const perLegRoutes = Array.from({ length: flags.length }, () => []);
+
+  for (const startAnalysis of startAnalyses) {
+    const fullRoute = startAnalysis.fullCourseRoute;
+    if (!fullRoute) {
+      continue;
+    }
+
+    for (let legIndex = 0; legIndex < flags.length; legIndex += 1) {
+      const legRoute = fullRoute.legRoutes?.[legIndex];
+      if (legRoute) {
+        perLegRoutes[legIndex].push({
+          ...legRoute,
+          startIndex: startAnalysis.index,
+          label: `Start ${startAnalysis.index + 1} leg ${legIndex === 0 ? "dock" : legIndex} -> ${legIndex + 1}`
+        });
+      }
+    }
+  }
+
+  let previousLegRoutes = [];
+  return perLegRoutes.map((routes, index) => {
+    const goal = flags[index];
+    const summary = summarizeExpectedFullCourseLegRoutes(routes, previousLegRoutes, goal, playerCount);
+    previousLegRoutes = routes;
+    return {
+      from: index === 0 ? "dock" : flags[index - 1],
+      goal,
+      routes,
+      distinctRoutes: routes,
+      summary
+    };
+  });
+}
+
+export function analyzeFullCourse(tileMap, starts, flags, options = {}) {
+  const maxRoutes = options.maxRoutes ?? 2;
+  const playerCount = options.playerCount ?? starts.length;
+  const dynamicGoals = options.dynamicGoals ?? [];
+  const routeOptions = {
+    maxRoutes,
+    maxActions: options.maxActions,
+    maxExpansions: options.maxExpansions,
+    recoveryRule: options.recoveryRule,
+    lessDeadlyGame: options.lessDeadlyGame,
+    moreDeadlyGame: options.moreDeadlyGame,
+    lighterGame: options.lighterGame,
+    upgradeWorld: options.upgradeWorld,
+    lessSpammyGame: options.lessSpammyGame,
+    criticalSpam: options.criticalSpam,
+    criticalHaywire: options.criticalHaywire,
+    permanentShutdown: options.permanentShutdown,
+    cuttingFloor: options.cuttingFloor,
+    flamingOil: options.flamingOil,
+    repulsorOverdrive: options.repulsorOverdrive,
+    lessForeshadowing: options.lessForeshadowing,
+    playerCount,
+    rebootTokens: options.rebootTokens,
+    boardRects: options.boardRects,
+    dynamicGoals
+  };
+
+  const startAnalyses = starts.map((start, index) => {
+    const rebootTokens = options.recoveryRule === "home_reboot"
+      ? getHomeRebootTokensForStart(start, options.rebootTokens)
+      : options.rebootTokens;
+    const facings = options.startupSpinUp ? ROTATION_ORDER : [start.facing ?? "E"];
+    const fullRoutes = dedupeRoutes(facings.flatMap((facing) => (
+      enumerateFullCourseRoutes(tileMap, {
+        ...start,
+        facing
+      }, flags, {
+        ...routeOptions,
+        rebootTokens,
+        maxRoutes
+      }).map((route) => ({
+        ...route,
+        startFacing: facing
+      }))
+    ))).sort((left, right) => left.score - right.score);
+    const distinctFullRoutes = selectDistinctRoutes(fullRoutes, flags.at(-1), maxRoutes)
+      .map((route) => prepareFullCourseCandidate(route, flags))
+      .filter(Boolean);
+    const fullRoute = distinctFullRoutes[0] ?? null;
+
+    return buildStartAnalysisForSelectedFullRoute({
+      index,
+      start,
+      reachable: Boolean(fullRoute),
+      fullCourseRoutes: distinctFullRoutes,
+      fullCourseRoute: fullRoute,
+      fullCourseRouteIndex: fullRoute ? 0 : null,
+      fullCourseTrafficPenalty: 0
+    }, flags);
+  });
+
+  const selection = selectFullCourseRoutesForStarts(tileMap, startAnalyses, flags, {
+    ...options,
+    playerCount
+  });
+  const selectedStartAnalyses = selection.starts.map((analysis) => buildStartAnalysisForSelectedFullRoute(analysis, flags));
+  const fullScores = selectedStartAnalyses
+    .filter((item) => item.reachable && item.fullCourseRoute)
+    .map((item) => item.fullCourseRoute.score + (item.fullCourseTrafficPenalty ?? 0));
+  const meanFullScore = average(fullScores);
+  const adjustedStartAnalyses = selectedStartAnalyses.map((analysis) => {
+    if (!analysis.fullCourseRoute) {
+      return analysis;
+    }
+
+    const fullScore = analysis.fullCourseRoute.score + (analysis.fullCourseTrafficPenalty ?? 0);
+    const rawDelta = fullScore - meanFullScore;
+    return {
+      ...analysis,
+      courseEstimate: {
+        ...analysis.courseEstimate,
+        meanFullScore: Number(meanFullScore.toFixed(2)),
+        delta: Number(rawDelta.toFixed(2))
+      },
+      courseScoreAdjustment: Number(clamp(rawDelta * 0.32, -10, 10).toFixed(2))
+    };
+  });
+
+  selectAndScoreStartAnalyses(tileMap, adjustedStartAnalyses, flags[0], playerCount, null, options);
+  const expectedLegAnalyses = buildExpectedLegAnalysesFromFullRoutes(adjustedStartAnalyses, flags, playerCount);
+  const finalSummary = summarizeFirstLegAnalyses(
+    tileMap,
+    adjustedStartAnalyses,
+    flags[0],
+    flags,
+    playerCount,
+    options,
+    new Set(),
+    new Map()
+  );
+
+  return {
+    goal: flags[0],
+    flags,
+    starts: adjustedStartAnalyses,
+    expectedLegAnalyses: expectedLegAnalyses.slice(1),
+    summary: {
+      ...finalSummary.summary,
+      courseContinuationMean: Number(meanFullScore.toFixed(2)),
+      courseContinuationWeighted: true,
+      fullCourseRoutes: true,
+      fullCourseTraffic: {
+        passes: selection.selectionPasses,
+        routeSwitches: selection.routeSwitches,
+        averagePenalty: selection.averageTrafficPenalty
+      }
+    }
+  };
+}
+
 export function recomputeFirstLegPressure(tileMap, firstLeg, options = {}) {
   const playerCount = options.playerCount ?? firstLeg.starts.length;
   const excludedIndices = new Set(options.excludedIndices ?? []);
-  const startAnalyses = firstLeg.starts.map((analysis) => ({ ...analysis }));
+  let startAnalyses = firstLeg.starts.map((analysis) => ({ ...analysis }));
+  let fullCourseTraffic = firstLeg.summary.fullCourseTraffic ?? null;
+  let expectedLegAnalyses = firstLeg.expectedLegAnalyses;
+
+  if (firstLeg.summary.fullCourseRoutes && Array.isArray(firstLeg.flags) && firstLeg.flags.length) {
+    const selection = selectFullCourseRoutesForStarts(tileMap, startAnalyses, firstLeg.flags, {
+      ...options,
+      playerCount,
+      excludedIndices
+    });
+    startAnalyses = selection.starts.map((analysis) => buildStartAnalysisForSelectedFullRoute(analysis, firstLeg.flags));
+    fullCourseTraffic = {
+      passes: selection.selectionPasses,
+      routeSwitches: selection.routeSwitches,
+      averagePenalty: selection.averageTrafficPenalty
+    };
+    expectedLegAnalyses = buildExpectedLegAnalysesFromFullRoutes(
+      startAnalyses.filter((analysis) => !excludedIndices.has(analysis.index)),
+      firstLeg.flags,
+      playerCount
+    ).slice(1);
+  }
+
   const activeIndices = new Set(
     startAnalyses
       .filter((analysis) => analysis.reachable && analysis.routes?.length && !excludedIndices.has(analysis.index))
@@ -2734,7 +3345,7 @@ export function recomputeFirstLegPressure(tileMap, firstLeg, options = {}) {
     tileMap,
     startAnalyses,
     firstLeg.goal,
-    new Array(firstLeg.summary.flagCount).fill(null),
+    firstLeg.flags ?? new Array(firstLeg.summary.flagCount).fill(null),
     playerCount,
     options,
     excludedIndices
@@ -2743,9 +3354,11 @@ export function recomputeFirstLegPressure(tileMap, firstLeg, options = {}) {
   return {
     ...firstLeg,
     starts: startAnalyses,
+    expectedLegAnalyses,
     summary: {
       ...firstLeg.summary,
       ...recomputed.summary,
+      fullCourseTraffic,
       outliers: firstLeg.summary.outliers
     }
   };
