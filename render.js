@@ -1075,26 +1075,42 @@ function drawStarts(
     const badgeSize = tileSize * 0.46;
     const badgeLeft = px + (tileSize - badgeSize) / 2;
     const badgeTop = py + (tileSize - badgeSize) / 2;
+    const badgeCenterX = badgeLeft + badgeSize / 2;
+    const badgeCenterY = badgeTop + badgeSize / 2;
 
     const rawEnergyCost = startEnergyCosts[index];
     const energyCost = Number(rawEnergyCost);
     const hasEnergyCost = rawEnergyCost !== null && rawEnergyCost !== undefined && Number.isFinite(energyCost);
+    const explicitStartLabel = startLabels[index];
+    const hasExplicitStartLabel = explicitStartLabel !== null && explicitStartLabel !== undefined && explicitStartLabel !== "";
+    const devPayToWinStart = hasEnergyCost && hasExplicitStartLabel;
 
     if (unusableStartIndices.has(index)) {
+      // Unusable/pruned starts stay red squares in every view.
       ctx.fillStyle = "rgba(232, 92, 62, 0.9)";
       ctx.fillRect(badgeLeft, badgeTop, badgeSize, badgeSize);
       ctx.strokeStyle = "#8c1f17";
       ctx.lineWidth = 1.8;
       ctx.strokeRect(badgeLeft, badgeTop, badgeSize, badgeSize);
-    } else if (hasEnergyCost) {
-      ctx.fillStyle = "rgba(21, 132, 86, 0.92)";
+    } else if (devPayToWinStart) {
+      // In dev view, a Pay to Win starting space is a blue circle carrying
+      // the normal start-space number. Its energy price is drawn separately.
+      ctx.fillStyle = "rgba(52, 120, 246, 0.9)";
+      ctx.strokeStyle = "#113a78";
+      ctx.lineWidth = 1.25;
       ctx.beginPath();
-      ctx.roundRect(badgeLeft, badgeTop, badgeSize, badgeSize, 8);
+      ctx.arc(badgeCenterX, badgeCenterY, badgeSize / 2, 0, Math.PI * 2);
       ctx.fill();
+      ctx.stroke();
+    } else if (hasEnergyCost) {
+      // In the regular Pay to Win view, the energy-cost marker is square.
+      ctx.fillStyle = "rgba(21, 132, 86, 0.92)";
+      ctx.fillRect(badgeLeft, badgeTop, badgeSize, badgeSize);
       ctx.strokeStyle = "#0c4f35";
       ctx.lineWidth = 1.35;
-      ctx.stroke();
+      ctx.strokeRect(badgeLeft, badgeTop, badgeSize, badgeSize);
     } else if (showAllStartMarkers) {
+      // Keep the existing non-Pay-to-Win dev start marker appearance.
       ctx.fillStyle = "rgba(52, 120, 246, 0.9)";
       ctx.beginPath();
       ctx.roundRect(badgeLeft, badgeTop, badgeSize, badgeSize, 8);
@@ -1104,35 +1120,42 @@ function drawStarts(
       ctx.stroke();
     }
 
-    const explicitStartLabel = startLabels[index];
-    const startLabel = explicitStartLabel ?? (hasEnergyCost ? String(energyCost) : showAllStartMarkers ? "S" : "");
+    const startLabel = hasExplicitStartLabel
+      ? explicitStartLabel
+      : hasEnergyCost
+        ? String(energyCost)
+        : showAllStartMarkers
+          ? "S"
+          : "";
 
     if (startLabel) {
       ctx.fillStyle = "#ffffff";
       ctx.font = "bold 12px sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText(String(startLabel), badgeLeft + badgeSize / 2, badgeTop + badgeSize / 2 + 0.5);
+      ctx.fillText(String(startLabel), badgeCenterX, badgeCenterY + 0.5);
       ctx.textAlign = "start";
       ctx.textBaseline = "alphabetic";
     }
 
-    if (hasEnergyCost && explicitStartLabel) {
-      const costRadius = tileSize * 0.16;
-      const costX = px + tileSize - costRadius - 3;
-      const costY = py + costRadius + 3;
+    if (devPayToWinStart) {
+      // In dev view, show the Pay to Win energy cost as a small green square
+      // in the upper-right of the tile, separate from the blue start circle.
+      const costSize = tileSize * 0.32;
+      const costLeft = px + tileSize - costSize - 3;
+      const costTop = py + 3;
+
       ctx.fillStyle = "rgba(21, 132, 86, 0.96)";
+      ctx.fillRect(costLeft, costTop, costSize, costSize);
       ctx.strokeStyle = "#0c4f35";
       ctx.lineWidth = 1.2;
-      ctx.beginPath();
-      ctx.arc(costX, costY, costRadius, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
+      ctx.strokeRect(costLeft, costTop, costSize, costSize);
+
       ctx.fillStyle = "#ffffff";
       ctx.font = "bold 9px sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText(String(energyCost), costX, costY + 0.5);
+      ctx.fillText(String(energyCost), costLeft + costSize / 2, costTop + costSize / 2 + 0.5);
       ctx.textAlign = "start";
       ctx.textBaseline = "alphabetic";
     }

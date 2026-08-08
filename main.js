@@ -51,6 +51,13 @@ const [
   import(versionedPath("./variants.js"))
 ]);
 
+// Cache clearing is a performance optimization, not a correctness requirement.
+// Keep startup/generation working if the browser temporarily resolves an older
+// analyze.js module that does not expose this helper.
+const clearAnalysisCachesSafe = typeof clearAnalysisCaches === "function"
+  ? clearAnalysisCaches
+  : () => {};
+
 const ROTATIONS = [0, 90, 180, 270];
 const FACINGS = ["N", "E", "S", "W"];
 const DOCK_SIDES = ["left", "top", "right", "bottom"];
@@ -95,6 +102,14 @@ const DOCK_BRIDGE_GAP = 3;
 const MAX_DOCK_COUNT = 2;
 const START_CAPACITY_HARD_FAILURES = new Set(["usable-starts", "reachable-starts", "normal-start-balance"]);
 const OVERLAY_UPDATE_INTERVAL = 4;
+const LIGHT_START_MIN_POOL = 8;
+const LIGHT_START_SURPLUS = 2;
+const LIGHT_START_MAX_PRESSURE_POOL = 10;
+const LIGHT_START_SPREAD_WEIGHT = 0.22;
+const LIGHT_START_MAX_EXPANSIONS = 7000;
+const LIGHT_START_MAX_ACTIONS = 18;
+const LIGHT_START_OUTLIER_Z = 2.5;
+const FULL_START_OUTLIER_Z = 2.25;
 const SCENARIO_RENDER_INTERVAL_MS = 125;
 const BOARD_SELECTION_FALLBACK_ATTEMPT = 12;
 const BOARD_PROFILE_HAZARD_DENSITY_THRESHOLD = 0.16;
@@ -245,6 +260,7 @@ let currentScenario = null;
 let cachedAssets = null;
 let scenarioAnimationFrameId = null;
 let lastScenarioRenderTime = 0;
+let isGenerating = false;
 let boardAuditInitialized = false;
 let boardAuditState = {
   pieceId: null,
@@ -611,7 +627,11 @@ function isSmallBoardLayoutAcceptable(boardPlacements, pieceMap, layoutValidatio
 }
 
 function nextFrame() {
-  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => {
+      window.setTimeout(resolve, 0);
+    });
+  });
 }
 
 function titleCaseWords(value) {
@@ -724,7 +744,11 @@ function getDifficultyThresholds() {
     easy: [0, 95],
     moderate: [90, 155],
     hard: [150, Infinity],
-    brutal: [150, Infinity]
+    // Robots. Must. Die. is intentionally a distinct top-end target rather
+    // than merely Hard with a different label. The generation tuning still
+    // uses the hard profile, but acceptance continues until the raw course
+    // difficulty reaches this higher floor.
+    brutal: [180, Infinity]
   };
 }
 
@@ -1461,10 +1485,24 @@ function describeCourseLengthText(rawLength) {
 }
 
 function describeDifficultyLead(scenario) {
-  if (scenario.preferences.difficulty !== "any" && scenario.metrics.difficultyDirection !== "matched") {
+  const requestedDifficulty = scenario.preferences.difficulty;
+  if (requestedDifficulty !== "any" && scenario.metrics.difficultyDirection !== "matched") {
     return scenario.metrics.difficultyDirection === "low"
       ? "The course comes out easier than requested"
       : "The course comes out harder than requested";
+  }
+
+  // The acceptance bands deliberately overlap. When a specific band was
+  // requested and matched, describe that matched target rather than running
+  // the raw score back through the generic three-band prose classifier (which
+  // could otherwise call a 150-154 Hard match "moderate").
+  if (requestedDifficulty !== "any") {
+    return {
+      easy: "The course matches the requested easier difficulty range",
+      moderate: "The course matches the requested moderate difficulty range",
+      hard: "The course matches the requested hard difficulty range",
+      brutal: "The course reaches the requested Robots. Must. Die. difficulty range"
+    }[requestedDifficulty] ?? `The course plays ${describeCourseDifficultyText(scenario.metrics.difficultyRaw)}`;
   }
 
   return `The course plays ${describeCourseDifficultyText(scenario.metrics.difficultyRaw)}`;
@@ -2087,7 +2125,11 @@ function buildCourseExplanationHtml(scenario, noteParts = []) {
     .filter((item) => item.reachable && item.selectedRoute)
     .map((item) => item.selectedRoute);
   const laterLegs = scenario.sequence.legs.slice(1);
-  const difficultyBand = describeCourseDifficultyBand(scenario.metrics.difficultyRaw);
+  const requestedDifficulty = scenario.preferences.difficulty;
+  const matchedRequestedDifficultyBand = requestedDifficulty !== "any" && scenario.metrics.difficultyDirection === "matched"
+    ? (requestedDifficulty === "brutal" ? "hard" : requestedDifficulty)
+    : null;
+  const difficultyBand = matchedRequestedDifficultyBand ?? describeCourseDifficultyBand(scenario.metrics.difficultyRaw);
   const lengthBand = describeCourseLengthBand(scenario.metrics.lengthRaw);
   const openingForcedDistance = openingRoutes.length
     ? averageValues(openingRoutes.map((route) => route.forcedDistance || 0))
@@ -6428,16 +6470,21 @@ function runIterativeStartBalancing(firstLeg, tileMap, playerCount, analysisOpti
     ...firstLeg,
     summary: {
       ...firstLeg.summary,
-      outliers: []
+      outliers: [...(firstLeg.summary.outliers || [])]
     }
   };
   const excludedIndices = new Set(options.initialExcludedIndices ?? []);
   const removals = [];
-  let currentFirstLeg = recomputeFirstLegPressure(tileMap, baseFirstLeg, {
-    playerCount,
-    ...analysisOptions,
-    excludedIndices: [...excludedIndices]
-  });
+  // The incoming first-leg analysis already contains route-pressure scoring.
+  // Recompute immediately only when an earlier lightweight stage has already
+  // excluded starts; Pay to Win and untrimmed normal setups can reuse it.
+  let currentFirstLeg = excludedIndices.size
+    ? recomputeFirstLegPressure(tileMap, baseFirstLeg, {
+      playerCount,
+      ...analysisOptions,
+      excludedIndices: [...excludedIndices]
+    })
+    : baseFirstLeg;
 
   for (let pass = 0; pass < (options.maxPasses ?? 12); pass += 1) {
     const activeStarts = getActivePruningStarts(currentFirstLeg, excludedIndices);
@@ -6488,11 +6535,23 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
     analysisOptions,
     ({ currentFirstLeg, excludedIndices }) => {
       const costState = getPayToWinCostEntries(currentFirstLeg, excludedIndices);
+      // Never price-prune below the number of robots that must be able to start.
+      if (costState.entries.length <= playerCount) {
+        return null;
+      }
+
       const expensiveEntries = costState.entries.filter((entry) => entry.energyCost >= 5);
       if (!expensiveEntries.length) {
         return null;
       }
 
+      // A 5E+ price means the active start spread is too wide; it is not
+      // necessarily the start that should be removed. Pay to Win deliberately
+      // trims from either end according to the requested setup:
+      //   short/easy -> remove the weakest (longer/harder) start
+      //   long/hard  -> remove the strongest (shorter/easier) start
+      //   neutral    -> remove the end farthest from the mean
+      // Pricing is then recomputed after that removal.
       const removed = choosePayToWinPruneEntry(costState.entries, options);
       if (!removed) {
         return null;
@@ -6563,6 +6622,333 @@ function getExpectedRouteTileSet(route, goal = null) {
   return set;
 }
 
+
+function medianValue(values) {
+  const finite = values.filter(Number.isFinite).slice().sort((left, right) => left - right);
+  if (!finite.length) {
+    return 0;
+  }
+  const middle = Math.floor(finite.length / 2);
+  return finite.length % 2
+    ? finite[middle]
+    : (finite[middle - 1] + finite[middle]) / 2;
+}
+
+function getRobustOutlierStats(entries, scoreKey = "adjustedScore") {
+  const values = entries.map((entry) => entry[scoreKey]).filter(Number.isFinite);
+  const center = medianValue(values);
+  const deviations = values.map((value) => Math.abs(value - center));
+  const mad = medianValue(deviations);
+  const robustScale = Math.max(1.5, mad * 1.4826);
+
+  return {
+    center,
+    mad,
+    robustScale
+  };
+}
+
+function rankNormalStartOutliers(entries, scoreKey = "adjustedScore", zThreshold = FULL_START_OUTLIER_Z) {
+  if (entries.length < 3) {
+    return [];
+  }
+
+  const scoreStats = getRobustOutlierStats(entries, scoreKey);
+  const actionStats = getRobustOutlierStats(entries, "bestActions");
+  const minimumScoreDelta = Math.max(5, Math.abs(scoreStats.center) * 0.08);
+
+  return entries
+    .map((entry) => {
+      const score = entry[scoreKey];
+      const scoreDelta = score - scoreStats.center;
+      const scoreZ = Math.abs(scoreDelta) / scoreStats.robustScale;
+      const actionDelta = Number.isFinite(entry.bestActions)
+        ? entry.bestActions - actionStats.center
+        : 0;
+      const actionZ = Number.isFinite(entry.bestActions)
+        ? Math.abs(actionDelta) / actionStats.robustScale
+        : 0;
+      const qualifies = (
+        scoreZ >= zThreshold && Math.abs(scoreDelta) >= minimumScoreDelta
+      ) || (
+        actionZ >= zThreshold + 0.35 && Math.abs(actionDelta) >= 2
+      );
+
+      return {
+        entry,
+        score,
+        scoreDelta,
+        scoreZ,
+        actionDelta,
+        actionZ,
+        qualifies,
+        strength: Math.max(scoreZ, actionZ * 0.9)
+      };
+    })
+    .filter((item) => item.qualifies)
+    .sort((left, right) => (
+      right.strength - left.strength ||
+      Math.abs(right.scoreDelta) - Math.abs(left.scoreDelta) ||
+      left.entry.index - right.entry.index
+    ));
+}
+
+function getLightweightPressurePoolTarget(startCount, playerCount) {
+  if (startCount <= 6) {
+    return startCount;
+  }
+
+  // RoboRally tops out at eight players. Keep two reserve starts at the
+  // eight-player ceiling, but do not send more than ten starts into the
+  // much more expensive full-course route-pressure phase. Smaller games
+  // retain an eight-start pressure pool so route choice is still meaningful.
+  return Math.min(
+    startCount,
+    LIGHT_START_MAX_PRESSURE_POOL,
+    Math.max(LIGHT_START_MIN_POOL, playerCount + LIGHT_START_SURPLUS)
+  );
+}
+
+function getLightweightPoolTrimRanking(entries) {
+  if (!entries.length) {
+    return [];
+  }
+
+  const scoreStats = getRobustOutlierStats(entries, "bestScore");
+  const actionStats = getRobustOutlierStats(entries, "bestActions");
+  return entries.map((entry) => {
+    const scoreDeviation = Math.abs(entry.bestScore - scoreStats.center) / scoreStats.robustScale;
+    const actionDeviation = Number.isFinite(entry.bestActions)
+      ? Math.abs(entry.bestActions - actionStats.center) / actionStats.robustScale
+      : 0;
+    return {
+      entry,
+      scoreDeviation,
+      actionDeviation,
+      centralityCost: scoreDeviation + actionDeviation * 0.55
+    };
+  });
+}
+
+function selectLightweightPressurePool(entries, targetCount) {
+  if (entries.length <= targetCount) {
+    return new Set(entries.map((entry) => entry.index));
+  }
+
+  const ranked = getLightweightPoolTrimRanking(entries);
+  const remaining = ranked.slice();
+  const selected = [];
+
+  while (selected.length < targetCount && remaining.length) {
+    let bestIndex = 0;
+    let bestValue = Infinity;
+
+    for (let index = 0; index < remaining.length; index += 1) {
+      const candidate = remaining[index];
+      const start = candidate.entry.start ?? {};
+      let spreadBonus = 0;
+
+      if (selected.length && Number.isFinite(start.x) && Number.isFinite(start.y)) {
+        const nearestDistance = Math.min(...selected.map((selectedEntry) => {
+          const selectedStart = selectedEntry.entry.start ?? {};
+          if (!Number.isFinite(selectedStart.x) || !Number.isFinite(selectedStart.y)) {
+            return 0;
+          }
+          return Math.abs(start.x - selectedStart.x) + Math.abs(start.y - selectedStart.y);
+        }));
+        spreadBonus = Math.min(4, nearestDistance) * LIGHT_START_SPREAD_WEIGHT;
+      }
+
+      // Prefer the statistically central first-leg cluster, with a modest
+      // spatial-spread bonus so a large dock is not reduced to one tiny
+      // contiguous patch merely because its intrinsic scores are similar.
+      const value = candidate.centralityCost - spreadBonus;
+      if (value < bestValue) {
+        bestValue = value;
+        bestIndex = index;
+      }
+    }
+
+    selected.push(remaining.splice(bestIndex, 1)[0]);
+  }
+
+  return new Set(selected.map((item) => item.entry.index));
+}
+
+function getLightweightStartPruning(tileMap, starts, flags, playerCount, options = {}) {
+  const minimumPool = getLightweightPressurePoolTarget(starts.length, playerCount);
+  if (
+    options.competitiveMode ||
+    options.payToWin ||
+    starts.length <= minimumPool ||
+    !flags.length
+  ) {
+    return {
+      starts: starts.map((start, index) => ({ ...start, analysisIndex: index })),
+      analyses: [],
+      excludedIndices: new Set(),
+      outliers: [],
+      minimumPool,
+      active: false
+    };
+  }
+
+  const firstGoal = flags[0];
+  const lightweight = analyzeCourse(tileMap, starts, firstGoal, {
+    flags: [firstGoal],
+    maxRoutes: 1,
+    skipTraffic: true,
+    playerCount,
+    maxActions: LIGHT_START_MAX_ACTIONS,
+    maxExpansions: LIGHT_START_MAX_EXPANSIONS,
+    recoveryRule: options.recoveryRule,
+    ...getRouteAnalysisVariantOptions(options),
+    startupSpinUp: options.startupSpinUp,
+    rebootTokens: options.rebootTokens,
+    boardRects: options.boardRects,
+    dynamicGoal: options.movingTargetTimelines?.[0] ?? null
+  });
+  const analyses = lightweight.starts;
+  const active = analyses.filter((analysis) => (
+    analysis.reachable &&
+    analysis.selectedRoute &&
+    Number.isFinite(analysis.bestScore)
+  ));
+  const excludedIndices = new Set();
+  const outliers = [];
+
+  // Stage 1: remove only strong intrinsic first-leg outliers. This is the
+  // fairness-preserving part of the cheap pass.
+  while (active.length - excludedIndices.size > minimumPool) {
+    const remaining = active.filter((analysis) => !excludedIndices.has(analysis.index));
+    const ranked = rankNormalStartOutliers(
+      remaining.map((analysis) => ({
+        ...analysis,
+        adjustedScore: analysis.bestScore
+      })),
+      "adjustedScore",
+      LIGHT_START_OUTLIER_Z
+    );
+    const candidate = ranked[0];
+    if (!candidate) {
+      break;
+    }
+
+    excludedIndices.add(candidate.entry.index);
+    outliers.push({
+      index: candidate.entry.index,
+      score: candidate.score,
+      delta: Number(candidate.scoreDelta.toFixed(2)),
+      actionDelta: Number(candidate.actionDelta.toFixed(2)),
+      reasons: {
+        lightweightPruned: true,
+        stage: "intrinsic-first-leg-outlier",
+        scoreZ: Number(candidate.scoreZ.toFixed(2)),
+        actionZ: Number(candidate.actionZ.toFixed(2)),
+        minimumPool,
+        maxExpansions: LIGHT_START_MAX_EXPANSIONS
+      }
+    });
+  }
+
+  // Stage 2: a 12- or 24-space setup can still contain no formal outlier.
+  // In that case deliberately trim the cheap-analysis pool before invoking
+  // full-course multi-route pressure. At most 8-10 starts survive this stage.
+  const remainingAfterOutliers = active.filter((analysis) => !excludedIndices.has(analysis.index));
+  if (remainingAfterOutliers.length > minimumPool) {
+    const retainedIndices = selectLightweightPressurePool(remainingAfterOutliers, minimumPool);
+    const trimRanking = getLightweightPoolTrimRanking(remainingAfterOutliers);
+    const rankByIndex = new Map(trimRanking.map((item) => [item.entry.index, item]));
+
+    remainingAfterOutliers.forEach((analysis) => {
+      if (retainedIndices.has(analysis.index)) {
+        return;
+      }
+
+      excludedIndices.add(analysis.index);
+      const ranking = rankByIndex.get(analysis.index);
+      outliers.push({
+        index: analysis.index,
+        score: analysis.bestScore,
+        delta: Number(((analysis.bestScore ?? 0) - medianValue(remainingAfterOutliers.map((item) => item.bestScore))).toFixed(2)),
+        actionDelta: 0,
+        reasons: {
+          lightweightPruned: true,
+          lightweightPoolTrim: true,
+          stage: "intrinsic-first-leg-pool-trim",
+          centralityCost: Number((ranking?.centralityCost ?? 0).toFixed(2)),
+          minimumPool,
+          sourcePool: starts.length,
+          maxExpansions: LIGHT_START_MAX_EXPANSIONS
+        }
+      });
+    });
+  }
+
+  return {
+    starts: starts
+      .map((start, index) => ({ ...start, analysisIndex: index }))
+      .filter((start) => !excludedIndices.has(start.analysisIndex)),
+    analyses,
+    excludedIndices,
+    outliers,
+    minimumPool,
+    active: excludedIndices.size > 0
+  };
+}
+
+function mergeLightweightPrunedStarts(firstLeg, prePruning, originalStartCount) {
+  if (!prePruning.excludedIndices.size) {
+    return firstLeg;
+  }
+
+  const fullByIndex = new Map(firstLeg.starts.map((analysis) => [analysis.index, analysis]));
+  const lightweightByIndex = new Map(prePruning.analyses.map((analysis) => [analysis.index, analysis]));
+  const mergedStarts = [];
+
+  for (let index = 0; index < originalStartCount; index += 1) {
+    if (fullByIndex.has(index)) {
+      mergedStarts.push(fullByIndex.get(index));
+      continue;
+    }
+
+    const lightweight = lightweightByIndex.get(index);
+    if (!lightweight) {
+      continue;
+    }
+
+    mergedStarts.push({
+      ...lightweight,
+      prePruned: true,
+      fullCourseRoutes: [],
+      fullCourseRoute: null,
+      fullCourseRouteIndex: null,
+      fullCourseTrafficPenalty: 0,
+      courseEstimate: null,
+      courseScoreAdjustment: 0
+    });
+  }
+
+  return {
+    ...firstLeg,
+    starts: mergedStarts,
+    summary: {
+      ...firstLeg.summary,
+      totalStarts: originalStartCount,
+      // Pre-pruned starts only had the cheap first-leg check, so do not count
+      // them as full-course reachable without running the expensive search.
+      reachableStarts: firstLeg.summary.reachableStarts,
+      outliers: [...prePruning.outliers],
+      lightweightStartPruning: {
+        active: true,
+        minimumPool: prePruning.minimumPool,
+        pruned: prePruning.outliers.map((outlier) => outlier.index),
+        maxExpansions: LIGHT_START_MAX_EXPANSIONS
+      }
+    }
+  };
+}
+
 function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) {
   const movingTargetTimelines = options.movingTargetTimelines ?? buildMovingTargetTimelines(
     tileMap,
@@ -6570,8 +6956,15 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
     options.movingTargets,
     { maxActions: options.movingTargetMaxActions ?? 16 }
   );
-  const firstLeg = analyzeFullCourse(tileMap, starts, flags, getPayToWinAnalysisOptions({
-    maxRoutes: 2,
+  const prePruning = getLightweightStartPruning(tileMap, starts, flags, playerCount, {
+    ...options,
+    movingTargetTimelines
+  });
+  const lateRouteCount = (!options.competitiveMode && !options.payToWin && prePruning.starts.length <= prePruning.minimumPool)
+    ? 3
+    : 2;
+  const analyzedFirstLeg = analyzeFullCourse(tileMap, prePruning.starts, flags, getPayToWinAnalysisOptions({
+    maxRoutes: lateRouteCount,
     maxActions: Math.max(24, flags.length * 18 + 8),
     maxExpansions: 52000,
     flags,
@@ -6584,6 +6977,7 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
     dynamicGoals: movingTargetTimelines,
     payToWin: options.payToWin
   }, playerCount));
+  const firstLeg = mergeLightweightPrunedStarts(analyzedFirstLeg, prePruning, starts.length);
 
   const legs = [
     {
@@ -6684,78 +7078,82 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
 
 function adjustStartOutliersForCourseLength(firstLeg, totalLength, tileMap, playerCount, options = {}) {
   const analysisOptions = getRouteAnalysisVariantOptions(options);
+  const prePrunedOutliers = (firstLeg.summary.outliers || []).filter((item) => item.reasons?.lightweightPruned);
+  const initialExcludedIndices = new Set(prePrunedOutliers.map((item) => item.index));
   const initialReachableCount = (firstLeg.starts || []).filter((item) => item.reachable && item.selectedRoute).length;
-  const maxNormalRemovals = Math.max(0, initialReachableCount - playerCount);
+  const initialActiveCount = initialReachableCount - initialExcludedIndices.size;
+  const maxNormalRemovals = Math.max(0, initialActiveCount - playerCount);
 
   const result = runIterativeStartBalancing(
     firstLeg,
     tileMap,
     playerCount,
     analysisOptions,
-    ({ currentFirstLeg, activeStarts, excludedIndices }) => {
+    ({ activeStarts }) => {
       if (activeStarts.length <= playerCount) {
         return null;
       }
 
-      const costState = getPayToWinCostEntries(currentFirstLeg, excludedIndices);
-      const badEntries = costState.entries.filter((entry) => entry.energyCost >= 3);
-      if (!badEntries.length) {
+      const ranked = rankNormalStartOutliers(activeStarts, "adjustedScore", FULL_START_OUTLIER_Z);
+      const removed = ranked[0];
+      if (!removed) {
         return null;
       }
 
-      const removed = [...badEntries].sort((left, right) => (
-        right.energyCost - left.energyCost ||
-        left.adjustedScore - right.adjustedScore ||
-        left.index - right.index
-      ))[0];
       return {
-        index: removed.index,
-        score: removed.adjustedScore,
-        actions: removed.startAnalysis.bestActions,
-        implicitCost: removed.energyCost,
+        index: removed.entry.index,
+        score: removed.score,
+        actions: removed.entry.bestActions,
         diagnostics: {
           normalBalancePruned: true,
-          implicitCost: removed.energyCost,
-          costThreshold: 3,
-          costUnit: costState.costUnit,
-          removalReason: "removed hidden start-cost outlier",
+          stage: "full-route-pressure",
+          scoreZ: Number(removed.scoreZ.toFixed(2)),
+          actionZ: Number(removed.actionZ.toFixed(2)),
+          scoreDelta: Number(removed.scoreDelta.toFixed(2)),
+          actionDelta: Number(removed.actionDelta.toFixed(2)),
+          removalReason: "removed route-pressure outlier",
           totalCourseLength: Number((totalLength || 0).toFixed(2)),
           totalCourseActions: Number((options.totalActions || 0).toFixed(2))
         }
       };
     },
-    { maxPasses: maxNormalRemovals }
+    {
+      maxPasses: maxNormalRemovals,
+      initialExcludedIndices: [...initialExcludedIndices]
+    }
   );
 
-  const finalCostState = getPayToWinCostEntries(result.currentFirstLeg, result.excludedIndices);
-  const remainingBadEntries = finalCostState.entries.filter((entry) => entry.energyCost >= 3);
+  const remainingActive = getActivePruningStarts(result.currentFirstLeg, result.excludedIndices);
+  const remainingOutliers = rankNormalStartOutliers(remainingActive, "adjustedScore", FULL_START_OUTLIER_Z);
   const badLimit = Math.ceil((playerCount || 1) * 0.25);
-  const shouldReject = remainingBadEntries.length > 0 && remainingBadEntries.length <= badLimit;
-  const activeScores = finalCostState.entries.map((entry) => entry.adjustedScore);
+  const shouldReject = remainingOutliers.length > 0 && remainingActive.length <= playerCount;
+  const activeScores = remainingActive.map((entry) => entry.adjustedScore);
   const meanScore = activeScores.length ? averageValues(activeScores) : 0;
-  const outliers = result.removals.map((item) => ({
+  const lateOutliers = result.removals.map((item) => ({
     index: item.index,
     score: item.score,
     delta: Number((item.score - meanScore).toFixed(2)),
-    actionDelta: 0,
+    actionDelta: Number((item.actions ?? 0).toFixed(2)),
     reasons: item.diagnostics ?? null
   }));
+  const allOutliers = [...prePrunedOutliers, ...lateOutliers];
 
   return recomputeFirstLegPressure(tileMap, {
     ...result.baseFirstLeg,
     summary: {
       ...result.baseFirstLeg.summary,
-      outliers,
+      outliers: allOutliers,
       normalStartBalance: {
         active: true,
-        costUnit: finalCostState.costUnit,
-        pruned: result.removals,
-        remainingBadStarts: remainingBadEntries.map((entry) => ({
-          index: entry.index,
-          implicitCost: entry.energyCost,
-          score: entry.adjustedScore
+        staged: true,
+        lightweightPruned: prePrunedOutliers.map((item) => item.index),
+        pressurePruned: result.removals,
+        remainingBadStarts: remainingOutliers.map((item) => ({
+          index: item.entry.index,
+          score: item.score,
+          scoreZ: Number(item.scoreZ.toFixed(2)),
+          actionZ: Number(item.actionZ.toFixed(2))
         })),
-        badCostThreshold: 3,
         badLimit,
         reject: shouldReject
       }
@@ -7892,7 +8290,7 @@ function buildScenarioReport(scenario, selectedLegIndex) {
       ? `Pay to Win costs: unit ${summary.payToWin.costUnit}, trafficScale ${summary.payToWin.trafficScaleMultiplier}, pruned ${summary.payToWin.pruned.length ? summary.payToWin.pruned.map((item) => `#${item.index + 1}(${item.energyCost}E; pass ${item.pass})`).join(", ") : "none"}`
       : "Pay to Win costs: n/a",
     summary.normalStartBalance?.active
-      ? `Normal start balance: unit ${summary.normalStartBalance.costUnit}, pruned ${summary.normalStartBalance.pruned.length ? summary.normalStartBalance.pruned.map((item) => `#${item.index + 1}(cost ${item.implicitCost}; pass ${item.pass})`).join(", ") : "none"}, remainingBad ${summary.normalStartBalance.remainingBadStarts.length}, reject ${summary.normalStartBalance.reject ? "yes" : "no"}`
+      ? `Normal start balance: ${summary.normalStartBalance.staged ? "staged" : "legacy"}, lightweightPruned ${(summary.normalStartBalance.lightweightPruned ?? []).length ? (summary.normalStartBalance.lightweightPruned ?? []).map((index) => `#${index + 1}`).join(", ") : "none"}, pressurePruned ${(summary.normalStartBalance.pressurePruned ?? []).length ? (summary.normalStartBalance.pressurePruned ?? []).map((item) => `#${item.index + 1}(scoreZ ${item.diagnostics?.scoreZ ?? "n/a"}; actionZ ${item.diagnostics?.actionZ ?? "n/a"}; pass ${item.pass ?? "n/a"})`).join(", ") : "none"}, remainingBad ${(summary.normalStartBalance.remainingBadStarts ?? []).length}, reject ${summary.normalStartBalance.reject ? "yes" : "no"}`
       : "Normal start balance: n/a",
     scenario.movingTargetReentryMarkers?.length
       ? `Moving target re-entry: ${scenario.movingTargetReentryMarkers.map((marker) => `${marker.label}(${marker.x},${marker.y})`).join(", ")}`
@@ -8486,7 +8884,7 @@ function ensureScenarioAnimationLoop() {
 
   const tick = () => {
     scenarioAnimationFrameId = requestAnimationFrame(tick);
-    if (!currentScenario || document.hidden) {
+    if (!currentScenario || document.hidden || isGenerating) {
       return;
     }
     const now = performance.now();
@@ -8592,7 +8990,7 @@ function getFlagRetryStallLimit(preferences = {}) {
   return lengthPreference === "long" ? 3 : 2;
 }
 
-async function createRandomCandidate(assets, preferences, attempt = 1, remainingEvaluations = 1, onEvaluation = null) {
+async function createRandomCandidate(assets, preferences, attempt = 1, remainingEvaluations = 1, onEvaluation = null, onStage = null) {
   const { pieceMap } = assets;
   const expansionIds = getSelectedExpansionIds(preferences);
   const availableDockIds = getEligibleDockIds(pieceMap, expansionIds, preferences);
@@ -8633,6 +9031,14 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     payToWin,
     extraDocks
   }, variantBundle);
+  const reportStage = async (message, localEvaluation = 1) => {
+    if (onStage) {
+      await onStage(message, localEvaluation);
+    }
+  };
+
+  await reportStage("Building board and dock layout", 1);
+
   const dockConfigurations = weightedOrder(
     getDockConfigurations(availableDockIds, pieceMap, generationPreferences).map((dockIds) => (
       [...dockIds].sort((left, right) => getDockSelectionWeight(pieceMap[right], generationPreferences) - getDockSelectionWeight(pieceMap[left], generationPreferences))
@@ -8715,7 +9121,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
   ];
   const boardRects = buildBoardRects(boardLayout.placements, pieceMap);
 
-  clearAnalysisCaches();
+  clearAnalysisCachesSafe();
   const { tileMap, starts } = buildResolvedMap(placements, pieceMap);
   const flagCandidates = getFlagCandidates(placements, pieceMap);
   const movingTargetsForced = isVariantForced(preferences, "movingTargets");
@@ -8723,6 +9129,8 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
   const movingCheckpointCandidateCount = movingTargets
     ? flagCandidates.filter((candidate) => getMovingCheckpointTrace(tileMap, candidate, movingTargetTraceCache, generationPreferences).moving).length
     : 0;
+
+  await reportStage("Preparing checkpoint candidates", 1);
 
   if (movingTargetsForced && movingCheckpointCandidateCount === 0) {
     return {
@@ -8743,6 +9151,12 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     if (onEvaluation) {
       await onEvaluation(evaluationsUsed, retryBudget);
     }
+    await reportStage(
+      retryBudget > 1
+        ? `Choosing checkpoints — checkpoint try ${retry + 1} / ${retryBudget}`
+        : "Choosing checkpoints",
+      evaluationsUsed
+    );
     const checkpoints = pickFlags(
       flagCandidates,
       flagCount,
@@ -8807,6 +9221,14 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       }
       effectiveVariantBundle = courseAvailability.variantBundle;
       activeStarts = filterStartsForGoals(resolved.starts, checkpoints);
+      const pressureTarget = getLightweightPressurePoolTarget(activeStarts.length, preferences.playerCount);
+      const stagedNormalAnalysis = !competitiveMode && !effectiveVariantBundle.payToWin && activeStarts.length > pressureTarget;
+      await reportStage(
+        stagedNormalAnalysis
+          ? `Evaluating starting spaces — pass ${pass + 1} / 4; screening ${activeStarts.length} toward ${pressureTarget}`
+          : `Evaluating starting spaces — pass ${pass + 1} / 4; ${activeStarts.length} start${activeStarts.length === 1 ? "" : "s"}`,
+        evaluationsUsed
+      );
       sequence = analyzeFlagSequence(goalTileMap, activeStarts, checkpoints, preferences.playerCount, applyVariantAnalysisOptions({
         rebootTokens,
         boardRects: scenarioBoardRects,
@@ -8814,7 +9236,16 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         length: generationPreferences.length
       }, effectiveVariantBundle));
 
+      // Competitive Mode deliberately keeps every reachable starting space.
+      // Its block-impact evaluation needs the complete pool, so there is no
+      // useful dock/board/overlay pruning pass to iterate after this analysis.
+      if (competitiveMode) {
+        break;
+      }
+
+      await reportStage(`Checking route fairness and removable pieces — pass ${pass + 1} / 4`, evaluationsUsed);
       const usableStarts = computeUsableStarts(sequence.firstLeg, { competitiveMode, payToWin: effectiveVariantBundle.payToWin });
+      let pruningChanged = false;
       const prunedDocks = pruneUnusedDockPlacements(
         scenarioDockPlacements,
         pieceMap,
@@ -8824,7 +9255,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       );
       if (prunedDocks.pruned) {
         scenarioDockPlacements = prunedDocks.dockPlacements;
-        continue;
+        pruningChanged = true;
       }
 
       const prunedBoards = pruneUnusedBoardPlacements(
@@ -8838,7 +9269,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       if (prunedBoards.pruned) {
         scenarioBoardPlacements = prunedBoards.boardPlacements;
         scenarioOverlayPlacements = prunedBoards.overlayPlacements;
-        continue;
+        pruningChanged = true;
       }
 
       const prunedOverlays = pruneIrrelevantOverlayPlacements(
@@ -8851,6 +9282,10 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       );
       if (prunedOverlays.pruned) {
         scenarioOverlayPlacements = prunedOverlays.overlayPlacements;
+        pruningChanged = true;
+      }
+
+      if (pruningChanged) {
         continue;
       }
 
@@ -8870,6 +9305,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         extraDocks: false
       };
     }
+    await reportStage("Checking difficulty, length, and final fit", evaluationsUsed);
     const metrics = classifyCandidate(sequence, {
       ...generationPreferences,
       actFast,
@@ -9073,7 +9509,7 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     return null;
   }
 
-  clearAnalysisCaches();
+  clearAnalysisCachesSafe();
   const { tileMap, starts } = buildResolvedMap(placements, pieceMap);
   const rebootTokens = recoveryRule === "home_reboot"
     ? placeHomeRebootTokens(dockPlacements, pieceMap, starts, tileMap, checkpoints, {
@@ -9230,6 +9666,9 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
   while (attempt < maxAttempts) {
     const remainingAttempts = maxAttempts - attempt;
     const attemptLabel = attempt + 1;
+    if (onProgress) {
+      await onProgress(attemptLabel, maxAttempts, "Setting up a new candidate");
+    }
     let result;
     try {
       result = await createRandomCandidate(
@@ -9238,11 +9677,18 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
         attemptLabel,
         remainingAttempts,
         async (localEvaluations) => {
-          if (!onProgress) {
+          if (!onProgress || localEvaluations <= 1) {
             return;
           }
           const visibleAttempt = Math.min(maxAttempts, attempt + localEvaluations);
-          await onProgress(visibleAttempt, maxAttempts);
+          await onProgress(visibleAttempt, maxAttempts, "Trying another checkpoint layout on this board");
+        },
+        async (stage, localEvaluations = 1) => {
+          if (!onProgress) {
+            return;
+          }
+          const visibleAttempt = Math.min(maxAttempts, attempt + Math.max(1, localEvaluations));
+          await onProgress(visibleAttempt, maxAttempts, stage);
         }
       );
     } catch (error) {
@@ -9276,7 +9722,7 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
     }
 
     if (onProgress && attempt % OVERLAY_UPDATE_INTERVAL === 0) {
-      await onProgress(attempt, maxAttempts);
+      await onProgress(attempt, maxAttempts, "No exact fit yet — continuing the search");
     }
   }
 
@@ -9378,7 +9824,7 @@ async function runDiagnostics() {
       continue;
     }
 
-    clearAnalysisCaches();
+    clearAnalysisCachesSafe();
     const generation = await generateScenarioForPreferences(assets, testCase.preferences, {
       maxAttempts: DIAGNOSTIC_ATTEMPTS
     });
@@ -9438,46 +9884,58 @@ async function runDiagnostics() {
 }
 
 async function start() {
-  setGeneratingOverlay(true, "Trying random setups and checking difficulty, length, and usable starts.");
-  await nextFrame();
-  const assets = await loadAssets();
-  initializeBoardAudit(assets);
   const preferences = getPreferencesFromControls();
-  const inventoryError = validateSelectedInventory(assets, preferences);
-  if (inventoryError) {
-    setGeneratingOverlay(false);
-    window.alert(inventoryError);
-    return;
-  }
+  isGenerating = true;
 
-  clearAnalysisCaches();
-  const generation = await generateScenarioForPreferences(assets, preferences, {
-    maxAttempts: MAX_ATTEMPTS,
-    onProgress: async (attempt, maxAttempts) => {
-      setGeneratingOverlay(true, `Attempt ${attempt} of ${maxAttempts}: still looking for ${formatOverlaySearchTarget(preferences)}.`);
-      await nextFrame();
-    }
-  });
-
-  if (!generation.scenario) {
-    setGeneratingOverlay(false);
-    window.alert(
-      generation.crashedAttempts > 0 && generation.lastAttemptError
-        ? `Course generation failed after ${MAX_ATTEMPTS} attempts. Last error: ${generation.lastAttemptError.message}`
-        : `Course generation failed after ${MAX_ATTEMPTS} attempts.`
+  try {
+    setGeneratingOverlay(
+      true,
+      `Generating scenario attempt 1 / ${MAX_ATTEMPTS}: Loading course assets. Looking for ${formatOverlaySearchTarget(preferences)}.`
     );
-    return;
-  }
+    await nextFrame();
+    const assets = await loadAssets();
+    initializeBoardAudit(assets);
+    const inventoryError = validateSelectedInventory(assets, preferences);
+    if (inventoryError) {
+      window.alert(inventoryError);
+      return;
+    }
 
-  currentScenario = generation.scenario;
-  await ensureScenarioImages(assets, currentScenario);
-  pruneImageCache(assets, [
-    ...getPlacementImagePieceIds(currentScenario.placements, currentScenario.pieceMap),
-    boardAuditState.pieceId
-  ]);
-  renderScenario(currentScenario);
-  saveScenarioSnapshot(currentScenario);
-  setGeneratingOverlay(false);
+    clearAnalysisCachesSafe();
+    const generation = await generateScenarioForPreferences(assets, preferences, {
+      maxAttempts: MAX_ATTEMPTS,
+      onProgress: async (attempt, maxAttempts, stage = "") => {
+        const stageText = stage ? ` ${stage}.` : "";
+        setGeneratingOverlay(
+          true,
+          `Generating scenario attempt ${attempt} / ${maxAttempts}:${stageText} Looking for ${formatOverlaySearchTarget(preferences)}.`
+        );
+        await nextFrame();
+      }
+    });
+
+    if (!generation.scenario) {
+      window.alert(
+        generation.crashedAttempts > 0 && generation.lastAttemptError
+          ? `Course generation failed after ${MAX_ATTEMPTS} attempts. Last error: ${generation.lastAttemptError.message}`
+          : `Course generation failed after ${MAX_ATTEMPTS} attempts.`
+      );
+      return;
+    }
+
+    currentScenario = generation.scenario;
+    await ensureScenarioImages(assets, currentScenario);
+    pruneImageCache(assets, [
+      ...getPlacementImagePieceIds(currentScenario.placements, currentScenario.pieceMap),
+      boardAuditState.pieceId
+    ]);
+    renderScenario(currentScenario);
+    saveScenarioSnapshot(currentScenario);
+    lastScenarioRenderTime = performance.now();
+  } finally {
+    isGenerating = false;
+    setGeneratingOverlay(false);
+  }
 }
 
 document.getElementById("reroll").addEventListener("click", () => {
