@@ -2651,7 +2651,25 @@ function updateRulesNote(scenario) {
   }
 
   if (scenario.payToWin) {
-    notes.push("Pay to Win: green starting spaces show the starting energy cost for choosing that space.");
+    const payToWinPricing = scenario.sequence.firstLeg.summary.payToWin;
+    if (payToWinPricing?.hasLatePriceDifference) {
+      const fallbackLatePlayerCount = Math.ceil(scenario.playerCount / 3);
+      const firstLatePlayer = payToWinPricing.lateSelectorStart
+        ?? (scenario.playerCount - fallbackLatePlayerCount + 1);
+      const lastLatePlayer = payToWinPricing.lateSelectorEnd ?? scenario.playerCount;
+      const singleLatePlayer = firstLatePlayer === lastLatePlayer;
+      const latePlayerText = singleLatePlayer
+        ? `Player ${firstLatePlayer}`
+        : `Players ${firstLatePlayer}–${lastLatePlayer}`;
+      const dashText = (payToWinPricing.lateUnavailableCount ?? 0) > 0
+        ? " A dash means that starting space is unavailable to those players."
+        : "";
+      notes.push(
+        `Pay to Win: green starting spaces show starting energy costs, paid from the initial 4 energy, before drawing cards or starting upgrades. ${latePlayerText} ${singleLatePlayer ? "uses" : "use"} the second value after the slash; earlier players use the first cost.${dashText}`
+      );
+    } else {
+      notes.push("Pay to Win: green starting spaces show the starting energy cost for choosing that space, paid from the initial 4 energy, before drawing cards or starting upgrades.");
+    }
   }
 
   if (scenario.factoryRejects) {
@@ -6435,6 +6453,103 @@ function getPayToWinCostEntries(firstLeg, excludedIndices = new Set()) {
   };
 }
 
+function getPayToWinLatePricingConfig(startCount, playerCount) {
+  const safePlayerCount = Math.max(1, playerCount ?? 1);
+  const latePlayerCount = Math.ceil(safePlayerCount / 3);
+  const lateSelectorStart = safePlayerCount - latePlayerCount + 1;
+  const surplusStarts = Math.max(0, startCount - safePlayerCount);
+  const trafficReduction = Math.min(1, surplusStarts / safePlayerCount);
+
+  return {
+    lateSelectorStart,
+    lateSelectorEnd: safePlayerCount,
+    surplusStarts,
+    trafficReduction
+  };
+}
+
+function getPayToWinLateCostEntries(firstLeg, excludedIndices = new Set(), playerCount = 4) {
+  const activeStarts = (firstLeg.starts || []).filter((item) => (
+    item.reachable &&
+    item.selectedRoute &&
+    Number.isFinite(item.adjustedScore) &&
+    !excludedIndices.has(item.index)
+  ));
+  const config = getPayToWinLatePricingConfig(activeStarts.length, playerCount);
+
+  if (!activeStarts.length) {
+    return {
+      entries: [],
+      costUnit: 1,
+      minScore: 0,
+      maxScore: 0,
+      ...config
+    };
+  }
+
+  const scoredStarts = activeStarts.map((item) => {
+    const trafficPenalty = Number.isFinite(item.trafficPenalty) ? item.trafficPenalty : 0;
+    const lateAdjustedScore = Number((
+      item.adjustedScore - trafficPenalty * config.trafficReduction
+    ).toFixed(2));
+
+    return {
+      startAnalysis: item,
+      index: item.index,
+      adjustedScore: item.adjustedScore,
+      lateAdjustedScore
+    };
+  });
+
+  const lateScores = scoredStarts.map((item) => item.lateAdjustedScore);
+  const minScore = Math.min(...lateScores);
+  const maxScore = Math.max(...lateScores);
+  const costUnit = Math.max(1, minScore / 10);
+  const entries = scoredStarts.map((item) => {
+    const calculatedLateEnergyCost = Math.max(
+      0,
+      Math.floor((maxScore - item.lateAdjustedScore) / costUnit)
+    );
+
+    return {
+      ...item,
+      calculatedLateEnergyCost,
+      lateEnergyCost: calculatedLateEnergyCost,
+      lateUnavailable: calculatedLateEnergyCost >= 5
+    };
+  });
+
+  return {
+    entries,
+    costUnit: Number(costUnit.toFixed(2)),
+    minScore,
+    maxScore,
+    ...config
+  };
+}
+
+function formatPayToWinEnergyCost(startAnalysis) {
+  if (startAnalysis?.energyCost === null || startAnalysis?.energyCost === undefined) {
+    return null;
+  }
+
+  const normalCost = Number(startAnalysis.energyCost);
+
+  if (startAnalysis.lateUnavailable) {
+    return `${normalCost}/—`;
+  }
+
+  const lateCost = Number(startAnalysis.lateEnergyCost);
+  if (
+    Number.isFinite(lateCost) &&
+    lateCost !== normalCost
+  ) {
+    return `${normalCost}/${lateCost}`;
+  }
+
+  return String(normalCost);
+}
+
 function choosePayToWinPruneEntry(entries, options = {}) {
   if (!entries.length) {
     return null;
@@ -6574,6 +6689,21 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
   const { currentFirstLeg, excludedIndices, removals: pruned } = result;
   const finalCostState = getPayToWinCostEntries(currentFirstLeg, excludedIndices);
   const costByIndex = new Map(finalCostState.entries.map((entry) => [entry.index, entry.energyCost]));
+  const lateCostState = getPayToWinLateCostEntries(
+    currentFirstLeg,
+    excludedIndices,
+    playerCount
+  );
+  const lateCostByIndex = new Map(lateCostState.entries.map((entry) => [entry.index, entry.lateEnergyCost]));
+  const lateUnavailableByIndex = new Map(lateCostState.entries.map((entry) => [entry.index, entry.lateUnavailable]));
+  const lateAdjustedScoreByIndex = new Map(lateCostState.entries.map((entry) => [entry.index, entry.lateAdjustedScore]));
+  const lateUnavailableCount = lateCostState.entries.filter((entry) => entry.lateUnavailable).length;
+  const maxLateUnavailable = Math.max(0, finalCostState.entries.length - playerCount);
+  const lateAvailabilityValid = lateUnavailableCount <= maxLateUnavailable;
+  const hasLatePriceDifference = lateCostState.entries.some((entry) => (
+    costByIndex.has(entry.index) &&
+    (entry.lateUnavailable || entry.lateEnergyCost !== costByIndex.get(entry.index))
+  ));
   const activeScores = finalCostState.entries.map((entry) => entry.adjustedScore);
   const meanScore = activeScores.length ? averageValues(activeScores) : 0;
   const outliers = pruned.map((item) => ({
@@ -6594,7 +6724,12 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
     ...currentFirstLeg,
     starts: currentFirstLeg.starts.map((startAnalysis) => ({
       ...startAnalysis,
-      energyCost: costByIndex.has(startAnalysis.index) ? costByIndex.get(startAnalysis.index) : null
+      energyCost: costByIndex.has(startAnalysis.index) ? costByIndex.get(startAnalysis.index) : null,
+      lateEnergyCost: lateCostByIndex.has(startAnalysis.index) ? lateCostByIndex.get(startAnalysis.index) : null,
+      lateUnavailable: lateUnavailableByIndex.get(startAnalysis.index) ?? false,
+      lateAdjustedScore: lateAdjustedScoreByIndex.has(startAnalysis.index)
+        ? lateAdjustedScoreByIndex.get(startAnalysis.index)
+        : null
     })),
     summary: {
       ...currentFirstLeg.summary,
@@ -6602,8 +6737,17 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
       payToWin: {
         active: true,
         costUnit: finalCostState.costUnit,
+        lateCostUnit: lateCostState.costUnit,
         pruned,
-        trafficScaleMultiplier: getPayToWinTrafficScaleMultiplier(playerCount)
+        trafficScaleMultiplier: getPayToWinTrafficScaleMultiplier(playerCount),
+        lateSelectorStart: lateCostState.lateSelectorStart,
+        lateSelectorEnd: lateCostState.lateSelectorEnd,
+        surplusStarts: lateCostState.surplusStarts,
+        lateTrafficReduction: Number((lateCostState.trafficReduction * 100).toFixed(2)),
+        lateUnavailableCount,
+        maxLateUnavailable,
+        lateAvailabilityValid,
+        hasLatePriceDifference
       }
     }
   };
@@ -8287,7 +8431,7 @@ function buildScenarioReport(scenario, selectedLegIndex) {
       ? `Competitive block impact: strongStarts ${scenario.metrics.competitiveBlockImpact.strongStartCount}, remainingAfterBlocks ${scenario.metrics.competitiveBlockImpact.remainingStartCount}, bestDelta ${scenario.metrics.competitiveBlockImpact.bestScoreDelta}, topBandDelta ${scenario.metrics.competitiveBlockImpact.topBandDelta}, strongRemoved ${scenario.metrics.competitiveBlockImpact.strongStartsRemoved}, meaningful ${scenario.metrics.competitiveBlockImpact.meaningful ? "yes" : "no"}`
       : "Competitive block impact: n/a",
     summary.payToWin?.active
-      ? `Pay to Win costs: unit ${summary.payToWin.costUnit}, trafficScale ${summary.payToWin.trafficScaleMultiplier}, pruned ${summary.payToWin.pruned.length ? summary.payToWin.pruned.map((item) => `#${item.index + 1}(${item.energyCost}E; pass ${item.pass})`).join(", ") : "none"}`
+      ? `Pay to Win costs: unit ${summary.payToWin.costUnit}, lateUnit ${summary.payToWin.lateCostUnit ?? summary.payToWin.costUnit}, trafficScale ${summary.payToWin.trafficScaleMultiplier}, latePlayers ${summary.payToWin.lateSelectorStart ?? "n/a"}-${summary.payToWin.lateSelectorEnd ?? "n/a"}, surplusStarts ${summary.payToWin.surplusStarts ?? 0}, lateTrafficReduction ${summary.payToWin.lateTrafficReduction ?? 0}%, lateUnavailable ${summary.payToWin.lateUnavailableCount ?? 0}/${summary.payToWin.maxLateUnavailable ?? 0}, lateAvailabilityValid ${summary.payToWin.lateAvailabilityValid === false ? "no" : "yes"}, slashPrices ${summary.payToWin.hasLatePriceDifference ? "yes" : "no"}, pruned ${summary.payToWin.pruned.length ? summary.payToWin.pruned.map((item) => `#${item.index + 1}(${item.energyCost}E; pass ${item.pass})`).join(", ") : "none"}`
       : "Pay to Win costs: n/a",
     summary.normalStartBalance?.active
       ? `Normal start balance: ${summary.normalStartBalance.staged ? "staged" : "legacy"}, lightweightPruned ${(summary.normalStartBalance.lightweightPruned ?? []).length ? (summary.normalStartBalance.lightweightPruned ?? []).map((index) => `#${index + 1}`).join(", ") : "none"}, pressurePruned ${(summary.normalStartBalance.pressurePruned ?? []).length ? (summary.normalStartBalance.pressurePruned ?? []).map((item) => `#${item.index + 1}(scoreZ ${item.diagnostics?.scoreZ ?? "n/a"}; actionZ ${item.diagnostics?.actionZ ?? "n/a"}; pass ${item.pass ?? "n/a"})`).join(", ") : "none"}, remainingBad ${(summary.normalStartBalance.remainingBadStarts ?? []).length}, reject ${summary.normalStartBalance.reject ? "yes" : "no"}`
@@ -8353,8 +8497,9 @@ function buildScenarioReport(scenario, selectedLegIndex) {
       ? ` reason ${formatOutlierReasons(outlierReasonByIndex.get(startAnalysis.index))}`
       : "";
     const adjustedLabel = usable === "outlier" ? "outlierEstimate" : "finalAdjusted";
-    const energyCost = scenario.payToWin && startAnalysis.energyCost !== null && startAnalysis.energyCost !== undefined
-      ? ` energy ${startAnalysis.energyCost}`
+    const formattedEnergyCost = scenario.payToWin ? formatPayToWinEnergyCost(startAnalysis) : null;
+    const energyCost = formattedEnergyCost !== null
+      ? ` energy ${formattedEnergyCost}${Number.isFinite(startAnalysis.lateAdjustedScore) ? ` lateAdjusted ${startAnalysis.lateAdjustedScore}` : ""}`
       : "";
     const courseEstimate = startAnalysis.courseEstimate
       ? ` courseAdj ${startAnalysis.courseScoreAdjustment ?? 0} courseScore ${startAnalysis.courseEstimate.totalScore} courseActions ${startAnalysis.courseEstimate.totalActions} courseTraffic ${startAnalysis.courseEstimate.fullCourseTrafficPenalty ?? 0} courseRoute ${(startAnalysis.courseEstimate.selectedRouteIndex ?? 0) + 1}/${startAnalysis.courseEstimate.candidateCount ?? 1}`
@@ -8444,7 +8589,7 @@ function formatRouteActions(route) {
   return actions.length ? actions.join(" -> ") : "none";
 }
 
-function formatRouteDetail(entry) {
+function formatRouteDetail(scenario, entry) {
   const route = entry?.route;
   if (!route) {
     return [];
@@ -8469,7 +8614,25 @@ function formatRouteDetail(entry) {
     const adjustedLabel = entry.outlierInfo ? "Outlier pass estimate" : "Final adjusted score";
     lines.push(`${adjustedLabel}: ${entry.startAnalysis.adjustedScore} (${startStatus}; raw ${route.score} + traffic ${trafficPenalty})`);
     if (entry.startAnalysis.energyCost !== null && entry.startAnalysis.energyCost !== undefined) {
-      lines.push(`Pay to Win: costs ${entry.startAnalysis.energyCost} starting energy`);
+      const formattedCost = formatPayToWinEnergyCost(entry.startAnalysis);
+      const payToWinPricing = scenario.sequence.firstLeg.summary.payToWin;
+      if (payToWinPricing?.hasLatePriceDifference && formattedCost?.includes("/")) {
+        const fallbackLatePlayerCount = Math.ceil(scenario.playerCount / 3);
+        const firstLatePlayer = payToWinPricing.lateSelectorStart
+          ?? (scenario.playerCount - fallbackLatePlayerCount + 1);
+        const lastLatePlayer = payToWinPricing.lateSelectorEnd ?? scenario.playerCount;
+        const singleLatePlayer = firstLatePlayer === lastLatePlayer;
+        const latePlayerText = singleLatePlayer
+          ? `player ${firstLatePlayer}`
+          : `players ${firstLatePlayer}–${lastLatePlayer}`;
+        if (entry.startAnalysis.lateUnavailable) {
+          lines.push(`Pay to Win: costs ${entry.startAnalysis.energyCost} starting energy for earlier selectors; unavailable to ${latePlayerText}`);
+        } else {
+          lines.push(`Pay to Win: costs ${formattedCost} starting energy; ${latePlayerText} ${singleLatePlayer ? "uses" : "use"} the second cost`);
+        }
+      } else {
+        lines.push(`Pay to Win: costs ${formattedCost} starting energy`);
+      }
     }
     if (entry.startAnalysis.courseEstimate) {
       lines.push(`Full-course estimate: ${entry.startAnalysis.courseEstimate.totalActions} registers, score ${entry.startAnalysis.courseEstimate.totalScore}, adjustment ${entry.startAnalysis.courseScoreAdjustment ?? 0}`);
@@ -8557,7 +8720,7 @@ function updateInspectionDetail(scenario, selectedLegIndex) {
 
   const focused = selectedLegIndex === null ? null : getFocusedRouteEntry(scenario, selectedLegIndex);
   const lines = routeInspectionState.kind === "start" && focused
-    ? formatRouteDetail(focused)
+    ? formatRouteDetail(scenario, focused)
     : routeInspectionState.kind === "checkpoint"
       ? getCheckpointInspectionLines(scenario, Number(routeInspectionState.key))
       : [];
@@ -8791,11 +8954,25 @@ function getScenarioRenderState(scenario) {
     `${startAnalysis.start.x},${startAnalysis.start.y}`,
     startAnalysis.energyCost
   ]));
+  const lateEnergyCostByKey = new Map(scenario.sequence.firstLeg.starts.map((startAnalysis) => [
+    `${startAnalysis.start.x},${startAnalysis.start.y}`,
+    startAnalysis.lateEnergyCost
+  ]));
+  const lateUnavailableByKey = new Map(scenario.sequence.firstLeg.starts.map((startAnalysis) => [
+    `${startAnalysis.start.x},${startAnalysis.start.y}`,
+    startAnalysis.lateUnavailable ?? false
+  ]));
   const startLabels = devViewEnabled
     ? scenario.activeStarts.map((start) => startNumberByKey.get(`${start.x},${start.y}`) ?? "")
     : [];
   const startEnergyCosts = scenario.payToWin
     ? scenario.activeStarts.map((start) => energyCostByKey.get(`${start.x},${start.y}`))
+    : [];
+  const startLateEnergyCosts = scenario.payToWin
+    ? scenario.activeStarts.map((start) => lateEnergyCostByKey.get(`${start.x},${start.y}`))
+    : [];
+  const startLateUnavailable = scenario.payToWin
+    ? scenario.activeStarts.map((start) => lateUnavailableByKey.get(`${start.x},${start.y}`) ?? false)
     : [];
 
   return {
@@ -8806,6 +8983,8 @@ function getScenarioRenderState(scenario) {
     selectedLegIndex,
     startLabels,
     startEnergyCosts,
+    startLateEnergyCosts,
+    startLateUnavailable,
     unusableStartIndices
   };
 }
@@ -8822,6 +9001,8 @@ function drawScenarioCanvas(scenario, options = {}) {
     selectedLegIndex,
     startLabels,
     startEnergyCosts,
+    startLateEnergyCosts,
+    startLateUnavailable,
     unusableStartIndices
   } = getScenarioRenderState(scenario);
   const canvas = document.getElementById("canvas");
@@ -8837,6 +9018,8 @@ function drawScenarioCanvas(scenario, options = {}) {
     starts: scenario.activeStarts,
     startLabels,
     startEnergyCosts,
+    startLateEnergyCosts,
+    startLateUnavailable,
     rebootTokens: scenario.rebootTokens,
     tileMap: scenario.goalTileMap,
     unusableStartIndices,
@@ -9292,6 +9475,13 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       break;
     }
     if (!sequence) {
+      staleRetries += 1;
+      continue;
+    }
+    if (
+      effectiveVariantBundle.payToWin &&
+      sequence.firstLeg.summary.payToWin?.lateAvailabilityValid === false
+    ) {
       staleRetries += 1;
       continue;
     }

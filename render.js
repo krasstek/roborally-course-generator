@@ -1061,7 +1061,9 @@ function drawStarts(
   visibleFeatureTypes = null,
   showAllStartMarkers = false,
   startLabels = [],
-  startEnergyCosts = []
+  startEnergyCosts = [],
+  startLateEnergyCosts = [],
+  startLateUnavailable = []
 ) {
   if (visibleFeatureTypes && !visibleFeatureTypes.has("start")) {
     return;
@@ -1081,6 +1083,23 @@ function drawStarts(
     const rawEnergyCost = startEnergyCosts[index];
     const energyCost = Number(rawEnergyCost);
     const hasEnergyCost = rawEnergyCost !== null && rawEnergyCost !== undefined && Number.isFinite(energyCost);
+    const rawLateEnergyCost = startLateEnergyCosts[index];
+    const lateEnergyCost = Number(rawLateEnergyCost);
+    const lateUnavailable = Boolean(startLateUnavailable[index]);
+    const hasDistinctLateEnergyCost = (
+      rawLateEnergyCost !== null &&
+      rawLateEnergyCost !== undefined &&
+      Number.isFinite(lateEnergyCost) &&
+      lateEnergyCost !== energyCost
+    );
+    const hasSecondaryCostDisplay = lateUnavailable || hasDistinctLateEnergyCost;
+    const energyCostLabel = hasEnergyCost
+      ? lateUnavailable
+        ? `${energyCost}/—`
+        : hasDistinctLateEnergyCost
+          ? `${energyCost}/${lateEnergyCost}`
+          : String(energyCost)
+      : "";
     const explicitStartLabel = startLabels[index];
     const hasExplicitStartLabel = explicitStartLabel !== null && explicitStartLabel !== undefined && explicitStartLabel !== "";
     const devPayToWinStart = hasEnergyCost && hasExplicitStartLabel;
@@ -1123,14 +1142,16 @@ function drawStarts(
     const startLabel = hasExplicitStartLabel
       ? explicitStartLabel
       : hasEnergyCost
-        ? String(energyCost)
+        ? energyCostLabel
         : showAllStartMarkers
           ? "S"
           : "";
 
     if (startLabel) {
       ctx.fillStyle = "#ffffff";
-      ctx.font = "bold 12px sans-serif";
+      ctx.font = hasEnergyCost && !hasExplicitStartLabel && hasSecondaryCostDisplay
+        ? "bold 9px sans-serif"
+        : "bold 12px sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(String(startLabel), badgeCenterX, badgeCenterY + 0.5);
@@ -1152,10 +1173,10 @@ function drawStarts(
       ctx.strokeRect(costLeft, costTop, costSize, costSize);
 
       ctx.fillStyle = "#ffffff";
-      ctx.font = "bold 9px sans-serif";
+      ctx.font = hasSecondaryCostDisplay ? "bold 7px sans-serif" : "bold 9px sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText(String(energyCost), costLeft + costSize / 2, costTop + costSize / 2 + 0.5);
+      ctx.fillText(energyCostLabel, costLeft + costSize / 2, costTop + costSize / 2 + 0.5);
       ctx.textAlign = "start";
       ctx.textBaseline = "alphabetic";
     }
@@ -1543,6 +1564,8 @@ export function render(canvas, pieces, imageMap = {}, options = {}) {
   const showAllStartMarkers = options.showAllStartMarkers ?? (showFeatureIcons || !showPieceImages);
   const startLabels = options.startLabels ?? [];
   const startEnergyCosts = options.startEnergyCosts ?? [];
+  const startLateEnergyCosts = options.startLateEnergyCosts ?? [];
+  const startLateUnavailable = options.startLateUnavailable ?? [];
   const edgeOutlineColor = options.edgeOutlineColor ?? null;
   const visibleFeatureTypes = options.visibleFeatureTypes
     ? new Set(options.visibleFeatureTypes)
@@ -1583,7 +1606,9 @@ export function render(canvas, pieces, imageMap = {}, options = {}) {
     visibleFeatureTypes,
     showAllStartMarkers,
     startLabels,
-    startEnergyCosts
+    startEnergyCosts,
+    startLateEnergyCosts,
+    startLateUnavailable
   );
   drawRebootTokens(ctx, options.rebootTokens || [], bounds, tileSize, margin);
   drawMovingTargetPaths(ctx, options.movingTargetTimelines || [], bounds, tileSize, margin, {

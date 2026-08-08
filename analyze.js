@@ -1685,31 +1685,43 @@ function enumerateRoutes(tileMap, start, goal, options = {}) {
     ? Math.min(requestedMaxExpansions, options.dynamicGoal?.maxExpansions ?? 8000)
     : requestedMaxExpansions;
   const maxActions = options.dynamicGoal?.maxActions ?? options.maxActions ?? (dynamicGoalActive ? 16 : Infinity);
-  const startState = {
-    x: start.x,
-    y: start.y,
-    facing: start.facing ?? "E"
-  };
+  const initialFacings = options.startupSpinUp
+    ? ROTATION_ORDER
+    : [start.facing ?? "E"];
   const portalMap = options.portalMap ?? buildPortalMap(tileMap);
   const simulationOptions = {
     ...options,
     portalMap
   };
-  const initialStateKey = getSearchStateKey(startState, 0, options);
   const queue = new MinHeap((entry) => entry.estimate);
-  queue.push(createQueueEntry({
-    finalState: startState,
-    parent: null,
-    transition: null,
-    actions: 0,
-    distance: 0,
-    forcedDistance: 0,
-    hazard: 0,
-    rebootPenalty: 0,
-    baseCost: 0,
-    actionHistory: []
-  }, goal));
-  const bestCostByState = new Map([[initialStateKey, 0]]);
+  const bestCostByState = new Map();
+
+  // Startup Spin-Up is a free setup choice, not a programmed turn. Seed one
+  // zero-cost root for every legal initial facing into the same search so all
+  // facings share the route limit and expansion budget.
+  for (const facing of initialFacings) {
+    const initialState = {
+      x: start.x,
+      y: start.y,
+      facing
+    };
+    const initialStateKey = getSearchStateKey(initialState, 0, options);
+    bestCostByState.set(initialStateKey, 0);
+    queue.push(createQueueEntry({
+      finalState: initialState,
+      initialState,
+      startFacing: facing,
+      parent: null,
+      transition: null,
+      actions: 0,
+      distance: 0,
+      forcedDistance: 0,
+      hazard: 0,
+      rebootPenalty: 0,
+      baseCost: 0,
+      actionHistory: []
+    }, goal));
+  }
 
   const completed = [];
   let expansions = 0;
@@ -1725,7 +1737,7 @@ function enumerateRoutes(tileMap, start, goal, options = {}) {
 
     if (routeReachesGoal(current, goal, options)) {
       const transitions = reconstructRouteTransitions(current);
-      const timeline = buildTimeline(transitions, startState);
+      const timeline = buildTimeline(transitions, current.initialState);
       const hitTarget = getRouteTarget(goal, current.actions, options);
       const hitSpace = getDynamicGoalSpace(options.dynamicGoal, hitTarget);
       const completedRoute = {
@@ -1741,6 +1753,8 @@ function enumerateRoutes(tileMap, start, goal, options = {}) {
         path: timeline,
         transitions,
         finalState: current.finalState,
+        initialState: current.initialState,
+        startFacing: current.startFacing,
         hitTarget,
         movingTarget: options.dynamicGoal
           ? {
@@ -1787,6 +1801,8 @@ function enumerateRoutes(tileMap, start, goal, options = {}) {
           : transition;
         const nextRoute = {
           finalState: destination,
+          initialState: current.initialState,
+          startFacing: current.startFacing,
           parent: current,
           transition: transitionForDestination,
           actions: nextActionCount,
@@ -1900,34 +1916,45 @@ function enumerateFullCourseRoutes(tileMap, start, flags, options = {}) {
   const maxRoutes = options.maxRoutes ?? 2;
   const maxActions = options.maxActions ?? Math.max(24, flags.length * 18 + 8);
   const maxExpansions = options.maxExpansions ?? 45000;
-  const startState = {
-    x: start.x,
-    y: start.y,
-    facing: start.facing ?? "E"
-  };
+  const initialFacings = options.startupSpinUp
+    ? ROTATION_ORDER
+    : [start.facing ?? "E"];
   const portalMap = options.portalMap ?? buildPortalMap(tileMap);
   const simulationOptions = {
     ...options,
     portalMap
   };
-  const initialRoute = {
-    finalState: startState,
-    initialState: startState,
-    parent: null,
-    transition: null,
-    actions: 0,
-    distance: 0,
-    forcedDistance: 0,
-    hazard: 0,
-    rebootPenalty: 0,
-    baseCost: 0,
-    checkpointIndex: 0,
-    checkpointHits: [],
-    actionHistory: []
-  };
   const queue = new MinHeap((entry) => entry.estimate);
-  queue.push(createFullCourseQueueEntry(initialRoute, flags, options));
-  const bestCostByState = new Map([[getFullCourseSearchStateKey(startState, 0, 0, options), 0]]);
+  const bestCostByState = new Map();
+
+  // As above, Startup Spin-Up is represented by multiple zero-cost roots in
+  // one full-course search rather than four separate searches.
+  for (const facing of initialFacings) {
+    const initialState = {
+      x: start.x,
+      y: start.y,
+      facing
+    };
+    const initialRoute = {
+      finalState: initialState,
+      initialState,
+      startFacing: facing,
+      parent: null,
+      transition: null,
+      actions: 0,
+      distance: 0,
+      forcedDistance: 0,
+      hazard: 0,
+      rebootPenalty: 0,
+      baseCost: 0,
+      checkpointIndex: 0,
+      checkpointHits: [],
+      actionHistory: []
+    };
+    const initialStateKey = getFullCourseSearchStateKey(initialState, 0, 0, options);
+    bestCostByState.set(initialStateKey, 0);
+    queue.push(createFullCourseQueueEntry(initialRoute, flags, options));
+  }
   const completed = [];
   let expansions = 0;
 
@@ -1942,7 +1969,7 @@ function enumerateFullCourseRoutes(tileMap, start, flags, options = {}) {
 
     if (current.checkpointIndex >= flags.length) {
       const transitions = reconstructRouteTransitions(current);
-      const timeline = buildTimeline(transitions, startState);
+      const timeline = buildTimeline(transitions, current.initialState);
       const finalGoal = flags.at(-1);
       const completedRoute = {
         ...current,
@@ -1958,7 +1985,8 @@ function enumerateFullCourseRoutes(tileMap, start, flags, options = {}) {
         path: timeline,
         transitions,
         finalState: current.finalState,
-        initialState: startState,
+        initialState: current.initialState,
+        startFacing: current.startFacing,
         checkpointHits: current.checkpointHits,
         actionHistory: current.actionHistory,
         fullCourse: true,
@@ -1998,7 +2026,8 @@ function enumerateFullCourseRoutes(tileMap, start, flags, options = {}) {
           : transition;
         let nextRoute = {
           finalState: destination,
-          initialState: startState,
+          initialState: current.initialState,
+          startFacing: current.startFacing,
           parent: current,
           transition: transitionForDestination,
           actions: nextActionCount,
@@ -2970,37 +2999,29 @@ export function analyzeCourse(tileMap, starts, goal, options = {}) {
     const rebootTokens = options.recoveryRule === "home_reboot"
       ? getHomeRebootTokensForStart(start, options.rebootTokens)
       : options.rebootTokens;
-    const facings = options.startupSpinUp ? ROTATION_ORDER : [start.facing ?? "E"];
-    const routes = dedupeRoutes(facings.flatMap((facing) => (
-      enumerateRoutes(tileMap, {
-        ...start,
-        facing
-      }, goal, {
-        maxRoutes,
-        maxActions: options.maxActions,
-        maxExpansions: options.maxExpansions,
-        recoveryRule: options.recoveryRule,
-        lessDeadlyGame: options.lessDeadlyGame,
-        moreDeadlyGame: options.moreDeadlyGame,
-        lighterGame: options.lighterGame,
-        upgradeWorld: options.upgradeWorld,
-        lessSpammyGame: options.lessSpammyGame,
-        criticalSpam: options.criticalSpam,
-        criticalHaywire: options.criticalHaywire,
-        permanentShutdown: options.permanentShutdown,
-        cuttingFloor: options.cuttingFloor,
-        flamingOil: options.flamingOil,
-        repulsorOverdrive: options.repulsorOverdrive,
-        playerCount,
-        rebootTokens,
-        boardRects: options.boardRects,
-        dynamicGoal: options.dynamicGoal,
-        portalMap
-      }).map((route) => ({
-        ...route,
-        startFacing: facing
-      }))
-    ))).sort((left, right) => left.score - right.score).slice(0, maxRoutes);
+    const routes = dedupeRoutes(enumerateRoutes(tileMap, start, goal, {
+      maxRoutes,
+      maxActions: options.maxActions,
+      maxExpansions: options.maxExpansions,
+      recoveryRule: options.recoveryRule,
+      lessDeadlyGame: options.lessDeadlyGame,
+      moreDeadlyGame: options.moreDeadlyGame,
+      lighterGame: options.lighterGame,
+      upgradeWorld: options.upgradeWorld,
+      lessSpammyGame: options.lessSpammyGame,
+      criticalSpam: options.criticalSpam,
+      criticalHaywire: options.criticalHaywire,
+      permanentShutdown: options.permanentShutdown,
+      cuttingFloor: options.cuttingFloor,
+      flamingOil: options.flamingOil,
+      repulsorOverdrive: options.repulsorOverdrive,
+      startupSpinUp: options.startupSpinUp,
+      playerCount,
+      rebootTokens,
+      boardRects: options.boardRects,
+      dynamicGoal: options.dynamicGoal,
+      portalMap
+    })).sort((left, right) => left.score - right.score).slice(0, maxRoutes);
 
     return {
       index: sourceIndex,
@@ -3347,20 +3368,12 @@ export function analyzeFullCourse(tileMap, starts, flags, options = {}) {
     const rebootTokens = options.recoveryRule === "home_reboot"
       ? getHomeRebootTokensForStart(start, options.rebootTokens)
       : options.rebootTokens;
-    const facings = options.startupSpinUp ? ROTATION_ORDER : [start.facing ?? "E"];
-    const fullRoutes = dedupeRoutes(facings.flatMap((facing) => (
-      enumerateFullCourseRoutes(tileMap, {
-        ...start,
-        facing
-      }, flags, {
-        ...routeOptions,
-        rebootTokens,
-        maxRoutes
-      }).map((route) => ({
-        ...route,
-        startFacing: facing
-      }))
-    ))).sort((left, right) => left.score - right.score);
+    const fullRoutes = dedupeRoutes(enumerateFullCourseRoutes(tileMap, start, flags, {
+      ...routeOptions,
+      rebootTokens,
+      maxRoutes,
+      startupSpinUp: options.startupSpinUp
+    })).sort((left, right) => left.score - right.score);
     const distinctFullRoutes = selectDistinctRoutes(fullRoutes, flags.at(-1), maxRoutes)
       .map((route) => prepareFullCourseCandidate(route, flags))
       .filter(Boolean);
