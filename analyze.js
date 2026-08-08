@@ -77,6 +77,7 @@ const ROUTE_SIMILARITY_CACHE = new Map();
 const OVERLAP_PENALTY_CACHE = new Map();
 const LATERAL_THREAT_CACHE = new Map();
 const REAR_THREAT_CACHE = new Map();
+const ONCOMING_TRAFFIC_CACHE = new Map();
 const ROUTE_PAIR_CACHE_LIMIT = 2500;
 
 class MinHeap {
@@ -2449,6 +2450,93 @@ function rearThreatPenalty(tileMap, routeA, routeB, options = {}) {
   return rounded;
 }
 
+function areOppositeDirections(dirA, dirB) {
+  return (
+    (dirA === "N" && dirB === "S") ||
+    (dirA === "S" && dirB === "N") ||
+    (dirA === "E" && dirB === "W") ||
+    (dirA === "W" && dirB === "E")
+  );
+}
+
+function oncomingTrafficPenalty(tileMap, routeA, routeB, options = {}) {
+  if (!routeA || !routeB) {
+    return 0;
+  }
+
+  const cacheKey = `${getRoutePathKey(routeA)}>${getRoutePathKey(routeB)}|${getThreatOptionKey(options)}`;
+  if (ONCOMING_TRAFFIC_CACHE.has(cacheKey)) {
+    return ONCOMING_TRAFFIC_CACHE.get(cacheKey);
+  }
+
+  let penalty = 0;
+  const { lateral: laserMultiplier } = getRobotLaserThreatMultipliers(options);
+
+  for (let indexA = 0; indexA < routeA.path.length; indexA += 1) {
+    const pointA = routeA.path[indexA];
+    const dirA = getRouteDirectionAt(routeA.path, indexA);
+    if (!dirA || pointA.jump) {
+      continue;
+    }
+
+    for (let indexB = Math.max(0, indexA - 2); indexB <= Math.min(routeB.path.length - 1, indexA + 2); indexB += 1) {
+      const pointB = routeB.path[indexB];
+      const dirB = getRouteDirectionAt(routeB.path, indexB);
+      if (!dirB || pointB.jump || !areOppositeDirections(dirA, dirB)) {
+        continue;
+      }
+
+      const timeDelta = Math.abs(indexA - indexB);
+      const timeWeight = timeDelta === 0 ? 1 : timeDelta === 1 ? 0.62 : 0.3;
+
+      // Independent route projections occupying the same tile at nearly the
+      // same time while travelling in opposite directions represent severe
+      // blocking/pushing pressure even before laser risk is considered.
+      if (pointA.x === pointB.x && pointA.y === pointB.y) {
+        penalty += 7.5 * timeWeight;
+        continue;
+      }
+
+      // Oncoming robots must be in the same corridor and travelling toward
+      // one another rather than merely moving in opposite directions nearby.
+      if (pointA.x !== pointB.x && pointA.y !== pointB.y) {
+        continue;
+      }
+      if (!isBehindAlongDir(pointB, pointA, dirA)) {
+        continue;
+      }
+
+      const distance = heuristic(pointA, pointB);
+      if (distance < 1 || distance > 4) {
+        continue;
+      }
+      if (!hasLineOfSight(tileMap, pointA, pointB)) {
+        continue;
+      }
+
+      const distanceWeight = distance === 1 ? 1.55 : distance === 2 ? 1.05 : distance === 3 ? 0.62 : 0.34;
+
+      // Physical pressure exists regardless of damage-deck variants: committed
+      // programs can meet nose-to-nose, block movement, or create pushes.
+      const physicalPressure = 4.8 * distanceWeight * timeWeight;
+
+      // Head-on line of sight also means both robots are exposed to incoming
+      // fire. This smaller component follows the existing robot-laser tuning.
+      const directedLaserPressure = 1.6 * distanceWeight * timeWeight * laserMultiplier;
+
+      // Adjacent robots on the same register are the clearest practical
+      // blocking/pushing case, so give that situation a modest extra premium.
+      const adjacentConflict = distance === 1 && timeDelta === 0 ? 3.2 : 0;
+
+      penalty += physicalPressure + directedLaserPressure + adjacentConflict;
+    }
+  }
+
+  const rounded = Number(penalty.toFixed(2));
+  setBoundedCacheValue(ONCOMING_TRAFFIC_CACHE, cacheKey, rounded);
+  return rounded;
+}
+
 function routeThreatPenalty(tileMap, routeA, routeB, options = {}) {
   return Number((
     lateralThreatPenalty(tileMap, routeA, routeB, options) +
@@ -3134,38 +3222,82 @@ function prepareFullCourseCandidate(route, flags) {
   return route;
 }
 
-function getFullRouteTrafficPenalty(tileMap, route, selectedRoutes, goal, options = {}) {
+const FULL_COURSE_OPENING_LEG_TRAFFIC_WEIGHT = 0.4;
+const FULL_COURSE_LATER_LEG_TRAFFIC_WEIGHT = 1;
+
+function getLegAwareFullRouteOverlap(route, other, flags) {
+  const routeLegs = route?.legRoutes ?? [];
+  const otherLegs = other?.legRoutes ?? [];
+  const legCount = Math.min(flags.length, routeLegs.length, otherLegs.length);
+
+  if (!legCount) {
+    const finalGoal = flags.at(-1);
+    return finalGoal ? overlapPenalty(route, other, finalGoal) : 0;
+  }
+
+  let overlap = 0;
+  for (let legIndex = 0; legIndex < legCount; legIndex += 1) {
+    const routeLeg = routeLegs[legIndex];
+    const otherLeg = otherLegs[legIndex];
+    const goal = flags[legIndex];
+
+    if (!routeLeg || !otherLeg || !goal) {
+      continue;
+    }
+
+    const legWeight = legIndex === 0
+      ? FULL_COURSE_OPENING_LEG_TRAFFIC_WEIGHT
+      : FULL_COURSE_LATER_LEG_TRAFFIC_WEIGHT;
+    overlap += overlapPenalty(routeLeg, otherLeg, goal) * legWeight;
+  }
+
+  return overlap;
+}
+
+function getFullRouteTrafficPenalty(tileMap, route, selectedRoutes, flags, options = {}) {
   if (!route || !selectedRoutes.length) {
     return 0;
   }
 
   const playerCount = options.playerCount ?? selectedRoutes.length + 1;
   const trafficScale = computeTrafficPairScale(playerCount, selectedRoutes.length + 1, options);
-  let overlap = 0;
+  let overlapPressure = 0;
   let lateralThreat = 0;
   let rearThreat = 0;
+  let oncomingTraffic = 0;
 
   for (const other of selectedRoutes) {
     if (!other || other === route) {
       continue;
     }
 
-    overlap += overlapPenalty(route, other, goal) * trafficScale;
+    // Preserve the V5.3 experiment: damp each robot-pair overlap separately
+    // rather than compressing the entire crowd into one square root. This lets
+    // 6-8 player traffic keep useful discriminatory power.
+    const pairOverlap = getLegAwareFullRouteOverlap(route, other, flags);
+    overlapPressure += Math.sqrt(Math.max(0, pairOverlap)) * trafficScale;
+
+    // Keep laser/rear-threat timing on the continuous whole-course paths.
     lateralThreat += lateralThreatPenalty(tileMap, route, other, options) * trafficScale;
     rearThreat += (
       rearThreatPenalty(tileMap, route, other, options) * 0.45 +
       rearThreatPenalty(tileMap, other, route, options) * 0.12
     ) * trafficScale;
+
+    // Dedicated head-on interaction pressure: incoming fire plus the physical
+    // cost of likely blocking/pushing conflicts in opposing traffic.
+    oncomingTraffic += oncomingTrafficPenalty(tileMap, route, other, options) * trafficScale;
   }
 
-  // This is intentionally softer than first-leg traffic scoring. Full-course
-  // alternatives should spread robots when the cost is close, without turning
-  // route choice into an expensive multiplayer solver or favoring silly detours.
-  return Number((Math.sqrt(overlap) * 0.55 + lateralThreat * 0.035 + rearThreat * 0.03).toFixed(2));
+  return Number((
+    overlapPressure * 0.22 +
+    lateralThreat * 0.035 +
+    rearThreat * 0.03 +
+    oncomingTraffic * 0.06
+  ).toFixed(2));
 }
 
 function selectFullCourseRoutesForStarts(tileMap, startAnalyses, flags, options = {}) {
-  const finalGoal = flags.at(-1);
   const excludedIndices = new Set(options.excludedIndices ?? []);
   const reachable = startAnalyses.filter((analysis) => (
     analysis.reachable &&
@@ -3198,7 +3330,7 @@ function selectFullCourseRoutesForStarts(tileMap, startAnalyses, flags, options 
       let bestValue = Infinity;
 
       for (const candidate of analysis.fullCourseRoutes) {
-        const trafficPenalty = getFullRouteTrafficPenalty(tileMap, candidate, otherRoutes, finalGoal, options);
+        const trafficPenalty = getFullRouteTrafficPenalty(tileMap, candidate, otherRoutes, flags, options);
         const rawGap = Math.max(0, candidate.score - analysis.fullCourseRoutes[0].score);
         const value = candidate.score + trafficPenalty + rawGap * 0.18;
         if (value < bestValue - 0.001) {
@@ -3225,7 +3357,7 @@ function selectFullCourseRoutesForStarts(tileMap, startAnalyses, flags, options 
   const trafficValues = reachable.map((analysis) => {
     const route = selectedByIndex.get(analysis.index);
     const otherRoutes = selectedRoutes.filter((other) => other !== route);
-    return getFullRouteTrafficPenalty(tileMap, route, otherRoutes, finalGoal, options);
+    return getFullRouteTrafficPenalty(tileMap, route, otherRoutes, flags, options);
   });
   const trafficByIndex = new Map(reachable.map((analysis, index) => [analysis.index, trafficValues[index] ?? 0]));
 
@@ -3443,7 +3575,13 @@ export function analyzeFullCourse(tileMap, starts, flags, options = {}) {
       fullCourseTraffic: {
         passes: selection.selectionPasses,
         routeSwitches: selection.routeSwitches,
-        averagePenalty: selection.averageTrafficPenalty
+        averagePenalty: selection.averageTrafficPenalty,
+        legAwareOverlap: true,
+        perRobotOverlapDamping: true,
+        oncomingTraffic: true,
+        oncomingTrafficWeight: 0.06,
+        openingLegWeight: FULL_COURSE_OPENING_LEG_TRAFFIC_WEIGHT,
+        laterLegWeight: FULL_COURSE_LATER_LEG_TRAFFIC_WEIGHT
       }
     }
   };

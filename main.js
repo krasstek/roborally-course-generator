@@ -760,6 +760,106 @@ function getLengthThresholds() {
   };
 }
 
+// Gross-mismatch limits are intentionally much wider than the actual
+// acceptance bands. They are used only after one complete course analysis,
+// and only to avoid spending additional physical-pruning/reanalysis passes on
+// a candidate that is already implausibly far from the requested target.
+const GROSS_DIFFICULTY_ABORT_BANDS = {
+  easy: { max: 165 },
+  moderate: { min: 35, max: 225 },
+  hard: { min: 75 },
+  brutal: { min: 90 }
+};
+
+const GROSS_LENGTH_ABORT_BANDS = {
+  short: { max: 220 },
+  moderate: { min: 70, max: 285 },
+  long: { min: 90 }
+};
+
+function getGrossCourseMismatch(metrics, preferences = {}) {
+  const difficultyBand = GROSS_DIFFICULTY_ABORT_BANDS[preferences.difficulty];
+  const lengthBand = GROSS_LENGTH_ABORT_BANDS[preferences.length];
+
+  if (difficultyBand && Number.isFinite(metrics?.difficultyRaw)) {
+    if (
+      Number.isFinite(difficultyBand.min) &&
+      metrics.difficultyRaw < difficultyBand.min
+    ) {
+      return {
+        abort: true,
+        reason: "difficulty-too-low",
+        metric: "difficulty",
+        value: metrics.difficultyRaw,
+        limit: difficultyBand.min,
+        requested: preferences.difficulty
+      };
+    }
+
+    if (
+      Number.isFinite(difficultyBand.max) &&
+      metrics.difficultyRaw > difficultyBand.max
+    ) {
+      return {
+        abort: true,
+        reason: "difficulty-too-high",
+        metric: "difficulty",
+        value: metrics.difficultyRaw,
+        limit: difficultyBand.max,
+        requested: preferences.difficulty
+      };
+    }
+  }
+
+  if (lengthBand && Number.isFinite(metrics?.lengthFitRaw)) {
+    if (
+      Number.isFinite(lengthBand.min) &&
+      metrics.lengthFitRaw < lengthBand.min
+    ) {
+      return {
+        abort: true,
+        reason: "length-too-low",
+        metric: "length",
+        value: metrics.lengthFitRaw,
+        limit: lengthBand.min,
+        requested: preferences.length
+      };
+    }
+
+    if (
+      Number.isFinite(lengthBand.max) &&
+      metrics.lengthFitRaw > lengthBand.max
+    ) {
+      return {
+        abort: true,
+        reason: "length-too-high",
+        metric: "length",
+        value: metrics.lengthFitRaw,
+        limit: lengthBand.max,
+        requested: preferences.length
+      };
+    }
+  }
+
+  return {
+    abort: false,
+    reason: null,
+    metric: null,
+    value: null,
+    limit: null,
+    requested: null
+  };
+}
+
+function formatGrossCourseMismatch(mismatch) {
+  if (!mismatch?.abort) {
+    return "";
+  }
+
+  const comparison = mismatch.reason.endsWith("too-low") ? "<" : ">";
+  return `${mismatch.metric} ${Number(mismatch.value).toFixed(1)} ${comparison} gross ${mismatch.requested} limit ${mismatch.limit}`;
+}
+
 function getReverseSideName(pieceId, pieceMap) {
   const piece = pieceMap[pieceId];
   if (!piece?.physicalBoardId) {
@@ -2665,10 +2765,10 @@ function updateRulesNote(scenario) {
         ? " A dash means that starting space is unavailable to those players."
         : "";
       notes.push(
-        `Pay to Win: green starting spaces show starting energy costs, paid from the initial 4 energy, before drawing cards or starting upgrades. ${latePlayerText} ${singleLatePlayer ? "uses" : "use"} the second value after the slash; earlier players use the first cost.${dashText}`
+        `Pay to Win: green starting spaces show starting energy costs, paid from the initial 4 starting energy before drawing starting hands or upgrades. ${latePlayerText} ${singleLatePlayer ? "uses" : "use"} the second value after the slash; earlier players use the first cost.${dashText}`
       );
     } else {
-      notes.push("Pay to Win: green starting spaces show the starting energy cost for choosing that space, paid from the initial 4 energy, before drawing cards or starting upgrades.");
+      notes.push("Pay to Win: green starting spaces show the starting energy cost for choosing that space, paid from the initial 4 starting energy before drawing starting hands or upgrades.");
     }
   }
 
@@ -9418,6 +9518,49 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         difficulty: generationPreferences.difficulty,
         length: generationPreferences.length
       }, effectiveVariantBundle));
+
+      // After the first genuine full-course analysis, abandon only candidates
+      // that are wildly outside the requested difficulty/length target. This
+      // check deliberately does not run in Competitive Mode because that mode
+      // already skips the physical-pruning/reanalysis loop after pass 1.
+      if (pass === 0 && !competitiveMode) {
+        const provisionalMetrics = classifyCandidate(sequence, {
+          ...generationPreferences,
+          actFast,
+          actFastMode,
+          flagCount,
+          classicSharedDeck,
+          criticalSpam,
+          criticalHaywire,
+          permanentShutdown,
+          cuttingFloor: effectiveVariantBundle.cuttingFloor,
+          flamingOil: effectiveVariantBundle.flamingOil,
+          factoryRejects,
+          repulsorOverdrive: effectiveVariantBundle.repulsorOverdrive,
+          upgradeWorld: effectiveVariantBundle.upgradeWorld,
+          hazardousFlags,
+          movingTargets,
+          payToWin: effectiveVariantBundle.payToWin,
+          lighterGame,
+          lessSpammyGame,
+          lessForeshadowing
+        }, {
+          boardPlacements: scenarioBoardPlacements,
+          pieceMap,
+          checkpoints,
+          tileMap: scenarioTileMap,
+          goalTileMap
+        });
+        const grossMismatch = getGrossCourseMismatch(provisionalMetrics, generationPreferences);
+
+        if (grossMismatch.abort) {
+          const mismatchText = formatGrossCourseMismatch(grossMismatch);
+          console.debug(`Early course abort: ${mismatchText}`);
+          await reportStage(`Rejecting gross mismatch — ${mismatchText}`, evaluationsUsed);
+          sequence = null;
+          break;
+        }
+      }
 
       // Competitive Mode deliberately keeps every reachable starting space.
       // Its block-impact evaluation needs the complete pool, so there is no
