@@ -758,7 +758,7 @@ function moveOneStep(tileMap, state, dir, mode, options = {}, moveBudget = null)
         workingState.facing = bounce.state.facing;
       }
 
-      return {
+      const repulsorOutcome = {
         state: workingState,
         blocked: false,
         crashed: false,
@@ -773,6 +773,9 @@ function moveOneStep(tileMap, state, dir, mode, options = {}, moveBudget = null)
         repulsed: true,
         rampAscent: false
       };
+      return distance > 0 && isOil(tileMap.get(tileKey(workingState.x, workingState.y)))
+        ? { ...mergeStepOutcome(repulsorOutcome, slideOnOil(tileMap, workingState, reverseDir, options)), repulsed: true }
+        : repulsorOutcome;
     }
 
     const rebootToken = moveCheck.crash && options.recoveryRule === "reboot_tokens"
@@ -884,10 +887,6 @@ function moveOneStep(tileMap, state, dir, mode, options = {}, moveBudget = null)
     spentMove: true,
     rampAscent: Boolean(moveCheck.rampAscent)
   };
-
-  if (mode !== "oil" && isOil(tileMap.get(tileKey(resolvedState.x, resolvedState.y)))) {
-    return mergeStepOutcome(outcome, slideOnOil(tileMap, resolvedState, dir, options));
-  }
 
   return outcome;
 }
@@ -1038,6 +1037,7 @@ function resolveConveyorPhase(tileMap, state, eligibleSpeed, options = {}) {
   let forcedDistance = 0;
   const maxSteps = eligibleSpeed === 2 ? 2 : 1;
   let stepsTaken = 0;
+  let lastMoveDir = null;
 
   while (stepsTaken < maxSteps) {
     const tile = tileMap.get(tileKey(workingState.x, workingState.y));
@@ -1055,6 +1055,7 @@ function resolveConveyorPhase(tileMap, state, eligibleSpeed, options = {}) {
     }
 
     const step = moveOneStep(tileMap, workingState, belt.dir, "belt", options);
+    lastMoveDir = belt.dir;
     traversed.push(...step.traversed);
     conveyorSteps.push(...(step.conveyorSteps || []));
     hazard += step.hazard;
@@ -1083,7 +1084,7 @@ function resolveConveyorPhase(tileMap, state, eligibleSpeed, options = {}) {
     workingState.facing = step.state.facing;
   }
 
-  return {
+  const conveyorOutcome = {
     state: workingState,
     traversed,
     conveyorSteps,
@@ -1094,6 +1095,9 @@ function resolveConveyorPhase(tileMap, state, eligibleSpeed, options = {}) {
     crashed: false,
     rebooted: false
   };
+  return stepsTaken > 0 && lastMoveDir && isOil(tileMap.get(tileKey(workingState.x, workingState.y)))
+    ? mergeStepOutcome(conveyorOutcome, slideOnOil(tileMap, workingState, lastMoveDir, options))
+    : conveyorOutcome;
 }
 
 function resolvePushPhase(tileMap, state, options = {}) {
@@ -1122,7 +1126,10 @@ function resolvePushPhase(tileMap, state, options = {}) {
   let forcedDistance = 0;
 
   for (const push of pushes) {
-    const step = moveOneStep(tileMap, workingState, push.dir, "push", options);
+    let step = moveOneStep(tileMap, workingState, push.dir, "push", options);
+    if (!step.crashed && !step.blocked && !step.rebooted && step.distance > 0 && !step.repulsed && isOil(tileMap.get(tileKey(step.state.x, step.state.y)))) {
+      step = mergeStepOutcome(step, slideOnOil(tileMap, step.state, push.dir, options));
+    }
     traversed.push(...step.traversed);
     hazard += step.hazard;
     rebootPenalty += step.rebootPenalty || 0;
@@ -1283,10 +1290,11 @@ export function simulateAction(tileMap, startState, action, options = {}) {
     const onOil = isOil(startTile);
     const onWater = isWater(startTile);
     let remainingSteps = Math.max(0, (action.steps ?? 1) - (
-      action.relative === "forward"
-        ? (onOil ? 1 : 0) + (onWater ? 1 : 0)
-        : 0
+      (onOil ? 1 : 0) +
+      (action.relative === "forward" && onWater ? 1 : 0)
     ));
+    const manualMoveDir = movementDir(state.facing, action.relative);
+    const manualDistanceBefore = distance;
 
     while (remainingSteps > 0) {
       const step = moveOneStep(tileMap, state, movementDir(state.facing, action.relative), "manual", options, remainingSteps);
@@ -1321,6 +1329,28 @@ export function simulateAction(tileMap, startState, action, options = {}) {
         break;
       }
       remainingSteps -= 1 + (step.rampAscent ? 1 : 0);
+    }
+
+    if (distance > manualDistanceBefore && isOil(tileMap.get(tileKey(state.x, state.y)))) {
+      const oilSlide = slideOnOil(tileMap, state, manualMoveDir, options);
+      traversed.push(...oilSlide.traversed);
+      hazard += oilSlide.hazard;
+      rebootPenalty += oilSlide.rebootPenalty || 0;
+      distance += oilSlide.distance;
+      forcedDistance += oilSlide.forcedDistance || 0;
+      state.x = oilSlide.state.x;
+      state.y = oilSlide.state.y;
+      state.facing = oilSlide.state.facing;
+      if (oilSlide.crashed || oilSlide.blocked || oilSlide.rebooted) {
+        return {
+          action: action.id,
+          from: cloneState(startState),
+          to: oilSlide.state,
+          rebootChoices: oilSlide.rebootChoices ?? null,
+          traversed, conveyorSteps, hazard, rebootPenalty, distance, forcedDistance,
+          crashed: oilSlide.crashed, blocked: oilSlide.blocked, rebooted: oilSlide.rebooted
+        };
+      }
     }
     }
   }
@@ -2100,6 +2130,7 @@ function sliceFullCourseRoute(fullRoute, legIndex, flags) {
     movingTarget: hit.movingTarget,
     checkpointHit: hit,
     actions: actionCount,
+    absoluteStartAction: startAction,
     absoluteActions: hit.action,
     distance,
     forcedDistance,
@@ -2350,12 +2381,47 @@ function getRobotLaserThreatMultipliers(options = {}) {
   return { lateral, rear };
 }
 
+function getTrafficPath(route) {
+  return route?.trafficPath ?? route?.path ?? [];
+}
+
+function getTrafficRouteKey(route) {
+  const path = getTrafficPath(route);
+  return path.map((point) => `${point.x},${point.y}${point.jump ? "!" : ""}`).join("|");
+}
+
+function applyTrafficGraceToRoute(route, graceRegisters = 0) {
+  if (!route || graceRegisters <= 0 || !Array.isArray(route.transitions)) {
+    return route;
+  }
+
+  const absoluteStartAction = route.absoluteStartAction ?? 0;
+  const skipCount = Math.max(0, Math.min(
+    route.transitions.length,
+    graceRegisters - absoluteStartAction
+  ));
+
+  if (skipCount <= 0) {
+    route.trafficPath = route.path;
+    return route;
+  }
+
+  if (skipCount >= route.transitions.length) {
+    route.trafficPath = [];
+    return route;
+  }
+
+  const startState = route.transitions[skipCount - 1]?.to ?? route.initialState;
+  route.trafficPath = buildTimeline(route.transitions.slice(skipCount), startState);
+  return route;
+}
+
 function lateralThreatPenalty(tileMap, routeA, routeB, options = {}) {
   if (!routeA || !routeB) {
     return 0;
   }
 
-  const cacheKey = `${getRoutePathKey(routeA)}>${getRoutePathKey(routeB)}|${getThreatOptionKey(options)}`;
+  const cacheKey = `${getTrafficRouteKey(routeA)}>${getTrafficRouteKey(routeB)}|${getThreatOptionKey(options)}`;
   if (LATERAL_THREAT_CACHE.has(cacheKey)) {
     return LATERAL_THREAT_CACHE.get(cacheKey);
   }
@@ -2363,11 +2429,13 @@ function lateralThreatPenalty(tileMap, routeA, routeB, options = {}) {
   let penalty = 0;
   const { lateral: multiplier } = getRobotLaserThreatMultipliers(options);
 
-  for (let indexA = 0; indexA < routeA.path.length; indexA += 1) {
-    const pointA = routeA.path[indexA];
+  const pathA = getTrafficPath(routeA);
+  const pathB = getTrafficPath(routeB);
+  for (let indexA = 0; indexA < pathA.length; indexA += 1) {
+    const pointA = pathA[indexA];
 
-    for (let indexB = Math.max(0, indexA - 1); indexB <= Math.min(routeB.path.length - 1, indexA + 1); indexB += 1) {
-      const pointB = routeB.path[indexB];
+    for (let indexB = Math.max(0, indexA - 1); indexB <= Math.min(pathB.length - 1, indexA + 1); indexB += 1) {
+      const pointB = pathB[indexB];
 
       if (pointA.x === pointB.x && pointA.y === pointB.y) {
         continue;
@@ -2403,7 +2471,7 @@ function rearThreatPenalty(tileMap, routeA, routeB, options = {}) {
     return 0;
   }
 
-  const cacheKey = `${getRoutePathKey(routeA)}>${getRoutePathKey(routeB)}|${getThreatOptionKey(options)}`;
+  const cacheKey = `${getTrafficRouteKey(routeA)}>${getTrafficRouteKey(routeB)}|${getThreatOptionKey(options)}`;
   if (REAR_THREAT_CACHE.has(cacheKey)) {
     return REAR_THREAT_CACHE.get(cacheKey);
   }
@@ -2411,16 +2479,18 @@ function rearThreatPenalty(tileMap, routeA, routeB, options = {}) {
   let penalty = 0;
   const { rear: multiplier } = getRobotLaserThreatMultipliers(options);
 
-  for (let indexA = 0; indexA < routeA.path.length; indexA += 1) {
-    const pointA = routeA.path[indexA];
-    const dirA = getRouteDirectionAt(routeA.path, indexA);
+  const pathA = getTrafficPath(routeA);
+  const pathB = getTrafficPath(routeB);
+  for (let indexA = 0; indexA < pathA.length; indexA += 1) {
+    const pointA = pathA[indexA];
+    const dirA = getRouteDirectionAt(pathA, indexA);
     if (!dirA || pointA.jump) {
       continue;
     }
 
-    for (let indexB = Math.max(0, indexA - 2); indexB <= Math.min(routeB.path.length - 1, indexA + 2); indexB += 1) {
-      const pointB = routeB.path[indexB];
-      const dirB = getRouteDirectionAt(routeB.path, indexB);
+    for (let indexB = Math.max(0, indexA - 2); indexB <= Math.min(pathB.length - 1, indexA + 2); indexB += 1) {
+      const pointB = pathB[indexB];
+      const dirB = getRouteDirectionAt(pathB, indexB);
       if (!dirB || pointB.jump || dirA !== dirB) {
         continue;
       }
@@ -2464,7 +2534,7 @@ function oncomingTrafficPenalty(tileMap, routeA, routeB, options = {}) {
     return 0;
   }
 
-  const cacheKey = `${getRoutePathKey(routeA)}>${getRoutePathKey(routeB)}|${getThreatOptionKey(options)}`;
+  const cacheKey = `${getTrafficRouteKey(routeA)}>${getTrafficRouteKey(routeB)}|${getThreatOptionKey(options)}`;
   if (ONCOMING_TRAFFIC_CACHE.has(cacheKey)) {
     return ONCOMING_TRAFFIC_CACHE.get(cacheKey);
   }
@@ -2472,16 +2542,18 @@ function oncomingTrafficPenalty(tileMap, routeA, routeB, options = {}) {
   let penalty = 0;
   const { lateral: laserMultiplier } = getRobotLaserThreatMultipliers(options);
 
-  for (let indexA = 0; indexA < routeA.path.length; indexA += 1) {
-    const pointA = routeA.path[indexA];
-    const dirA = getRouteDirectionAt(routeA.path, indexA);
+  const pathA = getTrafficPath(routeA);
+  const pathB = getTrafficPath(routeB);
+  for (let indexA = 0; indexA < pathA.length; indexA += 1) {
+    const pointA = pathA[indexA];
+    const dirA = getRouteDirectionAt(pathA, indexA);
     if (!dirA || pointA.jump) {
       continue;
     }
 
-    for (let indexB = Math.max(0, indexA - 2); indexB <= Math.min(routeB.path.length - 1, indexA + 2); indexB += 1) {
-      const pointB = routeB.path[indexB];
-      const dirB = getRouteDirectionAt(routeB.path, indexB);
+    for (let indexB = Math.max(0, indexA - 2); indexB <= Math.min(pathB.length - 1, indexA + 2); indexB += 1) {
+      const pointB = pathB[indexB];
+      const dirB = getRouteDirectionAt(pathB, indexB);
       if (!dirB || pointB.jump || !areOppositeDirections(dirA, dirB)) {
         continue;
       }
@@ -2537,11 +2609,37 @@ function oncomingTrafficPenalty(tileMap, routeA, routeB, options = {}) {
   return rounded;
 }
 
+function oilPushRiskPenalty(tileMap, routeA, routeB) {
+  if (!routeA || !routeB) return 0;
+  const pathA = getTrafficPath(routeA);
+  const pathB = getTrafficPath(routeB);
+  let penalty = 0;
+  for (let indexA = 0; indexA < pathA.length; indexA += 1) {
+    const pointA = pathA[indexA];
+    const dirA = getRouteDirectionAt(pathA, indexA);
+    if (!dirA || pointA.jump) continue;
+    for (let indexB = Math.max(0, indexA - 1); indexB <= Math.min(pathB.length - 1, indexA + 1); indexB += 1) {
+      const pointB = pathB[indexB];
+      if (pointB.jump || heuristic(pointA, pointB) !== 1) continue;
+      const ahead = { x: pointB.x + DIRS[dirA].dx, y: pointB.y + DIRS[dirA].dy };
+      if (ahead.x !== pointA.x || ahead.y !== pointA.y) continue;
+      const beyond = { x: pointA.x + DIRS[dirA].dx, y: pointA.y + DIRS[dirA].dy };
+      const beyondTile = tileMap.get(tileKey(beyond.x, beyond.y));
+      if (!beyondTile || !isOil(beyondTile)) continue;
+      const moveCheck = canMoveBetween(tileMap, pointA, beyond, dirA, {});
+      if (!moveCheck.ok) continue;
+      penalty += indexA === indexB ? 3.2 : 1.4;
+    }
+  }
+  return Number(penalty.toFixed(2));
+}
+
 function routeThreatPenalty(tileMap, routeA, routeB, options = {}) {
   return Number((
     lateralThreatPenalty(tileMap, routeA, routeB, options) +
     rearThreatPenalty(tileMap, routeA, routeB, options) * 0.45 +
-    rearThreatPenalty(tileMap, routeB, routeA, options) * 0.12
+    rearThreatPenalty(tileMap, routeB, routeA, options) * 0.12 +
+    oilPushRiskPenalty(tileMap, routeA, routeB) * 0.08
   ).toFixed(2));
 }
 
@@ -2550,19 +2648,24 @@ function overlapPenalty(routeA, routeB, goal) {
     return 0;
   }
 
-  const cacheKey = `${getRoutePathKey(routeA)}>${getRoutePathKey(routeB)}|${tileKey(goal.x, goal.y)}`;
+  const pathA = getTrafficPath(routeA);
+  const pathB = getTrafficPath(routeB);
+  if (!pathA.length || !pathB.length) {
+    return 0;
+  }
+  const cacheKey = `${getTrafficRouteKey(routeA)}>${getTrafficRouteKey(routeB)}|${tileKey(goal.x, goal.y)}`;
   if (OVERLAP_PENALTY_CACHE.has(cacheKey)) {
     return OVERLAP_PENALTY_CACHE.get(cacheKey);
   }
 
   let penalty = 0;
-  const tileSetB = buildTileSet(routeB, goal);
-  const edgeSetB = buildEdgeSet(routeB);
+  const tileSetB = buildTileSet({ ...routeB, path: pathB }, goal);
+  const edgeSetB = buildEdgeSet({ ...routeB, path: pathB });
 
-  for (let index = 0; index < routeA.path.length; index += 1) {
-    const point = routeA.path[index];
+  for (let index = 0; index < pathA.length; index += 1) {
+    const point = pathA[index];
     const key = tileKey(point.x, point.y);
-    const sameTick = routeB.path[index];
+    const sameTick = pathB[index];
     const isGoal = point.x === goal.x && point.y === goal.y;
 
     const goalDistance = heuristic(point, goal);
@@ -2575,7 +2678,7 @@ function overlapPenalty(routeA, routeB, goal) {
     }
 
     if (index > 0) {
-      const prev = routeA.path[index - 1];
+      const prev = pathA[index - 1];
       const edge = `${tileKey(prev.x, prev.y)}>${key}`;
       if (edgeSetB.has(edge)) {
         penalty += 3 * goalWeight;
@@ -3212,13 +3315,18 @@ function summarizeExpectedFullCourseLegRoutes(routes, previousRoutes, goal, play
 }
 
 
-function prepareFullCourseCandidate(route, flags) {
+function prepareFullCourseCandidate(route, flags, options = {}) {
   if (!route) {
     return null;
   }
 
-  const legRoutes = flags.map((_, legIndex) => sliceFullCourseRoute(route, legIndex, flags));
+  const graceRegisters = options.trafficGraceRegisters ?? 0;
+  const legRoutes = flags.map((_, legIndex) => (
+    applyTrafficGraceToRoute(sliceFullCourseRoute(route, legIndex, flags), graceRegisters)
+  ));
   route.legRoutes = legRoutes;
+  route.absoluteStartAction = 0;
+  applyTrafficGraceToRoute(route, graceRegisters);
   return route;
 }
 
@@ -3265,6 +3373,7 @@ function getFullRouteTrafficPenalty(tileMap, route, selectedRoutes, flags, optio
   let lateralThreat = 0;
   let rearThreat = 0;
   let oncomingTraffic = 0;
+  let oilPushRisk = 0;
 
   for (const other of selectedRoutes) {
     if (!other || other === route) {
@@ -3287,13 +3396,15 @@ function getFullRouteTrafficPenalty(tileMap, route, selectedRoutes, flags, optio
     // Dedicated head-on interaction pressure: incoming fire plus the physical
     // cost of likely blocking/pushing conflicts in opposing traffic.
     oncomingTraffic += oncomingTrafficPenalty(tileMap, route, other, options) * trafficScale;
+    oilPushRisk += oilPushRiskPenalty(tileMap, route, other) * trafficScale;
   }
 
   return Number((
     overlapPressure * 0.22 +
     lateralThreat * 0.035 +
     rearThreat * 0.03 +
-    oncomingTraffic * 0.06
+    oncomingTraffic * 0.06 +
+    oilPushRisk * 0.08
   ).toFixed(2));
 }
 
@@ -3489,14 +3600,14 @@ export function analyzeFullCourse(tileMap, starts, flags, options = {}) {
     repulsorOverdrive: options.repulsorOverdrive,
     lessForeshadowing: options.lessForeshadowing,
     playerCount,
+    virtualBots: Boolean(options.virtualBots),
     rebootTokens: options.rebootTokens,
     boardRects: options.boardRects,
     dynamicGoals,
     portalMap
   };
 
-  const startAnalyses = starts.map((start, index) => {
-    const sourceIndex = Number.isInteger(start.analysisIndex) ? start.analysisIndex : index;
+  const enumeratePreparedRoutesForStart = (start) => {
     const rebootTokens = options.recoveryRule === "home_reboot"
       ? getHomeRebootTokensForStart(start, options.rebootTokens)
       : options.rebootTokens;
@@ -3506,9 +3617,38 @@ export function analyzeFullCourse(tileMap, starts, flags, options = {}) {
       maxRoutes,
       startupSpinUp: options.startupSpinUp
     })).sort((left, right) => left.score - right.score);
-    const distinctFullRoutes = selectDistinctRoutes(fullRoutes, flags.at(-1), maxRoutes)
-      .map((route) => prepareFullCourseCandidate(route, flags))
+    return selectDistinctRoutes(fullRoutes, flags.at(-1), maxRoutes)
+      .map((route) => prepareFullCourseCandidate(route, flags, options))
       .filter(Boolean);
+  };
+
+  // All Virtual Bots share Flag 0, so avoid repeating the same expensive
+  // continuous route search once per player. Clone the candidate objects per
+  // robot so multiplayer route selection still treats them independently.
+  const sharedVirtualRoutes = options.virtualBots && starts.length
+    ? enumeratePreparedRoutesForStart(starts[0])
+    : null;
+
+  const clonePreparedRoute = (route) => route
+    ? {
+      ...route,
+      path: route.path ? [...route.path] : route.path,
+      trafficPath: route.trafficPath ? [...route.trafficPath] : route.trafficPath,
+      legRoutes: (route.legRoutes || []).map((leg) => leg
+        ? {
+          ...leg,
+          path: leg.path ? [...leg.path] : leg.path,
+          trafficPath: leg.trafficPath ? [...leg.trafficPath] : leg.trafficPath
+        }
+        : leg)
+    }
+    : route;
+
+  const startAnalyses = starts.map((start, index) => {
+    const sourceIndex = Number.isInteger(start.analysisIndex) ? start.analysisIndex : index;
+    const distinctFullRoutes = sharedVirtualRoutes
+      ? sharedVirtualRoutes.map(clonePreparedRoute)
+      : enumeratePreparedRoutesForStart(start);
     const fullRoute = distinctFullRoutes[0] ?? null;
 
     return buildStartAnalysisForSelectedFullRoute({

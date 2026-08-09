@@ -281,52 +281,344 @@ let lastRenderDiagnostics = {
   blankFallbackTriggered: false
 };
 
-function renderVariantControls() {
-  const menuEl = document.getElementById("variant-rules-menu");
-  if (!menuEl) {
+function createVariantRuleNameElement(variant) {
+  const nameEl = document.createElement("div");
+  nameEl.className = "variant-rule-name";
+  nameEl.textContent = variant.label;
+  return nameEl;
+}
+
+function createVariantCategoryBulkRow(category) {
+  const rowEl = document.createElement("div");
+  rowEl.className = "variant-rule variant-bulk-rule";
+
+  const nameEl = document.createElement("div");
+  nameEl.className = "variant-rule-name";
+
+  const buttonEl = document.createElement("button");
+  buttonEl.className = "variant-state";
+  buttonEl.type = "button";
+  buttonEl.dataset.variantAction = "toggle-category";
+  buttonEl.dataset.variantCategory = category;
+
+  rowEl.append(nameEl, buttonEl);
+  return rowEl;
+}
+
+function getOverlayControlButtons() {
+  return Array.from(document.querySelectorAll("[data-overlay-control]"));
+}
+
+function isOverlayModeAvailable(preferences = {}, pieceMap = cachedAssets?.pieceMap ?? null) {
+  if (!pieceMap) {
+    return true;
+  }
+  const expansionIds = getSelectedExpansionIds(preferences);
+  return getAvailableOverlayIds(pieceMap, expansionIds).length > 0;
+}
+
+function getOverlayUnavailabilityReason(preferences = {}, pieceMap = cachedAssets?.pieceMap ?? null) {
+  return isOverlayModeAvailable(preferences, pieceMap)
+    ? null
+    : "Requires overlay-capable boards or tokens in the selected sets.";
+}
+
+function setOverlayModeControl(mode, buttonEl = null) {
+  const targets = buttonEl ? [buttonEl] : getOverlayControlButtons();
+  if (!targets.length) {
     return;
   }
 
-  menuEl.replaceChildren();
-  const states = VARIANT_DEFINITIONS.map((variant) => normalizeVariantState(getVariantPreferenceState({}, variant.id)));
-  const bulkAllAllowed = states.every((state) => state === "allowed" || state === "forced");
-  const bulkRowEl = document.createElement("div");
-  bulkRowEl.className = "variant-rule";
-
-  const bulkNameEl = document.createElement("div");
-  bulkNameEl.className = "variant-rule-name";
-  bulkNameEl.textContent = bulkAllAllowed ? "Allow none" : "Allow all";
-
-  const bulkButtonEl = document.createElement("button");
-  bulkButtonEl.className = "variant-state";
-  bulkButtonEl.type = "button";
-  bulkButtonEl.dataset.variantAction = "toggle-all";
-  bulkButtonEl.textContent = bulkAllAllowed ? "No" : "Yes";
-  bulkButtonEl.title = bulkAllAllowed ? "Set all allowed variants to No" : "Set all disallowed variants to Yes";
-  bulkButtonEl.setAttribute("aria-label", bulkButtonEl.title);
-
-  bulkRowEl.append(bulkNameEl, bulkButtonEl);
-
-  const items = VARIANT_DEFINITIONS.map((variant) => {
-    const rowEl = document.createElement("div");
-    rowEl.className = "variant-rule";
-    rowEl.title = variant.description;
-
-    const nameEl = document.createElement("div");
-    nameEl.className = "variant-rule-name";
-    nameEl.textContent = variant.label;
-
-    const buttonEl = document.createElement("button");
-    buttonEl.id = variant.controlId;
-    buttonEl.className = "variant-state";
-    buttonEl.type = "button";
-    buttonEl.dataset.variantId = variant.id;
-
-    rowEl.append(nameEl, buttonEl);
-    setVariantControlState(variant.id, variant.defaultState, buttonEl);
-    return rowEl;
+  const normalized = normalizeOverlayMode(mode);
+  targets.forEach((button) => {
+    button.value = normalized;
+    button.dataset.overlayMode = normalized;
+    button.dataset.state = normalized === OVERLAY_MODES.no
+      ? "off"
+      : normalized === OVERLAY_MODES.yes
+        ? "forced"
+        : "allowed";
+    button.textContent = formatOverlayMode(normalized);
+    button.title = `Overlays: ${formatOverlayMode(normalized)}. Click to cycle No, Tokens, Boards, Yes.`;
+    button.setAttribute("aria-label", button.title);
   });
-  menuEl.append(bulkRowEl, ...items);
+}
+
+function updateOverlayAvailability(preferences = getPreferencesFromControls()) {
+  const reason = getOverlayUnavailabilityReason(preferences);
+  getOverlayControlButtons().forEach((buttonEl) => {
+    if (reason) {
+      buttonEl.dataset.unavailableReason = reason;
+      buttonEl.classList.add("unavailable");
+      buttonEl.setAttribute("aria-disabled", "true");
+      buttonEl.title = reason;
+      buttonEl.setAttribute("aria-label", `Overlays: unavailable. ${reason}`);
+    } else {
+      delete buttonEl.dataset.unavailableReason;
+      buttonEl.classList.remove("unavailable");
+      buttonEl.removeAttribute("aria-disabled");
+      const mode = normalizeOverlayMode(buttonEl.value);
+      buttonEl.title = `Overlays: ${formatOverlayMode(mode)}. Click to cycle No, Tokens, Boards, Yes.`;
+      buttonEl.setAttribute("aria-label", buttonEl.title);
+    }
+  });
+}
+
+function cycleOverlayModeControl() {
+  const buttonEl = document.getElementById("overlay-mode");
+  if (!buttonEl) {
+    return;
+  }
+  if (buttonEl.dataset.unavailableReason) {
+    showToast(buttonEl.dataset.unavailableReason);
+    return;
+  }
+
+  const current = normalizeOverlayMode(buttonEl.value);
+  const currentIndex = OVERLAY_MODE_CYCLE.indexOf(current);
+  const next = OVERLAY_MODE_CYCLE[(currentIndex + 1) % OVERLAY_MODE_CYCLE.length];
+  setOverlayModeControl(next);
+  updateVariantSummary();
+}
+
+function createOverlayModeRow(options = {}) {
+  const rowEl = document.createElement("div");
+  rowEl.className = "variant-rule";
+  rowEl.title = "Controls whether available overlay-capable boards and tokens may be placed as overlays.";
+  rowEl.dataset.ruleSearch = "overlays board layout setup layout master builder tokens boards";
+
+  const nameWrapEl = document.createElement("div");
+  nameWrapEl.className = "variant-rule-name-wrap";
+  const nameEl = document.createElement("div");
+  nameEl.className = "variant-rule-name";
+  nameEl.textContent = "Overlays";
+  nameWrapEl.appendChild(nameEl);
+  if (options.showCategory) {
+    const categoryEl = document.createElement("div");
+    categoryEl.className = "variant-rule-category";
+    categoryEl.textContent = "Setup & Layout";
+    nameWrapEl.appendChild(categoryEl);
+  }
+  if (options.showDescription) {
+    const descriptionEl = document.createElement("div");
+    descriptionEl.className = "variant-rule-description";
+    descriptionEl.textContent = "Allows overlay-capable boards, tokens, or both to be placed over the main factory layout.";
+    nameWrapEl.appendChild(descriptionEl);
+  }
+
+  const buttonEl = document.createElement("button");
+  if (!options.mirror) {
+    buttonEl.id = "overlay-mode";
+  }
+  buttonEl.className = "variant-state overlay-state";
+  buttonEl.type = "button";
+  buttonEl.dataset.overlayControl = "true";
+
+  rowEl.append(nameWrapEl, buttonEl);
+
+  const primary = document.getElementById("overlay-mode");
+  setOverlayModeControl(primary?.value ?? OVERLAY_MODES.yes, buttonEl);
+  return rowEl;
+}
+
+function normalizeActFastControlChoice(choice, variantState = null, mode = null) {
+  if (ACT_FAST_CONTROL_CHOICES.some((entry) => entry.id === choice)) {
+    return choice;
+  }
+  if (mode && ACT_FAST_MODE_IDS.has(mode)) {
+    return mode;
+  }
+  const normalizedState = normalizeVariantState(variantState);
+  return normalizedState === "allowed" ? "allowed" : normalizedState === "off" ? "off" : "allowed";
+}
+
+function getActFastControlChoice(buttonEl = null) {
+  const button = buttonEl ?? document.getElementById(VARIANT_CONTROL_IDS.actFast);
+  return normalizeActFastControlChoice(
+    button?.dataset.actFastChoice,
+    button?.dataset.state,
+    button?.dataset.actFastMode
+  );
+}
+
+function getActFastModeFromControls() {
+  const button = document.getElementById(VARIANT_CONTROL_IDS.actFast);
+  const mode = button?.dataset.actFastMode ?? null;
+  return ACT_FAST_MODE_IDS.has(mode) ? mode : null;
+}
+
+function setActFastControlChoice(choice, buttonEl = null) {
+  const normalizedChoice = normalizeActFastControlChoice(choice);
+  const choiceDef = ACT_FAST_CONTROL_CHOICES.find((entry) => entry.id === normalizedChoice) ?? ACT_FAST_CONTROL_CHOICES[0];
+  const targets = buttonEl
+    ? [buttonEl]
+    : Array.from(document.querySelectorAll('[data-variant-id="actFast"]'));
+  targets.forEach((button) => {
+    button.dataset.state = choiceDef.variantState;
+    button.dataset.actFastChoice = choiceDef.id;
+    if (choiceDef.mode) {
+      button.dataset.actFastMode = choiceDef.mode;
+    } else {
+      delete button.dataset.actFastMode;
+    }
+    button.textContent = choiceDef.shortLabel;
+    button.title = choiceDef.label;
+    button.setAttribute("aria-label", `Act Fast: ${choiceDef.label}`);
+  });
+}
+
+function cycleActFastControlChoice() {
+  const current = getActFastControlChoice();
+  const currentIndex = ACT_FAST_CONTROL_CHOICES.findIndex((entry) => entry.id === current);
+  const next = ACT_FAST_CONTROL_CHOICES[(currentIndex + 1) % ACT_FAST_CONTROL_CHOICES.length];
+  setActFastControlChoice(next.id);
+  if (next.variantState === "forced") {
+    getConflictingVariantIds("actFast").forEach((conflictId) => {
+      if (getVariantControlState(conflictId) === "forced") {
+        setVariantControlState(conflictId, "off");
+        showToast(`${getVariantDefinitionLabel(conflictId)} was turned off because Act Fast is fixed.`);
+      }
+    });
+  }
+  updateVariantAvailability();
+  updateVariantSummary();
+}
+
+function createVariantRuleRow(variant, options = {}) {
+  const rowEl = document.createElement("div");
+  rowEl.className = "variant-rule";
+  rowEl.title = variant.description;
+  rowEl.dataset.ruleSearch = [
+    variant.label,
+    variant.officialName,
+    variant.sourceLabel,
+    variant.description,
+    variant.category,
+    getVariantUiCategoryLabel(variant)
+  ].filter(Boolean).join(" ").toLowerCase();
+
+  const nameWrapEl = document.createElement("div");
+  nameWrapEl.className = "variant-rule-name-wrap";
+  const nameEl = createVariantRuleNameElement(variant);
+  nameWrapEl.appendChild(nameEl);
+  if (options.showCategory) {
+    const categoryEl = document.createElement("div");
+    categoryEl.className = "variant-rule-category";
+    categoryEl.textContent = getVariantUiCategoryLabel(variant);
+    nameWrapEl.appendChild(categoryEl);
+  }
+  if (options.showDescription && variant.description) {
+    const descriptionEl = document.createElement("div");
+    descriptionEl.className = "variant-rule-description";
+    descriptionEl.textContent = variant.description;
+    nameWrapEl.appendChild(descriptionEl);
+  }
+
+  const buttonEl = document.createElement("button");
+  if (!options.mirror) {
+    buttonEl.id = variant.controlId;
+  }
+  buttonEl.className = "variant-state";
+  buttonEl.type = "button";
+  buttonEl.dataset.variantId = variant.id;
+  if (options.mirror) {
+    buttonEl.dataset.variantMirror = "true";
+  }
+
+  rowEl.append(nameWrapEl, buttonEl);
+  if (variant.id === "actFast") {
+    const primary = document.getElementById(VARIANT_CONTROL_IDS.actFast);
+    setActFastControlChoice(primary ? getActFastControlChoice(primary) : variant.defaultState, buttonEl);
+  } else {
+    setVariantControlState(variant.id, options.mirror ? getVariantControlState(variant.id) : variant.defaultState, buttonEl);
+  }
+  return rowEl;
+}
+
+function renderOptionalRulesIndex() {
+  const listEl = document.getElementById("optional-rules-index-list");
+  if (!listEl) {
+    return;
+  }
+  listEl.replaceChildren();
+  const entries = [
+    { type: "overlay", label: "Overlays" },
+    ...VARIANT_DEFINITIONS.map((variant) => ({ type: "variant", label: variant.label, variant }))
+  ].sort((left, right) => left.label.localeCompare(right.label));
+
+  entries.forEach((entry) => {
+    if (entry.type === "overlay") {
+      listEl.appendChild(createOverlayModeRow({ mirror: true, showCategory: true, showDescription: true }));
+      return;
+    }
+    listEl.appendChild(createVariantRuleRow(entry.variant, { mirror: true, showCategory: true, showDescription: true }));
+  });
+  updateVariantAvailability();
+}
+
+function filterOptionalRulesIndex(query = "") {
+  const normalized = query.trim().toLowerCase();
+  document.querySelectorAll("#optional-rules-index-list .variant-rule").forEach((rowEl) => {
+    const haystack = rowEl.dataset.ruleSearch ?? rowEl.textContent?.toLowerCase() ?? "";
+    rowEl.classList.toggle("hidden", Boolean(normalized) && !haystack.includes(normalized));
+  });
+}
+
+function openOptionalRulesDialog() {
+  const dialog = document.getElementById("optional-rules-dialog");
+  if (!dialog) {
+    return;
+  }
+  if (typeof dialog.showModal === "function") {
+    dialog.showModal();
+  } else {
+    dialog.setAttribute("open", "");
+  }
+  const searchEl = document.getElementById("optional-rules-search");
+  if (searchEl) {
+    searchEl.value = "";
+    filterOptionalRulesIndex("");
+    requestAnimationFrame(() => searchEl.focus());
+  }
+}
+
+function closeOptionalRulesDialog() {
+  const dialog = document.getElementById("optional-rules-dialog");
+  if (!dialog) {
+    return;
+  }
+  if (typeof dialog.close === "function" && dialog.open) {
+    dialog.close();
+  } else {
+    dialog.removeAttribute("open");
+  }
+}
+
+function renderVariantControls() {
+  const menuEls = Array.from(document.querySelectorAll("[data-variant-menu]"));
+  if (!menuEls.length) {
+    return;
+  }
+
+  menuEls.forEach((menuEl) => {
+    const category = menuEl.dataset.variantCategory;
+    const variants = getVariantsForUiCategory(category);
+    menuEl.replaceChildren();
+
+    const bulkRowEl = createVariantCategoryBulkRow(category);
+    menuEl.appendChild(bulkRowEl);
+
+    if (category === UI_SETUP_LAYOUT_CATEGORY) {
+      menuEl.appendChild(createOverlayModeRow());
+    }
+
+    variants.forEach((variant) => {
+      menuEl.appendChild(createVariantRuleRow(variant));
+    });
+  });
+
+  renderOptionalRulesIndex();
+  updateVariantSummary();
 }
 
 function getVariantDefinitionLabel(variantId) {
@@ -676,6 +968,34 @@ const OVERLAY_MODES = {
   yes: "yes"
 };
 
+const OVERLAY_MODE_CYCLE = [
+  OVERLAY_MODES.no,
+  OVERLAY_MODES.tokens,
+  OVERLAY_MODES.boards,
+  OVERLAY_MODES.yes
+];
+
+const ACT_FAST_CONTROL_CHOICES = [
+  { id: "off", variantState: "off", mode: null, shortLabel: "No", label: "Not allowed" },
+  { id: "allowed", variantState: "allowed", mode: null, shortLabel: "Yes", label: "Allowed; timer mode is chosen if Act Fast is used" },
+  { id: "countdown_3m", variantState: "forced", mode: "countdown_3m", shortLabel: "3 min", label: "Always on: 3-minute programming timer" },
+  { id: "countdown_2m", variantState: "forced", mode: "countdown_2m", shortLabel: "2 min", label: "Always on: 2-minute programming timer" },
+  { id: "countdown_1m", variantState: "forced", mode: "countdown_1m", shortLabel: "1 min", label: "Always on: 1-minute programming timer" },
+  { id: "countdown_30s", variantState: "forced", mode: "countdown_30s", shortLabel: "30 sec", label: "Always on: 30-second programming timer" },
+  { id: "last_player_30s", variantState: "forced", mode: "last_player_30s", shortLabel: "Last 30s", label: "Always on: last player has 30 seconds" }
+];
+const ACT_FAST_MODE_IDS = new Set(ACT_FAST_CONTROL_CHOICES.filter((choice) => choice.mode).map((choice) => choice.mode));
+
+function formatActFastMode(mode) {
+  return ({
+    countdown_3m: "3 min",
+    countdown_2m: "2 min",
+    countdown_1m: "1 min",
+    countdown_30s: "30 sec",
+    last_player_30s: "Last player 30 sec"
+  })[mode] ?? "Yes";
+}
+
 function normalizeOverlayMode(mode) {
   return Object.prototype.hasOwnProperty.call(OVERLAY_MODES, mode) ? mode : OVERLAY_MODES.yes;
 }
@@ -990,7 +1310,39 @@ function countFeatureTypeInSelectedSets(featureType, pieceMap = cachedAssets?.pi
 
 function variantsConflict(leftVariantId, rightVariantId) {
   const left = getVariantDefinition(leftVariantId);
-  return Boolean(left?.incompatibleWith?.includes(rightVariantId));
+  const right = getVariantDefinition(rightVariantId);
+  return Boolean(
+    left?.incompatibleWith?.includes(rightVariantId) ||
+    right?.incompatibleWith?.includes(leftVariantId)
+  );
+}
+
+function normalizeForcedVariantPreferenceConflicts(preferences = {}) {
+  const allowedVariantRules = { ...(preferences.allowedVariantRules ?? {}) };
+  const forcedIds = VARIANT_DEFINITIONS
+    .filter((variant) => getVariantPreferenceState(preferences, variant.id) === "forced")
+    .map((variant) => variant.id)
+    .sort((left, right) => left.localeCompare(right));
+  const keptForcedIds = [];
+  const relaxedIds = [];
+
+  forcedIds.forEach((variantId) => {
+    if (keptForcedIds.some((keptId) => variantsConflict(variantId, keptId))) {
+      allowedVariantRules[variantId] = "allowed";
+      relaxedIds.push(variantId);
+      return;
+    }
+    allowedVariantRules[variantId] = "forced";
+    keptForcedIds.push(variantId);
+  });
+
+  return {
+    preferences: {
+      ...preferences,
+      allowedVariantRules
+    },
+    relaxedIds
+  };
 }
 
 function getConflictingVariantIds(variantId) {
@@ -1501,7 +1853,10 @@ function updateSetupSummary(scenario) {
     overlayTilesRowEl.classList.add("hidden");
     overlayTilesEl.textContent = "";
   }
-  flagsEl.textContent = `${scenario.checkpoints.length} checkpoint${scenario.checkpoints.length === 1 ? "" : "s"}`;
+  const visibleCheckpointCount = scenario.virtualBots
+    ? Math.max(0, scenario.checkpoints.length - 1)
+    : scenario.checkpoints.length;
+  flagsEl.textContent = `${visibleCheckpointCount} checkpoint${visibleCheckpointCount === 1 ? "" : "s"}${scenario.virtualBots ? " + entry" : ""}`;
   const noteParts = [];
   const difficultyFit = scenario.metrics.difficultyFit ?? 0;
   const lengthFit = scenario.metrics.lengthFit ?? 0;
@@ -1814,13 +2169,13 @@ function getMeaningfulVariantReasons(scenario) {
   }
 
   if (scenario.lighterGame) {
-    difficultyLowerReasons.push("A Lighter Game softens the board pressure");
-    lengthShorterReasons.push("A Lighter Game trims some board friction");
+    difficultyLowerReasons.push("Energy Crisis softens the board pressure");
+    lengthShorterReasons.push("Energy Crisis trims some board friction");
   }
 
   if (scenario.lessSpammyGame) {
-    difficultyLowerReasons.push("A Less SPAM-Y Game makes recovery cleaner");
-    lengthShorterReasons.push("A Less SPAM-Y Game keeps turns moving");
+    difficultyLowerReasons.push("SPAM Filter makes recovery cleaner");
+    lengthShorterReasons.push("SPAM Filter keeps turns moving");
   }
 
   if (scenario.criticalSpam) {
@@ -2382,36 +2737,110 @@ function buildCourseExplanationHtml(scenario, noteParts = []) {
   return parts.join("");
 }
 
-function updateVariantSummary() {
-  const summaryEl = document.getElementById("variant-summary");
-  const states = VARIANT_DEFINITIONS.map((variant) => ({
-    id: variant.id,
-    label: variant.label,
-    state: getVariantControlState(variant.id)
-  }));
-  const enabled = states.filter((entry) => entry.state !== "off");
-  summaryEl.textContent = `${enabled.length} selected`;
-  summaryEl.title = states.map((entry) => `${entry.label}: ${getVariantStateCopy(entry.id, entry.state).label}`).join(", ");
+const UI_SETUP_LAYOUT_CATEGORY = "setup-layout";
 
-  const bulkButton = document.querySelector('#variant-rules-menu [data-variant-action="toggle-all"]');
-  if (bulkButton) {
-    const allAllowed = states.every((entry) => entry.state === "allowed" || entry.state === "forced");
+function getVariantUiCategory(variantOrCategory) {
+  const category = typeof variantOrCategory === "string"
+    ? variantOrCategory
+    : variantOrCategory?.category;
+
+  return category === "setup" || category === UI_SETUP_LAYOUT_CATEGORY
+    ? UI_SETUP_LAYOUT_CATEGORY
+    : category;
+}
+
+function getVariantUiCategoryLabel(variantOrCategory) {
+  const category = getVariantUiCategory(variantOrCategory);
+  return category === UI_SETUP_LAYOUT_CATEGORY
+    ? "Setup & Layout"
+    : String(category ?? "").replaceAll("-", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function getVariantsForUiCategory(category) {
+  return VARIANT_DEFINITIONS.filter((variant) => getVariantUiCategory(variant) === category);
+}
+
+function getVariantCategoryStates(category) {
+  return getVariantsForUiCategory(category)
+    .map((variant) => ({
+      id: variant.id,
+      label: variant.label,
+      state: getVariantControlState(variant.id)
+    }));
+}
+
+function getVariantCategoryAllAllowed(category, states = getVariantCategoryStates(category)) {
+  const variantsAllowed = states.every((entry) => entry.state === "allowed" || entry.state === "forced");
+  if (category !== UI_SETUP_LAYOUT_CATEGORY) {
+    return variantsAllowed;
+  }
+  const preferences = getPreferencesFromControls();
+  if (!isOverlayModeAvailable(preferences)) {
+    return variantsAllowed;
+  }
+  return variantsAllowed && normalizeOverlayMode(document.getElementById("overlay-mode")?.value) === OVERLAY_MODES.yes;
+}
+
+function countSelectedOptionalRules() {
+  const variantCount = VARIANT_DEFINITIONS.filter((variant) => getVariantControlState(variant.id) !== "off").length;
+  const preferences = getPreferencesFromControls();
+  const overlayCount = isOverlayModeAvailable(preferences) && normalizeOverlayMode(preferences.overlayMode) !== OVERLAY_MODES.no ? 1 : 0;
+  return variantCount + overlayCount;
+}
+
+function updateVariantSummary() {
+  document.querySelectorAll("[data-variant-summary]").forEach((summaryEl) => {
+    const category = summaryEl.dataset.variantCategory;
+    const states = getVariantCategoryStates(category);
+    const enabled = states.filter((entry) => entry.state !== "off");
+    let selectedCount = enabled.length;
+
+    if (category === UI_SETUP_LAYOUT_CATEGORY) {
+      const preferences = getPreferencesFromControls();
+      const overlayAvailable = isOverlayModeAvailable(preferences);
+      const overlayLabel = formatOverlayMode(preferences.overlayMode);
+      if (overlayAvailable && normalizeOverlayMode(preferences.overlayMode) !== OVERLAY_MODES.no) {
+        selectedCount += 1;
+      }
+      summaryEl.title = [
+        ...states.map((entry) => `${entry.label}: ${getVariantStateCopy(entry.id, entry.state).label}`),
+        `Overlays: ${overlayLabel}${overlayAvailable ? "" : " (unavailable)"}`
+      ].join(", ");
+    } else {
+      summaryEl.title = states.map((entry) => `${entry.label}: ${entry.id === "actFast" && getActFastModeFromControls() ? formatActFastMode(getActFastModeFromControls()) : getVariantStateCopy(entry.id, entry.state).label}`).join(", ");
+    }
+    summaryEl.textContent = `${selectedCount} selected`;
+
+    const menuEl = document.querySelector(`[data-variant-menu][data-variant-category="${category}"]`);
+    const bulkButton = menuEl?.querySelector('[data-variant-action="toggle-category"]');
+    if (!bulkButton) {
+      return;
+    }
+
+    const allAllowed = getVariantCategoryAllAllowed(category, states);
     bulkButton.textContent = allAllowed ? "No" : "Yes";
-    bulkButton.title = allAllowed ? "Set all allowed variants to No" : "Set all disallowed variants to Yes";
+    const categoryLabel = getVariantUiCategoryLabel(category);
+    bulkButton.title = allAllowed
+      ? `Set optional ${categoryLabel} rules to No`
+      : `Set ${categoryLabel} rules to Yes`;
     bulkButton.setAttribute("aria-label", bulkButton.title);
     const bulkName = bulkButton.parentElement?.querySelector(".variant-rule-name");
     if (bulkName) {
       bulkName.textContent = allAllowed ? "Allow none" : "Allow all";
     }
+  });
+
+  const indexButton = document.getElementById("optional-rules-title");
+  if (indexButton) {
+    const selectedCount = countSelectedOptionalRules();
+    indexButton.textContent = `Optional Rules · ${selectedCount} selected`;
+    indexButton.setAttribute("aria-label", `Open searchable optional rules list. ${selectedCount} selected.`);
   }
 }
 
-function toggleAllVariantStates() {
-  const states = VARIANT_DEFINITIONS.map((variant) => ({
-    id: variant.id,
-    state: getVariantControlState(variant.id)
-  }));
-  const allAllowed = states.every((entry) => entry.state === "allowed" || entry.state === "forced");
+function toggleVariantCategoryStates(category) {
+  const states = getVariantCategoryStates(category);
+  const allAllowed = getVariantCategoryAllAllowed(category, states);
 
   states.forEach(({ id, state }) => {
     if (allAllowed) {
@@ -2425,6 +2854,13 @@ function toggleAllVariantStates() {
       setVariantControlState(id, "allowed");
     }
   });
+
+  if (category === UI_SETUP_LAYOUT_CATEGORY) {
+    const preferences = getPreferencesFromControls();
+    if (isOverlayModeAvailable(preferences)) {
+      setOverlayModeControl(allAllowed ? OVERLAY_MODES.no : OVERLAY_MODES.yes);
+    }
+  }
 
   updateVariantAvailability();
   updateVariantSummary();
@@ -2609,11 +3045,20 @@ function getVariantImpactSummary(scenario) {
   if (scenario.extraDocks) {
     addImpact("extraDocks");
   }
+  if (scenario.noDocks) {
+    addImpact("noDocks");
+  }
+  if (scenario.sandwichedDock) {
+    addImpact("sandwichedDock");
+  }
   if (scenario.factoryRejects) {
     addImpact("factoryRejects");
   }
   if (scenario.startupSpinUp) {
     addImpact("startupSpinUp");
+  }
+  if (scenario.virtualBots) {
+    addImpact("virtualBots");
   }
   if (scenario.competitiveMode) {
     addImpact("competitiveMode");
@@ -2695,6 +3140,7 @@ function updateRulesNote(scenario) {
   const checkpointNoteEl = document.getElementById("checkpoint-note");
   const photoRulesNoteEl = document.getElementById("photo-rules-note");
   const noteEl = document.getElementById("rules-note");
+  const adviceNoteEl = document.getElementById("rules-advice-note");
   const checkpointNotes = [];
   const photoNotes = [];
   const notes = [];
@@ -2746,6 +3192,19 @@ function updateRulesNote(scenario) {
     photoNotes.push("Board photos are for general layout reference only. With overlays, use the physical boards or Icon View for exact placement of walls, ledges, and other border elements.");
   }
 
+  if (scenario.noDocks) {
+    if (scenario.payToWin) {
+      notes.push("No Docks: do not use a docking bay. The priced starting spaces along the indicated outer board edge replace docking-bay starting spaces.");
+    } else if (scenario.startupSpinUp) {
+      notes.push("No Docks: do not use a docking bay. White circles along the indicated outer board edge are the available starting spaces.");
+    } else {
+      notes.push("No Docks: do not use a docking bay. White circles along the indicated outer board edge are the available starting spaces; robots begin facing into the factory.");
+    }
+    if (scenario.startupSpinUp) {
+      notes.push("Startup Spin-Up with No Docks: players may choose their robots' initial facing freely.");
+    }
+  }
+
   if (scenario.competitiveMode) {
     notes.push("Competitive Mode: before the game, players take turns blocking starting spaces. (Rulebook p. 32).");
   }
@@ -2759,16 +3218,16 @@ function updateRulesNote(scenario) {
       const lastLatePlayer = payToWinPricing.lateSelectorEnd ?? scenario.playerCount;
       const singleLatePlayer = firstLatePlayer === lastLatePlayer;
       const latePlayerText = singleLatePlayer
-        ? `Player ${firstLatePlayer}`
-        : `Players ${firstLatePlayer}–${lastLatePlayer}`;
+        ? `player ${firstLatePlayer}`
+        : `players ${firstLatePlayer}–${lastLatePlayer}`;
       const dashText = (payToWinPricing.lateUnavailableCount ?? 0) > 0
         ? " A dash means that starting space is unavailable to those players."
         : "";
       notes.push(
-        `Pay to Win: green starting spaces show starting energy costs, paid from the initial 4 starting energy before drawing starting hands or upgrades. ${latePlayerText} ${singleLatePlayer ? "uses" : "use"} the second value after the slash; earlier players use the first cost.${dashText}`
+        `Pay to Win: green starting spaces show starting energy costs. ${latePlayerText} ${singleLatePlayer ? "uses" : "use"} the second value after the slash; earlier players use the first cost.${dashText}`
       );
     } else {
-      notes.push("Pay to Win: green starting spaces show the starting energy cost for choosing that space, paid from the initial 4 starting energy before drawing starting hands or upgrades.");
+      notes.push("Pay to Win: green starting spaces show the starting energy cost for choosing that space.");
     }
   }
 
@@ -2777,11 +3236,11 @@ function updateRulesNote(scenario) {
   }
 
   if (scenario.lessDeadlyGame) {
-    notes.push("A Less Deadly Game: board edges act as walls (Rulebook p. 32).");
+    notes.push("Walled In: board edges act as walls (2023 rulebook: A Less Deadly Game, p. 32).");
   }
 
   if (scenario.lessSpammyGame) {
-    notes.push("A Less SPAM-Y Game: discard all SPAM cards from hand to your discard pile at the end of programming phase (Rulebook p. 32).");
+    notes.push("SPAM Filter: discard all SPAM cards from hand to your discard pile at the end of programming phase (2023 rulebook: A Less SPAM-Y Game, p. 32).");
   }
 
   if (scenario.criticalSpam) {
@@ -2797,7 +3256,7 @@ function updateRulesNote(scenario) {
   }
 
   if (scenario.moreDeadlyGame) {
-    notes.push("A More Deadly Game: rebooting deals 3 damage instead of 2 (Rulebook p. 28).");
+    notes.push("Hard Reboot: rebooting deals 3 damage instead of 2 (2023 rulebook: A More Deadly Game, p. 28).");
   }
 
   if (scenario.cuttingFloor) {
@@ -2820,7 +3279,29 @@ function updateRulesNote(scenario) {
     notes.push("Set to Stun: SPAM drawn as a result of robots main laser is immediately discarded to the damage discard pile without effect.");
   }
 
-  if (scenario.startupSpinUp) {
+  if (scenario.virtualBots) {
+    const entry = scenario.checkpoints?.[0];
+    const dirText = entry?.facing ? ` facing ${entry.facing}` : "";
+    const entryName = scenario.recoveryRule === "reboot_tokens" ? "starting reboot" : "entry";
+    const markerDescription = scenario.recoveryRule === "reboot_tokens"
+      ? "the reboot token with an orange energy cube on it"
+      : "a reboot token with an orange energy cube on it";
+
+    if (scenario.startupSpinUp) {
+      notes.push(
+        `Virtual Bots: do not use a docking bay or starting spaces. The ${entryName} is marked by ${markerDescription}. Place every player's Archive Token there. These Archive Tokens are the robots' Virtual Bots. Virtual Bots move and are affected by the factory floor normally, including conveyors, pushers, gears, pits, board lasers, and other board elements, but they do not interact with robots or other Virtual Bots: they do not push or block them, and robot weapons cannot affect Virtual Bots or be used by Virtual Bots against other robots. Resolve all five registers of the first turn this way. At the end of each turn, any Virtual Bot that does not share its space with another robot or Virtual Bot is replaced by that player's robot miniature; from then on that robot follows the normal rules. A Virtual Bot sharing a space remains virtual until the end of a later turn when it is alone.`
+      );
+      notes.push(
+        `Startup Spin-Up with Virtual Bots: in priority order, players choose the initial facing of their Virtual Bots freely at the ${entryName}.`
+      );
+    } else {
+      notes.push(
+        `Virtual Bots: do not use a docking bay or starting spaces. The ${entryName} is marked by ${markerDescription}${dirText}. Place every player's Archive Token there facing in the direction shown by the marker. These Archive Tokens are the robots' Virtual Bots. Virtual Bots move and are affected by the factory floor normally, including conveyors, pushers, gears, pits, board lasers, and other board elements, but they do not interact with robots or other Virtual Bots: they do not push or block them, and robot weapons cannot affect Virtual Bots or be used by Virtual Bots against other robots. Resolve all five registers of the first turn this way. At the end of each turn, any Virtual Bot that does not share its space with another robot or Virtual Bot is replaced by that player's robot miniature; from then on that robot follows the normal rules. A Virtual Bot sharing a space remains virtual until the end of a later turn when it is alone.`
+      );
+    }
+  }
+
+  if (scenario.startupSpinUp && !scenario.virtualBots && !scenario.noDocks) {
     notes.push("Startup Spin-Up: during setup, robots can start with any facing.");
   }
 
@@ -2833,11 +3314,30 @@ function updateRulesNote(scenario) {
   }
 
   if (scenario.lighterGame) {
-    notes.push("A Lighter Game: upgrade cards are removed and battery (and chop shop) spaces are inactive (Rulebook p. 32).");
+    notes.push("Energy Crisis: upgrade cards are removed and battery (and chop shop) spaces are inactive (2023 rulebook: A Lighter Game, p. 32).");
   }
 
   if (scenario.lessForeshadowing) {
     notes.push("Less Foreshadowing: decks reshuffle every turn (Rulebook p. 32).");
+  }
+
+  const adviceNotes = [];
+  if (scenario.virtualBots && isVariantExplicitlyForced(scenario.preferences, "virtualBots")) {
+    const suggestions = [];
+    if (!scenario.startupSpinUp) suggestions.push("Startup Spin-Up");
+    if (!scenario.dynamicArchiving) suggestions.push("Dynamic Archiving");
+    if (suggestions.length) {
+      adviceNotes.push(`Consider with Virtual Bots: ${suggestions.join(" and ")} ${suggestions.length === 1 ? "works" : "work"} well with this setup.`);
+    }
+  }
+  if (adviceNoteEl) {
+    if (adviceNotes.length) {
+      adviceNoteEl.textContent = `RULES NOTES: ${adviceNotes.join(" ")}`;
+      adviceNoteEl.classList.remove("hidden");
+    } else {
+      adviceNoteEl.textContent = "";
+      adviceNoteEl.classList.add("hidden");
+    }
   }
 
   if (checkpointNotes.length) {
@@ -2859,18 +3359,16 @@ function updateRulesNote(scenario) {
   bottomAnchorEl?.appendChild(bottomRulesBlockEl);
   bottomRulesBlockEl?.classList.toggle("hidden", !checkpointNotes.length && !photoNotes.length);
 
+  const hasTopRules = notes.length > 0 || adviceNotes.length > 0;
+  topAnchorEl?.appendChild(topRulesBlockEl);
+  topRulesBlockEl?.classList.toggle("hidden", !hasTopRules);
   if (notes.length) {
-    topAnchorEl?.appendChild(topRulesBlockEl);
-    topRulesBlockEl?.classList.remove("hidden");
     noteEl.textContent = `SPECIAL RULES: ${notes.join(" ")}`;
     noteEl.classList.remove("hidden");
-    return;
+  } else {
+    noteEl.textContent = "";
+    noteEl.classList.add("hidden");
   }
-
-  topAnchorEl?.appendChild(topRulesBlockEl);
-  topRulesBlockEl?.classList.add("hidden");
-  noteEl.textContent = "";
-  noteEl.classList.add("hidden");
 }
 
 function describeAllowedVariants(preferences = {}) {
@@ -2887,7 +3385,11 @@ function describeAllowedVariants(preferences = {}) {
     if (normalized === "off") {
       continue;
     }
-    variants.push(`${label} (${getVariantStateCopy(id, normalized).label})`);
+    if (id === "actFast" && normalized === "forced" && ACT_FAST_MODE_IDS.has(preferences.actFastMode)) {
+      variants.push(`${label} (${formatActFastMode(preferences.actFastMode)})`);
+    } else {
+      variants.push(`${label} (${getVariantStateCopy(id, normalized).label})`);
+    }
   }
 
   return variants.length ? variants.join(", ") : "none";
@@ -2896,7 +3398,14 @@ function describeAllowedVariants(preferences = {}) {
 function updateLegend(scenario) {
   const rebootTokenEl = document.getElementById("legend-reboot-token");
   const payToWinStartEl = document.getElementById("legend-pay-to-win-start");
-  rebootTokenEl?.classList.toggle("hidden", !["reboot_tokens", "home_reboot"].includes(scenario?.recoveryRule));
+  if (rebootTokenEl) {
+    rebootTokenEl.textContent = scenario?.virtualBots
+      ? (scenario?.rebootTokens?.length
+        ? "Green markers: Virtual Bots entry and reboot token"
+        : "Green marker + orange cube: Virtual Bots entry")
+      : "Green marker: reboot token";
+  }
+  rebootTokenEl?.classList.toggle("hidden", !scenario?.virtualBots && !["reboot_tokens", "home_reboot"].includes(scenario?.recoveryRule));
   payToWinStartEl?.classList.toggle("hidden", !scenario?.payToWin);
 }
 
@@ -2913,16 +3422,30 @@ function getVariantControlState(variantId) {
 
 function setVariantControlState(variantId, state, buttonEl = null) {
   const normalized = normalizeVariantState(state);
-  const button = buttonEl ?? document.getElementById(VARIANT_CONTROL_IDS[variantId]);
-  if (!button) {
+  if (variantId === "actFast") {
+    if (normalized === "off" || normalized === "allowed") {
+      setActFastControlChoice(normalized, buttonEl);
+      return;
+    }
+    const currentChoice = getActFastControlChoice(buttonEl);
+    setActFastControlChoice(ACT_FAST_MODE_IDS.has(currentChoice) ? currentChoice : "allowed", buttonEl);
+    return;
+  }
+
+  const targets = buttonEl
+    ? [buttonEl]
+    : Array.from(document.querySelectorAll(`[data-variant-id="${variantId}"]`));
+  if (!targets.length) {
     return;
   }
   const stateCopy = getVariantStateCopy(variantId, normalized);
 
-  button.dataset.state = normalized;
-  button.textContent = stateCopy.shortLabel;
-  button.title = stateCopy.label;
-  button.setAttribute("aria-label", `${getVariantDefinitionLabel(variantId)}: ${stateCopy.label}`);
+  targets.forEach((button) => {
+    button.dataset.state = normalized;
+    button.textContent = stateCopy.shortLabel;
+    button.title = stateCopy.label;
+    button.setAttribute("aria-label", `${getVariantDefinitionLabel(variantId)}: ${stateCopy.label}`);
+  });
 }
 
 function cycleVariantControlState(variantId) {
@@ -3063,7 +3586,10 @@ function getVariantBaseChance(variantId, preferences = {}) {
     movingTargets: { easy: 0.06, moderate: 0.14, hard: 0.22 },
     homeReboot: { easy: 0.06, moderate: 0.12, hard: 0.18 },
     lessForeshadowing: { easy: 0.07, moderate: 0.16, hard: 0.24 },
-    staggeredBoards: { easy: 0.18, moderate: 0.42, hard: 0.5 }
+    staggeredBoards: { easy: 0.18, moderate: 0.42, hard: 0.5 },
+    virtualBots: { easy: 0.06, moderate: 0.14, hard: 0.2 },
+    noDocks: { easy: 0.07, moderate: 0.16, hard: 0.22 },
+    sandwichedDock: { easy: 0.04, moderate: 0.04, hard: 0.04 }
   };
 
   return byVariant[variantId]?.[difficulty] ?? 0.2;
@@ -3099,6 +3625,7 @@ function getLateEasyVariantRescueBonus(variantId, preferences = {}) {
 }
 
 function chooseVariantBundle(preferences = {}, options = {}) {
+  const { preferences: normalizedPreferences } = normalizeForcedVariantPreferenceConflicts(preferences);
   const definitions = VARIANT_DEFINITIONS.map((variant) => ({
     id: variant.id,
     cost: variant.cost,
@@ -3108,10 +3635,10 @@ function chooseVariantBundle(preferences = {}, options = {}) {
   let usedBudget = 0;
   const pieceMap = options.pieceMap ?? cachedAssets?.pieceMap ?? null;
   const collectionAvailableEntries = definitions.filter((entry) => (
-    variantIsAvailable(entry.id, preferences, pieceMap)
+    variantIsAvailable(entry.id, normalizedPreferences, pieceMap)
   ));
 
-  const forcedEntries = collectionAvailableEntries.filter((entry) => getVariantPreferenceState(preferences, entry.id) === "forced");
+  const forcedEntries = collectionAvailableEntries.filter((entry) => getVariantPreferenceState(normalizedPreferences, entry.id) === "forced");
   forcedEntries.forEach((entry) => {
     if (getConflictingVariantIds(entry.id).some((conflictId) => active[conflictId])) {
       return;
@@ -3119,14 +3646,14 @@ function chooseVariantBundle(preferences = {}, options = {}) {
     active[entry.id] = true;
   });
 
-  const sampledBudget = sampleVariantComplexityBudget(preferences);
+  const sampledBudget = sampleVariantComplexityBudget(normalizedPreferences);
   const budget = sampledBudget;
   const allowedEntries = collectionAvailableEntries
-    .filter((entry) => getVariantPreferenceState(preferences, entry.id) === "allowed")
+    .filter((entry) => getVariantPreferenceState(normalizedPreferences, entry.id) === "allowed")
     .map((entry) => ({
       ...entry,
       chance: clamp(
-        getVariantBaseChance(entry.id, preferences) + getLateEasyVariantRescueBonus(entry.id, preferences),
+        getVariantBaseChance(entry.id, normalizedPreferences) + getLateEasyVariantRescueBonus(entry.id, normalizedPreferences),
         0,
         0.95
       )
@@ -3150,9 +3677,9 @@ function chooseVariantBundle(preferences = {}, options = {}) {
     }
 
     let chance = entry.chance;
-    const forcedConflictIds = getConflictingVariantIds(entry.id).filter((variantId) => active[variantId] && getVariantPreferenceState(preferences, variantId) === "forced");
+    const forcedConflictIds = getConflictingVariantIds(entry.id).filter((variantId) => active[variantId] && getVariantPreferenceState(normalizedPreferences, variantId) === "forced");
     const activeConflictIds = getConflictingVariantIds(entry.id).filter((variantId) => active[variantId]);
-    const missingRequiredIds = getMissingRequiredVariantIds(entry.id, preferences, active);
+    const missingRequiredIds = getMissingRequiredVariantIds(entry.id, normalizedPreferences, active);
     if (
       activeConflictIds.length ||
       missingRequiredIds.length ||
@@ -3174,7 +3701,19 @@ function isVariantForced(preferences = {}, variantId) {
   return getVariantPreferenceState(preferences, variantId) === "forced";
 }
 
+function isVariantExplicitlyForced(preferences = {}, variantId) {
+  if (isVariantForced(preferences, variantId)) {
+    return true;
+  }
+  return variantId === "actFast" && Boolean(preferences.actFastMode);
+}
+
 function chooseActFastMode(preferences = {}) {
+  const fixedMode = ACT_FAST_MODE_IDS.has(preferences.actFastMode) ? preferences.actFastMode : null;
+  if (fixedMode && getVariantPreferenceState(preferences, "actFast") === "forced") {
+    return fixedMode;
+  }
+
   const difficulty = getTuningDifficulty(preferences.difficulty);
   const table = {
     easy: [
@@ -3217,6 +3756,7 @@ function getPreferencesFromControls() {
     difficulty: document.getElementById("difficulty").value,
     length: document.getElementById("length").value,
     overlayMode: normalizeOverlayMode(document.getElementById("overlay-mode")?.value),
+    actFastMode: getActFastModeFromControls(),
     selectedExpansions: {
       roborally: document.getElementById("expansion-roborally").checked,
       "rr-dice": document.getElementById("expansion-rr-dice").checked,
@@ -3237,21 +3777,42 @@ function applyPreferencesToControls(preferences) {
     return;
   }
 
-  document.getElementById("player-count").value = String(preferences.playerCount ?? 4);
-  document.getElementById("difficulty").value = preferences.difficulty ?? "any";
-  document.getElementById("length").value = preferences.length ?? "any";
-  document.getElementById("overlay-mode").value = normalizeOverlayMode(preferences.overlayMode);
-  document.getElementById("expansion-roborally").checked = preferences.selectedExpansions?.roborally ?? true;
-  document.getElementById("expansion-rr-dice").checked = preferences.selectedExpansions?.["rr-dice"] ?? false;
-  document.getElementById("expansion-30th-anniversary").checked = preferences.selectedExpansions?.["30th-anniversary"] ?? false;
-  document.getElementById("expansion-master-builder").checked = preferences.selectedExpansions?.["master-builder"] ?? false;
-  document.getElementById("expansion-thrills-and-spills").checked = preferences.selectedExpansions?.["thrills-and-spills"] ?? false;
-  document.getElementById("expansion-chaos-and-carnage").checked = preferences.selectedExpansions?.["chaos-and-carnage"] ?? false;
-  document.getElementById("expansion-wet-and-wild").checked = preferences.selectedExpansions?.["wet-and-wild"] ?? false;
+  const {
+    preferences: normalizedPreferences,
+    relaxedIds
+  } = normalizeForcedVariantPreferenceConflicts(preferences);
+
+  document.getElementById("player-count").value = String(normalizedPreferences.playerCount ?? 4);
+  document.getElementById("difficulty").value = normalizedPreferences.difficulty ?? "any";
+  document.getElementById("length").value = normalizedPreferences.length ?? "any";
+  setOverlayModeControl(normalizedPreferences.overlayMode);
+  document.getElementById("expansion-roborally").checked = normalizedPreferences.selectedExpansions?.roborally ?? true;
+  document.getElementById("expansion-rr-dice").checked = normalizedPreferences.selectedExpansions?.["rr-dice"] ?? false;
+  document.getElementById("expansion-30th-anniversary").checked = normalizedPreferences.selectedExpansions?.["30th-anniversary"] ?? false;
+  document.getElementById("expansion-master-builder").checked = normalizedPreferences.selectedExpansions?.["master-builder"] ?? false;
+  document.getElementById("expansion-thrills-and-spills").checked = normalizedPreferences.selectedExpansions?.["thrills-and-spills"] ?? false;
+  document.getElementById("expansion-chaos-and-carnage").checked = normalizedPreferences.selectedExpansions?.["chaos-and-carnage"] ?? false;
+  document.getElementById("expansion-wet-and-wild").checked = normalizedPreferences.selectedExpansions?.["wet-and-wild"] ?? false;
   VARIANT_DEFINITIONS.forEach((variant) => {
-    setVariantControlState(variant.id, getVariantPreferenceState(preferences, variant.id));
+    if (variant.id === "actFast") {
+      return;
+    }
+    setVariantControlState(variant.id, getVariantPreferenceState(normalizedPreferences, variant.id));
   });
+  const actFastState = getVariantPreferenceState(normalizedPreferences, "actFast");
+  const actFastChoice = actFastState === "forced" && ACT_FAST_MODE_IDS.has(normalizedPreferences.actFastMode)
+    ? normalizedPreferences.actFastMode
+    : actFastState === "allowed"
+      ? "allowed"
+      : "off";
+  setActFastControlChoice(actFastChoice);
   updateExpansionSummary();
+
+  if (relaxedIds.length) {
+    showToast(
+      `Conflicting saved Must rules were normalized. ${relaxedIds.map((id) => getVariantDefinitionLabel(id)).join(", ")} changed to Yes.`
+    );
+  }
 }
 
 function clamp(value, min, max) {
@@ -3527,32 +4088,52 @@ function updateVariantAvailability() {
   const preferences = getPreferencesFromControls();
 
   VARIANT_DEFINITIONS.forEach((variant) => {
-    const button = document.getElementById(variant.controlId);
-    if (!button) {
+    const buttons = Array.from(document.querySelectorAll(`[data-variant-id="${variant.id}"]`));
+    if (!buttons.length) {
       return;
     }
 
     const available = variantIsAvailable(variant.id, preferences);
-    button.disabled = !available;
+    const primaryButton = document.getElementById(variant.controlId) ?? buttons[0];
+    const previousState = normalizeVariantState(primaryButton.dataset.state ?? variant.defaultState);
 
     if (!available) {
-      const previousState = normalizeVariantState(button.dataset.state ?? variant.defaultState);
-      const reason = getVariantUnavailabilityReason(variant.id, preferences);
+      const reason = getVariantUnavailabilityReason(variant.id, preferences)
+        ?? `${variant.label} is unavailable with the current setup.`;
       const fallbackState = previousState === "forced" || previousState === "allowed" ? "allowed" : "off";
-      setVariantControlState(variant.id, fallbackState, button);
-      button.title = reason ?? button.title;
-      button.setAttribute("aria-label", `${variant.label}: unavailable`);
-      if (previousState === "forced" && reason) {
+      setVariantControlState(variant.id, fallbackState);
+      buttons.forEach((button) => {
+        button.disabled = false;
+        button.dataset.unavailableReason = reason;
+        button.classList.add("unavailable");
+        button.setAttribute("aria-disabled", "true");
+        button.title = reason;
+        button.setAttribute("aria-label", `${variant.label}: unavailable. ${reason}`);
+      });
+      if (previousState === "forced") {
         showToast(
           `${variant.label} was relaxed to Yes. ${reason}`
         );
       }
     } else {
-      button.title = getVariantStateCopy(variant.id, button.dataset.state ?? variant.defaultState).label;
-      button.setAttribute("aria-label", `${variant.label}: ${button.title}`);
+      buttons.forEach((button) => {
+        button.disabled = false;
+        delete button.dataset.unavailableReason;
+        button.classList.remove("unavailable");
+        button.removeAttribute("aria-disabled");
+        if (variant.id === "actFast") {
+          const choiceDef = ACT_FAST_CONTROL_CHOICES.find((entry) => entry.id === getActFastControlChoice(button)) ?? ACT_FAST_CONTROL_CHOICES[0];
+          button.title = choiceDef.label;
+          button.setAttribute("aria-label", `Act Fast: ${choiceDef.label}`);
+        } else {
+          button.title = getVariantStateCopy(variant.id, button.dataset.state ?? variant.defaultState).label;
+          button.setAttribute("aria-label", `${variant.label}: ${button.title}`);
+        }
+      });
     }
   });
 
+  updateOverlayAvailability(preferences);
   updateVariantSummary();
 }
 
@@ -4975,6 +5556,103 @@ function placeHomeRebootTokens(dockPlacements, pieceMap, starts = [], tileMap, c
   return tokens;
 }
 
+function getNoDockEdgeTiles(boardRect, side) {
+  const tiles = [];
+  if (side === "N" || side === "S") {
+    const y = side === "N" ? boardRect.y : boardRect.y + boardRect.height - 1;
+    for (let x = boardRect.x; x < boardRect.x + boardRect.width; x += 1) tiles.push({ x, y });
+  } else {
+    const x = side === "W" ? boardRect.x : boardRect.x + boardRect.width - 1;
+    for (let y = boardRect.y; y < boardRect.y + boardRect.height; y += 1) tiles.push({ x, y });
+  }
+  return tiles;
+}
+
+function getNoDockInwardFacing(side) {
+  return { N: "S", E: "W", S: "N", W: "E" }[side];
+}
+
+function getDirectionDelta(dir) {
+  return {
+    N: { dx: 0, dy: -1, opposite: "S" },
+    E: { dx: 1, dy: 0, opposite: "W" },
+    S: { dx: 0, dy: 1, opposite: "N" },
+    W: { dx: -1, dy: 0, opposite: "E" }
+  }[dir];
+}
+
+function isNoDockStartTileClear(tile) {
+  return (tile?.features || []).every((feature) => feature.type === "wall");
+}
+
+function buildNoDockEdgeCandidate(boardRect, side, tileMap) {
+  const facing = getNoDockInwardFacing(side);
+  const delta = getDirectionDelta(facing);
+  const outward = getDirectionDelta(side);
+  const starts = [];
+  const edgeTiles = getNoDockEdgeTiles(boardRect, side);
+  const fullyExposed = edgeTiles.every((point) => (
+    !tileMap.get(`${point.x + outward.dx},${point.y + outward.dy}`)
+  ));
+  if (!fullyExposed) {
+    return {
+      boardIndex: boardRect.index,
+      pieceId: boardRect.pieceId,
+      side,
+      facing,
+      starts: [],
+      longestRun: 0,
+      score: 0
+    };
+  }
+
+  for (const point of edgeTiles) {
+    const tile = tileMap.get(`${point.x},${point.y}`);
+    if (!tile || !isNoDockStartTileClear(tile)) continue;
+
+    const inwardPoint = { x: point.x + delta.dx, y: point.y + delta.dy };
+    const inwardTile = tileMap.get(`${inwardPoint.x},${inwardPoint.y}`);
+    if (!inwardTile || (inwardTile.features || []).some((feature) => feature.type === "pit")) continue;
+    if (getWallsAtTile(tile).has(facing) || getWallsAtTile(inwardTile).has(delta.opposite)) continue;
+
+    starts.push({ x: point.x, y: point.y, facing });
+  }
+
+  let longestRun = 0;
+  let run = 0;
+  let previous = null;
+  for (const start of starts) {
+    const coord = side === "N" || side === "S" ? start.x : start.y;
+    run = previous !== null && coord === previous + 1 ? run + 1 : 1;
+    longestRun = Math.max(longestRun, run);
+    previous = coord;
+  }
+
+  return {
+    boardIndex: boardRect.index,
+    pieceId: boardRect.pieceId,
+    side,
+    facing,
+    starts,
+    longestRun,
+    score: starts.length * 10 + longestRun * 3
+  };
+}
+
+function chooseNoDockStartingEdge(boardRects, tileMap, requiredStarts) {
+  const candidates = [];
+  for (const boardRect of boardRects) {
+    for (const side of ["N", "E", "S", "W"]) {
+      const candidate = buildNoDockEdgeCandidate(boardRect, side, tileMap);
+      if (candidate.starts.length >= requiredStarts) candidates.push(candidate);
+    }
+  }
+  if (!candidates.length) return null;
+  const bestScore = Math.max(...candidates.map((candidate) => candidate.score));
+  const nearBest = candidates.filter((candidate) => candidate.score >= bestScore - 8);
+  return sample(nearBest);
+}
+
 function getFlagCandidates(placements, pieceMap) {
   const candidates = [];
 
@@ -5959,6 +6637,48 @@ function applyFlagOverrides(tileMap, goals, options = {}) {
   return next;
 }
 
+function hideVirtualFlagZeroFeature(tileMap, flagZero) {
+  if (!flagZero) return tileMap;
+  const next = cloneTileMap(tileMap);
+  const key = `${flagZero.x},${flagZero.y}`;
+  const tile = next.get(key);
+  if (tile) {
+    tile.features = (tile.features || []).filter((feature) => feature.type !== "checkpoint");
+    next.set(key, tile);
+  }
+  return next;
+}
+
+function getVirtualBotEntryDirections(tileMap, point) {
+  const deltas = {
+    N: { dx: 0, dy: -1, opposite: "S" },
+    E: { dx: 1, dy: 0, opposite: "W" },
+    S: { dx: 0, dy: 1, opposite: "N" },
+    W: { dx: -1, dy: 0, opposite: "E" }
+  };
+  return Object.entries(deltas).filter(([dir, d]) => {
+    const fromTile = tileMap.get(`${point.x},${point.y}`);
+    const toTile = tileMap.get(`${point.x + d.dx},${point.y + d.dy}`);
+    if (!toTile) return false;
+    if (getWallsAtTile(fromTile).has(dir) || getWallsAtTile(toTile).has(d.opposite)) return false;
+    return !(toTile.features || []).some((feature) => feature.type === "pit");
+  }).map(([dir]) => dir);
+}
+
+function getPlayableCheckpoints(checkpoints = [], virtualBots = false) {
+  return virtualBots ? checkpoints.slice(1) : checkpoints;
+}
+
+function buildVirtualRobotStarts(flagZero, playerCount = 4, startupSpinUp = false) {
+  if (!flagZero) return [];
+  return Array.from({ length: Math.max(1, playerCount) }, (_, index) => ({
+    x: flagZero.x,
+    y: flagZero.y,
+    ...(startupSpinUp ? {} : { facing: flagZero.facing ?? "E" }),
+    virtualRobotIndex: index
+  }));
+}
+
 function filterStartsForGoals(starts, goals) {
   const goalKeys = new Set((goals || []).map((goal) => `${goal.x},${goal.y}`));
   return (starts || []).filter((start) => !goalKeys.has(`${start.x},${start.y}`));
@@ -6083,7 +6803,7 @@ function canBridgeDisconnectedLayout(structuralPlacements, pieceMap, dockPieceId
   );
 }
 
-function tryExtendBoardLayout(existingPlacements, nextBoardId, pieceMap, dockPieceId, allowDockBridge = false) {
+function tryExtendBoardLayout(existingPlacements, nextBoardId, pieceMap, dockPieceId, allowDockBridge = false, options = {}) {
   const nextBoard = pieceMap[nextBoardId];
   const dock = pieceMap[dockPieceId];
   const anchorIndices = shuffle(existingPlacements.map((_, index) => index));
@@ -6092,6 +6812,7 @@ function tryExtendBoardLayout(existingPlacements, nextBoardId, pieceMap, dockPie
     const anchorPlacement = existingPlacements[anchorIndex];
     const anchorPiece = pieceMap[anchorPlacement.pieceId];
 
+    if (!options.bridgeOnly) {
     for (const side of shuffle(DOCK_SIDES)) {
       for (const rotation of shuffle(ROTATIONS)) {
         const nextPlacement = createAttachedBoardPlacement(anchorPlacement, anchorPiece, nextBoardId, nextBoard, side, rotation);
@@ -6120,6 +6841,8 @@ function tryExtendBoardLayout(existingPlacements, nextBoardId, pieceMap, dockPie
           }
         }
       }
+    }
+
     }
 
     if (!allowDockBridge) {
@@ -6189,8 +6912,13 @@ function createBoardPlacements(pieceMap, lengthPreference, preferences, guidance
   const mainBoardIds = getAvailableMainBoardIds(pieceMap, expansionIds);
   const hasLargeBoards = mainBoardIds.some((boardId) => pieceMap[boardId]?.kind !== "small");
   const maxBoards = Math.min(hasLargeBoards ? 4 : 6, countPhysicalBoards(mainBoardIds, pieceMap));
-  const boardCount = weightedBoardCount(lengthPreference, maxBoards, hasLargeBoards, preferences);
+  let boardCount = weightedBoardCount(lengthPreference, maxBoards, hasLargeBoards, preferences);
+  if (preferences.sandwichedDock && maxBoards >= 2) {
+    boardCount = Math.max(2, boardCount);
+  }
   const shouldForceFilteredSubset = generationAttempt >= BOARD_SELECTION_FALLBACK_ATTEMPT;
+  const requireDockSupport = !preferences.noDocks && !preferences.virtualBots;
+  const hasDockPiece = Boolean(dockPieceId && pieceMap[dockPieceId]);
   let boardIds = [];
 
   if (!shouldForceFilteredSubset) {
@@ -6199,7 +6927,7 @@ function createBoardPlacements(pieceMap, lengthPreference, preferences, guidance
       if (candidateBoardIds.length !== boardCount) {
         continue;
       }
-      if (!boardIdsCanSupportDock(candidateBoardIds, pieceMap, dockPieceId)) {
+      if (requireDockSupport && !boardIdsCanSupportDock(candidateBoardIds, pieceMap, dockPieceId)) {
         continue;
       }
       boardIds = candidateBoardIds;
@@ -6218,12 +6946,12 @@ function createBoardPlacements(pieceMap, lengthPreference, preferences, guidance
     );
     const fallbackBoardIds = fallbackSelection.selectedBoardIds ?? [];
 
-    if (fallbackBoardIds.length === boardCount && boardIdsCanSupportDock(fallbackBoardIds, pieceMap, dockPieceId)) {
+    if (fallbackBoardIds.length === boardCount && (!requireDockSupport || boardIdsCanSupportDock(fallbackBoardIds, pieceMap, dockPieceId))) {
       boardIds = fallbackBoardIds;
     }
   }
 
-  if (boardIds.length !== boardCount) {
+  if (boardIds.length !== boardCount || (preferences.sandwichedDock && boardCount < 2)) {
     return null;
   }
   const firstBoard = pieceMap[boardIds[0]];
@@ -6239,10 +6967,24 @@ function createBoardPlacements(pieceMap, lengthPreference, preferences, guidance
   });
 
   for (const [index, nextBoardId] of boardIds.slice(1).entries()) {
-    const allowDockBridge = !preferences.alignedLayout && index === boardIds.length - 2;
-    const extension = preferences.alignedLayout
-      ? tryExtendAlignedBoardLayout(placements, nextBoardId, pieceMap)
-      : tryExtendBoardLayout(placements, nextBoardId, pieceMap, dockPieceId, allowDockBridge);
+    const isFinalBoard = index === boardIds.length - 2;
+    const forceDockBridge = Boolean(preferences.sandwichedDock && isFinalBoard && hasDockPiece);
+    const allowDockBridge = forceDockBridge || (!preferences.alignedLayout && isFinalBoard);
+    let extension = null;
+
+    if (forceDockBridge) {
+      // A sandwiched dock is deliberately the bridge between two board components.
+      // Staggering may offset the opposing long-side frontage; aligned layouts use
+      // the same bridge geometry but require the dock frontage alignment below.
+      extension = tryExtendBoardLayout(placements, nextBoardId, pieceMap, dockPieceId, true, {
+        bridgeOnly: true
+      });
+    } else {
+      extension = preferences.alignedLayout
+        ? tryExtendAlignedBoardLayout(placements, nextBoardId, pieceMap)
+        : tryExtendBoardLayout(placements, nextBoardId, pieceMap, dockPieceId, allowDockBridge && hasDockPiece);
+    }
+
     if (!extension) {
       return null;
     }
@@ -6466,6 +7208,119 @@ function getDockBoundaryRun(structuralPlacements, dockPlacement, pieceMap) {
 
 function getDockPlacementsFromScenarioPlacements(placements = [], pieceMap = {}) {
   return placements.filter((placement) => pieceMap[placement.pieceId]?.kind === "dock");
+}
+
+function getIntervalCoverageLength(intervals = []) {
+  if (!intervals.length) return 0;
+  const ordered = intervals
+    .filter(([start, end]) => end > start)
+    .sort((left, right) => left[0] - right[0] || left[1] - right[1]);
+
+  let total = 0;
+  let currentStart = ordered[0]?.[0] ?? 0;
+  let currentEnd = ordered[0]?.[1] ?? 0;
+
+  for (const [start, end] of ordered.slice(1)) {
+    if (start <= currentEnd) {
+      currentEnd = Math.max(currentEnd, end);
+    } else {
+      total += currentEnd - currentStart;
+      currentStart = start;
+      currentEnd = end;
+    }
+  }
+
+  return total + Math.max(0, currentEnd - currentStart);
+}
+
+function getSandwichedDockStructure(boardPlacements, dockPlacement, pieceMap) {
+  if (!dockPlacement) {
+    return { valid: false, boardIndices: [] };
+  }
+
+  const dockPiece = pieceMap[dockPlacement.pieceId];
+  if (!dockPiece) {
+    return { valid: false, boardIndices: [] };
+  }
+
+  const dockRect = getPlacedRect(dockPiece, dockPlacement);
+  const boardRects = (boardPlacements || []).map((placement, index) => ({
+    index,
+    ...getPlacedRect(pieceMap[placement.pieceId], placement)
+  }));
+  const horizontal = dockRect.width >= dockRect.height;
+  const sideA = [];
+  const sideB = [];
+  const sideAIndices = new Set();
+  const sideBIndices = new Set();
+
+  for (const rect of boardRects) {
+    if (horizontal) {
+      const start = Math.max(rect.x, dockRect.x);
+      const end = Math.min(rect.x + rect.width, dockRect.x + dockRect.width);
+      if (end <= start) continue;
+
+      if (rect.y + rect.height === dockRect.y) {
+        sideA.push([start, end]);
+        sideAIndices.add(rect.index);
+      }
+      if (rect.y === dockRect.y + dockRect.height) {
+        sideB.push([start, end]);
+        sideBIndices.add(rect.index);
+      }
+    } else {
+      const start = Math.max(rect.y, dockRect.y);
+      const end = Math.min(rect.y + rect.height, dockRect.y + dockRect.height);
+      if (end <= start) continue;
+
+      if (rect.x + rect.width === dockRect.x) {
+        sideA.push([start, end]);
+        sideAIndices.add(rect.index);
+      }
+      if (rect.x === dockRect.x + dockRect.width) {
+        sideB.push([start, end]);
+        sideBIndices.add(rect.index);
+      }
+    }
+  }
+
+  const requiredCoverage = horizontal ? dockRect.width : dockRect.height;
+  const sideACoverage = getIntervalCoverageLength(sideA);
+  const sideBCoverage = getIntervalCoverageLength(sideB);
+  const valid = (
+    sideACoverage >= requiredCoverage &&
+    sideBCoverage >= requiredCoverage &&
+    sideAIndices.size > 0 &&
+    sideBIndices.size > 0
+  );
+
+  return {
+    valid,
+    boardIndices: valid
+      ? [...new Set([...sideAIndices, ...sideBIndices])]
+      : [],
+    sideACoverage,
+    sideBCoverage,
+    requiredCoverage
+  };
+}
+
+function getProtectedSandwichBoardIndices(boardPlacements, dockPlacements, pieceMap) {
+  const protectedIndices = new Set();
+
+  for (const dockPlacement of dockPlacements || []) {
+    const structure = getSandwichedDockStructure(boardPlacements, dockPlacement, pieceMap);
+    if (!structure.valid) continue;
+    structure.boardIndices.forEach((index) => protectedIndices.add(index));
+  }
+
+  return protectedIndices;
+}
+
+function hasPhysicalSandwichedDock(boardPlacements, dockPlacements, pieceMap) {
+  return (dockPlacements || []).some((dockPlacement) => (
+    getSandwichedDockStructure(boardPlacements, dockPlacement, pieceMap).valid
+  ));
 }
 
 function buildDockSummaries(boardPlacements, dockPlacements, pieceMap) {
@@ -7261,7 +8116,7 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
 
     return sum + (leg.analysis.summary.averageRouteActions || 0);
   }, 0);
-  const courseAdjustedFirstLeg = options.competitiveMode
+  const courseAdjustedFirstLeg = (options.competitiveMode || options.virtualBots)
     ? {
       ...firstLeg,
       summary: {
@@ -7410,7 +8265,7 @@ function adjustStartOutliersForCourseLength(firstLeg, totalLength, tileMap, play
 }
 
 function computeUsableStarts(firstLeg, preferences = {}) {
-  if (preferences.competitiveMode) {
+  if (preferences.competitiveMode || preferences.virtualBots) {
     return firstLeg.starts.filter((startAnalysis) => startAnalysis.reachable);
   }
 
@@ -7422,59 +8277,137 @@ function hasStartCapacityHardFailure(scenario) {
   return (scenario?.metrics?.hardFailures || []).some((failure) => START_CAPACITY_HARD_FAILURES.has(failure));
 }
 
+function getCompetitiveBalanceProfile(entries = []) {
+  const scores = entries.map((entry) => entry.adjustedScore).filter(Number.isFinite);
+  const actions = entries.map((entry) => entry.bestActions).filter(Number.isFinite);
+  const scoreStats = getRobustOutlierStats(entries, "adjustedScore");
+  const actionStats = getRobustOutlierStats(entries, "bestActions");
+  const outliers = rankNormalStartOutliers(entries, "adjustedScore", FULL_START_OUTLIER_Z);
+  const scoreRange = scores.length ? Math.max(...scores) - Math.min(...scores) : 0;
+  const actionRange = actions.length ? Math.max(...actions) - Math.min(...actions) : 0;
+  const worstScoreZ = entries.length
+    ? Math.max(...entries.map((entry) => Math.abs(entry.adjustedScore - scoreStats.center) / scoreStats.robustScale))
+    : 0;
+  const worstActionZ = entries.length
+    ? Math.max(...entries.map((entry) => Number.isFinite(entry.bestActions)
+      ? Math.abs(entry.bestActions - actionStats.center) / actionStats.robustScale
+      : 0))
+    : 0;
+  const objective = (
+    outliers.length * 1000 +
+    Math.max(worstScoreZ, worstActionZ * 0.9) * 55 +
+    scoreRange * 0.18 +
+    actionRange * 1.2
+  );
+  return {
+    outliers,
+    scoreRange: Number(scoreRange.toFixed(2)),
+    actionRange: Number(actionRange.toFixed(2)),
+    worstScoreZ: Number(worstScoreZ.toFixed(2)),
+    worstActionZ: Number(worstActionZ.toFixed(2)),
+    objective: Number(objective.toFixed(3))
+  };
+}
+
+function getCombinationCount(n, k, cap = 50001) {
+  if (k < 0 || k > n) return 0;
+  k = Math.min(k, n - k);
+  let value = 1;
+  for (let index = 1; index <= k; index += 1) {
+    value = (value * (n - k + index)) / index;
+    if (value >= cap) return cap;
+  }
+  return Math.round(value);
+}
+
 function computeCompetitiveBlockImpact(firstLeg, playerCount = 4) {
   const reachable = (firstLeg?.starts || [])
-    .filter((startAnalysis) => startAnalysis.reachable && startAnalysis.selectedRoute && Number.isFinite(startAnalysis.adjustedScore))
-    .slice()
-    .sort((left, right) => left.adjustedScore - right.adjustedScore);
+    .filter((startAnalysis) => startAnalysis.reachable && startAnalysis.selectedRoute && Number.isFinite(startAnalysis.adjustedScore));
+  const blockCount = Math.max(0, Math.min(playerCount, reachable.length));
+  const requiredRemaining = Math.max(1, playerCount);
 
-  if (!reachable.length) {
+  if (reachable.length < blockCount + requiredRemaining) {
     return {
-      blockedStartCount: 0,
-      remainingStartCount: 0,
-      strongStartCount: 0,
-      bestScoreDelta: 0,
-      topBandDelta: 0,
-      strongStartsRemoved: 0,
-      meaningful: false
+      blockedStartCount: blockCount,
+      remainingStartCount: Math.max(0, reachable.length - blockCount),
+      blockedIndices: [],
+      remainingOutlierCount: Infinity,
+      scoreRange: Infinity,
+      actionRange: Infinity,
+      worstScoreZ: Infinity,
+      worstActionZ: Infinity,
+      acceptable: false,
+      method: "insufficient-starts"
     };
   }
 
-  const blockCount = Math.min(playerCount, reachable.length);
-  const remaining = reachable.slice(blockCount);
-  const topBandCount = Math.min(playerCount, reachable.length);
-  const baselineTopBand = reachable.slice(0, topBandCount);
-  const remainingTopBand = remaining.slice(0, Math.min(topBandCount, remaining.length));
-  const scoreStdDev = firstLeg?.summary?.scoreStdDev ?? 0;
-  const strongThreshold = (baselineTopBand[baselineTopBand.length - 1]?.adjustedScore ?? reachable[0].adjustedScore) + Math.max(4, scoreStdDev * 0.4);
-  const strongStartCount = reachable.filter((item) => item.adjustedScore <= strongThreshold).length;
-  const remainingStrongStartCount = remaining.filter((item) => item.adjustedScore <= strongThreshold).length;
-  const bestScoreDelta = remaining.length
-    ? Number((remaining[0].adjustedScore - reachable[0].adjustedScore).toFixed(2))
-    : 0;
-  const topBandDelta = remainingTopBand.length
-    ? Number((averageValues(remainingTopBand.map((item) => item.adjustedScore)) - averageValues(baselineTopBand.map((item) => item.adjustedScore))).toFixed(2))
-    : 0;
-  const strongStartsRemoved = strongStartCount - remainingStrongStartCount;
-  const meaningfulScoreShift = (
-    bestScoreDelta >= Math.max(6, scoreStdDev * 0.7) &&
-    topBandDelta >= Math.max(4, scoreStdDev * 0.45)
-  );
-  const meaningfulStrongDrop = strongStartsRemoved >= Math.max(2, Math.ceil(playerCount * 0.5));
-  const meaningful = (
-    strongStartCount >= playerCount &&
-    remaining.length >= playerCount &&
-    (meaningfulScoreShift || meaningfulStrongDrop)
+  const evaluateBlocked = (blockedSet) => {
+    const remaining = reachable.filter((entry) => !blockedSet.has(entry.index));
+    return { remaining, profile: getCompetitiveBalanceProfile(remaining) };
+  };
+
+  let best = null;
+  const consider = (blockedIndices, method) => {
+    const blockedSet = new Set(blockedIndices);
+    const evaluated = evaluateBlocked(blockedSet);
+    const candidate = { blockedIndices: [...blockedIndices], ...evaluated, method };
+    if (!best || candidate.profile.objective < best.profile.objective - 0.001) best = candidate;
+  };
+
+  const combinationCount = getCombinationCount(reachable.length, blockCount);
+  if (combinationCount <= 20000) {
+    const chosen = [];
+    const visit = (offset) => {
+      if (chosen.length === blockCount) {
+        consider(chosen.map((position) => reachable[position].index), "exact");
+        return;
+      }
+      const needed = blockCount - chosen.length;
+      for (let position = offset; position <= reachable.length - needed; position += 1) {
+        chosen.push(position);
+        visit(position + 1);
+        chosen.pop();
+      }
+    };
+    visit(0);
+  } else {
+    const beamWidth = 96;
+    let beam = [{ blockedIndices: [], nextOffset: 0, objective: getCompetitiveBalanceProfile(reachable).objective }];
+    for (let depth = 0; depth < blockCount; depth += 1) {
+      const nextBeam = [];
+      for (const state of beam) {
+        for (let position = state.nextOffset; position < reachable.length; position += 1) {
+          const blockedIndices = [...state.blockedIndices, reachable[position].index];
+          const evaluated = evaluateBlocked(new Set(blockedIndices));
+          nextBeam.push({ blockedIndices, nextOffset: position + 1, objective: evaluated.profile.objective });
+        }
+      }
+      nextBeam.sort((left, right) => left.objective - right.objective);
+      beam = nextBeam.slice(0, beamWidth);
+    }
+    beam.forEach((state) => consider(state.blockedIndices, "beam"));
+  }
+
+  const profile = best?.profile ?? getCompetitiveBalanceProfile(reachable);
+  const remainingStartCount = best?.remaining?.length ?? reachable.length;
+  const acceptable = (
+    remainingStartCount >= requiredRemaining &&
+    profile.outliers.length === 0 &&
+    profile.worstScoreZ < FULL_START_OUTLIER_Z &&
+    profile.worstActionZ < FULL_START_OUTLIER_Z + 0.35
   );
 
   return {
     blockedStartCount: blockCount,
-    remainingStartCount: remaining.length,
-    strongStartCount,
-    bestScoreDelta,
-    topBandDelta,
-    strongStartsRemoved,
-    meaningful
+    remainingStartCount,
+    blockedIndices: best?.blockedIndices ?? [],
+    remainingOutlierCount: profile.outliers.length,
+    scoreRange: profile.scoreRange,
+    actionRange: profile.actionRange,
+    worstScoreZ: profile.worstScoreZ,
+    worstActionZ: profile.worstActionZ,
+    acceptable,
+    method: best?.method ?? "none"
   };
 }
 
@@ -7771,7 +8704,7 @@ function pruneIrrelevantOverlayPlacements(overlayPlacements, pieceMap, sequence,
   };
 }
 
-function pruneUnusedBoardPlacements(boardPlacements, overlayPlacements, pieceMap, sequence, usableStarts, checkpoints) {
+function pruneUnusedBoardPlacements(boardPlacements, overlayPlacements, pieceMap, sequence, usableStarts, checkpoints, options = {}) {
   if ((boardPlacements?.length ?? 0) <= 1) {
     return {
       boardPlacements,
@@ -7787,6 +8720,11 @@ function pruneUnusedBoardPlacements(boardPlacements, overlayPlacements, pieceMap
     usableStarts,
     checkpoints
   );
+  for (const index of options.protectedBoardIndices || []) {
+    if (Number.isInteger(index) && index >= 0 && index < boardPlacements.length) {
+      usedBoards.add(index);
+    }
+  }
 
   if (usedBoards.size === 0 || usedBoards.size >= boardPlacements.length) {
     return {
@@ -8285,9 +9223,6 @@ function classifyCandidate(sequence, preferences, context = {}) {
     movingTargetStats,
     goalTileMap: context.goalTileMap ?? context.tileMap
   }, boardHarshness);
-  if (preferences.competitiveMode) {
-    difficultyRaw = Number((difficultyRaw + getCompetitiveModeDifficultyBonus(fairnessStdDev)).toFixed(2));
-  }
   const lengthMetrics = computeLengthMetrics(
     sequence,
     preferences.flagCount,
@@ -8320,12 +9255,8 @@ function classifyCandidate(sequence, preferences, context = {}) {
     hardFailures.push("normal-start-balance");
   }
 
-  if (preferences.competitiveMode && (
-    !competitiveBlockImpact?.meaningful ||
-    (competitiveBlockImpact?.strongStartCount ?? 0) < preferences.playerCount ||
-    (competitiveBlockImpact?.remainingStartCount ?? 0) < preferences.playerCount
-  )) {
-    hardFailures.push("competitive-block-impact");
+  if (preferences.competitiveMode && !competitiveBlockImpact?.acceptable) {
+    hardFailures.push("competitive-start-balance");
   }
 
   if (context.boardPlacements?.length > 1 && context.pieceMap && context.checkpoints) {
@@ -8369,9 +9300,10 @@ function classifyCandidate(sequence, preferences, context = {}) {
     : fairnessStdDev >= 14 ? fairnessStdDev - 14 : 0;
   const competitiveBlockPenalty = preferences.competitiveMode
     ? (
-      Math.max(0, preferences.playerCount - (competitiveBlockImpact?.strongStartCount ?? 0)) * 16 +
       Math.max(0, preferences.playerCount - (competitiveBlockImpact?.remainingStartCount ?? 0)) * 18 +
-      (competitiveBlockImpact?.meaningful ? 0 : 24)
+      (competitiveBlockImpact?.remainingOutlierCount ?? 0) * 24 +
+      Math.max(0, (competitiveBlockImpact?.worstScoreZ ?? 0) - 1.5) * 4 +
+      Math.max(0, (competitiveBlockImpact?.worstActionZ ?? 0) - 1.8) * 3
     )
     : 0;
   const movingTargetVolatilityPenalty = getMovingTargetVolatilityPenalty(
@@ -8418,7 +9350,7 @@ function classifyCandidate(sequence, preferences, context = {}) {
 function buildScenarioReport(scenario, selectedLegIndex) {
   const summary = scenario.sequence.firstLeg.summary;
   const legOptions = scenario.sequence.legs.map((leg, index) => (
-    index === 0 ? "Dock -> 1" : `${leg.from} -> ${leg.to}`
+    index === 0 ? (scenario.virtualBots ? "Entry -> 1" : "Dock -> 1") : `${leg.from} -> ${leg.to}`
   ));
   const goal = scenario.checkpoints[selectedLegIndex === 0 ? 0 : selectedLegIndex];
   const outlierReasonByIndex = new Map((summary.outliers || []).map((item) => [item.index, item.reasons ?? null]));
@@ -8487,14 +9419,16 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     `Variant impact: ${getVariantImpactSummary(scenario) || "none"}`,
     `Act Fast used: ${scenario.actFast ? scenario.actFastMode ?? "yes" : "no"}`,
     `Competitive Mode used: ${scenario.competitiveMode ? "yes" : "no"}`,
+    `Virtual Bots used: ${scenario.virtualBots ? "yes" : "no"}`,
     `Pay to Win used: ${scenario.payToWin ? "yes" : "no"}`,
     `Extra Docks used: ${scenario.extraDocks ? "yes" : "no"}`,
+    `No Docks used: ${scenario.noDocks ? "yes" : "no"}${scenario.noDockEdge ? ` (${scenario.noDockEdge.pieceId} ${scenario.noDockEdge.side} edge, facing ${scenario.noDockEdge.facing})` : ""}`,
     `Factory Rejects used: ${scenario.factoryRejects ? "yes" : "no"}`,
     `Recovery used: ${scenario.recoveryRule}`,
-    `A Lighter Game used: ${scenario.lighterGame ? "yes" : "no"}`,
-    `A Less SPAM-Y Game used: ${scenario.lessSpammyGame ? "yes" : "no"}`,
-    `A Less Deadly Game used: ${scenario.lessDeadlyGame ? "yes" : "no"}`,
-    `A More Deadly Game used: ${scenario.moreDeadlyGame ? "yes" : "no"}`,
+    `Energy Crisis / A Lighter Game used: ${scenario.lighterGame ? "yes" : "no"}`,
+    `SPAM Filter / A Less SPAM-Y Game used: ${scenario.lessSpammyGame ? "yes" : "no"}`,
+    `Walled In / A Less Deadly Game used: ${scenario.lessDeadlyGame ? "yes" : "no"}`,
+    `Hard Reboot / A More Deadly Game used: ${scenario.moreDeadlyGame ? "yes" : "no"}`,
     `Flaming Oil used: ${scenario.flamingOil ? "yes" : "no"}`,
     `Shared Deck used: ${scenario.classicSharedDeck ? "yes" : "no"}`,
     `Hazardous Flags used: ${scenario.hazardousFlags ? "yes" : "no"}`,
@@ -8505,7 +9439,7 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     `Board count: ${scenario.boardCount}`,
     `Overlays requested: ${formatOverlayMode(scenario.preferences.overlayMode)}`,
     `Boards: ${scenario.mainBoardIds.map((pieceId, index) => `${pieceId}@${scenario.mainRotations[index]}`).join(", ")}`,
-    `Flags: ${scenario.checkpoints.map((flag, index) => `#${index + 1}(${flag.x},${flag.y})`).join(", ")}`,
+    `Flags: ${scenario.checkpoints.map((flag, index) => `${scenario.virtualBots && index === 0 ? "#0" : `#${scenario.virtualBots ? index : index + 1}`}(${flag.x},${flag.y})${scenario.virtualBots && index === 0 && flag.facing ? `/${flag.facing}` : ""}`).join(", ")}`,
     scenario.rebootTokens?.length
       ? `Reboot tokens: ${scenario.rebootTokens.map((token) => `${token.pieceId}(${token.x},${token.y},${token.dir})`).join(", ")}`
       : "Reboot tokens: none",
@@ -8526,10 +9460,9 @@ function buildScenarioReport(scenario, selectedLegIndex) {
       : "Final leg anticlimax penalty: none",
     scenario.metrics.routeDrama
       ? `Route drama: ${scenario.metrics.routeDrama.level}, score ${scenario.metrics.routeDrama.score}, penalty ${scenario.metrics.routeDrama.penalty}, sharedTiles ${scenario.metrics.routeDrama.sharedTiles}, crossings ${scenario.metrics.routeDrama.crossings}, reverseEdges ${scenario.metrics.routeDrama.reverseEdges}`
-      : "Route drama: n/a",
-    scenario.metrics.competitiveBlockImpact
-      ? `Competitive block impact: strongStarts ${scenario.metrics.competitiveBlockImpact.strongStartCount}, remainingAfterBlocks ${scenario.metrics.competitiveBlockImpact.remainingStartCount}, bestDelta ${scenario.metrics.competitiveBlockImpact.bestScoreDelta}, topBandDelta ${scenario.metrics.competitiveBlockImpact.topBandDelta}, strongRemoved ${scenario.metrics.competitiveBlockImpact.strongStartsRemoved}, meaningful ${scenario.metrics.competitiveBlockImpact.meaningful ? "yes" : "no"}`
-      : "Competitive block impact: n/a",
+      : "Route drama: n/a",    scenario.metrics.competitiveBlockImpact
+      ? `Competitive balance simulation: blocked ${scenario.metrics.competitiveBlockImpact.blockedStartCount} [${scenario.metrics.competitiveBlockImpact.blockedIndices.join(", ")}], remaining ${scenario.metrics.competitiveBlockImpact.remainingStartCount}, outliers ${scenario.metrics.competitiveBlockImpact.remainingOutlierCount}, scoreRange ${scenario.metrics.competitiveBlockImpact.scoreRange}, actionRange ${scenario.metrics.competitiveBlockImpact.actionRange}, worstZ ${scenario.metrics.competitiveBlockImpact.worstScoreZ}/${scenario.metrics.competitiveBlockImpact.worstActionZ}, acceptable ${scenario.metrics.competitiveBlockImpact.acceptable ? "yes" : "no"}, method ${scenario.metrics.competitiveBlockImpact.method}`
+      : "Competitive balance simulation: n/a",
     summary.payToWin?.active
       ? `Pay to Win costs: unit ${summary.payToWin.costUnit}, lateUnit ${summary.payToWin.lateCostUnit ?? summary.payToWin.costUnit}, trafficScale ${summary.payToWin.trafficScaleMultiplier}, latePlayers ${summary.payToWin.lateSelectorStart ?? "n/a"}-${summary.payToWin.lateSelectorEnd ?? "n/a"}, surplusStarts ${summary.payToWin.surplusStarts ?? 0}, lateTrafficReduction ${summary.payToWin.lateTrafficReduction ?? 0}%, lateUnavailable ${summary.payToWin.lateUnavailableCount ?? 0}/${summary.payToWin.maxLateUnavailable ?? 0}, lateAvailabilityValid ${summary.payToWin.lateAvailabilityValid === false ? "no" : "yes"}, slashPrices ${summary.payToWin.hasLatePriceDifference ? "yes" : "no"}, pruned ${summary.payToWin.pruned.length ? summary.payToWin.pruned.map((item) => `#${item.index + 1}(${item.energyCost}E; pass ${item.pass})`).join(", ") : "none"}`
       : "Pay to Win costs: n/a",
@@ -9017,9 +9950,10 @@ function getScenarioRenderState(scenario) {
       : "none";
   const selectedLegIndex = selectedLegValue === "none" ? null : Number(selectedLegValue);
   const displayedLeg = selectedLegIndex === null ? null : scenario.sequence.legs[selectedLegIndex];
+  const playableCheckpoints = getPlayableCheckpoints(scenario.checkpoints, scenario.virtualBots);
   const goal = selectedLegIndex === null
-    ? scenario.checkpoints[0]
-    : scenario.checkpoints[selectedLegIndex === 0 ? 0 : selectedLegIndex];
+    ? playableCheckpoints[0]
+    : playableCheckpoints[selectedLegIndex] ?? playableCheckpoints[0];
   const outlierIndices = new Set((scenario.sequence.firstLeg.summary.outliers || []).map((item) => item.index));
   const focusedRoute = selectedLegIndex === null ? null : getFocusedRouteEntry(scenario, selectedLegIndex);
   const renderAnalysis = selectedLegIndex === null
@@ -9110,12 +10044,13 @@ function drawScenarioCanvas(scenario, options = {}) {
     placements: scenario.placements,
     goal,
     analysis: renderAnalysis,
-    goals: scenario.checkpoints,
+    goals: getPlayableCheckpoints(scenario.checkpoints, scenario.virtualBots),
+    virtualBotEntry: scenario.virtualBots ? scenario.virtualBotEntry : null,
     reentryMarkers: hasMovingTargetsEffect(scenario) ? scenario.movingTargetReentryMarkers : [],
     movingTargetTimelines: hasMovingTargetsEffect(scenario) ? scenario.movingTargetTimelines : [],
     showMovingTargetDetails: devViewEnabled,
     showMovingTargetHits: devViewEnabled,
-    starts: scenario.activeStarts,
+    starts: scenario.virtualBots ? [] : scenario.activeStarts,
     startLabels,
     startEnergyCosts,
     startLateEnergyCosts,
@@ -9126,7 +10061,9 @@ function drawScenarioCanvas(scenario, options = {}) {
     edgeOutlineColor: scenario.lessDeadlyGame ? "#f2c230" : null,
     showBoardLabels: false,
     showStartFacing: devViewEnabled && selectedLegIndex !== null,
-    showAllStartMarkers: devViewEnabled,
+    showAllStartMarkers: devViewEnabled && !scenario.virtualBots,
+    noDockStarts: Boolean(scenario.noDocks),
+    hideUnusableStarts: Boolean(scenario.noDocks && !devViewEnabled),
     showWalls: iconBoardView || (devViewEnabled && selectedLegIndex !== null),
     showPieceImages: !iconBoardView,
     showFootprints: true,
@@ -9190,7 +10127,7 @@ function renderScenario(scenario) {
   const devViewEnabled = isDevViewEnabled();
   const legOptions = scenario.sequence.legs.map((leg, index) => ({
     value: String(index),
-    label: index === 0 ? "Dock -> 1" : `${leg.from} -> ${leg.to}`
+    label: index === 0 ? (scenario.virtualBots ? "Entry -> 1" : "Dock -> 1") : `${leg.from} -> ${leg.to}`
   }));
 
   const previousLegValue = legSelect.value;
@@ -9225,14 +10162,18 @@ function renderScenario(scenario) {
 function validateSelectedInventory(assets, preferences) {
   const expansionIds = getSelectedExpansionIds(preferences);
   const availableDockIds = getEligibleDockIds(assets.pieceMap, expansionIds, preferences);
-  if (!availableDockIds.length) {
-    return "The selected sets contain no docking bay. Enable a set with a docking bay to generate a course.";
+  const virtualBotsState = getVariantPreferenceState(preferences, "virtualBots");
+  const noDocksState = getVariantPreferenceState(preferences, "noDocks");
+  const docklessSetupAvailable = virtualBotsState !== "off" || noDocksState !== "off";
+  if (!availableDockIds.length && !docklessSetupAvailable) {
+    return "The selected sets contain no docking bay. Enable No Docks or Virtual Bots, or select a set with a docking bay.";
   }
-  if (!canSupportRequiredDockStarts(availableDockIds, assets.pieceMap, preferences)) {
+  const docklessSetupForced = virtualBotsState === "forced" || noDocksState === "forced";
+  if (!docklessSetupForced && availableDockIds.length && !canSupportRequiredDockStarts(availableDockIds, assets.pieceMap, preferences)) {
     const requiredStarts = getRequiredDockStartCount(preferences);
     return `The selected sets do not provide enough dock starting spaces for this setup (${requiredStarts} needed).`;
   }
-  if (!getDockConfigurations(availableDockIds, assets.pieceMap, preferences).length) {
+  if (!docklessSetupForced && availableDockIds.length && !getDockConfigurations(availableDockIds, assets.pieceMap, preferences).length) {
     return getExtraDockModeState(preferences) === "forced"
       ? "Extra Docks is required, but the selected sets do not provide a valid two-dock combination."
       : "The selected sets do not provide a valid docking bay setup for these rules.";
@@ -9284,6 +10225,8 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     competitiveMode,
     payToWin,
     extraDocks,
+    noDocks,
+    sandwichedDock,
     factoryRejects,
     recoveryRule,
     lessDeadlyGame,
@@ -9292,6 +10235,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     criticalHaywire,
     permanentShutdown,
     startupSpinUp,
+    virtualBots,
     moreDeadlyGame,
     flamingOil,
     lighterGame,
@@ -9304,6 +10248,11 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     variantComplexityBudget,
     variantComplexityUsed
   } = variantBundle;
+  let effectiveNoDocks = noDocks;
+  if (!availableDockIds.length && !virtualBots && getVariantPreferenceState(preferences, "noDocks") !== "off") {
+    effectiveNoDocks = true;
+    variantBundle.noDocks = true;
+  }
   const actFastMode = actFast ? chooseActFastMode(preferences) : null;
   const generationPreferences = applyVariantGenerationOptions({
     ...preferences,
@@ -9312,7 +10261,10 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     actFastMode,
     competitiveMode,
     payToWin,
-    extraDocks
+    extraDocks,
+    noDocks: effectiveNoDocks,
+    sandwichedDock,
+    virtualBots
   }, variantBundle);
   const reportStage = async (message, localEvaluation = 1) => {
     if (onStage) {
@@ -9322,7 +10274,8 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
 
   await reportStage("Building board and dock layout", 1);
 
-  const dockConfigurations = weightedOrder(
+  const docklessSetup = virtualBots || effectiveNoDocks;
+  const dockConfigurations = docklessSetup ? [] : weightedOrder(
     getDockConfigurations(availableDockIds, pieceMap, generationPreferences).map((dockIds) => (
       [...dockIds].sort((left, right) => getDockSelectionWeight(pieceMap[right], generationPreferences) - getDockSelectionWeight(pieceMap[left], generationPreferences))
     )),
@@ -9337,75 +10290,96 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
   let dockPlacements = [];
   let dockSummaries = [];
 
-  for (const dockConfiguration of dockConfigurations.length ? dockConfigurations : orderedDockIds.map((dockId) => [dockId])) {
-    const candidateDockId = dockConfiguration[0];
-    const candidateBoardLayout = createBoardPlacements(
-      pieceMap,
-      generationPreferences.length,
-      generationPreferences,
-      guidanceLevel,
-      expansionIds,
-      candidateDockId,
-      attempt
-    );
-    if (!candidateBoardLayout) {
-      continue;
-    }
-
-    const candidateDockPlacements = [];
-    let validDockSet = true;
-
-    for (const dockId of dockConfiguration) {
-      const flipOrder = shuffle([false, true]);
-      let placedDock = null;
-      for (const candidateFlip of flipOrder) {
-        placedDock = createDockPlacement(
-          [...candidateBoardLayout.placements, ...candidateDockPlacements],
-          pieceMap,
-          dockId,
-          candidateFlip,
-          {
-            alignedLayout: generationPreferences.alignedLayout,
-            allowBridgePlacement: true
-          }
-        );
-        if (placedDock) {
-          candidateDockPlacements.push(placedDock.dockPlacement);
-          break;
-        }
-      }
-
-      if (!placedDock) {
-        validDockSet = false;
+  if (docklessSetup) {
+    const layoutAnchors = orderedDockIds.length ? orderedDockIds : [null];
+    for (const candidateDockId of layoutAnchors) {
+      const candidateBoardLayout = createBoardPlacements(
+        pieceMap, generationPreferences.length, generationPreferences, guidanceLevel, expansionIds, candidateDockId, attempt
+      );
+      if (candidateBoardLayout) {
+        boardLayout = candidateBoardLayout;
         break;
       }
     }
+  } else {
+    for (const dockConfiguration of dockConfigurations.length ? dockConfigurations : orderedDockIds.map((dockId) => [dockId])) {
+      const candidateDockId = dockConfiguration[0];
+      const candidateBoardLayout = createBoardPlacements(
+        pieceMap,
+        generationPreferences.length,
+        generationPreferences,
+        guidanceLevel,
+        expansionIds,
+        candidateDockId,
+        attempt
+      );
+      if (!candidateBoardLayout) continue;
 
-    if (!validDockSet || !candidateDockPlacements.length) {
-      continue;
+      const candidateDockPlacements = [];
+      let validDockSet = true;
+      for (const dockId of dockConfiguration) {
+        const flipOrder = shuffle([false, true]);
+        let placedDock = null;
+        for (const candidateFlip of flipOrder) {
+          if (sandwichedDock && candidateDockPlacements.length === 0) {
+            placedDock = findBridgeDockPlacement(
+              candidateBoardLayout.placements,
+              pieceMap,
+              dockId,
+              candidateFlip
+            );
+            if (
+              placedDock &&
+              generationPreferences.alignedLayout &&
+              !hasAlignedDockFrontage(candidateBoardLayout.placements, pieceMap, placedDock.dockPlacement)
+            ) {
+              placedDock = null;
+            }
+          } else {
+            placedDock = createDockPlacement(
+              [...candidateBoardLayout.placements, ...candidateDockPlacements],
+              pieceMap, dockId, candidateFlip,
+              { alignedLayout: generationPreferences.alignedLayout, allowBridgePlacement: true }
+            );
+          }
+          if (placedDock) {
+            candidateDockPlacements.push(placedDock.dockPlacement);
+            break;
+          }
+        }
+        if (!placedDock) { validDockSet = false; break; }
+      }
+      if (!validDockSet || !candidateDockPlacements.length) continue;
+      boardLayout = candidateBoardLayout;
+      dockPlacements = candidateDockPlacements;
+      dockSummaries = buildDockSummaries(boardLayout.placements, dockPlacements, pieceMap);
+      break;
     }
-
-    boardLayout = candidateBoardLayout;
-    dockPlacements = candidateDockPlacements;
-    dockSummaries = buildDockSummaries(boardLayout.placements, dockPlacements, pieceMap);
-    break;
   }
 
   if (!boardLayout) {
     throw new Error("Unable to create a valid board layout");
   }
 
-  const overlayPlacements = chooseOverlayPlacements(boardLayout.placements, dockPlacements, pieceMap, generationPreferences, expansionIds);
-
+  const courseDockPlacements = docklessSetup ? [] : dockPlacements;
+  const overlayPlacements = chooseOverlayPlacements(boardLayout.placements, courseDockPlacements, pieceMap, generationPreferences, expansionIds);
   const placements = [
     ...boardLayout.placements,
-    ...dockPlacements,
+    ...courseDockPlacements,
     ...overlayPlacements
   ];
   const boardRects = buildBoardRects(boardLayout.placements, pieceMap);
 
   clearAnalysisCachesSafe();
   const { tileMap, starts } = buildResolvedMap(placements, pieceMap);
+  const noDockEdge = effectiveNoDocks
+    ? chooseNoDockStartingEdge(boardRects, tileMap, getRequiredDockStartCount({ ...generationPreferences, competitiveMode }))
+    : null;
+  if (effectiveNoDocks && !noDockEdge) {
+    return { scenario: null, evaluationsUsed: 1 };
+  }
+  const noDockStarts = noDockEdge?.starts ?? [];
+  const setupStarts = effectiveNoDocks ? noDockStarts : starts;
   const flagCandidates = getFlagCandidates(placements, pieceMap);
   const movingTargetsForced = isVariantForced(preferences, "movingTargets");
   const movingTargetTraceCache = movingTargets ? new Map() : null;
@@ -9440,18 +10414,18 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         : "Choosing checkpoints",
       evaluationsUsed
     );
-    const checkpoints = pickFlags(
+    const pickedCheckpoints = pickFlags(
       flagCandidates,
-      flagCount,
+      flagCount + (virtualBots ? 1 : 0),
       boardLayout.placements,
-      dockPlacements,
+      courseDockPlacements,
       pieceMap,
-      starts,
+      virtualBots ? [] : setupStarts,
       { ...generationPreferences, hazardousFlags, movingTargets },
       guidanceLevel
     );
 
-    if (!checkpoints) {
+    if (!pickedCheckpoints) {
       staleRetries += 1;
       if (retry > 0 && staleRetries >= stallLimit) {
         break;
@@ -9459,14 +10433,35 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       continue;
     }
 
+    const virtualEntryCandidate = virtualBots ? pickedCheckpoints[0] : null;
+    const virtualEntryDirections = virtualEntryCandidate
+      ? getVirtualBotEntryDirections(tileMap, virtualEntryCandidate)
+      : [];
+    if (virtualBots && !virtualEntryDirections.length) {
+      continue;
+    }
+    const flagZero = virtualBots
+      ? {
+        ...virtualEntryCandidate,
+        id: 0,
+        facing: sample(virtualEntryDirections)
+      }
+      : null;
+    const checkpoints = virtualBots
+      ? [flagZero, ...pickedCheckpoints.slice(1)]
+      : pickedCheckpoints;
+    const playableCheckpoints = getPlayableCheckpoints(checkpoints, virtualBots);
+
     let scenarioBoardPlacements = boardLayout.placements;
-    let scenarioDockPlacements = dockPlacements;
+    let scenarioDockPlacements = courseDockPlacements;
     let scenarioOverlayPlacements = overlayPlacements;
     let scenarioPlacements = placements;
     let scenarioBoardRects = boardRects;
     let scenarioTileMap = tileMap;
     let goalTileMap = scenarioTileMap;
-    let activeStarts = filterStartsForGoals(starts, checkpoints);
+    let activeStarts = virtualBots
+      ? buildVirtualRobotStarts(flagZero, preferences.playerCount, startupSpinUp)
+      : filterStartsForGoals(setupStarts, checkpoints);
     let rebootTokens = [];
     let sequence = null;
     let effectiveVariantBundle = variantBundle;
@@ -9481,12 +10476,18 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       const resolved = buildResolvedMap(scenarioPlacements, pieceMap);
       scenarioTileMap = resolved.tileMap;
       rebootTokens = recoveryRule === "reboot_tokens"
-        ? placeRebootTokens(scenarioBoardRects, pieceMap, scenarioTileMap, checkpoints, preferences.playerCount)
+        ? placeRebootTokens(scenarioBoardRects, pieceMap, scenarioTileMap, playableCheckpoints, preferences.playerCount)
         : recoveryRule === "home_reboot"
           ? placeHomeRebootTokens(scenarioDockPlacements, pieceMap, resolved.starts, scenarioTileMap, checkpoints, {
             lessDeadlyGame
           })
           : [];
+      if (virtualBots && recoveryRule === "reboot_tokens" && flagZero) {
+        const entryBoard = scenarioBoardRects.find((rect) => pointOnRect(flagZero, rect));
+        if (entryBoard) {
+          rebootTokens = rebootTokens.filter((token) => token.boardIndex !== entryBoard.index);
+        }
+      }
       if (recoveryRule === "home_reboot") {
         const dockCountWithStarts = scenarioDockPlacements.filter((dockPlacement) => (
           resolved.starts.some((start) => pointOnPlacement(start, dockPlacement, pieceMap))
@@ -9496,14 +10497,24 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
           break;
         }
       }
-      goalTileMap = applyFlagOverrides(scenarioTileMap, checkpoints, { hazardousFlags, movingTargets });
+      if (virtualBots) {
+        const withFlagZero = applyFlagOverrides(scenarioTileMap, [flagZero], { hazardousFlags, movingTargets: false });
+        goalTileMap = applyFlagOverrides(withFlagZero, playableCheckpoints, { hazardousFlags, movingTargets });
+        goalTileMap = hideVirtualFlagZeroFeature(goalTileMap, flagZero);
+      } else {
+        goalTileMap = applyFlagOverrides(scenarioTileMap, checkpoints, { hazardousFlags, movingTargets });
+      }
       const courseAvailability = applyCourseVariantAvailability(variantBundle, goalTileMap, preferences);
       if (courseAvailability.blockedForced.length) {
         sequence = null;
         break;
       }
       effectiveVariantBundle = courseAvailability.variantBundle;
-      activeStarts = filterStartsForGoals(resolved.starts, checkpoints);
+      activeStarts = virtualBots
+        ? buildVirtualRobotStarts(flagZero, preferences.playerCount, startupSpinUp)
+        : effectiveNoDocks
+          ? filterStartsForGoals(noDockStarts, checkpoints)
+          : filterStartsForGoals(resolved.starts, checkpoints);
       const pressureTarget = getLightweightPressurePoolTarget(activeStarts.length, preferences.playerCount);
       const stagedNormalAnalysis = !competitiveMode && !effectiveVariantBundle.payToWin && activeStarts.length > pressureTarget;
       await reportStage(
@@ -9512,7 +10523,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
           : `Evaluating starting spaces — pass ${pass + 1} / 4; ${activeStarts.length} start${activeStarts.length === 1 ? "" : "s"}`,
         evaluationsUsed
       );
-      sequence = analyzeFlagSequence(goalTileMap, activeStarts, checkpoints, preferences.playerCount, applyVariantAnalysisOptions({
+      sequence = analyzeFlagSequence(goalTileMap, activeStarts, playableCheckpoints, preferences.playerCount, applyVariantAnalysisOptions({
         rebootTokens,
         boardRects: scenarioBoardRects,
         difficulty: generationPreferences.difficulty,
@@ -9547,7 +10558,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         }, {
           boardPlacements: scenarioBoardPlacements,
           pieceMap,
-          checkpoints,
+          checkpoints: playableCheckpoints,
           tileMap: scenarioTileMap,
           goalTileMap
         });
@@ -9570,7 +10581,11 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       }
 
       await reportStage(`Checking route fairness and removable pieces — pass ${pass + 1} / 4`, evaluationsUsed);
-      const usableStarts = computeUsableStarts(sequence.firstLeg, { competitiveMode, payToWin: effectiveVariantBundle.payToWin });
+      const usableStarts = computeUsableStarts(sequence.firstLeg, {
+        competitiveMode,
+        virtualBots,
+        payToWin: effectiveVariantBundle.payToWin
+      });
       let pruningChanged = false;
       const prunedDocks = pruneUnusedDockPlacements(
         scenarioDockPlacements,
@@ -9584,13 +10599,21 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         pruningChanged = true;
       }
 
+      const protectedSandwichBoards = sandwichedDock
+        ? getProtectedSandwichBoardIndices(
+          scenarioBoardPlacements,
+          scenarioDockPlacements,
+          pieceMap
+        )
+        : new Set();
       const prunedBoards = pruneUnusedBoardPlacements(
         scenarioBoardPlacements,
         scenarioOverlayPlacements,
         pieceMap,
         sequence,
         usableStarts,
-        checkpoints
+        checkpoints,
+        { protectedBoardIndices: protectedSandwichBoards }
       );
       if (prunedBoards.pruned) {
         scenarioBoardPlacements = prunedBoards.boardPlacements;
@@ -9618,6 +10641,17 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       break;
     }
     if (!sequence) {
+      staleRetries += 1;
+      continue;
+    }
+    if (
+      sandwichedDock &&
+      !hasPhysicalSandwichedDock(
+        scenarioBoardPlacements,
+        scenarioDockPlacements,
+        pieceMap
+      )
+    ) {
       staleRetries += 1;
       continue;
     }
@@ -9662,7 +10696,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     }, {
       boardPlacements: scenarioBoardPlacements,
       pieceMap,
-      checkpoints,
+      checkpoints: playableCheckpoints,
       tileMap: scenarioTileMap,
       goalTileMap
     });
@@ -9673,7 +10707,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     ];
     const finalOverlayPlacements = scenarioPlacements.filter((placement) => placement.overlay);
     const movingTargetTimelines = sequence.movingTargetTimelines ?? [];
-    const movingTargetReentryMarkers = collectMovingTargetReentryMarkers(scenarioTileMap, checkpoints, effectiveVariantBundle.movingTargets);
+    const movingTargetReentryMarkers = collectMovingTargetReentryMarkers(scenarioTileMap, playableCheckpoints, effectiveVariantBundle.movingTargets);
     const scenario = applyVariantScenarioState({
       pieceMap: assets.pieceMap,
       imageMap: assets.imageMap,
@@ -9682,6 +10716,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       dockPlacements: scenarioDockPlacements,
       dockSummaries: buildDockSummaries(scenarioBoardPlacements, scenarioDockPlacements, pieceMap),
       checkpoints,
+      virtualBotEntry: flagZero ? { x: flagZero.x, y: flagZero.y, dir: flagZero.facing } : null,
       rebootTokens,
       goalTileMap,
       activeStarts,
@@ -9689,6 +10724,15 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       actFast,
       actFastMode,
       payToWin: effectiveVariantBundle.payToWin,
+      noDocks: effectiveNoDocks,
+      sandwichedDock: sandwichedDock && hasPhysicalSandwichedDock(
+        scenarioBoardPlacements,
+        scenarioDockPlacements,
+        pieceMap
+      ),
+      noDockEdge: noDockEdge ? { boardIndex: noDockEdge.boardIndex, pieceId: noDockEdge.pieceId, side: noDockEdge.side, facing: noDockEdge.facing } : null,
+      noDockStarts,
+      virtualBots,
       extraDocks: scenarioDockPlacements.length > 1,
       mainBoardIds: scenarioBoardPlacements.map((placement) => placement.pieceId),
       mainRotations: scenarioBoardPlacements.map((placement) => placement.rotation),
@@ -9707,8 +10751,15 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         actFastMode,
         competitiveMode,
         extraDocks: scenarioDockPlacements.length > 1,
+        noDocks: effectiveNoDocks,
+        sandwichedDock: sandwichedDock && hasPhysicalSandwichedDock(
+          scenarioBoardPlacements,
+          scenarioDockPlacements,
+          pieceMap
+        ),
         factoryRejects,
         flagCount,
+        virtualBots,
         classicSharedDeck,
         criticalSpam,
         criticalHaywire,
@@ -9753,6 +10804,10 @@ function serializeScenario(scenario) {
     competitiveMode: scenario.competitiveMode,
     payToWin: scenario.payToWin,
     extraDocks: scenario.extraDocks,
+    noDocks: scenario.noDocks,
+    sandwichedDock: scenario.sandwichedDock,
+    noDockEdge: scenario.noDockEdge,
+    noDockStarts: scenario.noDockStarts,
     factoryRejects: scenario.factoryRejects,
     recoveryRule: scenario.recoveryRule,
     lessDeadlyGame: scenario.lessDeadlyGame,
@@ -9761,6 +10816,7 @@ function serializeScenario(scenario) {
     criticalHaywire: scenario.criticalHaywire,
     permanentShutdown: scenario.permanentShutdown,
     startupSpinUp: scenario.startupSpinUp,
+    virtualBots: scenario.virtualBots,
     moreDeadlyGame: scenario.moreDeadlyGame,
     homeReboot: scenario.homeReboot,
     cuttingFloor: scenario.cuttingFloor,
@@ -9808,6 +10864,9 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
   const recoveryRule = snapshot.recoveryRule ?? "reboot_tokens";
   const competitiveMode = Boolean(snapshot.competitiveMode);
   const payToWin = Boolean(snapshot.payToWin);
+  const noDocks = Boolean(snapshot.noDocks);
+  const sandwichedDock = Boolean(snapshot.sandwichedDock);
+  const noDockStarts = snapshot.noDockStarts || [];
   const factoryRejects = Boolean(snapshot.factoryRejects);
   const lessDeadlyGame = Boolean(snapshot.lessDeadlyGame);
   const lessSpammyGame = Boolean(snapshot.lessSpammyGame);
@@ -9820,6 +10879,7 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
   const flamingOil = Boolean(snapshot.flamingOil);
   const repulsorOverdrive = Boolean(snapshot.repulsorOverdrive);
   const startupSpinUp = Boolean(snapshot.startupSpinUp);
+  const virtualBots = Boolean(snapshot.virtualBots);
   const upgradeWorld = Boolean(snapshot.upgradeWorld);
   const lighterGame = Boolean(snapshot.lighterGame);
   const classicSharedDeck = Boolean(snapshot.classicSharedDeck);
@@ -9838,7 +10898,7 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
   const extraDocks = dockPlacements.length > 1;
   const boardRects = buildBoardRects(boardPlacements, pieceMap);
 
-  if (!dockPlacements.length || !boardPlacements.length) {
+  if ((!virtualBots && !noDocks && !dockPlacements.length) || !boardPlacements.length) {
     return null;
   }
 
@@ -9849,9 +10909,22 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
       lessDeadlyGame
     })
     : (snapshot.rebootTokens || []);
-  const goalTileMap = applyFlagOverrides(tileMap, checkpoints, { hazardousFlags, movingTargets });
-  const activeStarts = filterStartsForGoals(starts, checkpoints);
-  const sequence = analyzeFlagSequence(goalTileMap, activeStarts, checkpoints, snapshot.preferences.playerCount, applyVariantAnalysisOptions({
+  const flagZero = virtualBots ? checkpoints[0] : null;
+  const playableCheckpoints = getPlayableCheckpoints(checkpoints, virtualBots);
+  let goalTileMap;
+  if (virtualBots) {
+    const withFlagZero = applyFlagOverrides(tileMap, [flagZero], { hazardousFlags, movingTargets: false });
+    goalTileMap = applyFlagOverrides(withFlagZero, playableCheckpoints, { hazardousFlags, movingTargets });
+    goalTileMap = hideVirtualFlagZeroFeature(goalTileMap, flagZero);
+  } else {
+    goalTileMap = applyFlagOverrides(tileMap, checkpoints, { hazardousFlags, movingTargets });
+  }
+  const activeStarts = virtualBots
+    ? buildVirtualRobotStarts(flagZero, snapshot.preferences.playerCount, startupSpinUp)
+    : noDocks
+      ? filterStartsForGoals(noDockStarts, checkpoints)
+      : filterStartsForGoals(starts, checkpoints);
+  const sequence = analyzeFlagSequence(goalTileMap, activeStarts, playableCheckpoints, snapshot.preferences.playerCount, applyVariantAnalysisOptions({
     rebootTokens,
     boardRects,
     difficulty: snapshot.preferences.difficulty,
@@ -9871,6 +10944,7 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     flamingOil,
     repulsorOverdrive,
     startupSpinUp,
+    virtualBots,
     upgradeWorld,
     lighterGame,
     hazardousFlags,
@@ -9881,7 +10955,7 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     actFast,
     actFastMode,
     recoveryRule,
-    flagCount: checkpoints.length,
+    flagCount: playableCheckpoints.length,
     classicSharedDeck,
     cuttingFloor,
     flamingOil,
@@ -9902,12 +10976,12 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
   }, {
     boardPlacements,
     pieceMap,
-    checkpoints,
+    checkpoints: playableCheckpoints,
     tileMap,
     goalTileMap
   });
   const movingTargetTimelines = sequence.movingTargetTimelines ?? [];
-  const movingTargetReentryMarkers = collectMovingTargetReentryMarkers(tileMap, checkpoints, movingTargets);
+  const movingTargetReentryMarkers = collectMovingTargetReentryMarkers(tileMap, playableCheckpoints, movingTargets);
 
   return {
     pieceMap,
@@ -9917,6 +10991,7 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     dockPlacements,
     dockSummaries: buildDockSummaries(boardPlacements, dockPlacements, pieceMap),
     checkpoints,
+    virtualBotEntry: flagZero ? { x: flagZero.x, y: flagZero.y, dir: flagZero.facing } : null,
     rebootTokens,
     goalTileMap,
     activeStarts,
@@ -9925,6 +11000,10 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     actFastMode,
     competitiveMode,
     payToWin,
+    noDocks,
+    sandwichedDock,
+    noDockEdge: snapshot.noDockEdge ?? null,
+    noDockStarts,
     extraDocks,
     factoryRejects,
     recoveryRule,
@@ -9934,6 +11013,7 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     criticalHaywire,
     permanentShutdown,
     startupSpinUp,
+    virtualBots,
     moreDeadlyGame,
     homeReboot,
     cuttingFloor,
@@ -9965,16 +11045,19 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
       actFastMode,
       competitiveMode,
       payToWin,
+      noDocks,
+      sandwichedDock,
       extraDocks,
       factoryRejects,
       recoveryRule,
-      flagCount: checkpoints.length,
+      flagCount: playableCheckpoints.length,
       classicSharedDeck,
       homeReboot,
       cuttingFloor,
       flamingOil,
       repulsorOverdrive,
       startupSpinUp,
+      virtualBots,
       upgradeWorld,
       hazardousFlags,
       movingTargets,
@@ -10363,18 +11446,50 @@ document.getElementById("board-audit-toggle").addEventListener("change", () => {
   updateBoardAuditVisibility();
 });
 
-document.getElementById("variant-rules-menu").addEventListener("click", (event) => {
+function handleOptionalRuleControlClick(event) {
   const button = event.target.closest(".variant-state");
   if (!button) {
     return;
   }
 
-  if (button.dataset.variantAction === "toggle-all") {
-    toggleAllVariantStates();
+  if (button.dataset.unavailableReason) {
+    showToast(button.dataset.unavailableReason);
+    return;
+  }
+
+  if (button.dataset.overlayControl) {
+    cycleOverlayModeControl();
+    return;
+  }
+
+  if (button.dataset.variantAction === "toggle-category") {
+    toggleVariantCategoryStates(button.dataset.variantCategory);
+    return;
+  }
+
+  if (button.dataset.variantId === "actFast") {
+    cycleActFastControlChoice();
     return;
   }
 
   cycleVariantControlState(button.dataset.variantId);
+}
+
+document.querySelectorAll("[data-variant-menu]").forEach((menuEl) => {
+  menuEl.addEventListener("click", handleOptionalRuleControlClick);
+});
+
+document.getElementById("optional-rules-index-list")?.addEventListener("click", handleOptionalRuleControlClick);
+document.getElementById("optional-rules-title")?.addEventListener("click", openOptionalRulesDialog);
+document.getElementById("optional-rules-close-icon")?.addEventListener("click", closeOptionalRulesDialog);
+document.getElementById("optional-rules-close-button")?.addEventListener("click", closeOptionalRulesDialog);
+document.getElementById("optional-rules-search")?.addEventListener("input", (event) => {
+  filterOptionalRulesIndex(event.target.value);
+});
+document.getElementById("optional-rules-dialog")?.addEventListener("click", (event) => {
+  if (event.target === event.currentTarget) {
+    closeOptionalRulesDialog();
+  }
 });
 
 document.getElementById("expansion-roborally").addEventListener("change", () => {
@@ -10424,6 +11539,7 @@ document.addEventListener("focusin", (event) => {
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     closeAboutDialog();
+    closeOptionalRulesDialog();
     closeVariantPicker();
   }
 });

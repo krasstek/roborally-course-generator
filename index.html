@@ -8,7 +8,7 @@
   <meta name="mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="mobile-web-app-title" content="RoboRally" />
   <meta name="application-name" content="RoboRally Course Generator" />
-  <meta name="app-version" content="20260808212830" />
+  <meta name="app-version" content="20260809164408" />
   <title>RoboRally Course Generator</title>
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="icon" type="image/png" sizes="16x16" href="./assets/icons/favicon-16.png" />
@@ -93,6 +93,12 @@
       letter-spacing: 0.02em;
     }
 
+    .rules-advice-note {
+      background: linear-gradient(180deg, rgba(218, 233, 242, 0.98) 0%, rgba(185, 210, 225, 0.98) 100%);
+      border-color: rgba(56, 91, 112, 0.34);
+      color: #183344;
+    }
+
     .app-shell {
       display: grid;
       grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.9fr);
@@ -171,8 +177,46 @@
       padding-bottom: 8px;
     }
 
+    .optional-rules-group {
+      flex: 1 1 100%;
+      min-width: 0;
+      display: grid;
+      gap: 7px;
+      padding: 10px 0 2px;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    button.optional-rules-title {
+      justify-self: start;
+      min-height: 0;
+      padding: 0;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      box-shadow: none;
+      color: rgba(227, 233, 237, 0.84);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    button.optional-rules-title:hover {
+      background: transparent;
+      color: #fff6d1;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+
+    .optional-rules-fields {
+      display: flex;
+      gap: 10px;
+      align-items: end;
+      flex-wrap: wrap;
+    }
+
     .variant-field {
-      min-width: 152px;
+      min-width: 142px;
     }
 
     .variant-picker {
@@ -214,7 +258,10 @@
       position: absolute;
       top: calc(100% + 6px);
       left: 0;
-      right: 0;
+      right: auto;
+      width: max-content;
+      min-width: 100%;
+      max-width: min(340px, calc(100vw - 32px));
       padding: 7px 9px;
       border-radius: 10px;
       border: 1px solid rgba(76, 91, 102, 0.24);
@@ -223,7 +270,7 @@
       box-shadow: var(--inset);
       display: grid;
       gap: 4px;
-      max-height: min(260px, 55vh);
+      max-height: min(300px, 58vh);
       overflow-y: auto;
       overscroll-behavior: contain;
       scrollbar-gutter: stable;
@@ -254,12 +301,40 @@
       padding: 4px 0;
     }
 
+    .variant-rule-name-wrap {
+      min-width: 0;
+    }
+
     .variant-rule-name {
       font-size: 11px;
       line-height: 1.25;
       color: #171d22;
       min-width: 0;
       overflow-wrap: anywhere;
+    }
+
+    .variant-rule-category {
+      margin-top: 1px;
+      color: #68747c;
+      font-size: 9px;
+      line-height: 1.2;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .variant-rule-description {
+      margin-top: 4px;
+      color: #4f5b64;
+      font-size: 11px;
+      line-height: 1.35;
+      text-transform: none;
+      letter-spacing: 0;
+    }
+
+    .variant-bulk-rule {
+      padding-bottom: 6px;
+      margin-bottom: 2px;
+      border-bottom: 1px solid rgba(76, 91, 102, 0.14);
     }
 
     button.variant-state {
@@ -291,6 +366,16 @@
     button.variant-state[data-state="forced"] {
       background: linear-gradient(180deg, #4fb86d 0%, #2f8f4f 100%);
       border-color: rgba(20, 88, 44, 0.34);
+    }
+
+    button.variant-state.unavailable {
+      opacity: 0.48;
+      cursor: help;
+      filter: grayscale(0.35);
+    }
+
+    button.variant-state.unavailable:hover {
+      opacity: 0.62;
     }
 
     .toggle-label input {
@@ -847,39 +932,85 @@
 
     .toast-stack {
       position: fixed;
-      right: 18px;
-      bottom: 18px;
+      left: 50%;
+      top: 44%;
+      transform: translate(-50%, -50%);
+      width: min(420px, calc(100vw - 32px));
       display: flex;
       flex-direction: column;
+      align-items: stretch;
       gap: 8px;
-      z-index: 45;
+      z-index: 1100;
       pointer-events: none;
     }
 
     .toast {
-      max-width: 320px;
-      padding: 10px 12px;
+      max-width: none;
+      padding: 11px 14px;
       border-radius: 10px;
-      background: rgba(17, 23, 28, 0.94);
-      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(17, 23, 28, 0.96);
+      border: 1px solid rgba(255, 255, 255, 0.14);
       color: #f6f8f9;
-      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
+      box-shadow: 0 14px 34px rgba(0, 0, 0, 0.34);
       font-size: 13px;
       line-height: 1.4;
+      text-align: center;
       opacity: 0;
-      transform: translateY(8px);
+      transform: translateY(8px) scale(0.98);
       transition: opacity 0.18s ease, transform 0.18s ease;
     }
 
     .toast.visible {
       opacity: 1;
-      transform: translateY(0);
+      transform: translateY(0) scale(1);
     }
 
     @keyframes pulse-slide {
       0% { transform: translateX(-10%) scaleX(0.9); opacity: 0.75; }
       50% { transform: translateX(80%) scaleX(1.15); opacity: 1; }
       100% { transform: translateX(210%) scaleX(0.9); opacity: 0.75; }
+    }
+
+    .about-dialog.optional-rules-dialog {
+      max-width: min(620px, calc(100vw - 32px));
+      width: min(620px, calc(100vw - 32px));
+    }
+
+    .optional-rules-index-card {
+      max-height: min(78vh, 720px);
+      overflow: hidden;
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr) auto;
+      gap: 12px;
+    }
+
+    .optional-rules-search {
+      width: 100%;
+      box-sizing: border-box;
+      min-height: 40px;
+    }
+
+    .optional-rules-index-list {
+      min-height: 0;
+      overflow-y: auto;
+      display: grid;
+      gap: 3px;
+      padding: 4px 10px 4px 0;
+      scrollbar-gutter: stable;
+    }
+
+    .optional-rules-index-list .variant-rule {
+      padding: 9px 0;
+      border-bottom: 1px solid rgba(66, 79, 89, 0.1);
+      align-items: start;
+    }
+
+    .optional-rules-index-list .variant-state {
+      margin-top: 1px;
+    }
+
+    .optional-rules-index-list .variant-rule:last-child {
+      border-bottom: 0;
     }
 
     .about-dialog {
@@ -1023,6 +1154,11 @@
         min-width: 0;
       }
 
+      .optional-rules-fields {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
       label,
       .variant-field,
       .audit-controls label {
@@ -1081,14 +1217,20 @@
         height: 7px;
       }
 
+      .optional-rules-fields {
+        grid-template-columns: 1fr;
+      }
+
       .variant-picker {
         position: static;
       }
 
       .variant-menu {
         position: static;
+        width: auto;
+        max-width: none;
         margin-top: 6px;
-        max-height: min(240px, 42vh);
+        max-height: min(260px, 46vh);
       }
 
       .overlay-card {
@@ -1157,15 +1299,6 @@
             <option value="icons">Icon View</option>
           </select>
         </label>
-        <label title="Controls whether Master Builder small boards and tokens and Robo Rally Dice small boards may be placed as overlays.">
-          Overlays
-          <select id="overlay-mode" title="Controls whether Master Builder small boards and tokens and Robo Rally Dice small boards may be placed as overlays.">
-            <option value="yes" selected>Yes</option>
-            <option value="tokens">Tokens</option>
-            <option value="boards">Boards</option>
-            <option value="no">No</option>
-          </select>
-        </label>
         <label class="variant-field">
           Sets
           <details class="variant-picker">
@@ -1202,13 +1335,39 @@
             </div>
           </details>
         </label>
-        <label class="variant-field">
-          Allowed variants
-          <details class="variant-picker">
-            <summary id="variant-summary">Loading…</summary>
-            <div id="variant-rules-menu" class="variant-menu"></div>
-          </details>
-        </label>
+        <div class="optional-rules-group" role="group" aria-labelledby="optional-rules-title">
+          <button id="optional-rules-title" class="optional-rules-title" type="button" aria-haspopup="dialog" aria-controls="optional-rules-dialog">Optional Rules</button>
+          <div class="optional-rules-fields">
+            <label class="variant-field">
+              Factory Floor
+              <details class="variant-picker">
+                <summary data-variant-summary data-variant-category="factory-floor">Loading…</summary>
+                <div class="variant-menu" data-variant-menu data-variant-category="factory-floor"></div>
+              </details>
+            </label>
+            <label class="variant-field">
+              Programming
+              <details class="variant-picker">
+                <summary data-variant-summary data-variant-category="programming">Loading…</summary>
+                <div class="variant-menu" data-variant-menu data-variant-category="programming"></div>
+              </details>
+            </label>
+            <label class="variant-field">
+              Robots
+              <details class="variant-picker">
+                <summary data-variant-summary data-variant-category="robots">Loading…</summary>
+                <div class="variant-menu" data-variant-menu data-variant-category="robots"></div>
+              </details>
+            </label>
+            <label class="variant-field">
+              Setup &amp; Layout
+              <details class="variant-picker">
+                <summary data-variant-summary data-variant-category="setup-layout">Loading…</summary>
+                <div class="variant-menu" data-variant-menu data-variant-category="setup-layout"></div>
+              </details>
+            </label>
+          </div>
+        </div>
         <label id="trace-leg-label" class="hidden">
           Trace leg
           <select id="leg-select">
@@ -1260,6 +1419,7 @@
       <div id="rules-anchor-top">
         <div id="rules-block-top" class="hidden">
           <p id="rules-note" class="rules-note hidden">SPECIAL RULES:</p>
+          <p id="rules-advice-note" class="rules-note rules-advice-note hidden"></p>
         </div>
       </div>
       <canvas id="canvas"></canvas>
@@ -1328,6 +1488,22 @@
       <pre id="report"></pre>
     </aside>
   </div>
+  <dialog id="optional-rules-dialog" class="about-dialog optional-rules-dialog" aria-labelledby="optional-rules-dialog-title">
+    <div class="about-card optional-rules-index-card">
+      <div class="about-header">
+        <div>
+          <h2 id="optional-rules-dialog-title" class="about-title">Optional Rules</h2>
+          <p class="about-copy">Browse what each optional rule does, search the list, or change its setting. The category controls remain synchronized.</p>
+        </div>
+        <button id="optional-rules-close-icon" class="secondary-button about-close" type="button" aria-label="Close optional rules dialog">×</button>
+      </div>
+      <input id="optional-rules-search" class="optional-rules-search" type="search" placeholder="Search optional rules…" autocomplete="off" />
+      <div id="optional-rules-index-list" class="optional-rules-index-list"></div>
+      <div class="about-actions">
+        <button id="optional-rules-close-button" class="secondary-button" type="button">Close</button>
+      </div>
+    </div>
+  </dialog>
   <dialog id="about-dialog" class="about-dialog" aria-labelledby="about-title">
     <div class="about-card">
       <div class="about-header">

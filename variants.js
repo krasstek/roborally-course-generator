@@ -29,16 +29,18 @@ const VARIANT_COMPLEXITY = {
   startupSpinUp: 1,
   competitiveMode: 1,
   payToWin: 1,
-  staggeredBoards: 1
+  staggeredBoards: 1,
+  virtualBots: 2,
+  noDocks: 1,
+  sandwichedDock: 1
 };
 
 const VARIANT_CATEGORIES = {
-  timing: "timing",
-  board: "board",
-  danger: "danger",
-  checkpoints: "checkpoints",
-  deck: "deck",
-  setup: "setup"
+  factoryFloor: "factory-floor",
+  programming: "programming",
+  robots: "robots",
+  setup: "setup",
+  boardLayout: "board-layout"
 };
 
 function applyBooleanField(field) {
@@ -51,7 +53,7 @@ const VARIANT_DEFINITION_ROWS = [
   {
     id: "actFast",
     label: "Act Fast",
-    category: VARIANT_CATEGORIES.timing,
+    category: VARIANT_CATEGORIES.programming,
     controlId: "variant-act-fast",
     defaultState: "off",
     description: "Programming is timed.",
@@ -60,8 +62,10 @@ const VARIANT_DEFINITION_ROWS = [
   },
   {
     id: "lighterGame",
-    label: "A Lighter Game",
-    category: VARIANT_CATEGORIES.deck,
+    label: "Energy Crisis",
+    officialName: "A Lighter Game",
+    sourceLabel: "2023 rulebook",
+    category: VARIANT_CATEGORIES.programming,
     controlId: "variant-lighter-game",
     defaultState: "off",
     description: "Removes upgrade cards and makes battery spaces inactive.",
@@ -72,7 +76,7 @@ const VARIANT_DEFINITION_ROWS = [
   {
     id: "upgradeWorld",
     label: "Upgrade World",
-    category: VARIANT_CATEGORIES.deck,
+    category: VARIANT_CATEGORIES.factoryFloor,
     controlId: "variant-upgrade-world",
     defaultState: "off",
     description: "Activating batteries and chop shops also draws an upgrade card.",
@@ -87,8 +91,10 @@ const VARIANT_DEFINITION_ROWS = [
   },
   {
     id: "lessSpammyGame",
-    label: "A Less SPAM-Y Game",
-    category: VARIANT_CATEGORIES.deck,
+    label: "SPAM Filter",
+    officialName: "A Less SPAM-Y Game",
+    sourceLabel: "2023 rulebook",
+    category: VARIANT_CATEGORIES.programming,
     controlId: "variant-less-spammy-game",
     defaultState: "off",
     description: "Discard all SPAM cards from hand to your discard pile at the end of programming phase.",
@@ -99,7 +105,7 @@ const VARIANT_DEFINITION_ROWS = [
   {
     id: "criticalSpam",
     label: "Critical Spam",
-    category: VARIANT_CATEGORIES.deck,
+    category: VARIANT_CATEGORIES.programming,
     controlId: "variant-critical-spam",
     defaultState: "off",
     description: "SPAM is discarded to player discard pile instead of damage discard pile after resolution. Shutdown removes it normally.",
@@ -110,7 +116,7 @@ const VARIANT_DEFINITION_ROWS = [
   {
     id: "criticalHaywire",
     label: "Critical Haywire",
-    category: VARIANT_CATEGORIES.deck,
+    category: VARIANT_CATEGORIES.programming,
     controlId: "variant-critical-haywire",
     defaultState: "off",
     description: "Haywires placed on registers count against hand size when drawing cards at the start of programming.",
@@ -120,7 +126,7 @@ const VARIANT_DEFINITION_ROWS = [
   {
     id: "permanentShutdown",
     label: "Permanent Shutdown",
-    category: VARIANT_CATEGORIES.deck,
+    category: VARIANT_CATEGORIES.programming,
     controlId: "variant-permanent-shutdown",
     defaultState: "off",
     description: "A player that has nothing but SPAM in hand after drawing cards has their robot destroyed and is out of the game.",
@@ -130,8 +136,10 @@ const VARIANT_DEFINITION_ROWS = [
   },
   {
     id: "lessDeadlyGame",
-    label: "A Less Deadly Game",
-    category: VARIANT_CATEGORIES.danger,
+    label: "Walled In",
+    officialName: "A Less Deadly Game",
+    sourceLabel: "2023 rulebook",
+    category: VARIANT_CATEGORIES.factoryFloor,
     controlId: "variant-less-deadly-game",
     defaultState: "off",
     description: "Treats board edges as walls.",
@@ -140,8 +148,10 @@ const VARIANT_DEFINITION_ROWS = [
   },
   {
     id: "moreDeadlyGame",
-    label: "A More Deadly Game",
-    category: VARIANT_CATEGORIES.danger,
+    label: "Hard Reboot",
+    officialName: "A More Deadly Game",
+    sourceLabel: "2023 rulebook",
+    category: VARIANT_CATEGORIES.robots,
     controlId: "variant-more-deadly-game",
     defaultState: "off",
     description: "Rebooting deals 3 damage instead of 2.",
@@ -151,7 +161,7 @@ const VARIANT_DEFINITION_ROWS = [
   {
     id: "cuttingFloor",
     label: "Cutting Floor",
-    category: VARIANT_CATEGORIES.danger,
+    category: VARIANT_CATEGORIES.factoryFloor,
     controlId: "variant-cutting-floor",
     defaultState: "off",
     description: "All board lasers deal double damage.",
@@ -166,7 +176,7 @@ const VARIANT_DEFINITION_ROWS = [
   {
     id: "flamingOil",
     label: "Flaming Oil",
-    category: VARIANT_CATEGORIES.danger,
+    category: VARIANT_CATEGORIES.factoryFloor,
     controlId: "variant-flaming-oil",
     defaultState: "off",
     description: "The first oil contact each register deals 1 damage.",
@@ -181,7 +191,7 @@ const VARIANT_DEFINITION_ROWS = [
   {
     id: "repulsorOverdrive",
     label: "Repulsor Overdrive",
-    category: VARIANT_CATEGORIES.danger,
+    category: VARIANT_CATEGORIES.factoryFloor,
     controlId: "variant-repulsor-overdrive",
     defaultState: "off",
     description: "Repulsors push robots twice the remaining movement.",
@@ -196,7 +206,7 @@ const VARIANT_DEFINITION_ROWS = [
   {
     id: "setToKill",
     label: "Set to Kill",
-    category: VARIANT_CATEGORIES.danger,
+    category: VARIANT_CATEGORIES.robots,
     controlId: "variant-set-to-kill",
     defaultState: "off",
     description: "Robots' main lasers deal 1 extra damage.",
@@ -206,7 +216,7 @@ const VARIANT_DEFINITION_ROWS = [
   {
     id: "setToStun",
     label: "Set to Stun",
-    category: VARIANT_CATEGORIES.danger,
+    category: VARIANT_CATEGORIES.robots,
     controlId: "variant-set-to-stun",
     defaultState: "off",
     description: "SPAM from robots' main lasers is immediately discarded to the damage discard pile without effect.",
@@ -216,7 +226,7 @@ const VARIANT_DEFINITION_ROWS = [
   {
     id: "dynamicArchiving",
     label: "Dynamic Archiving",
-    category: VARIANT_CATEGORIES.setup,
+    category: VARIANT_CATEGORIES.robots,
     controlId: "variant-dynamic-archiving",
     defaultState: "allowed",
     description: "Robots archive when they end a register on a checkpoint or battery space.",
@@ -229,7 +239,7 @@ const VARIANT_DEFINITION_ROWS = [
   {
     id: "homeReboot",
     label: "Home Reboot",
-    category: VARIANT_CATEGORIES.setup,
+    category: VARIANT_CATEGORIES.robots,
     controlId: "variant-home-reboot",
     defaultState: "off",
     description: "Robots reboot at the token on their home dock.",
@@ -242,7 +252,7 @@ const VARIANT_DEFINITION_ROWS = [
   {
     id: "hazardousFlags",
     label: "Hazardous Flags",
-    category: VARIANT_CATEGORIES.checkpoints,
+    category: VARIANT_CATEGORIES.factoryFloor,
     controlId: "variant-hazardous-flags",
     defaultState: "off",
     description: "Board elements under checkpoints stay active without moving the checkpoints.",
@@ -252,7 +262,7 @@ const VARIANT_DEFINITION_ROWS = [
   {
     id: "movingTargets",
     label: "Moving Targets",
-    category: VARIANT_CATEGORIES.checkpoints,
+    category: VARIANT_CATEGORIES.factoryFloor,
     controlId: "variant-moving-targets",
     defaultState: "off",
     description: "Checkpoints on conveyors are treated as moving targets for generation heuristics.",
@@ -267,6 +277,7 @@ const VARIANT_DEFINITION_ROWS = [
     defaultState: "off",
     description: "Adds an extra docking bay if the selected sets have one and the layout has room.",
     cost: VARIANT_COMPLEXITY.extraDocks,
+    incompatibleWith: ["virtualBots", "noDocks"],
     availability: {
       type: "physicalDockGroupsAtLeast",
       count: 2,
@@ -280,9 +291,31 @@ const VARIANT_DEFINITION_ROWS = [
     applyBundle: applyBooleanField("extraDocks")
   },
   {
+    id: "noDocks",
+    label: "No Docks",
+    category: VARIANT_CATEGORIES.setup,
+    controlId: "variant-no-docks",
+    defaultState: "off",
+    description: "Uses a clear outer edge of a factory board as the starting strip instead of a docking bay.",
+    cost: VARIANT_COMPLEXITY.noDocks,
+    incompatibleWith: ["extraDocks", "virtualBots", "homeReboot", "sandwichedDock"],
+    applyBundle: applyBooleanField("noDocks")
+  },
+  {
+    id: "sandwichedDock",
+    label: "Sandwiched Dock",
+    category: VARIANT_CATEGORIES.setup,
+    controlId: "variant-sandwiched-dock",
+    defaultState: "off",
+    description: "Allows a docking bay to sit between factory boards, with factory boards adjoining both long sides.",
+    cost: VARIANT_COMPLEXITY.sandwichedDock,
+    incompatibleWith: ["noDocks", "virtualBots"],
+    applyBundle: applyBooleanField("sandwichedDock")
+  },
+  {
     id: "factoryRejects",
     label: "Factory Rejects",
-    category: VARIANT_CATEGORIES.deck,
+    category: VARIANT_CATEGORIES.programming,
     controlId: "variant-factory-rejects",
     defaultState: "off",
     description: "Hand size is 7 instead of 9 (Altered from previous Robo Rally editions).",
@@ -300,9 +333,20 @@ const VARIANT_DEFINITION_ROWS = [
     applyBundle: applyBooleanField("startupSpinUp")
   },
   {
+    id: "virtualBots",
+    label: "Virtual Bots",
+    category: VARIANT_CATEGORIES.setup,
+    controlId: "variant-virtual-bots",
+    defaultState: "off",
+    description: "Removes docking bays and starts every robot from one shared entry point. The first five registers do not create robot traffic pressure.",
+    cost: VARIANT_COMPLEXITY.virtualBots,
+    incompatibleWith: ["competitiveMode", "payToWin", "extraDocks", "homeReboot", "noDocks", "sandwichedDock"],
+    applyBundle: applyBooleanField("virtualBots")
+  },
+  {
     id: "lessForeshadowing",
     label: "Less Foreshadowing",
-    category: VARIANT_CATEGORIES.deck,
+    category: VARIANT_CATEGORIES.programming,
     controlId: "variant-less-foreshadowing",
     defaultState: "off",
     description: "Decks reshuffle every turn, reducing card-draw consistency.",
@@ -313,7 +357,7 @@ const VARIANT_DEFINITION_ROWS = [
   {
     id: "classicSharedDeck",
     label: "Shared Deck",
-    category: VARIANT_CATEGORIES.deck,
+    category: VARIANT_CATEGORIES.programming,
     controlId: "variant-classic-shared-deck",
     defaultState: "off",
     description: "Players share one combined programming deck and spam cards go to hand.",
@@ -329,7 +373,7 @@ const VARIANT_DEFINITION_ROWS = [
     defaultState: "off",
     description: "Before the game, players block starting spaces with energy cubes before choosing from the remaining starts.",
     cost: VARIANT_COMPLEXITY.competitiveMode,
-    incompatibleWith: ["payToWin"],
+    incompatibleWith: ["payToWin", "virtualBots"],
     applyBundle: applyBooleanField("competitiveMode")
   },
   {
@@ -340,13 +384,13 @@ const VARIANT_DEFINITION_ROWS = [
     defaultState: "off",
     description: "Better starting spaces cost starting energy instead of being automatically pruned as outliers.",
     cost: VARIANT_COMPLEXITY.payToWin,
-    incompatibleWith: ["competitiveMode", "lighterGame"],
+    incompatibleWith: ["competitiveMode", "lighterGame", "virtualBots"],
     applyBundle: applyBooleanField("payToWin")
   },
   {
     id: "staggeredBoards",
     label: "Staggered Boards",
-    category: VARIANT_CATEGORIES.board,
+    category: VARIANT_CATEGORIES.boardLayout,
     controlId: "variant-staggered-boards",
     defaultState: "off",
     description: "Allows the main boards to be offset instead of forming a straight aligned block.",
@@ -419,6 +463,9 @@ export function applyVariantGenerationOptions(baseOptions = {}, variantBundle = 
     competitiveMode: Boolean(variantBundle.competitiveMode),
     payToWin: Boolean(variantBundle.payToWin),
     extraDocks: Boolean(variantBundle.extraDocks),
+    noDocks: Boolean(variantBundle.noDocks),
+    sandwichedDock: Boolean(variantBundle.sandwichedDock),
+    virtualBots: Boolean(variantBundle.virtualBots),
     recoveryRule: variantBundle.recoveryRule ?? baseOptions.recoveryRule
   };
 }
@@ -443,6 +490,8 @@ export function applyVariantAnalysisOptions(baseOptions = {}, variantBundle = {}
     upgradeWorld: Boolean(variantBundle.upgradeWorld),
     lighterGame: Boolean(variantBundle.lighterGame),
     startupSpinUp: Boolean(variantBundle.startupSpinUp),
+    virtualBots: Boolean(variantBundle.virtualBots),
+    trafficGraceRegisters: variantBundle.virtualBots ? 5 : 0,
     hazardousFlags: Boolean(variantBundle.hazardousFlags),
     movingTargets: Boolean(variantBundle.movingTargets),
     lessForeshadowing: Boolean(variantBundle.lessForeshadowing)

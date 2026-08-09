@@ -1063,7 +1063,9 @@ function drawStarts(
   startLabels = [],
   startEnergyCosts = [],
   startLateEnergyCosts = [],
-  startLateUnavailable = []
+  startLateUnavailable = [],
+  noDockStarts = false,
+  hideUnusableStarts = false
 ) {
   if (visibleFeatureTypes && !visibleFeatureTypes.has("start")) {
     return;
@@ -1072,6 +1074,9 @@ function drawStarts(
   ctx.save();
 
   starts.forEach((s, index) => {
+    if (hideUnusableStarts && unusableStartIndices.has(index)) {
+      return;
+    }
     const px = margin + (s.x - bounds.minX) * tileSize;
     const py = margin + (s.y - bounds.minY) * tileSize;
     const badgeSize = tileSize * 0.46;
@@ -1128,6 +1133,15 @@ function drawStarts(
       ctx.strokeStyle = "#0c4f35";
       ctx.lineWidth = 1.35;
       ctx.strokeRect(badgeLeft, badgeTop, badgeSize, badgeSize);
+    } else if (noDockStarts) {
+      // Dockless setup: player-facing available starts are white circles.
+      ctx.fillStyle = "rgba(255, 255, 255, 0.96)";
+      ctx.strokeStyle = "#111111";
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.arc(badgeCenterX, badgeCenterY, badgeSize / 2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
     } else if (showAllStartMarkers) {
       // Keep the existing non-Pay-to-Win dev start marker appearance.
       ctx.fillStyle = "rgba(52, 120, 246, 0.9)";
@@ -1148,7 +1162,9 @@ function drawStarts(
           : "";
 
     if (startLabel) {
-      ctx.fillStyle = "#ffffff";
+      ctx.fillStyle = noDockStarts && !hasEnergyCost && !unusableStartIndices.has(index)
+        ? "#111111"
+        : "#ffffff";
       ctx.font = hasEnergyCost && !hasExplicitStartLabel && hasSecondaryCostDisplay
         ? "bold 9px sans-serif"
         : "bold 12px sans-serif";
@@ -1320,6 +1336,84 @@ function drawReentryMarkers(ctx, markers, bounds, tileSize, margin) {
     );
     ctx.restore();
   }
+}
+
+function drawVirtualBotEntry(ctx, entry, bounds, tileSize, margin) {
+  if (!entry) return;
+
+  const left = margin + (entry.x - bounds.minX) * tileSize;
+  const top = margin + (entry.y - bounds.minY) * tileSize;
+  const size = tileSize * 0.72;
+  const inset = (tileSize - size) / 2;
+  const cx = left + tileSize / 2;
+  const cy = top + tileSize / 2;
+
+  ctx.save();
+  ctx.fillStyle = "#73c53d";
+  ctx.strokeStyle = "#2f7e1c";
+  ctx.lineWidth = 2.4;
+  ctx.beginPath();
+  ctx.roundRect(left + inset, top + inset, size, size, 10);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.translate(cx, cy);
+
+  if (entry.dir) {
+    const rotation = {
+      N: 0,
+      E: Math.PI / 2,
+      S: Math.PI,
+      W: -Math.PI / 2
+    }[entry.dir] ?? 0;
+    ctx.rotate(rotation);
+    ctx.fillStyle = "rgba(255,255,255,0.98)";
+    ctx.beginPath();
+    ctx.moveTo(0, -tileSize * 0.23);
+    ctx.lineTo(tileSize * 0.14, -tileSize * 0.02);
+    ctx.lineTo(tileSize * 0.06, -tileSize * 0.02);
+    ctx.lineTo(tileSize * 0.06, tileSize * 0.2);
+    ctx.lineTo(-tileSize * 0.06, tileSize * 0.2);
+    ctx.lineTo(-tileSize * 0.06, -tileSize * 0.02);
+    ctx.lineTo(-tileSize * 0.14, -tileSize * 0.02);
+    ctx.closePath();
+    ctx.fill();
+  } else {
+    // Startup Spin-Up: the shared entry point has no required facing.
+    ctx.strokeStyle = "rgba(255,255,255,0.98)";
+    ctx.lineWidth = Math.max(2, tileSize * 0.065);
+    ctx.beginPath();
+    ctx.arc(0, 0, tileSize * 0.15, 0, Math.PI * 2);
+    ctx.stroke();
+    for (const [dx, dy] of [[0,-1],[1,0],[0,1],[-1,0]]) {
+      ctx.beginPath();
+      ctx.moveTo(dx * tileSize * 0.08, dy * tileSize * 0.08);
+      ctx.lineTo(dx * tileSize * 0.22, dy * tileSize * 0.22);
+      ctx.stroke();
+    }
+  }
+
+  // Draw the energy cube last, at the rear edge opposite the marker's facing,
+  // so the arrow remains unobscured and directionality is immediately legible.
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  const cubeSize = tileSize * 0.20;
+  const rearOffset = tileSize * 0.235;
+  const rearVector = {
+    N: { x: 0, y: 1 },
+    E: { x: -1, y: 0 },
+    S: { x: 0, y: -1 },
+    W: { x: 1, y: 0 }
+  }[entry.dir] ?? { x: 0, y: 0 };
+  const cubeCx = cx + rearVector.x * rearOffset;
+  const cubeCy = cy + rearVector.y * rearOffset;
+
+  ctx.fillStyle = "#f28c28";
+  ctx.strokeStyle = "#8d4308";
+  ctx.lineWidth = Math.max(1.5, tileSize * 0.04);
+  ctx.fillRect(cubeCx - cubeSize / 2, cubeCy - cubeSize / 2, cubeSize, cubeSize);
+  ctx.strokeRect(cubeCx - cubeSize / 2, cubeCy - cubeSize / 2, cubeSize, cubeSize);
+
+  ctx.restore();
 }
 
 function drawRebootTokens(ctx, rebootTokens, bounds, tileSize, margin) {
@@ -1566,6 +1660,8 @@ export function render(canvas, pieces, imageMap = {}, options = {}) {
   const startEnergyCosts = options.startEnergyCosts ?? [];
   const startLateEnergyCosts = options.startLateEnergyCosts ?? [];
   const startLateUnavailable = options.startLateUnavailable ?? [];
+  const noDockStarts = Boolean(options.noDockStarts);
+  const hideUnusableStarts = Boolean(options.hideUnusableStarts);
   const edgeOutlineColor = options.edgeOutlineColor ?? null;
   const visibleFeatureTypes = options.visibleFeatureTypes
     ? new Set(options.visibleFeatureTypes)
@@ -1608,9 +1704,12 @@ export function render(canvas, pieces, imageMap = {}, options = {}) {
     startLabels,
     startEnergyCosts,
     startLateEnergyCosts,
-    startLateUnavailable
+    startLateUnavailable,
+    noDockStarts,
+    hideUnusableStarts
   );
   drawRebootTokens(ctx, options.rebootTokens || [], bounds, tileSize, margin);
+  drawVirtualBotEntry(ctx, options.virtualBotEntry || null, bounds, tileSize, margin);
   drawMovingTargetPaths(ctx, options.movingTargetTimelines || [], bounds, tileSize, margin, {
     showDetails: options.showMovingTargetDetails
   });
