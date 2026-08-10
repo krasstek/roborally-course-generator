@@ -72,6 +72,125 @@ const ROUTE_PATH_KEY_CACHE = new WeakMap();
 const ROUTE_TILE_SET_CACHE = new WeakMap();
 const ROUTE_EDGE_SET_CACHE = new WeakMap();
 const ROUTE_DIRECTIONS_CACHE = new WeakMap();
+const TRAFFIC_TIMELINE_CACHE = new WeakMap();
+const TRAFFIC_PAIR_PROFILE_CACHE = new WeakMap();
+const TRAFFIC_DISPLACEMENT_CACHE = new WeakMap();
+
+const CONTEXTUAL_PHYSICAL_TRANSITION_CACHE = new WeakMap();
+const CONTEXTUAL_PHYSICAL_TRANSITION_CACHE_LIMIT = 50000;
+
+function getContextualPhysicalOptionSignature(options = {}) {
+  const rebootTokens = (options.rebootTokens || [])
+    .map((token) => [
+      token.x ?? "",
+      token.y ?? "",
+      token.facing ?? token.dir ?? "",
+      token.boardId ?? token.board ?? ""
+    ].join(","))
+    .sort()
+    .join(";");
+
+  const boardRects = (options.boardRects || [])
+    .map((rect) => [
+      rect.id ?? rect.boardId ?? "",
+      rect.x ?? "",
+      rect.y ?? "",
+      rect.width ?? rect.w ?? "",
+      rect.height ?? rect.h ?? ""
+    ].join(","))
+    .sort()
+    .join(";");
+
+  return [
+    options.recoveryRule ?? "",
+    options.lessDeadlyGame ? 1 : 0,
+    options.repulsorOverdrive ? 1 : 0,
+    options.repairStations ? 1 : 0,
+    options.lighterGame ? 1 : 0,
+    options.flamingOil ? 1 : 0,
+    options.walledIn ? 1 : 0,
+    options.hardReboot ? 1 : 0,
+    options.playerCount ?? "",
+    rebootTokens,
+    boardRects
+  ].join("|");
+}
+
+function getContextualPhysicalTransitionCache(tileMap) {
+  let cache = CONTEXTUAL_PHYSICAL_TRANSITION_CACHE.get(tileMap);
+  if (!cache) {
+    cache = new Map();
+    CONTEXTUAL_PHYSICAL_TRANSITION_CACHE.set(tileMap, cache);
+  }
+  return cache;
+}
+
+function cloneCachedTransition(transition) {
+  if (!transition) return transition;
+  return {
+    ...transition,
+    from: transition.from ? { ...transition.from } : transition.from,
+    to: transition.to ? { ...transition.to } : transition.to,
+    rebootChoices: transition.rebootChoices
+      ? transition.rebootChoices.map((choice) => ({ ...choice }))
+      : transition.rebootChoices,
+    traversed: (transition.traversed || []).map((point) => ({ ...point })),
+    conveyorSteps: (transition.conveyorSteps || []).map((step) => ({
+      ...step,
+      from: step.from ? { ...step.from } : step.from,
+      to: step.to ? { ...step.to } : step.to
+    })),
+    boardEvents: (transition.boardEvents || []).map((event) => ({
+      ...event,
+      from: event.from ? { ...event.from } : event.from,
+      to: event.to ? { ...event.to } : event.to,
+      at: event.at ? { ...event.at } : event.at
+    }))
+  };
+}
+
+function getCachedContextualPhysicalTransition(
+  tileMap,
+  state,
+  action,
+  options,
+  optionSignature
+) {
+  const goal = options.goal;
+  const key = [
+    state.x,
+    state.y,
+    state.facing,
+    action.id,
+    goal?.x ?? "",
+    goal?.y ?? "",
+    optionSignature
+  ].join("|");
+
+  const cache = getContextualPhysicalTransitionCache(tileMap);
+  const cached = cache.get(key);
+  if (cached) {
+    return {
+      transition: cloneCachedTransition(cached),
+      hit: true
+    };
+  }
+
+  const transition = simulateAction(tileMap, state, action, options);
+  cache.set(key, cloneCachedTransition(transition));
+
+  if (cache.size > CONTEXTUAL_PHYSICAL_TRANSITION_CACHE_LIMIT) {
+    const oldestKey = cache.keys().next().value;
+    if (oldestKey !== undefined) {
+      cache.delete(oldestKey);
+    }
+  }
+
+  return {
+    transition,
+    hit: false
+  };
+}
 const LINE_OF_SIGHT_CACHE = new WeakMap();
 const ROUTE_SIMILARITY_CACHE = new Map();
 const OVERLAP_PENALTY_CACHE = new Map();
@@ -79,6 +198,136 @@ const LATERAL_THREAT_CACHE = new Map();
 const REAR_THREAT_CACHE = new Map();
 const ONCOMING_TRAFFIC_CACHE = new Map();
 const ROUTE_PAIR_CACHE_LIMIT = 2500;
+
+const ANALYSIS_TELEMETRY_MAX_SEARCHES = 5000;
+const ANALYSIS_TELEMETRY = {
+  routeSearches: []
+};
+
+function analysisTelemetryNow() {
+  return typeof performance !== "undefined" && typeof performance.now === "function"
+    ? performance.now()
+    : Date.now();
+}
+
+export function resetAnalysisTelemetry() {
+  ANALYSIS_TELEMETRY.routeSearches.length = 0;
+}
+
+export function getAnalysisTelemetrySnapshot() {
+  const routeSearches = ANALYSIS_TELEMETRY.routeSearches.map((entry) => ({ ...entry }));
+  const totalsByKind = {};
+  let totalExpansions = 0;
+  let totalDurationMs = 0;
+  let cappedSearches = 0;
+
+  routeSearches.forEach((entry) => {
+    totalExpansions += entry.expansions ?? 0;
+    totalDurationMs += entry.durationMs ?? 0;
+    if (entry.hitExpansionCap) cappedSearches += 1;
+    const kind = entry.kind ?? "unknown";
+    const bucket = totalsByKind[kind] ?? {
+      searches: 0,
+      expansions: 0,
+      durationMs: 0,
+      capped: 0
+    };
+    bucket.searches += 1;
+    bucket.expansions += entry.expansions ?? 0;
+    bucket.durationMs += entry.durationMs ?? 0;
+    if (entry.hitExpansionCap) bucket.capped += 1;
+    totalsByKind[kind] = bucket;
+  });
+
+  Object.values(totalsByKind).forEach((bucket) => {
+    bucket.durationMs = Number(bucket.durationMs.toFixed(2));
+  });
+
+  const slowestSearch = routeSearches.reduce(
+    (slowest, entry) => !slowest || (entry.durationMs ?? 0) > (slowest.durationMs ?? 0) ? entry : slowest,
+    null
+  );
+
+  const contextualProfileTotals = {
+    queueMs: 0,
+    currentKeyMs: 0,
+    goalCompletionMs: 0,
+    simulationMs: 0,
+    actionScoringMs: 0,
+    historyBuildMs: 0,
+    destinationBuildMs: 0,
+    nextKeyMs: 0,
+    dominanceMs: 0,
+    actionCandidates: 0,
+    simulationCalls: 0,
+    blockedTransitions: 0,
+    destinationCandidates: 0,
+    acceptedStates: 0,
+    dominatedStates: 0,
+    completedGoals: 0,
+    physicalCacheHits: 0,
+    physicalCacheMisses: 0
+  };
+
+  routeSearches.forEach((entry) => {
+    const profile = entry.contextualProfile;
+    if (!profile) return;
+    Object.keys(contextualProfileTotals).forEach((key) => {
+      contextualProfileTotals[key] += profile[key] ?? 0;
+    });
+  });
+
+  [
+    "queueMs",
+    "currentKeyMs",
+    "goalCompletionMs",
+    "simulationMs",
+    "actionScoringMs",
+    "historyBuildMs",
+    "destinationBuildMs",
+    "nextKeyMs",
+    "dominanceMs"
+  ].forEach((key) => {
+    contextualProfileTotals[key] = Number(contextualProfileTotals[key].toFixed(2));
+  });
+
+  return {
+    routeSearches,
+    routeSearchCount: routeSearches.length,
+    totalExpansions,
+    totalDurationMs: Number(totalDurationMs.toFixed(2)),
+    cappedSearches,
+    slowestSearch: slowestSearch ? { ...slowestSearch } : null,
+    totalsByKind,
+    contextualProfileTotals
+  };
+}
+
+function recordRouteSearchTelemetry(kind, startedAt, details = {}) {
+  const entry = {
+    kind,
+    durationMs: Number((analysisTelemetryNow() - startedAt).toFixed(2)),
+    expansions: details.expansions ?? 0,
+    maxExpansions: details.maxExpansions ?? 0,
+    completedRoutes: details.completedRoutes ?? 0,
+    returnedRoutes: details.returnedRoutes ?? details.completedRoutes ?? 0,
+    hitExpansionCap: Boolean(
+      details.maxExpansions > 0 &&
+      (details.expansions ?? 0) >= details.maxExpansions
+    ),
+    start: details.start ?? null,
+    goal: details.goal ?? null,
+    legIndex: details.legIndex ?? null,
+    contextualProfile: details.contextualProfile
+      ? { ...details.contextualProfile }
+      : null
+  };
+
+  if (ANALYSIS_TELEMETRY.routeSearches.length >= ANALYSIS_TELEMETRY_MAX_SEARCHES) {
+    ANALYSIS_TELEMETRY.routeSearches.shift();
+  }
+  ANALYSIS_TELEMETRY.routeSearches.push(entry);
+}
 
 class MinHeap {
   constructor(score) {
@@ -1787,7 +2036,9 @@ function getCardAvailabilityPressure(history, actionId, options = {}) {
     return 0;
   }
 
-  const registerIndex = history.length % REGISTER_COUNT;
+  const registerIndex = Number.isInteger(options.absoluteActionCount)
+    ? options.absoluteActionCount % REGISTER_COUNT
+    : history.length % REGISTER_COUNT;
   const currentTurnHistory = history.slice(history.length - registerIndex);
   const currentTurnWindow = [...currentTurnHistory, actionId];
   const handWindow = [...history.slice(-(HAND_DRAW_SIZE - 1)), actionId];
@@ -1986,6 +2237,7 @@ function getSearchStateKey(state, actionCount, options = {}) {
 }
 
 function enumerateRoutes(tileMap, start, goal, options = {}) {
+  const telemetryStartedAt = analysisTelemetryNow();
   const dynamicGoalActive = Boolean(options.dynamicGoal);
   const maxRoutes = options.maxRoutes ?? 2;
   const requestedMaxExpansions = options.maxExpansions ?? 30000;
@@ -2097,7 +2349,14 @@ function enumerateRoutes(tileMap, start, goal, options = {}) {
       const actionPenalty = getActionPenalty(action, options);
       const reversePenalty = action.id === "BACK" ? 1.4 : 0;
       const heavyMovePenalty = action.id === "FORWARD_2" ? 0.25 : action.id === "FORWARD_3" ? 0.75 : 0;
-      const scarceReusePenalty = getCardAvailabilityPressure(current.actionHistory, action.id, options);
+      const scarceReusePenalty = getCardAvailabilityPressure(
+        current.actionHistory,
+        action.id,
+        {
+          ...options,
+          absoluteActionCount: current.actions
+        }
+      );
       const conveyorComplexity = scoreTransitionConveyorComplexity(transition, goal);
       const nextActionHistory = [...current.actionHistory, action.id].slice(-9);
       const destinations = transition.rebootChoices?.length ? transition.rebootChoices : [transition.to];
@@ -2137,6 +2396,14 @@ function enumerateRoutes(tileMap, start, goal, options = {}) {
     }
   }
 
+  recordRouteSearchTelemetry("single-leg", telemetryStartedAt, {
+    expansions,
+    maxExpansions,
+    completedRoutes: completed.length,
+    returnedRoutes: completed.length,
+    start: { x: start.x, y: start.y, facing: start.facing ?? null },
+    goal: { x: goal.x, y: goal.y }
+  });
   return completed;
 }
 
@@ -2221,32 +2488,54 @@ function makeCheckpointHit(route, flags, options = {}) {
 }
 
 function enumerateFullCourseRoutes(tileMap, start, flags, options = {}) {
+  const telemetryStartedAt = analysisTelemetryNow();
   if (!Array.isArray(flags) || !flags.length) {
+    recordRouteSearchTelemetry("full-course", telemetryStartedAt, {
+      expansions: 0,
+      maxExpansions: 0,
+      completedRoutes: 0,
+      returnedRoutes: 0,
+      start: { x: start.x, y: start.y, facing: start.facing ?? null },
+      goal: null
+    });
     return [];
   }
 
   const maxRoutes = options.maxRoutes ?? 2;
   const maxActions = options.maxActions ?? Math.max(24, flags.length * 18 + 8);
   const maxExpansions = options.maxExpansions ?? 45000;
-  const initialFacings = options.startupSpinUp
-    ? ROTATION_ORDER
-    : [start.facing ?? "E"];
+  const maxStateLabels = Math.max(1, Math.min(2, options.maxStateLabels ?? 1));
+  const initialFacings = options.startupSpinUp ? ROTATION_ORDER : [start.facing ?? "E"];
   const portalMap = options.portalMap ?? buildPortalMap(tileMap);
-  const simulationOptions = {
-    ...options,
-    portalMap
-  };
+  const simulationOptions = { ...options, portalMap };
   const queue = new MinHeap((entry) => entry.estimate);
-  const bestCostByState = new Map();
+  const bestCostsByState = new Map();
 
-  // As above, Startup Spin-Up is represented by multiple zero-cost roots in
-  // one full-course search rather than four separate searches.
+  const acceptStateLabel = (stateId, cost, labelLimit = maxStateLabels) => {
+    const safeLimit = Math.max(1, Math.min(maxStateLabels, labelLimit));
+    const costs = bestCostsByState.get(stateId) ?? [];
+    if (costs.length < safeLimit) {
+      bestCostsByState.set(stateId, [...costs, cost].sort((a, b) => a - b));
+      return true;
+    }
+    const worst = costs[costs.length - 1];
+    if (cost < worst - 0.001) {
+      bestCostsByState.set(
+        stateId,
+        [...costs.slice(0, safeLimit - 1), cost].sort((a, b) => a - b)
+      );
+      return true;
+    }
+    return false;
+  };
+
+  const stateLabelStillActive = (stateId, cost) => {
+    const costs = bestCostsByState.get(stateId);
+    return Boolean(costs?.length) && cost <= costs[costs.length - 1] + 0.001;
+  };
+
   for (const facing of initialFacings) {
-    const initialState = {
-      x: start.x,
-      y: start.y,
-      facing
-    };
+    const initialState = { x: start.x, y: start.y, facing };
     const initialRoute = {
       finalState: initialState,
       initialState,
@@ -2264,20 +2553,22 @@ function enumerateFullCourseRoutes(tileMap, start, flags, options = {}) {
       actionHistory: []
     };
     const initialStateKey = getFullCourseSearchStateKey(initialState, 0, 0, options);
-    bestCostByState.set(initialStateKey, 0);
+    acceptStateLabel(initialStateKey, 0, 1);
     queue.push(createFullCourseQueueEntry(initialRoute, flags, options));
   }
+
   const completed = [];
   let expansions = 0;
 
   while (queue.size && completed.length < maxRoutes && expansions < maxExpansions) {
     const current = queue.pop();
-    const currentStateId = getFullCourseSearchStateKey(current.finalState, current.actions, current.checkpointIndex, options);
-    const knownBest = bestCostByState.get(currentStateId);
-
-    if (knownBest !== undefined && current.baseCost > knownBest + 0.001) {
-      continue;
-    }
+    const currentStateId = getFullCourseSearchStateKey(
+      current.finalState,
+      current.actions,
+      current.checkpointIndex,
+      options
+    );
+    if (!stateLabelStillActive(currentStateId, current.baseCost)) continue;
 
     if (current.checkpointIndex >= flags.length) {
       const transitions = reconstructRouteTransitions(current);
@@ -2308,26 +2599,28 @@ function enumerateFullCourseRoutes(tileMap, start, flags, options = {}) {
     }
 
     expansions += 1;
-    if (current.actions >= maxActions) {
-      continue;
-    }
+    if (current.actions >= maxActions) continue;
 
     const currentTarget = getFullCourseTarget(flags, current.checkpointIndex, current.actions, options);
-
     for (const action of ACTIONS) {
       const transition = simulateAction(tileMap, current.finalState, action, {
         ...simulationOptions,
         goal: currentTarget,
         registerIndex: current.actions % REGISTER_COUNT
       });
-      if (transition.crashed || transition.blocked) {
-        continue;
-      }
+      if (transition.crashed || transition.blocked) continue;
 
       const actionPenalty = getActionPenalty(action, options);
       const reversePenalty = action.id === "BACK" ? 1.4 : 0;
       const heavyMovePenalty = action.id === "FORWARD_2" ? 0.25 : action.id === "FORWARD_3" ? 0.75 : 0;
-      const scarceReusePenalty = getCardAvailabilityPressure(current.actionHistory, action.id, options);
+      const scarceReusePenalty = getCardAvailabilityPressure(
+        current.actionHistory,
+        action.id,
+        {
+          ...options,
+          absoluteActionCount: current.actions
+        }
+      );
       const conveyorComplexity = scoreTransitionConveyorComplexity(transition, currentTarget);
       const nextActionHistory = [...current.actionHistory, action.id].slice(-9);
       const destinations = transition.rebootChoices?.length ? transition.rebootChoices : [transition.to];
@@ -2366,18 +2659,32 @@ function enumerateFullCourseRoutes(tileMap, start, flags, options = {}) {
           };
         }
 
-        const nextStateKey = getFullCourseSearchStateKey(nextRoute.finalState, nextActionCount, nextRoute.checkpointIndex, options);
-        const priorBest = bestCostByState.get(nextStateKey);
-        if (priorBest !== undefined && nextRoute.baseCost >= priorBest - 0.001) {
-          continue;
-        }
-
-        bestCostByState.set(nextStateKey, nextRoute.baseCost);
+        const nextStateKey = getFullCourseSearchStateKey(
+          nextRoute.finalState,
+          nextActionCount,
+          nextRoute.checkpointIndex,
+          options
+        );
+        const stateLabelLimit = (
+          options.diverseStateLabelsAfterFirstCheckpoint &&
+          nextRoute.checkpointIndex >= 1
+        )
+          ? maxStateLabels
+          : 1;
+        if (!acceptStateLabel(nextStateKey, nextRoute.baseCost, stateLabelLimit)) continue;
         queue.push(createFullCourseQueueEntry(nextRoute, flags, options));
       }
     }
   }
 
+  recordRouteSearchTelemetry("full-course", telemetryStartedAt, {
+    expansions,
+    maxExpansions,
+    completedRoutes: completed.length,
+    returnedRoutes: completed.length,
+    start: { x: start.x, y: start.y, facing: start.facing ?? null },
+    goal: flags.length ? { x: flags.at(-1).x, y: flags.at(-1).y } : null
+  });
   return completed;
 }
 
@@ -2649,21 +2956,25 @@ function isBehindAlongDir(lead, trailing, dir) {
 function getRobotLaserThreatMultipliers(options = {}) {
   let lateral = 1;
   let rear = 1;
+  let frontal = 1;
   const damagePressure = getDamageDeckPressureMultipliers(options);
 
   if (options.setToKill) {
     lateral *= 1.18;
     rear *= 1.35;
+    frontal *= 1.25;
   }
   if (options.setToStun) {
     lateral *= 0.65;
     rear *= 0.45;
+    frontal *= 0.55;
   }
 
   lateral *= damagePressure.robotTraffic;
   rear *= damagePressure.robotTraffic;
+  frontal *= damagePressure.robotTraffic;
 
-  return { lateral, rear };
+  return { lateral, rear, frontal };
 }
 
 function getTrafficPath(route) {
@@ -3393,32 +3704,64 @@ export function scoreFlagArea(tileMap, goal, options = {}) {
 
 function assignRoutesWithOverlap(tileMap, startAnalyses, goal, trafficScale = 1, activeIndices = null, options = {}) {
   const selections = startAnalyses.map(() => 0);
-  const activeSet = activeIndices ?? new Set(startAnalyses.filter((analysis) => analysis.routes.length).map((analysis) => analysis.index));
+  const activeSet = activeIndices ?? new Set(
+    startAnalyses
+      .filter((analysis) => analysis.routes.length)
+      .map((analysis) => analysis.index)
+  );
+  const activeAnalyses = startAnalyses.filter((analysis) => (
+    analysis.routes.length &&
+    activeSet.has(analysis.index)
+  ));
+  const playerCount = Math.max(1, options.playerCount ?? activeAnalyses.length);
 
   for (let pass = 0; pass < 5; pass += 1) {
     let changed = false;
+
     for (let index = 0; index < startAnalyses.length; index += 1) {
       const analysis = startAnalyses[index];
       if (!analysis.routes.length || !activeSet.has(analysis.index)) {
         continue;
       }
 
+      const occupancyByIndex = buildConditionalOccupancyMap(
+        activeAnalyses,
+        analysis.index,
+        playerCount,
+        options,
+        (other) => {
+          const otherIndex = startAnalyses.indexOf(other);
+          return other.routes[selections[otherIndex] ?? 0];
+        }
+      );
+
+      const otherRouteEntries = activeAnalyses
+        .filter((other) => other.index !== analysis.index)
+        .map((other) => {
+          const otherIndex = startAnalyses.indexOf(other);
+          return {
+            route: other.routes[selections[otherIndex] ?? 0],
+            occupancyWeight: occupancyByIndex.get(other.index) ?? 0
+          };
+        })
+        .filter((entry) => entry.route && entry.occupancyWeight > 0);
+
       let bestRouteIndex = selections[index];
       let bestAdjusted = Infinity;
 
       analysis.routes.forEach((route, routeIndex) => {
-        let penalty = 0;
+        const traffic = getExpectedTrafficBreakdown(
+          tileMap,
+          route,
+          otherRouteEntries,
+          [goal],
+          {
+            ...options,
+            singleLegTraffic: true
+          }
+        );
 
-        for (let otherIndex = 0; otherIndex < startAnalyses.length; otherIndex += 1) {
-          if (otherIndex === index) continue;
-          const other = startAnalyses[otherIndex];
-          if (!activeSet.has(other.index)) continue;
-          const selected = other.routes[selections[otherIndex]];
-          penalty += overlapPenalty(route, selected, goal) * trafficScale;
-          penalty += routeThreatPenalty(tileMap, route, selected, options) * 0.3 * trafficScale;
-        }
-
-        const adjusted = route.score + penalty;
+        const adjusted = route.score + traffic.total;
         if (adjusted < bestAdjusted) {
           bestAdjusted = adjusted;
           bestRouteIndex = routeIndex;
@@ -3438,16 +3781,32 @@ function assignRoutesWithOverlap(tileMap, startAnalyses, goal, trafficScale = 1,
 
   return selections;
 }
-
 function selectAndScoreStartAnalyses(tileMap, startAnalyses, goal, playerCount, activeIndices = null, options = {}) {
   const activeSet = activeIndices ?? new Set(
     startAnalyses
       .filter((analysis) => analysis.routes.length)
       .map((analysis) => analysis.index)
   );
-  const routeCapableStarts = startAnalyses.filter((analysis) => analysis.routes.length && activeSet.has(analysis.index)).length;
-  const trafficScale = computeTrafficPairScale(playerCount, routeCapableStarts, options);
-  const selectedRouteIndices = assignRoutesWithOverlap(tileMap, startAnalyses, goal, trafficScale, activeSet, options);
+  const activeAnalyses = startAnalyses.filter((analysis) => (
+    analysis.routes.length &&
+    activeSet.has(analysis.index)
+  ));
+  const routeCapableStarts = activeAnalyses.length;
+  const trafficScale = routeCapableStarts > 1
+    ? Math.min(1, Math.max(0, (playerCount - 1) / (routeCapableStarts - 1)))
+    : 0;
+
+  const selectedRouteIndices = assignRoutesWithOverlap(
+    tileMap,
+    startAnalyses,
+    goal,
+    trafficScale,
+    activeSet,
+    {
+      ...options,
+      playerCount
+    }
+  );
 
   startAnalyses.forEach((analysis, index) => {
     const selectedIndex = selectedRouteIndices[index] ?? 0;
@@ -3465,37 +3824,59 @@ function selectAndScoreStartAnalyses(tileMap, startAnalyses, goal, playerCount, 
       analysis.lateralThreat = Infinity;
       analysis.rearThreat = Infinity;
       analysis.routeThreat = Infinity;
+      analysis.trafficRanged = Infinity;
+      analysis.trafficNearby = Infinity;
+      analysis.trafficCompetition = Infinity;
       analysis.trafficScale = trafficScale;
       analysis.trafficPenalty = Infinity;
       analysis.adjustedScore = Infinity;
       return;
     }
 
-    let overlap = 0;
-    let lateralThreat = 0;
-    let rearThreat = 0;
+    const occupancyByIndex = buildConditionalOccupancyMap(
+      activeAnalyses,
+      analysis.index,
+      playerCount,
+      options,
+      (other) => other.selectedRoute
+    );
+    const otherRouteEntries = activeAnalyses
+      .filter((other) => other.index !== analysis.index && other.selectedRoute)
+      .map((other) => ({
+        route: other.selectedRoute,
+        occupancyWeight: occupancyByIndex.get(other.index) ?? 0
+      }))
+      .filter((entry) => entry.occupancyWeight > 0);
 
-    for (const other of startAnalyses) {
-      if (other.index === analysis.index || !other.selectedRoute || !activeSet.has(other.index)) {
-        continue;
+    const traffic = getExpectedTrafficBreakdown(
+      tileMap,
+      analysis.selectedRoute,
+      otherRouteEntries,
+      [goal],
+      {
+        ...options,
+        playerCount,
+        singleLegTraffic: true
       }
+    );
 
-      overlap += overlapPenalty(analysis.selectedRoute, other.selectedRoute, goal) * trafficScale;
-      lateralThreat += lateralThreatPenalty(tileMap, analysis.selectedRoute, other.selectedRoute, options) * trafficScale;
-      rearThreat += (
-        rearThreatPenalty(tileMap, analysis.selectedRoute, other.selectedRoute, options) * 0.45 +
-        rearThreatPenalty(tileMap, other.selectedRoute, analysis.selectedRoute, options) * 0.12
-      ) * trafficScale;
-    }
+    analysis.trafficRanged = traffic.ranged;
+    analysis.trafficNearby = traffic.nearby;
+    analysis.trafficCompetition = traffic.competition;
 
-    analysis.overlapPenalty = Number(overlap.toFixed(2));
-    analysis.lateralThreat = Number(lateralThreat.toFixed(2));
-    analysis.rearThreat = Number(rearThreat.toFixed(2));
-    analysis.routeThreat = Number((analysis.lateralThreat + analysis.rearThreat).toFixed(2));
+    // Keep legacy fields populated for older report/diagnostic consumers.
+    analysis.overlapPenalty = traffic.competition;
+    analysis.lateralThreat = traffic.nearby;
+    analysis.rearThreat = traffic.ranged;
+    analysis.routeThreat = Number((traffic.ranged + traffic.nearby).toFixed(2));
     analysis.trafficScale = trafficScale;
-    analysis.trafficPenalty = Number((Math.sqrt(analysis.overlapPenalty) + analysis.routeThreat * 0.16).toFixed(2));
+    analysis.trafficPenalty = traffic.total;
     analysis.courseScoreAdjustment = Number(analysis.courseScoreAdjustment ?? 0);
-    analysis.adjustedScore = Number((analysis.bestScore + analysis.trafficPenalty + analysis.courseScoreAdjustment).toFixed(2));
+    analysis.adjustedScore = Number((
+      analysis.bestScore +
+      analysis.trafficPenalty +
+      analysis.courseScoreAdjustment
+    ).toFixed(2));
   });
 
   return {
@@ -3503,7 +3884,6 @@ function selectAndScoreStartAnalyses(tileMap, startAnalyses, goal, playerCount, 
     trafficScale
   };
 }
-
 function summarizeFirstLegAnalyses(tileMap, startAnalyses, goal, flags, playerCount, options = {}, outlierSet = new Set(), outlierDiagnostics = new Map()) {
   const reachable = startAnalyses.filter((item) => item.reachable && item.selectedRoute);
   const activeReachable = reachable.filter((item) => !outlierSet.has(item.index));
@@ -3738,7 +4118,7 @@ function prepareFullCourseCandidate(route, flags, options = {}) {
     return null;
   }
 
-  const graceRegisters = options.trafficGraceRegisters ?? 0;
+  const graceRegisters = 0;
   const legRoutes = flags.map((_, legIndex) => (
     applyTrafficGraceToRoute(sliceFullCourseRoute(route, legIndex, flags), graceRegisters)
   ));
@@ -3747,6 +4127,56 @@ function prepareFullCourseCandidate(route, flags, options = {}) {
   applyTrafficGraceToRoute(route, graceRegisters);
   return route;
 }
+
+function getFullCourseCorridorDiversity(routeA, routeB, flags) {
+  const legsA = routeA?.legRoutes ?? [];
+  const legsB = routeB?.legRoutes ?? [];
+  const legCount = Math.min(flags.length, legsA.length, legsB.length);
+  if (!legCount) {
+    const finalGoal = flags.at(-1);
+    return finalGoal ? 1 - routeSimilarity(routeA, routeB, finalGoal) : 0;
+  }
+
+  const firstComparedLeg = legCount > 1 ? 1 : 0;
+  let weightedDifference = 0;
+  let totalWeight = 0;
+  for (let legIndex = firstComparedLeg; legIndex < legCount; legIndex += 1) {
+    const legA = legsA[legIndex];
+    const legB = legsB[legIndex];
+    const goal = flags[legIndex];
+    if (!legA || !legB || !goal) continue;
+    const weight = 1 + legIndex * 0.15;
+    weightedDifference += (1 - routeSimilarity(legA, legB, goal)) * weight;
+    totalWeight += weight;
+  }
+  return totalWeight > 0 ? weightedDifference / totalWeight : 0;
+}
+
+function selectCorridorDiverseFullCourseRoutes(routes, flags, limit = 3) {
+  if (!routes.length || limit <= 0) return [];
+  const remaining = [...routes].sort((left, right) => left.score - right.score);
+  const selected = [remaining.shift()];
+
+  while (selected.length < limit && remaining.length) {
+    let bestIndex = -1;
+    let bestNovelty = -Infinity;
+    let bestScore = Infinity;
+    for (let index = 0; index < remaining.length; index += 1) {
+      const candidate = remaining[index];
+      const novelty = Math.min(...selected.map((chosen) => getFullCourseCorridorDiversity(candidate, chosen, flags)));
+      if (novelty > bestNovelty + 0.001 || (Math.abs(novelty - bestNovelty) <= 0.001 && candidate.score < bestScore)) {
+        bestNovelty = novelty;
+        bestScore = candidate.score;
+        bestIndex = index;
+      }
+    }
+    if (bestIndex < 0 || bestNovelty < 0.12) break;
+    selected.push(remaining.splice(bestIndex, 1)[0]);
+  }
+
+  return selected.sort((left, right) => left.score - right.score);
+}
+
 
 const FULL_COURSE_OPENING_LEG_TRAFFIC_WEIGHT = 0.4;
 const FULL_COURSE_LATER_LEG_TRAFFIC_WEIGHT = 1;
@@ -3810,75 +4240,790 @@ function getLegAwareConvoyFrontPenalty(tileMap, route, other, flags, options = {
   return Number(pressure.toFixed(2));
 }
 
-function getFullRouteTrafficPenalty(tileMap, route, selectedRoutes, flags, options = {}) {
-  if (!route || !selectedRoutes.length) {
+function getRegisterTimeline(route) {
+  if (!route?.transitions?.length) {
+    return [];
+  }
+
+  const cached = TRAFFIC_TIMELINE_CACHE.get(route);
+  if (cached) {
+    return cached;
+  }
+
+  const startAction = route.absoluteStartAction ?? 0;
+  const timeline = route.transitions.map((transition, index) => {
+    const before = transition.from ?? route.initialState;
+    const after = transition.to ?? transition.state ?? before;
+    const boardComplexity =
+      ((transition.conveyorSteps || []).length * 0.35) +
+      ((transition.boardEvents || []).length * 0.18) +
+      (transition.gearTurned ? 0.25 : 0) +
+      ((transition.hazard || 0) > 0 ? 0.2 : 0);
+
+    return {
+      absoluteRegister: startAction + index + 1,
+      legRegister: index + 1,
+      before,
+      after,
+      facing: after?.facing ?? before?.facing,
+      uncertainty: Math.min(2.8, 0.75 + index * 0.12 + boardComplexity)
+    };
+  });
+
+  TRAFFIC_TIMELINE_CACHE.set(route, timeline);
+  return timeline;
+}
+
+function getTemporalInteractionWeight(pointA, pointB) {
+  const delta = Math.abs((pointA?.legRegister ?? 0) - (pointB?.legRegister ?? 0));
+  const spread = Math.max(
+    1,
+    (pointA?.uncertainty ?? 1) + (pointB?.uncertainty ?? 1)
+  );
+
+  if (delta >= spread * 2.25) {
     return 0;
   }
 
-  const playerCount = options.playerCount ?? selectedRoutes.length + 1;
-  const trafficScale = computeTrafficPairScale(playerCount, selectedRoutes.length + 1, options);
-  let overlapPressure = 0;
-  let lateralThreat = 0;
-  let rearThreat = 0;
-  let oncomingTraffic = 0;
-  let oilPushRisk = 0;
-  let randomizerTrafficRisk = 0;
-  let convoyFrontPressure = 0;
-  let convoyFollowers = 0;
+  return Math.max(0, 1 - delta / (spread * 2.25));
+}
 
-  for (const other of selectedRoutes) {
-    if (!other || other === route) {
+function classifyTrafficOrientation(reference, other) {
+  if (!reference?.after || !other?.after) {
+    return "side";
+  }
+
+  const facing = reference.facing ?? reference.after.facing;
+  const vector = DIRS[facing];
+  if (!vector) {
+    return "side";
+  }
+
+  const dx = other.after.x - reference.after.x;
+  const dy = other.after.y - reference.after.y;
+  const forward = dx * vector.dx + dy * vector.dy;
+  const lateral = Math.abs(dx * vector.dy - dy * vector.dx);
+
+  if (Math.abs(forward) >= lateral) {
+    return forward < 0 ? "rear" : "front";
+  }
+
+  return "side";
+}
+
+function getStandardRobotLaserCost() {
+  // A normal robot laser is anchored to the exact route-score cost of a normal
+  // one-damage board laser. Cutting Floor applies to board lasers only, so the
+  // reference deliberately uses neutral board-laser rules here.
+  return getTilePenaltyForFeature(
+    { type: "laser", damage: 1 },
+    { cuttingFloor: false }
+  );
+}
+
+function getNearbyInteractionProbability(orientation, distance) {
+  if (distance <= 0) return 1;
+
+  if (orientation === "rear") {
+    if (distance === 1) return 0.9;
+    if (distance === 2) return 0.55;
+    if (distance === 3) return 0.24;
+    return 0;
+  }
+
+  if (orientation === "front") {
+    if (distance === 1) return 0.95;
+    if (distance === 2) return 0.72;
+    if (distance === 3) return 0.48;
+    if (distance === 4) return 0.24;
+    if (distance === 5) return 0.1;
+    return 0;
+  }
+
+  if (distance === 1) return 0.95;
+  if (distance === 2) return 0.48;
+  if (distance === 3) return 0.12;
+  return 0;
+}
+
+function getOrdinaryInterferenceCost() {
+  // Blocking / replanning on otherwise harmless floor is real, but far cheaper
+  // than taking a point of damage.
+  return getStandardRobotLaserCost() * 0.2;
+}
+
+function getRouteDeviationScore(timeline, timelineIndex, destination) {
+  if (!timeline?.length || !destination) {
+    return { disruption: 0, benefitCredit: 0 };
+  }
+
+  const lookAhead = timeline.slice(timelineIndex + 1, timelineIndex + 6);
+  if (!lookAhead.length) {
+    return { disruption: 0, benefitCredit: 0 };
+  }
+
+  let bestDistance = Infinity;
+  let bestOffset = 0;
+
+  lookAhead.forEach((future, offset) => {
+    const distance = heuristic(destination, future.after);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestOffset = offset + 1;
+    }
+  });
+
+  if (!Number.isFinite(bestDistance)) {
+    return { disruption: 0, benefitCredit: 0 };
+  }
+
+  const damageUnit = getStandardRobotLaserCost();
+
+  if (bestDistance === 0 && bestOffset >= 2) {
+    return {
+      disruption: 0,
+      // Being shoved onto a future part of the route can save registers, but
+      // treat that as an unreliable benefit rather than a planned shortcut.
+      benefitCredit: Math.min(damageUnit * 0.55, (bestOffset - 1) * 0.6)
+    };
+  }
+
+  return {
+    disruption: Math.min(damageUnit * 1.25, bestDistance * 1.15),
+    benefitCredit: 0
+  };
+}
+
+function getDisplacementConsequenceScore(
+  tileMap,
+  point,
+  timeline,
+  timelineIndex,
+  options = {}
+) {
+  if (!point) {
+    return 0;
+  }
+
+  const damageUnit = getStandardRobotLaserCost();
+  let worst = 0;
+
+  for (const [dir, delta] of Object.entries(DIRS)) {
+    const destination = {
+      x: point.x + delta.dx,
+      y: point.y + delta.dy
+    };
+    const tile = tileMap.get(tileKey(destination.x, destination.y));
+    const moveCheck = canMoveBetween(tileMap, point, destination, dir, {
+      ...options,
+      repulsorActive: true
+    });
+
+    if (!tile) {
+      if (moveCheck.crash) {
+        const pitEquivalent =
+          damageUnit * 2 +
+          getRebootRoutePenalty() * 0.45;
+        worst = Math.max(worst, pitEquivalent);
+      }
       continue;
     }
 
-    // Preserve the V5.3 experiment: damp each robot-pair overlap separately
-    // rather than compressing the entire crowd into one square root. This lets
-    // 6-8 player traffic keep useful discriminatory power.
-    const pairOverlap = getLegAwareFullRouteOverlap(route, other, flags);
-    overlapPressure += Math.sqrt(Math.max(0, pairOverlap)) * trafficScale;
+    if (!moveCheck.ok && !moveCheck.crash && !moveCheck.repulsor) {
+      // A solid wall means this displacement cannot happen in that direction.
+      continue;
+    }
 
-    // Keep laser/rear-threat timing on the continuous whole-course paths.
-    lateralThreat += lateralThreatPenalty(tileMap, route, other, options) * trafficScale;
-    rearThreat += (
-      rearThreatPenalty(tileMap, route, other, options) * 0.45 +
-      rearThreatPenalty(tileMap, other, route, options) * 0.12
-    ) * trafficScale;
+    let consequence = 0;
+    const features = tile.features || [];
 
-    // Dedicated head-on interaction pressure: incoming fire plus the physical
-    // cost of likely blocking/pushing conflicts in opposing traffic.
-    oncomingTraffic += oncomingTrafficPenalty(tileMap, route, other, options) * trafficScale;
-    oilPushRisk += oilPushRiskPenalty(tileMap, route, other) * trafficScale;
-    randomizerTrafficRisk += randomizerTrafficRiskPenalty(tileMap, route, other) * trafficScale;
+    if (moveCheck.crash || features.some((feature) => feature.type === "pit")) {
+      // Normal pits deal two damage, plus a substantial but discounted reboot /
+      // lost-program cost because an involuntary fall can occasionally help.
+      consequence += damageUnit * 2 + getRebootRoutePenalty() * 0.45;
+    } else {
+      for (const feature of features) {
+        if (
+          feature.type === "laser" ||
+          feature.type === "flamethrower" ||
+          feature.type === "trapdoor" ||
+          feature.type === "crusher" ||
+          feature.type === "randomizer" ||
+          feature.type === "oil"
+        ) {
+          consequence += Math.max(
+            0,
+            getTilePenaltyForFeature(feature, {
+              ...options,
+              onEntrance: true
+            })
+          );
+        }
+      }
 
-    const pairConvoyFrontPressure = getLegAwareConvoyFrontPenalty(
+      if (features.some((feature) => feature.type === "conveyor")) {
+        consequence += damageUnit * 0.32;
+      }
+      if (features.some((feature) => feature.type === "water")) {
+        consequence += damageUnit * 0.2;
+      }
+      if (moveCheck.repulsor || features.some((feature) => feature.type === "repulsor")) {
+        consequence += Math.max(
+          damageUnit * 0.35,
+          getTilePenaltyForFeature(
+            { type: "repulsor" },
+            options
+          ) * 0.7
+        );
+      }
+
+      if ((moveCheck.ledgeDamage || 0) > 0) {
+        // Ledge damage is directly comparable to lasers: normally two damage.
+        consequence += damageUnit * moveCheck.ledgeDamage;
+      }
+
+      const deviation = getRouteDeviationScore(timeline, timelineIndex, destination);
+      consequence += deviation.disruption;
+      consequence = Math.max(
+        0,
+        consequence - deviation.benefitCredit
+      );
+    }
+
+    worst = Math.max(worst, consequence);
+  }
+
+  return Number(worst.toFixed(2));
+}
+
+function getDisplacementConsequenceMultiplier(
+  tileMap,
+  point,
+  timeline,
+  timelineIndex,
+  options = {}
+) {
+  const consequence = getDisplacementConsequenceScore(
+    tileMap,
+    point,
+    timeline,
+    timelineIndex,
+    options
+  );
+  const damageUnit = getStandardRobotLaserCost();
+
+  // Nearby robot pressure exists even on empty floor. Consequential squares
+  // amplify it in damage-equivalent terms, capped to keep pushes from dwarfing
+  // the entire route score.
+  return 1 + Math.min(2.6, consequence / (damageUnit * 1.5));
+}
+
+function getRobotRangedPressure(tileMap, targetPoint, shooterPoint, options = {}) {
+  if (!targetPoint?.after || !shooterPoint?.after) {
+    return 0;
+  }
+
+  const target = targetPoint.after;
+  const shooter = shooterPoint.after;
+  const facing = shooter.facing ?? shooterPoint.facing;
+  const vector = DIRS[facing];
+  if (!vector) {
+    return 0;
+  }
+
+  const dx = target.x - shooter.x;
+  const dy = target.y - shooter.y;
+  const aligned = vector.dx !== 0
+    ? dy === 0 && Math.sign(dx) === Math.sign(vector.dx)
+    : dx === 0 && Math.sign(dy) === Math.sign(vector.dy);
+
+  if (!aligned || !hasLineOfSight(tileMap, shooter, target)) {
+    return 0;
+  }
+
+  const orientation = classifyTrafficOrientation(targetPoint, shooterPoint);
+  const multipliers = getRobotLaserThreatMultipliers(options);
+  const ruleMultiplier = orientation === "rear"
+    ? multipliers.rear
+    : orientation === "front"
+      ? multipliers.frontal
+      : multipliers.lateral;
+
+  // Each credible shot starts at exactly one normal board-laser equivalent.
+  // Rear corridors are modestly meaner because sustained pursuit tends to
+  // preserve the firing opportunity; actual repeated registers still account
+  // for most of the extra cost.
+  const orientationPersistence = orientation === "rear"
+    ? 1.15
+    : orientation === "front"
+      ? 1.0
+      : 0.9;
+
+  return getStandardRobotLaserCost() * ruleMultiplier * orientationPersistence;
+}
+
+function getRouteCompetitionPressure(tileMap, pointA, pointB) {
+  if (!pointA?.after || !pointB?.after) {
+    return 0;
+  }
+
+  const distance = heuristic(pointA.after, pointB.after);
+  const damageUnit = getStandardRobotLaserCost();
+
+  if (distance === 0) {
+    return damageUnit * 0.28;
+  }
+  if (distance === 1) {
+    return damageUnit * 0.16;
+  }
+  if (distance <= 3 && hasLineOfSight(tileMap, pointA.after, pointB.after)) {
+    return damageUnit * 0.05;
+  }
+
+  return 0;
+}
+
+function getVirtualPhysicalInteractionScale(pointA, pointB, options = {}) {
+  if (!options.virtualBots) {
+    return 1;
+  }
+
+  const register = Math.max(
+    1,
+    Math.min(
+      pointA?.absoluteRegister ?? 1,
+      pointB?.absoluteRegister ?? 1
+    )
+  );
+
+  // Virtual Bots can cease being virtual as early as the first register once
+  // separated. We cannot predict that exact moment, so ramp the probability of
+  // ordinary physical interaction quickly instead of deleting an entire round.
+  if (register <= 1) return 0;
+  if (register === 2) return 0.4;
+  if (register === 3) return 0.72;
+  if (register === 4) return 0.9;
+  return 1;
+}
+
+function getVirtualCompetitionScale(physicalScale, options = {}) {
+  return options.virtualBots
+    ? Math.max(0, 1 - physicalScale)
+    : 0;
+}
+
+function getTrafficRouteEntry(entry) {
+  if (entry?.route) {
+    return {
+      route: entry.route,
+      occupancyWeight: Number.isFinite(entry.occupancyWeight)
+        ? entry.occupancyWeight
+        : 1
+    };
+  }
+
+  return {
+    route: entry,
+    occupancyWeight: Number.isFinite(entry?.occupancyWeight)
+      ? entry.occupancyWeight
+      : 1
+  };
+}
+
+function getTrafficLegs(route) {
+  return route?.legRoutes?.length
+    ? route.legRoutes
+    : route
+      ? [route]
+      : [];
+}
+
+function getTrafficDisplacementProfile(tileMap, route, timeline, options = {}) {
+  const cached = TRAFFIC_DISPLACEMENT_CACHE.get(route);
+  if (cached) {
+    return cached;
+  }
+
+  const profile = timeline.map((point, timelineIndex) => (
+    getDisplacementConsequenceScore(
       tileMap,
-      route,
-      other,
-      flags,
+      point.after,
+      timeline,
+      timelineIndex,
       options
-    ) * trafficScale;
-    if (pairConvoyFrontPressure > 0) {
-      convoyFollowers += 1;
-      convoyFrontPressure += pairConvoyFrontPressure;
+    )
+  ));
+
+  TRAFFIC_DISPLACEMENT_CACHE.set(route, profile);
+  return profile;
+}
+
+function getTrafficPairProfile(tileMap, route, otherRoute, options = {}) {
+  let otherCache = TRAFFIC_PAIR_PROFILE_CACHE.get(route);
+  if (!otherCache) {
+    otherCache = new WeakMap();
+    TRAFFIC_PAIR_PROFILE_CACHE.set(route, otherCache);
+  }
+
+  const cached = otherCache.get(otherRoute);
+  if (cached) {
+    return cached;
+  }
+
+  const timelineA = getRegisterTimeline(route);
+  const timelineB = getRegisterTimeline(otherRoute);
+  if (!timelineA.length || !timelineB.length) {
+    const empty = { ranged: [], nearby: [], competition: [] };
+    otherCache.set(otherRoute, empty);
+    return empty;
+  }
+
+  const displacementProfile = getTrafficDisplacementProfile(
+    tileMap,
+    route,
+    timelineA,
+    options
+  );
+  const ranged = new Array(timelineA.length).fill(0);
+  const nearby = new Array(timelineA.length).fill(0);
+  const competition = new Array(timelineA.length).fill(0);
+
+  timelineA.forEach((pointA, timelineIndex) => {
+    let temporalMass = 0;
+    let strongestTemporal = 0;
+    let rangedWeighted = 0;
+    let nearbyWeighted = 0;
+    let competitionWeighted = 0;
+
+    const maximumOtherUncertainty = 2.8;
+    const temporalRadius = Math.ceil(
+      ((pointA.uncertainty ?? 1) + maximumOtherUncertainty) * 2.25
+    );
+    const centerIndex = Math.max(0, (pointA.legRegister ?? 1) - 1);
+    const firstIndex = Math.max(0, centerIndex - temporalRadius);
+    const lastIndex = Math.min(
+      timelineB.length - 1,
+      centerIndex + temporalRadius
+    );
+
+    for (let otherIndex = firstIndex; otherIndex <= lastIndex; otherIndex += 1) {
+      const pointB = timelineB[otherIndex];
+      const temporal = getTemporalInteractionWeight(pointA, pointB);
+      if (temporal <= 0) {
+        continue;
+      }
+
+      temporalMass += temporal;
+      strongestTemporal = Math.max(strongestTemporal, temporal);
+
+      const physicalScale = getVirtualPhysicalInteractionScale(
+        pointA,
+        pointB,
+        options
+      );
+      const competitionScale = getVirtualCompetitionScale(
+        physicalScale,
+        options
+      );
+
+      if (physicalScale > 0) {
+        rangedWeighted += (
+          getRobotRangedPressure(tileMap, pointA, pointB, options) *
+          temporal *
+          physicalScale
+        );
+
+        const distance = heuristic(pointA.after, pointB.after);
+        const orientation = classifyTrafficOrientation(pointA, pointB);
+        const interactionProbability = getNearbyInteractionProbability(
+          orientation,
+          distance
+        );
+        const consequence = (
+          getOrdinaryInterferenceCost() +
+          (displacementProfile[timelineIndex] ?? 0)
+        );
+
+        nearbyWeighted += (
+          interactionProbability *
+          consequence *
+          temporal *
+          physicalScale
+        );
+      }
+
+      if (competitionScale > 0) {
+        competitionWeighted += (
+          getRouteCompetitionPressure(tileMap, pointA, pointB) *
+          temporal *
+          competitionScale
+        );
+      }
+    }
+
+    if (temporalMass <= 0) {
+      return;
+    }
+
+    // Fuzzy positions are alternative possibilities for the SAME robot.
+    const credibility = Math.min(1, strongestTemporal);
+    ranged[timelineIndex] = (
+      rangedWeighted / temporalMass
+    ) * credibility;
+    nearby[timelineIndex] = (
+      nearbyWeighted / temporalMass
+    ) * credibility;
+    competition[timelineIndex] = (
+      competitionWeighted / temporalMass
+    ) * credibility;
+  });
+
+  const profile = { ranged, nearby, competition };
+  otherCache.set(otherRoute, profile);
+  return profile;
+}
+
+function getExpectedTrafficBreakdownForLeg(
+  tileMap,
+  route,
+  selectedRouteEntries,
+  options = {}
+) {
+  const timelineA = getRegisterTimeline(route);
+  if (!timelineA.length || !selectedRouteEntries?.length) {
+    return { ranged: 0, nearby: 0, competition: 0, total: 0 };
+  }
+
+  const preparedOthers = selectedRouteEntries
+    .map(getTrafficRouteEntry)
+    .filter((entry) => entry.route && entry.occupancyWeight > 0);
+
+  if (!preparedOthers.length) {
+    return { ranged: 0, nearby: 0, competition: 0, total: 0 };
+  }
+
+  const damageUnit = getStandardRobotLaserCost();
+  const rangedByRegister = new Array(timelineA.length).fill(0);
+  const nearbyByRegister = new Array(timelineA.length).fill(0);
+  const competitionByRegister = new Array(timelineA.length).fill(0);
+
+  for (const other of preparedOthers) {
+    const profile = getTrafficPairProfile(tileMap, route, other.route, options);
+    const occupancy = other.occupancyWeight;
+
+    for (let index = 0; index < timelineA.length; index += 1) {
+      rangedByRegister[index] = Math.max(
+        rangedByRegister[index],
+        (profile.ranged[index] ?? 0) * occupancy
+      );
+      nearbyByRegister[index] += (profile.nearby[index] ?? 0) * occupancy;
+      competitionByRegister[index] += (profile.competition[index] ?? 0) * occupancy;
     }
   }
 
-  // Several robots following the same leader make the lane progressively less
-  // attractive, but cap the crowd multiplier so large-player games do not
-  // explode numerically.
-  const convoyCrowdMultiplier = convoyFollowers <= 1
-    ? 1
-    : Math.min(1.9, 1 + (convoyFollowers - 1) * 0.45);
+  let ranged = 0;
+  let nearby = 0;
+  let competition = 0;
 
-  return Number((
-    overlapPressure * 0.22 +
-    lateralThreat * 0.035 +
-    rearThreat * 0.03 +
-    oncomingTraffic * 0.06 +
-    oilPushRisk * 0.08 +
-    randomizerTrafficRisk * 0.12 +
-    convoyFrontPressure * convoyCrowdMultiplier * 0.65
-  ).toFixed(2));
+  for (let index = 0; index < timelineA.length; index += 1) {
+    ranged += rangedByRegister[index];
+    nearby += Math.min(nearbyByRegister[index], damageUnit * 3.25);
+    competition += Math.min(competitionByRegister[index], damageUnit);
+  }
+
+  return {
+    ranged: Number(ranged.toFixed(2)),
+    nearby: Number(nearby.toFixed(2)),
+    competition: Number(competition.toFixed(2)),
+    total: Number((ranged + nearby + competition).toFixed(2))
+  };
+}
+
+function getExpectedTrafficBreakdown(
+  tileMap,
+  route,
+  selectedRouteEntries,
+  flags,
+  options = {}
+) {
+  if (!route || !selectedRouteEntries?.length) {
+    return { ranged: 0, nearby: 0, competition: 0, total: 0 };
+  }
+
+  if (options.singleLegTraffic) {
+    return getExpectedTrafficBreakdownForLeg(
+      tileMap,
+      route,
+      selectedRouteEntries,
+      options
+    );
+  }
+
+  const routeLegs = getTrafficLegs(route);
+  if (!routeLegs.length) {
+    return { ranged: 0, nearby: 0, competition: 0, total: 0 };
+  }
+
+  let ranged = 0;
+  let nearby = 0;
+  let competition = 0;
+
+  routeLegs.forEach((routeLeg, legIndex) => {
+    const otherLegEntries = selectedRouteEntries
+      .map(getTrafficRouteEntry)
+      .map((entry) => {
+        const legs = getTrafficLegs(entry.route);
+        return {
+          route: legs[legIndex] ?? null,
+          occupancyWeight: entry.occupancyWeight
+        };
+      })
+      .filter((entry) => entry.route);
+
+    const legBreakdown = getExpectedTrafficBreakdownForLeg(
+      tileMap,
+      routeLeg,
+      otherLegEntries,
+      options
+    );
+
+    const legWeight = legIndex === 0
+      ? FULL_COURSE_OPENING_LEG_TRAFFIC_WEIGHT
+      : FULL_COURSE_LATER_LEG_TRAFFIC_WEIGHT;
+
+    ranged += legBreakdown.ranged * legWeight;
+    nearby += legBreakdown.nearby * legWeight;
+    competition += legBreakdown.competition * legWeight;
+  });
+
+  return {
+    ranged: Number(ranged.toFixed(2)),
+    nearby: Number(nearby.toFixed(2)),
+    competition: Number(competition.toFixed(2)),
+    total: Number((ranged + nearby + competition).toFixed(2))
+  };
+}
+
+function getFullRouteTrafficPenalty(tileMap, route, selectedRoutes, flags, options = {}) {
+  return getExpectedTrafficBreakdown(
+    tileMap,
+    route,
+    selectedRoutes,
+    flags,
+    options
+  ).total;
+}
+
+function allocateCappedOccupancy(items, targetCount, weightForItem) {
+  const result = new Map(items.map((item) => [item.index, 0]));
+  let remainingItems = [...items];
+  let remaining = Math.max(0, Math.min(targetCount, remainingItems.length));
+
+  while (remainingItems.length && remaining > 0.0001) {
+    const weights = remainingItems.map((item) => Math.max(0.0001, weightForItem(item)));
+    const totalWeight = weights.reduce((sum, value) => sum + value, 0);
+    const capped = [];
+
+    remainingItems.forEach((item, index) => {
+      const proposed = remaining * weights[index] / totalWeight;
+      if (proposed >= 1) {
+        result.set(item.index, 1);
+        capped.push(item.index);
+      }
+    });
+
+    if (!capped.length) {
+      remainingItems.forEach((item, index) => {
+        result.set(
+          item.index,
+          Math.min(1, remaining * weights[index] / totalWeight)
+        );
+      });
+      remaining = 0;
+      break;
+    }
+
+    remaining -= capped.length;
+    remainingItems = remainingItems.filter((item) => !capped.includes(item.index));
+  }
+
+  return result;
+}
+
+function getExplicitOccupancyWeight(occupancyByIndex, index) {
+  if (!occupancyByIndex) {
+    return null;
+  }
+  const value = occupancyByIndex instanceof Map
+    ? occupancyByIndex.get(index)
+    : occupancyByIndex[index];
+  return Number.isFinite(value)
+    ? Math.max(0, Math.min(1, value))
+    : 0;
+}
+
+function buildConditionalOccupancyMap(
+  analyses,
+  focusIndex,
+  playerCount,
+  options,
+  routeForAnalysis
+) {
+  const others = analyses.filter((analysis) => analysis.index !== focusIndex);
+  const targetCount = Math.min(
+    Math.max(0, (playerCount ?? 1) - 1),
+    others.length
+  );
+
+  if (!others.length) {
+    return new Map();
+  }
+
+  if (options.occupancyByIndex) {
+    return new Map(others.map((analysis) => [
+      analysis.index,
+      getExplicitOccupancyWeight(options.occupancyByIndex, analysis.index)
+    ]));
+  }
+
+  if (targetCount <= 0) {
+    return new Map();
+  }
+
+  // Pay to Win pricing is intended to make all retained starts equally
+  // attractive, so traffic occupancy is uniform by design.
+  if (options.payToWin) {
+    const uniform = targetCount / others.length;
+    return new Map(others.map((analysis) => [analysis.index, uniform]));
+  }
+
+  const scored = others.map((analysis) => ({
+    analysis,
+    score: routeForAnalysis(analysis)?.score ?? Infinity
+  }));
+  const finiteScores = scored
+    .map((item) => item.score)
+    .filter(Number.isFinite);
+
+  if (!finiteScores.length) {
+    const uniform = targetCount / others.length;
+    return new Map(others.map((analysis) => [analysis.index, uniform]));
+  }
+
+  const minScore = Math.min(...finiteScores);
+  const maxScore = Math.max(...finiteScores);
+  const temperature = Math.max(6, (maxScore - minScore) / 3);
+
+  return allocateCappedOccupancy(
+    others,
+    targetCount,
+    (analysis) => {
+      const score = routeForAnalysis(analysis)?.score;
+      return Number.isFinite(score)
+        ? Math.exp(-(score - minScore) / temperature)
+        : 0.0001;
+    }
+  );
 }
 
 function selectFullCourseRoutesForStarts(tileMap, startAnalyses, flags, options = {}) {
@@ -3897,29 +5042,54 @@ function selectFullCourseRoutesForStarts(tileMap, startAnalyses, flags, options 
     };
   }
 
+  const playerCount = Math.max(1, options.playerCount ?? reachable.length);
   const maxPasses = Math.max(1, Math.min(3, options.fullCourseTrafficPasses ?? 2));
   let routeSwitches = 0;
   let actualPasses = 0;
-  let selectedByIndex = new Map(reachable.map((analysis) => [analysis.index, analysis.fullCourseRoutes[0]]));
+  let selectedByIndex = new Map(
+    reachable.map((analysis) => [analysis.index, analysis.fullCourseRoutes[0]])
+  );
 
   for (let pass = 0; pass < maxPasses; pass += 1) {
     actualPasses = pass + 1;
     let changed = false;
+
     for (const analysis of reachable) {
-      const otherRoutes = reachable
+      const occupancyByIndex = buildConditionalOccupancyMap(
+        reachable,
+        analysis.index,
+        playerCount,
+        options,
+        (other) => selectedByIndex.get(other.index)
+      );
+      const otherRouteEntries = reachable
         .filter((other) => other.index !== analysis.index)
-        .map((other) => selectedByIndex.get(other.index))
-        .filter(Boolean);
+        .map((other) => ({
+          route: selectedByIndex.get(other.index),
+          occupancyWeight: occupancyByIndex.get(other.index) ?? 0
+        }))
+        .filter((entry) => entry.route && entry.occupancyWeight > 0);
+
       let bestRoute = selectedByIndex.get(analysis.index) ?? analysis.fullCourseRoutes[0];
       let bestValue = Infinity;
 
       for (const candidate of analysis.fullCourseRoutes) {
-        const trafficPenalty = getFullRouteTrafficPenalty(tileMap, candidate, otherRoutes, flags, options);
-        const rawGap = Math.max(0, candidate.score - analysis.fullCourseRoutes[0].score);
-        // candidate.score already contains the geometric cost of taking a
-        // detour. Keep only a tiny tie-breaking surcharge here so traffic can
-        // make a slightly longer but safer later-leg route genuinely win.
-        const value = candidate.score + trafficPenalty + rawGap * 0.04;
+        const traffic = getExpectedTrafficBreakdown(
+          tileMap,
+          candidate,
+          otherRouteEntries,
+          flags,
+          {
+            ...options,
+            playerCount
+          }
+        );
+        const rawGap = Math.max(
+          0,
+          candidate.score - analysis.fullCourseRoutes[0].score
+        );
+        const value = candidate.score + traffic.total + rawGap * 0.04;
+
         if (value < bestValue - 0.001) {
           bestValue = value;
           bestRoute = candidate;
@@ -3938,15 +5108,40 @@ function selectFullCourseRoutesForStarts(tileMap, startAnalyses, flags, options 
     }
   }
 
-  const selectedRoutes = reachable
-    .map((analysis) => selectedByIndex.get(analysis.index))
-    .filter(Boolean);
-  const trafficValues = reachable.map((analysis) => {
+  const trafficValues = [];
+  const trafficBreakdowns = new Map();
+
+  for (const analysis of reachable) {
     const route = selectedByIndex.get(analysis.index);
-    const otherRoutes = selectedRoutes.filter((other) => other !== route);
-    return getFullRouteTrafficPenalty(tileMap, route, otherRoutes, flags, options);
-  });
-  const trafficByIndex = new Map(reachable.map((analysis, index) => [analysis.index, trafficValues[index] ?? 0]));
+    const occupancyByIndex = buildConditionalOccupancyMap(
+      reachable,
+      analysis.index,
+      playerCount,
+      options,
+      (other) => selectedByIndex.get(other.index)
+    );
+    const otherRouteEntries = reachable
+      .filter((other) => other.index !== analysis.index)
+      .map((other) => ({
+        route: selectedByIndex.get(other.index),
+        occupancyWeight: occupancyByIndex.get(other.index) ?? 0
+      }))
+      .filter((entry) => entry.route && entry.occupancyWeight > 0);
+
+    const breakdown = getExpectedTrafficBreakdown(
+      tileMap,
+      route,
+      otherRouteEntries,
+      flags,
+      {
+        ...options,
+        playerCount
+      }
+    );
+
+    trafficBreakdowns.set(analysis.index, breakdown);
+    trafficValues.push(breakdown.total);
+  }
 
   return {
     starts: startAnalyses.map((analysis) => {
@@ -3955,10 +5150,20 @@ function selectFullCourseRoutesForStarts(tileMap, startAnalyses, flags, options 
         return analysis;
       }
 
+      const breakdown = trafficBreakdowns.get(analysis.index) ?? {
+        ranged: 0,
+        nearby: 0,
+        competition: 0,
+        total: 0
+      };
+
       return {
         ...analysis,
         fullCourseRoute: selectedRoute,
-        fullCourseTrafficPenalty: trafficByIndex.get(analysis.index) ?? 0,
+        fullCourseTrafficPenalty: breakdown.total,
+        fullCourseTrafficRanged: breakdown.ranged,
+        fullCourseTrafficNearby: breakdown.nearby,
+        fullCourseTrafficCompetition: breakdown.competition,
         fullCourseRouteIndex: analysis.fullCourseRoutes.indexOf(selectedRoute)
       };
     }),
@@ -3967,7 +5172,6 @@ function selectFullCourseRoutesForStarts(tileMap, startAnalyses, flags, options 
     averageTrafficPenalty: Number(average(trafficValues).toFixed(2))
   };
 }
-
 function buildStartAnalysisForSelectedFullRoute(analysis, flags) {
   const fullRoute = analysis.fullCourseRoute;
   const legRoutes = fullRoute?.legRoutes ?? [];
@@ -4053,7 +5257,1192 @@ function buildExpectedLegAnalysesFromFullRoutes(startAnalyses, flags, playerCoun
   });
 }
 
+
+const CONTEXTUAL_OPENING_ROUTES = 2;
+const CONTEXTUAL_LATER_ROUTES = 3;
+const CONTEXTUAL_BEAM_WIDTH = 2;
+const CONTEXTUAL_COMPLETION_POOL = 4;
+const CONTEXTUAL_OPENING_EXPANSIONS = 7000;
+const CONTEXTUAL_LATER_EXPANSIONS = 6000;
+const CONTEXTUAL_LEG_MAX_ACTIONS = 24;
+const CONTEXTUAL_TEMPLATE_POOL = 6;
+const CONTEXTUAL_TEMPLATE_CARD_DELTA_LIMIT = 14;
+const CONTEXTUAL_OPTIONAL_ROUTE_BUDGET_RATIO = 0.75;
+const CONTEXTUAL_ZERO_ROUTE_STALL_MIN = 5;
+const CONTEXTUAL_ZERO_ROUTE_STALL_STARTS_MIN = 3;
+
+function getProgramHistoryWindow(history) {
+  return (history || []).slice(-9);
+}
+
+function getProgramCacheSignature(history, absoluteActions) {
+  const phase = absoluteActions % REGISTER_COUNT;
+  const window = getProgramHistoryWindow(history);
+  return `r${phase}:${window.join(".") || "-"}`;
+}
+
+function getCompactProgramSearchSignature(history, absoluteActions) {
+  const phase = absoluteActions % REGISTER_COUNT;
+  const window = getProgramHistoryWindow(history);
+  const currentTurn = phase > 0 ? window.slice(-phase) : [];
+  const count = (id) => currentTurn.filter((value) => value === id).length;
+  const previous = window.at(-1) ?? "-";
+
+  return [
+    `r${phase}`,
+    `p${previous}`,
+    `f3${count("FORWARD_3")}`,
+    `b${count("BACK")}`,
+    `u${count("UTURN")}`,
+    `w${count("WAIT")}`,
+    `f2${Math.min(3, count("FORWARD_2"))}`
+  ].join(":");
+}
+
+function getDynamicGoalCachePhase(dynamicGoal, absoluteActions) {
+  if (!dynamicGoal) {
+    return "-";
+  }
+
+  const { periodStart = 0, periodLength = 0, positions = [] } = dynamicGoal;
+  if (periodLength > 0 && absoluteActions >= periodStart) {
+    return `${periodStart}+${(absoluteActions - periodStart) % periodLength}`;
+  }
+
+  return String(
+    Math.min(absoluteActions, Math.max(0, positions.length - 1))
+  );
+}
+
+function getContextualLegCacheKey(
+  context,
+  legIndex,
+  dynamicGoal,
+  namespace = "shared"
+) {
+  return [
+    namespace,
+    `leg${legIndex}`,
+    stateKey(context.state),
+    getProgramCacheSignature(context.history, context.absoluteActions),
+    `g${getDynamicGoalCachePhase(dynamicGoal, context.absoluteActions)}`
+  ].join("|");
+}
+
+function getContextualTemplateCacheKey(
+  context,
+  legIndex,
+  dynamicGoal,
+  namespace = "shared"
+) {
+  return [
+    namespace,
+    `leg${legIndex}`,
+    stateKey(context.state),
+    `r${context.absoluteActions % REGISTER_COUNT}`,
+    `g${getDynamicGoalCachePhase(dynamicGoal, context.absoluteActions)}`
+  ].join("|");
+}
+
+function getContextualSearchStateKey(
+  state,
+  absoluteActions,
+  history,
+  dynamicGoal
+) {
+  return [
+    stateKey(state),
+    getCompactProgramSearchSignature(history, absoluteActions),
+    `g${getDynamicGoalCachePhase(dynamicGoal, absoluteActions)}`
+  ].join("|");
+}
+
+function routeReachesContextualGoal(route, goal, dynamicGoal) {
+  const target = (
+    getDynamicGoalPosition(dynamicGoal, route.absoluteActions) ??
+    goal
+  );
+  return (
+    route.finalState.x === target.x &&
+    route.finalState.y === target.y
+  );
+}
+
+function createContextualQueueEntry(route, goal, dynamicGoal) {
+  const target = (
+    getDynamicGoalPosition(dynamicGoal, route.absoluteActions) ??
+    goal
+  );
+  return {
+    ...route,
+    estimate: route.baseCost + heuristic(route.finalState, target) * 5
+  };
+}
+
+function enumerateContextualLegRoutes(
+  tileMap,
+  context,
+  goal,
+  options = {}
+) {
+  const telemetryStartedAt = analysisTelemetryNow();
+  const profile = {
+    queueMs: 0,
+    currentKeyMs: 0,
+    goalCompletionMs: 0,
+    simulationMs: 0,
+    actionScoringMs: 0,
+    historyBuildMs: 0,
+    destinationBuildMs: 0,
+    nextKeyMs: 0,
+    dominanceMs: 0,
+    actionCandidates: 0,
+    simulationCalls: 0,
+    blockedTransitions: 0,
+    destinationCandidates: 0,
+    acceptedStates: 0,
+    dominatedStates: 0,
+    completedGoals: 0,
+    physicalCacheHits: 0,
+    physicalCacheMisses: 0
+  };
+  const profileNow = analysisTelemetryNow;
+
+  const dynamicGoal = options.dynamicGoal ?? null;
+  const maxOutputRoutes = options.maxRoutes ?? CONTEXTUAL_LATER_ROUTES;
+  const completionPool = Math.max(
+    maxOutputRoutes,
+    options.completionPool ?? CONTEXTUAL_COMPLETION_POOL
+  );
+  const maxExpansions = options.maxExpansions ?? CONTEXTUAL_LATER_EXPANSIONS;
+  const optionalRouteExpansionLimit = Math.max(
+    1,
+    Math.floor(
+      maxExpansions *
+      (options.optionalRouteBudgetRatio ?? CONTEXTUAL_OPTIONAL_ROUTE_BUDGET_RATIO)
+    )
+  );
+  const maxActions = options.maxActions ?? CONTEXTUAL_LEG_MAX_ACTIONS;
+  const portalMap = options.portalMap ?? buildPortalMap(tileMap);
+  const simulationOptions = { ...options, portalMap };
+  const physicalOptionSignature = getContextualPhysicalOptionSignature(
+    simulationOptions
+  );
+  const queue = new MinHeap((entry) => entry.estimate);
+  const bestCostByState = new Map();
+  const initialFacings = options.startupSpinUp
+    ? ROTATION_ORDER
+    : [context.state.facing ?? "E"];
+
+  for (const facing of initialFacings) {
+    const initialState = {
+      x: context.state.x,
+      y: context.state.y,
+      facing
+    };
+    const initialHistory = getProgramHistoryWindow(context.history);
+    const root = {
+      finalState: initialState,
+      initialState,
+      startFacing: facing,
+      parent: null,
+      transition: null,
+      localActions: 0,
+      absoluteActions: context.absoluteActions,
+      distance: 0,
+      forcedDistance: 0,
+      hazard: 0,
+      rebootPenalty: 0,
+      baseCost: 0,
+      cardAvailabilityPenalty: 0,
+      actionHistory: initialHistory,
+      localActionIds: []
+    };
+
+    let blockStartedAt = profileNow();
+    const key = getContextualSearchStateKey(
+      initialState,
+      context.absoluteActions,
+      initialHistory,
+      dynamicGoal
+    );
+    profile.currentKeyMs += profileNow() - blockStartedAt;
+
+    blockStartedAt = profileNow();
+    bestCostByState.set(key, 0);
+    queue.push(createContextualQueueEntry(root, goal, dynamicGoal));
+    profile.queueMs += profileNow() - blockStartedAt;
+  }
+
+  const completed = [];
+  let expansions = 0;
+
+  while (
+    queue.size &&
+    completed.length < completionPool &&
+    expansions < maxExpansions
+  ) {
+    let blockStartedAt = profileNow();
+    const current = queue.pop();
+    profile.queueMs += profileNow() - blockStartedAt;
+
+    blockStartedAt = profileNow();
+    const currentKey = getContextualSearchStateKey(
+      current.finalState,
+      current.absoluteActions,
+      current.actionHistory,
+      dynamicGoal
+    );
+    profile.currentKeyMs += profileNow() - blockStartedAt;
+
+    blockStartedAt = profileNow();
+    const knownBest = bestCostByState.get(currentKey);
+    if (
+      knownBest !== undefined &&
+      current.baseCost > knownBest + 0.001
+    ) {
+      profile.dominatedStates += 1;
+      profile.dominanceMs += profileNow() - blockStartedAt;
+      continue;
+    }
+    profile.dominanceMs += profileNow() - blockStartedAt;
+
+    if (
+      completed.length >= 1 &&
+      maxOutputRoutes > 1 &&
+      expansions >= optionalRouteExpansionLimit
+    ) {
+      break;
+    }
+
+    blockStartedAt = profileNow();
+    const reachesGoal = routeReachesContextualGoal(
+      current,
+      goal,
+      dynamicGoal
+    );
+    if (reachesGoal) {
+      profile.completedGoals += 1;
+      const transitions = reconstructRouteTransitions(current);
+      const path = buildTimeline(transitions, current.initialState);
+      const hitTarget = (
+        getDynamicGoalPosition(dynamicGoal, current.absoluteActions) ??
+        goal
+      );
+      const route = {
+        path,
+        transitions,
+        finalState: current.finalState,
+        initialState: current.initialState,
+        startFacing: current.startFacing,
+        hitTarget,
+        movingTarget: dynamicGoal
+          ? {
+            checkpointId: dynamicGoal.id ?? null,
+            position: hitTarget,
+            space: getDynamicGoalSpace(dynamicGoal, hitTarget),
+            actions: current.absoluteActions,
+            positions: dynamicGoal.positions ?? [],
+            displayPositions:
+              dynamicGoal.displayPositions ??
+              dynamicGoal.positions ??
+              []
+          }
+          : null,
+        actions: current.localActions,
+        absoluteStartAction: context.absoluteActions,
+        absoluteActions: current.absoluteActions,
+        distance: current.distance,
+        forcedDistance: current.forcedDistance,
+        hazard: Number(current.hazard.toFixed(2)),
+        rebootPenalty: current.rebootPenalty,
+        conveyorComplexity: scoreConveyorComplexity(
+          { transitions },
+          hitTarget
+        ),
+        rebootCount: transitions.filter(
+          (transition) => transition.rebooted
+        ).length,
+        score: Number(current.baseCost.toFixed(2)),
+        cardAvailabilityPenalty: Number(
+          (current.cardAvailabilityPenalty || 0).toFixed(2)
+        ),
+        goalReached: true,
+        fullCourseLeg: true,
+        localActionIds: current.localActionIds,
+        programHistoryEnd: getProgramHistoryWindow(
+          current.actionHistory
+        )
+      };
+
+      if (
+        (
+          options.recoveryRule === "dynamic_archiving" ||
+          !options.recoveryRule
+        ) &&
+        routeTouchesPit(tileMap, route)
+      ) {
+        profile.goalCompletionMs += profileNow() - blockStartedAt;
+        continue;
+      }
+
+      completed.push(route);
+      profile.goalCompletionMs += profileNow() - blockStartedAt;
+      continue;
+    }
+    profile.goalCompletionMs += profileNow() - blockStartedAt;
+
+    expansions += 1;
+    if (current.localActions >= maxActions) {
+      continue;
+    }
+
+    const currentTarget = (
+      getDynamicGoalPosition(dynamicGoal, current.absoluteActions) ??
+      goal
+    );
+
+    for (const action of ACTIONS) {
+      profile.actionCandidates += 1;
+
+      blockStartedAt = profileNow();
+      const physicalResult = getCachedContextualPhysicalTransition(
+        tileMap,
+        current.finalState,
+        action,
+        {
+          ...simulationOptions,
+          goal: currentTarget,
+          registerIndex: current.absoluteActions % REGISTER_COUNT
+        },
+        physicalOptionSignature
+      );
+      const transition = physicalResult.transition;
+      profile.simulationCalls += 1;
+      if (physicalResult.hit) {
+        profile.physicalCacheHits += 1;
+      } else {
+        profile.physicalCacheMisses += 1;
+      }
+      profile.simulationMs += profileNow() - blockStartedAt;
+
+      if (transition.crashed || transition.blocked) {
+        profile.blockedTransitions += 1;
+        continue;
+      }
+
+      blockStartedAt = profileNow();
+      const actionPenalty = getActionPenalty(action, options);
+      const reversePenalty = action.id === "BACK" ? 1.4 : 0;
+      const heavyMovePenalty = action.id === "FORWARD_2"
+        ? 0.25
+        : action.id === "FORWARD_3"
+          ? 0.75
+          : 0;
+      const scarceReusePenalty = getCardAvailabilityPressure(
+        current.actionHistory,
+        action.id,
+        {
+          ...options,
+          absoluteActionCount: current.absoluteActions
+        }
+      );
+      const conveyorComplexity = scoreTransitionConveyorComplexity(
+        transition,
+        currentTarget
+      );
+      profile.actionScoringMs += profileNow() - blockStartedAt;
+
+      blockStartedAt = profileNow();
+      const nextHistory = getProgramHistoryWindow([
+        ...current.actionHistory,
+        action.id
+      ]);
+      const nextLocalActionIds = [
+        ...current.localActionIds,
+        action.id
+      ];
+      const destinations = transition.rebootChoices?.length
+        ? transition.rebootChoices
+        : [transition.to];
+      profile.historyBuildMs += profileNow() - blockStartedAt;
+
+      for (const destination of destinations) {
+        profile.destinationCandidates += 1;
+
+        blockStartedAt = profileNow();
+        const nextAbsoluteActions = current.absoluteActions + 1;
+        const transitionRebootPenalty = transition.rebooted
+          ? getRebootRoutePenalty(nextAbsoluteActions)
+          : (transition.rebootPenalty || 0);
+        const transitionForDestination = transition.rebootChoices?.length
+          ? { ...transition, to: destination }
+          : transition;
+        const nextRoute = {
+          finalState: destination,
+          initialState: current.initialState,
+          startFacing: current.startFacing,
+          parent: current,
+          transition: transitionForDestination,
+          localActions: current.localActions + 1,
+          absoluteActions: nextAbsoluteActions,
+          distance: current.distance + transition.distance,
+          forcedDistance:
+            current.forcedDistance + transition.forcedDistance,
+          hazard: current.hazard + transition.hazard,
+          rebootPenalty:
+            current.rebootPenalty + transitionRebootPenalty,
+          baseCost:
+            current.baseCost +
+            transition.hazard +
+            transitionRebootPenalty +
+            weightedDistance(
+              transition.distance,
+              transition.forcedDistance
+            ) +
+            actionPenalty +
+            reversePenalty +
+            heavyMovePenalty +
+            scarceReusePenalty +
+            conveyorComplexity,
+          cardAvailabilityPenalty:
+            (current.cardAvailabilityPenalty || 0) +
+            scarceReusePenalty,
+          actionHistory: nextHistory,
+          localActionIds: nextLocalActionIds
+        };
+        profile.destinationBuildMs += profileNow() - blockStartedAt;
+
+        blockStartedAt = profileNow();
+        const nextKey = getContextualSearchStateKey(
+          destination,
+          nextAbsoluteActions,
+          nextHistory,
+          dynamicGoal
+        );
+        profile.nextKeyMs += profileNow() - blockStartedAt;
+
+        blockStartedAt = profileNow();
+        const priorBest = bestCostByState.get(nextKey);
+        if (
+          priorBest !== undefined &&
+          nextRoute.baseCost >= priorBest - 0.001
+        ) {
+          profile.dominatedStates += 1;
+          profile.dominanceMs += profileNow() - blockStartedAt;
+          continue;
+        }
+
+        bestCostByState.set(nextKey, nextRoute.baseCost);
+        profile.acceptedStates += 1;
+        profile.dominanceMs += profileNow() - blockStartedAt;
+
+        blockStartedAt = profileNow();
+        queue.push(
+          createContextualQueueEntry(nextRoute, goal, dynamicGoal)
+        );
+        profile.queueMs += profileNow() - blockStartedAt;
+      }
+    }
+  }
+
+  const deduped = dedupeRoutes(completed).sort(
+    (left, right) => left.score - right.score
+  );
+  const selectedRoutes = selectDistinctRoutes(
+    deduped,
+    goal,
+    maxOutputRoutes
+  );
+
+  [
+    "queueMs",
+    "currentKeyMs",
+    "goalCompletionMs",
+    "simulationMs",
+    "actionScoringMs",
+    "historyBuildMs",
+    "destinationBuildMs",
+    "nextKeyMs",
+    "dominanceMs"
+  ].forEach((key) => {
+    profile[key] = Number(profile[key].toFixed(2));
+  });
+
+  selectedRoutes.contextualSearchMeta = {
+    expansions,
+    maxExpansions,
+    optionalRouteExpansionLimit,
+    hitExpansionCap: expansions >= maxExpansions,
+    stoppedAfterUsefulRoute: (
+      selectedRoutes.length >= 1 &&
+      expansions >= optionalRouteExpansionLimit &&
+      expansions < maxExpansions
+    ),
+    zeroRouteCapFailure: (
+      selectedRoutes.length === 0 &&
+      expansions >= maxExpansions
+    )
+  };
+
+  recordRouteSearchTelemetry("contextual-leg", telemetryStartedAt, {
+    expansions,
+    maxExpansions,
+    completedRoutes: completed.length,
+    returnedRoutes: selectedRoutes.length,
+    start: {
+      x: context.state.x,
+      y: context.state.y,
+      facing: context.state.facing ?? null
+    },
+    goal: { x: goal.x, y: goal.y },
+    contextualProfile: profile
+  });
+  return selectedRoutes;
+}
+
+function scoreContextualCardSequence(
+  history,
+  absoluteActions,
+  actionIds,
+  options = {}
+) {
+  let workingHistory = getProgramHistoryWindow(history);
+  let workingAbsoluteActions = absoluteActions;
+  let penalty = 0;
+
+  for (const actionId of actionIds || []) {
+    penalty += getCardAvailabilityPressure(
+      workingHistory,
+      actionId,
+      {
+        ...options,
+        absoluteActionCount: workingAbsoluteActions
+      }
+    );
+    workingHistory = getProgramHistoryWindow([
+      ...workingHistory,
+      actionId
+    ]);
+    workingAbsoluteActions += 1;
+  }
+
+  return {
+    penalty: Number(penalty.toFixed(2)),
+    history: workingHistory,
+    absoluteActions: workingAbsoluteActions
+  };
+}
+
+function rebaseContextualCachedRoute(
+  route,
+  context,
+  options = {}
+) {
+  const cardState = scoreContextualCardSequence(
+    context.history,
+    context.absoluteActions,
+    route.localActionIds,
+    options
+  );
+  const oldCardPenalty = route.cardAvailabilityPenalty || 0;
+  const score = Number((
+    route.score -
+    oldCardPenalty +
+    cardState.penalty
+  ).toFixed(2));
+  const movingTarget = route.movingTarget
+    ? {
+      ...route.movingTarget,
+      actions: cardState.absoluteActions
+    }
+    : null;
+
+  return {
+    ...route,
+    absoluteStartAction: context.absoluteActions,
+    absoluteActions: cardState.absoluteActions,
+    movingTarget,
+    score,
+    cardAvailabilityPenalty: cardState.penalty,
+    programHistoryEnd: cardState.history
+  };
+}
+
+function getContextAfterLeg(route) {
+  return {
+    state: cloneState(route.finalState),
+    absoluteActions: route.absoluteActions,
+    history: getProgramHistoryWindow(route.programHistoryEnd)
+  };
+}
+
+function getPartialBeamCurrentLeg(partial) {
+  return partial.legs.at(-1) ?? null;
+}
+
+function selectContextualPartialBeam(
+  partials,
+  goal,
+  width = CONTEXTUAL_BEAM_WIDTH
+) {
+  if (partials.length <= width) {
+    return [...partials].sort(
+      (left, right) => left.score - right.score
+    );
+  }
+
+  const sorted = [...partials].sort(
+    (left, right) => left.score - right.score
+  );
+  const best = sorted[0];
+  const scoreAllowance = Math.max(18, best.score * 0.1);
+  const eligible = sorted.filter(
+    (partial) => partial.score <= best.score + scoreAllowance
+  );
+
+  if (width === 1 || eligible.length === 1) {
+    return [best];
+  }
+
+  let diverse = null;
+  let diverseNovelty = -1;
+
+  for (const candidate of eligible.slice(1)) {
+    const candidateLeg = getPartialBeamCurrentLeg(candidate);
+    const bestLeg = getPartialBeamCurrentLeg(best);
+    if (!candidateLeg || !bestLeg) {
+      continue;
+    }
+
+    const novelty = 1 - routeSimilarity(
+      candidateLeg,
+      bestLeg,
+      goal
+    );
+    if (
+      novelty > diverseNovelty + 0.001 ||
+      (
+        Math.abs(novelty - diverseNovelty) <= 0.001 &&
+        candidate.score < (diverse?.score ?? Infinity)
+      )
+    ) {
+      diverse = candidate;
+      diverseNovelty = novelty;
+    }
+  }
+
+  return diverse && diverseNovelty >= 0.1
+    ? [best, diverse].sort(
+      (left, right) => left.score - right.score
+    )
+    : [best];
+}
+
+function stitchContextualLegs(legs, flags) {
+  if (!legs?.length) {
+    return null;
+  }
+
+  const transitions = legs.flatMap(
+    (leg) => leg.transitions || []
+  );
+  const initialState = legs[0].initialState;
+  const finalState = legs.at(-1).finalState;
+  const path = buildTimeline(transitions, initialState);
+  let cumulativeActions = 0;
+  let cumulativeDistance = 0;
+  let cumulativeForcedDistance = 0;
+  let cumulativeHazard = 0;
+  let cumulativeRebootPenalty = 0;
+  let cumulativeBaseCost = 0;
+  const checkpointHits = [];
+
+  legs.forEach((leg, legIndex) => {
+    cumulativeActions += leg.actions ?? 0;
+    cumulativeDistance += leg.distance ?? 0;
+    cumulativeForcedDistance += leg.forcedDistance ?? 0;
+    cumulativeHazard += leg.hazard ?? 0;
+    cumulativeRebootPenalty += leg.rebootPenalty ?? 0;
+    cumulativeBaseCost += leg.score ?? 0;
+    const flag = flags[legIndex];
+
+    checkpointHits.push({
+      checkpointIndex: legIndex,
+      checkpointId: flag?.id ?? legIndex + 1,
+      action: cumulativeActions,
+      state: cloneState(leg.finalState),
+      position: leg.hitTarget ?? flag,
+      movingTarget: leg.movingTarget ?? null,
+      distance: cumulativeDistance,
+      forcedDistance: cumulativeForcedDistance,
+      hazard: cumulativeHazard,
+      rebootPenalty: cumulativeRebootPenalty,
+      baseCost: cumulativeBaseCost
+    });
+  });
+
+  return {
+    path,
+    transitions,
+    finalState,
+    initialState,
+    startFacing: legs[0].startFacing,
+    checkpointHits,
+    actionHistory: legs.flatMap(
+      (leg) => leg.localActionIds || []
+    ),
+    actions: cumulativeActions,
+    distance: Number(cumulativeDistance.toFixed(2)),
+    forcedDistance: Number(
+      cumulativeForcedDistance.toFixed(2)
+    ),
+    hazard: Number(cumulativeHazard.toFixed(2)),
+    rebootPenalty: Number(cumulativeRebootPenalty.toFixed(2)),
+    conveyorComplexity: Number(
+      legs.reduce(
+        (sum, leg) => sum + (leg.conveyorComplexity || 0),
+        0
+      ).toFixed(2)
+    ),
+    rebootCount: legs.reduce(
+      (sum, leg) => sum + (leg.rebootCount || 0),
+      0
+    ),
+    score: Number(cumulativeBaseCost.toFixed(2)),
+    goalReached: true,
+    fullCourse: true,
+    legRoutes: legs
+  };
+}
+
+function analyzeFullCourseContextual(
+  tileMap,
+  starts,
+  flags,
+  options = {}
+) {
+  const playerCount = options.playerCount ?? starts.length;
+  const dynamicGoals = options.dynamicGoals ?? [];
+  const portalMap = options.portalMap ?? buildPortalMap(tileMap);
+  const legCache = new Map();
+  const templateCache = new Map();
+  let cacheHits = 0;
+  let templateHits = 0;
+  let cacheMisses = 0;
+  let templateFallbacks = 0;
+  let zeroRouteCapFailures = 0;
+  const zeroRouteFailureStarts = new Set();
+  const earlyExitEnabled = Boolean(options.contextualEarlyExit);
+  const requestConstrained = (
+    (options.difficulty && options.difficulty !== "any") ||
+    (options.length && options.length !== "any")
+  );
+  const priorRoutingStalls = Math.max(
+    0,
+    Number(options.contextualPriorRoutingStalls ?? 0)
+  );
+  const stallEscalation = Math.min(2, Math.floor(priorRoutingStalls));
+  const zeroRouteFailureLimit = Math.max(
+    CONTEXTUAL_ZERO_ROUTE_STALL_STARTS_MIN,
+    CONTEXTUAL_ZERO_ROUTE_STALL_MIN +
+      Math.max(0, flags.length - 3) +
+      (requestConstrained ? 2 : 0) -
+      stallEscalation
+  );
+
+  const baseRouteOptions = {
+    recoveryRule: options.recoveryRule,
+    lessDeadlyGame: options.lessDeadlyGame,
+    moreDeadlyGame: options.moreDeadlyGame,
+    lighterGame: options.lighterGame,
+    upgradeWorld: options.upgradeWorld,
+    lessSpammyGame: options.lessSpammyGame,
+    criticalSpam: options.criticalSpam,
+    criticalHaywire: options.criticalHaywire,
+    permanentShutdown: options.permanentShutdown,
+    cuttingFloor: options.cuttingFloor,
+    flamingOil: options.flamingOil,
+    repulsorOverdrive: options.repulsorOverdrive,
+    lessForeshadowing: options.lessForeshadowing,
+    repairStations: Boolean(options.repairStations),
+    playerCount,
+    virtualBots: Boolean(options.virtualBots),
+    boardRects: options.boardRects,
+    portalMap
+  };
+
+  const getLegRoutes = (
+    context,
+    legIndex,
+    start,
+    startIndex,
+    startupSpinUp = false
+  ) => {
+    const dynamicGoal = dynamicGoals[legIndex] ?? null;
+    const namespace = options.recoveryRule === "home_reboot"
+      ? `start${startIndex}`
+      : "shared";
+    const cacheKey = getContextualLegCacheKey(
+      context,
+      legIndex,
+      dynamicGoal,
+      namespace
+    );
+    const templateKey = getContextualTemplateCacheKey(
+      context,
+      legIndex,
+      dynamicGoal,
+      namespace
+    );
+
+    if (legCache.has(cacheKey)) {
+      cacheHits += 1;
+      return legCache.get(cacheKey).map((route) => (
+        rebaseContextualCachedRoute(
+          route,
+          context,
+          baseRouteOptions
+        )
+      ));
+    }
+
+    const opening = legIndex === 0;
+    const targetRouteCount = opening
+      ? CONTEXTUAL_OPENING_ROUTES
+      : CONTEXTUAL_LATER_ROUTES;
+    const cachedTemplates = templateCache.get(templateKey) ?? [];
+
+    if (cachedTemplates.length) {
+      const rebasedTemplates = cachedTemplates
+        .map((route) => {
+          const rebased = rebaseContextualCachedRoute(
+            route,
+            context,
+            baseRouteOptions
+          );
+          return {
+            route: rebased,
+            cardDelta: Math.abs(
+              (rebased.cardAvailabilityPenalty || 0) -
+              (route.cardAvailabilityPenalty || 0)
+            )
+          };
+        })
+        .sort((left, right) => left.route.score - right.route.score);
+      const acceptable = rebasedTemplates
+        .filter((entry) => (
+          entry.cardDelta <= CONTEXTUAL_TEMPLATE_CARD_DELTA_LIMIT
+        ))
+        .map((entry) => entry.route);
+      const distinct = selectDistinctRoutes(
+        acceptable,
+        flags[legIndex],
+        targetRouteCount
+      );
+
+      if (distinct.length >= Math.min(2, targetRouteCount)) {
+        templateHits += 1;
+        legCache.set(cacheKey, distinct);
+        return distinct;
+      }
+
+      templateFallbacks += 1;
+    }
+
+    cacheMisses += 1;
+    const rebootTokens = options.recoveryRule === "home_reboot"
+      ? getHomeRebootTokensForStart(start, options.rebootTokens)
+      : options.rebootTokens;
+    const routes = enumerateContextualLegRoutes(
+      tileMap,
+      context,
+      flags[legIndex],
+      {
+        ...baseRouteOptions,
+        rebootTokens,
+        dynamicGoal,
+        startupSpinUp: opening && startupSpinUp,
+        maxRoutes: targetRouteCount,
+        completionPool: opening
+          ? 4
+          : CONTEXTUAL_COMPLETION_POOL,
+        maxExpansions: opening
+          ? (
+            options.contextualOpeningExpansions ??
+            CONTEXTUAL_OPENING_EXPANSIONS
+          )
+          : (
+            options.contextualLaterExpansions ??
+            CONTEXTUAL_LATER_EXPANSIONS
+          ),
+        maxActions:
+          options.contextualLegMaxActions ??
+          CONTEXTUAL_LEG_MAX_ACTIONS
+      }
+    );
+
+    const searchMeta = routes.contextualSearchMeta ?? null;
+    if (searchMeta?.zeroRouteCapFailure) {
+      zeroRouteCapFailures += 1;
+      zeroRouteFailureStarts.add(startIndex);
+
+      if (
+        earlyExitEnabled &&
+        zeroRouteCapFailures >= zeroRouteFailureLimit &&
+        zeroRouteFailureStarts.size >= CONTEXTUAL_ZERO_ROUTE_STALL_STARTS_MIN
+      ) {
+        const error = new Error(
+          `Contextual routing stalled after ${zeroRouteCapFailures} cap-exhausted zero-route contexts across ${zeroRouteFailureStarts.size} starts`
+        );
+        error.code = "CONTEXTUAL_SEARCH_STALLED";
+        error.contextualSearchHealth = {
+          zeroRouteCapFailures,
+          distinctStarts: zeroRouteFailureStarts.size,
+          failureLimit: zeroRouteFailureLimit,
+          flagCount: flags.length,
+          constrained: requestConstrained,
+          priorRoutingStalls,
+          stallEscalation
+        };
+        throw error;
+      }
+    }
+
+    legCache.set(cacheKey, routes);
+
+    const mergedTemplates = dedupeRoutes([
+      ...cachedTemplates,
+      ...routes
+    ])
+      .sort((left, right) => left.score - right.score)
+      .slice(0, CONTEXTUAL_TEMPLATE_POOL);
+    templateCache.set(templateKey, mergedTemplates);
+
+    return routes;
+  };
+
+  const startPartials = starts.map((start, index) => {
+    const sourceIndex = Number.isInteger(start.analysisIndex)
+      ? start.analysisIndex
+      : index;
+    const context = {
+      state: {
+        x: start.x,
+        y: start.y,
+        facing: start.facing ?? "E"
+      },
+      absoluteActions: 0,
+      history: []
+    };
+    const openingRoutes = getLegRoutes(
+      context,
+      0,
+      start,
+      sourceIndex,
+      Boolean(options.startupSpinUp)
+    );
+    const partials = openingRoutes.map((route) => ({
+      legs: [route],
+      context: getContextAfterLeg(route),
+      score: route.score
+    }));
+
+    return {
+      index: sourceIndex,
+      start,
+      partials: selectContextualPartialBeam(
+        partials,
+        flags[0],
+        CONTEXTUAL_BEAM_WIDTH
+      )
+    };
+  });
+
+  for (let legIndex = 1; legIndex < flags.length; legIndex += 1) {
+    for (const entry of startPartials) {
+      if (!entry.partials.length) {
+        continue;
+      }
+
+      const extensions = [];
+      for (const partial of entry.partials) {
+        const legRoutes = getLegRoutes(
+          partial.context,
+          legIndex,
+          entry.start,
+          entry.index,
+          false
+        );
+
+        for (const route of legRoutes) {
+          extensions.push({
+            legs: [...partial.legs, route],
+            context: getContextAfterLeg(route),
+            score: partial.score + route.score
+          });
+        }
+      }
+
+      entry.partials = selectContextualPartialBeam(
+        extensions,
+        flags[legIndex],
+        CONTEXTUAL_BEAM_WIDTH
+      );
+    }
+  }
+
+  const startAnalyses = startPartials.map((entry) => {
+    const fullCourseRoutes = entry.partials
+      .map((partial) => (
+        stitchContextualLegs(partial.legs, flags)
+      ))
+      .filter(Boolean)
+      .sort((left, right) => left.score - right.score);
+    const fullCourseRoute = fullCourseRoutes[0] ?? null;
+
+    return buildStartAnalysisForSelectedFullRoute({
+      index: entry.index,
+      start: entry.start,
+      reachable: Boolean(fullCourseRoute),
+      fullCourseRoutes,
+      fullCourseRoute,
+      fullCourseRouteIndex: fullCourseRoute ? 0 : null,
+      fullCourseTrafficPenalty: 0
+    }, flags);
+  });
+
+  const selection = selectFullCourseRoutesForStarts(
+    tileMap,
+    startAnalyses,
+    flags,
+    {
+      ...options,
+      playerCount
+    }
+  );
+  const selectedStartAnalyses = selection.starts.map(
+    (analysis) => (
+      buildStartAnalysisForSelectedFullRoute(
+        analysis,
+        flags
+      )
+    )
+  );
+  const fullScores = selectedStartAnalyses
+    .filter(
+      (item) => item.reachable && item.fullCourseRoute
+    )
+    .map(
+      (item) => (
+        item.fullCourseRoute.score +
+        (item.fullCourseTrafficPenalty ?? 0)
+      )
+    );
+  const meanFullScore = average(fullScores);
+  const adjustedStartAnalyses = selectedStartAnalyses.map(
+    (analysis) => {
+      if (!analysis.fullCourseRoute) {
+        return analysis;
+      }
+
+      const fullScore = (
+        analysis.fullCourseRoute.score +
+        (analysis.fullCourseTrafficPenalty ?? 0)
+      );
+      const rawDelta = fullScore - meanFullScore;
+      return {
+        ...analysis,
+        courseEstimate: {
+          ...analysis.courseEstimate,
+          meanFullScore: Number(meanFullScore.toFixed(2)),
+          delta: Number(rawDelta.toFixed(2))
+        },
+        courseScoreAdjustment: Number(
+          clamp(rawDelta * 0.32, -10, 10).toFixed(2)
+        )
+      };
+    }
+  );
+
+  selectAndScoreStartAnalyses(
+    tileMap,
+    adjustedStartAnalyses,
+    flags[0],
+    playerCount,
+    null,
+    options
+  );
+  const expectedLegAnalyses = buildExpectedLegAnalysesFromFullRoutes(
+    adjustedStartAnalyses,
+    flags,
+    playerCount
+  );
+  const finalSummary = summarizeFirstLegAnalyses(
+    tileMap,
+    adjustedStartAnalyses,
+    flags[0],
+    flags,
+    playerCount,
+    options,
+    new Set(),
+    new Map()
+  );
+
+  return {
+    goal: flags[0],
+    flags,
+    starts: adjustedStartAnalyses,
+    expectedLegAnalyses: expectedLegAnalyses.slice(1),
+    summary: {
+      ...finalSummary.summary,
+      courseContinuationMean: Number(
+        meanFullScore.toFixed(2)
+      ),
+      courseContinuationWeighted: true,
+      fullCourseRoutes: true,
+      contextualLegRoutes: true,
+      contextualLegCache: {
+        entries: legCache.size,
+        templateEntries: templateCache.size,
+        hits: cacheHits + templateHits,
+        exactHits: cacheHits,
+        templateHits,
+        misses: cacheMisses,
+        templateFallbacks,
+        zeroRouteCapFailures,
+        zeroRouteFailureStarts: zeroRouteFailureStarts.size,
+        zeroRouteFailureLimit,
+        priorRoutingStalls,
+        stallEscalation
+      },
+      fullCourseTraffic: {
+        passes: selection.selectionPasses,
+        routeSwitches: selection.routeSwitches,
+        averagePenalty: selection.averageTrafficPenalty,
+        legAwareOverlap: true,
+        contextualLegRoutes: true,
+        openingRoutesPerStart: CONTEXTUAL_OPENING_ROUTES,
+        laterRoutesPerContext: CONTEXTUAL_LATER_ROUTES,
+        stitchedBeamWidth: CONTEXTUAL_BEAM_WIDTH,
+        openingLegWeight:
+          FULL_COURSE_OPENING_LEG_TRAFFIC_WEIGHT,
+        laterLegWeight:
+          FULL_COURSE_LATER_LEG_TRAFFIC_WEIGHT
+      }
+    }
+  };
+}
+
 export function analyzeFullCourse(tileMap, starts, flags, options = {}) {
+  if (options.contextualLegSearch) {
+    return analyzeFullCourseContextual(
+      tileMap,
+      starts,
+      flags,
+      options
+    );
+  }
   const maxRoutes = options.maxRoutes ?? 2;
   const playerCount = options.playerCount ?? starts.length;
   const dynamicGoals = options.dynamicGoals ?? [];
@@ -4088,16 +6477,25 @@ export function analyzeFullCourse(tileMap, starts, flags, options = {}) {
     const rebootTokens = options.recoveryRule === "home_reboot"
       ? getHomeRebootTokensForStart(start, options.rebootTokens)
       : options.rebootTokens;
-    const fullRoutes = dedupeRoutes(enumerateFullCourseRoutes(tileMap, start, flags, {
+    const diverseSearch = Boolean(options.diverseFullCourseSearch);
+    const completionPool = diverseSearch
+      ? Math.min(5, maxRoutes + 2)
+      : maxRoutes;
+    const rawRoutes = dedupeRoutes(enumerateFullCourseRoutes(tileMap, start, flags, {
       ...routeOptions,
       rebootTokens,
-      maxRoutes,
+      maxRoutes: completionPool,
+      maxStateLabels: diverseSearch ? 2 : 1,
+      diverseStateLabelsAfterFirstCheckpoint: diverseSearch,
       startupSpinUp: options.startupSpinUp,
       repairStations: options.repairStations
     })).sort((left, right) => left.score - right.score);
-    return selectDistinctRoutes(fullRoutes, flags.at(-1), maxRoutes)
+    const preparedRoutes = rawRoutes
       .map((route) => prepareFullCourseCandidate(route, flags, options))
       .filter(Boolean);
+    return diverseSearch
+      ? selectCorridorDiverseFullCourseRoutes(preparedRoutes, flags, maxRoutes)
+      : selectDistinctRoutes(preparedRoutes, flags.at(-1), maxRoutes);
   };
 
   // All Virtual Bots share Flag 0, so avoid repeating the same expensive
@@ -4203,6 +6601,227 @@ export function analyzeFullCourse(tileMap, starts, flags, options = {}) {
       }
     }
   };
+}
+
+export function evaluateFullCourseFocusUnderOccupancy(
+  tileMap,
+  firstLeg,
+  flags,
+  focusIndex,
+  occupancyByIndex,
+  options = {}
+) {
+  const analyses = (firstLeg?.starts || []).filter((analysis) => (
+    analysis.reachable &&
+    analysis.fullCourseRoutes?.length
+  ));
+  const focus = analyses.find((analysis) => analysis.index === focusIndex);
+  if (!focus) {
+    return null;
+  }
+
+  const selectedOtherRoutes = analyses
+    .filter((analysis) => analysis.index !== focusIndex)
+    .map((analysis) => ({
+      route: analysis.fullCourseRoute ?? analysis.fullCourseRoutes[0],
+      occupancyWeight: getExplicitOccupancyWeight(
+        occupancyByIndex,
+        analysis.index
+      )
+    }))
+    .filter((entry) => entry.route && entry.occupancyWeight > 0);
+
+  let bestRoute = focus.fullCourseRoute ?? focus.fullCourseRoutes[0];
+  let bestTraffic = null;
+  let bestValue = Infinity;
+
+  for (const candidate of focus.fullCourseRoutes) {
+    const traffic = getExpectedTrafficBreakdown(
+      tileMap,
+      candidate,
+      selectedOtherRoutes,
+      flags,
+      {
+        ...options,
+        occupancyByIndex
+      }
+    );
+    const rawGap = Math.max(
+      0,
+      candidate.score - focus.fullCourseRoutes[0].score
+    );
+    const value = candidate.score + traffic.total + rawGap * 0.04;
+    if (value < bestValue - 0.001) {
+      bestValue = value;
+      bestRoute = candidate;
+      bestTraffic = traffic;
+    }
+  }
+
+  if (!bestTraffic) {
+    bestTraffic = {
+      ranged: 0,
+      nearby: 0,
+      competition: 0,
+      total: 0
+    };
+  }
+
+  const firstLegRoute = bestRoute?.legRoutes?.[0] ?? null;
+  const otherFirstLegRoutes = analyses
+    .filter((analysis) => analysis.index !== focusIndex)
+    .map((analysis) => {
+      const route = (
+        analysis.fullCourseRoute ??
+        analysis.fullCourseRoutes[0]
+      )?.legRoutes?.[0];
+      return {
+        route,
+        occupancyWeight: getExplicitOccupancyWeight(
+          occupancyByIndex,
+          analysis.index
+        )
+      };
+    })
+    .filter((entry) => entry.route && entry.occupancyWeight > 0);
+  const firstTraffic = firstLegRoute
+    ? getExpectedTrafficBreakdown(
+      tileMap,
+      firstLegRoute,
+      otherFirstLegRoutes,
+      [flags[0]],
+      {
+        ...options,
+        occupancyByIndex,
+        singleLegTraffic: true
+      }
+    )
+    : { ranged: 0, nearby: 0, competition: 0, total: 0 };
+
+  return {
+    index: focusIndex,
+    fullCourseRouteIndex: focus.fullCourseRoutes.indexOf(bestRoute),
+    fullCourseRoute: bestRoute,
+    fullCourseIntrinsic: bestRoute?.score ?? Infinity,
+    fullCourseTraffic: bestTraffic.total,
+    fullCourseTrafficBreakdown: bestTraffic,
+    fullTotal: (bestRoute?.score ?? Infinity) + bestTraffic.total,
+    firstLegIntrinsic: firstLegRoute?.score ?? Infinity,
+    firstLegTraffic: firstTraffic.total,
+    firstLegTrafficBreakdown: firstTraffic,
+    firstLegTotal: (firstLegRoute?.score ?? Infinity) + firstTraffic.total
+  };
+}
+
+const OCCUPANCY_SCENARIO_CACHE = new WeakMap();
+
+export function evaluateFullCourseSubsetTraffic(
+  tileMap,
+  firstLeg,
+  flags,
+  includedIndices,
+  options = {}
+) {
+  if (!firstLeg || !Array.isArray(flags) || !flags.length) {
+    return { entries: [], routeSwitches: 0, averageTrafficPenalty: 0 };
+  }
+
+  const included = [...new Set(includedIndices || [])].sort((a, b) => a - b);
+  const playerCount = Math.max(1, options.playerCount ?? included.length);
+  let firstLegCache = OCCUPANCY_SCENARIO_CACHE.get(firstLeg);
+  if (!firstLegCache) {
+    firstLegCache = new Map();
+    OCCUPANCY_SCENARIO_CACHE.set(firstLeg, firstLegCache);
+  }
+  const cacheKey = `${playerCount}|${included.join(",")}`;
+  if (firstLegCache.has(cacheKey)) {
+    return firstLegCache.get(cacheKey);
+  }
+
+  const includedSet = new Set(included);
+  const subset = (firstLeg.starts || [])
+    .filter((analysis) => (
+      includedSet.has(analysis.index) &&
+      analysis.reachable &&
+      analysis.fullCourseRoutes?.length
+    ))
+    .map((analysis) => ({ ...analysis }));
+
+  if (!subset.length) {
+    const empty = { entries: [], routeSwitches: 0, averageTrafficPenalty: 0 };
+    firstLegCache.set(cacheKey, empty);
+    return empty;
+  }
+
+  const selection = selectFullCourseRoutesForStarts(
+    tileMap,
+    subset,
+    flags,
+    {
+      ...options,
+      playerCount,
+      payToWin: false,
+      fullCourseTrafficPasses:
+        options.fullCourseTrafficPasses ?? 2
+    }
+  );
+  let selected = selection.starts.map((analysis) => (
+    buildStartAnalysisForSelectedFullRoute(analysis, flags)
+  ));
+
+  const fullTotals = selected
+    .filter((analysis) => analysis.fullCourseRoute)
+    .map((analysis) => (
+      analysis.fullCourseRoute.score +
+      (analysis.fullCourseTrafficPenalty ?? 0)
+    ));
+  const meanFull = average(fullTotals);
+
+  selected = selected.map((analysis) => {
+    if (!analysis.fullCourseRoute) {
+      return analysis;
+    }
+    const fullTotal = (
+      analysis.fullCourseRoute.score +
+      (analysis.fullCourseTrafficPenalty ?? 0)
+    );
+    return {
+      ...analysis,
+      courseScoreAdjustment: Number(
+        clamp((fullTotal - meanFull) * 0.32, -10, 10).toFixed(2)
+      )
+    };
+  });
+
+  const activeIndices = new Set(selected.map((analysis) => analysis.index));
+  selectAndScoreStartAnalyses(
+    tileMap,
+    selected,
+    flags[0],
+    playerCount,
+    activeIndices,
+    {
+      ...options,
+      playerCount,
+      payToWin: false
+    }
+  );
+
+  const result = {
+    entries: selected.map((analysis) => ({
+      index: analysis.index,
+      adjustedScore: analysis.adjustedScore,
+      bestActions: analysis.bestActions,
+      bestScore: analysis.bestScore,
+      trafficPenalty: analysis.trafficPenalty,
+      fullCourseTrafficPenalty: analysis.fullCourseTrafficPenalty ?? 0,
+      fullCourseRouteIndex: analysis.fullCourseRouteIndex ?? 0
+    })),
+    routeSwitches: selection.routeSwitches,
+    averageTrafficPenalty: selection.averageTrafficPenalty
+  };
+  firstLegCache.set(cacheKey, result);
+  return result;
 }
 
 export function recomputeFirstLegPressure(tileMap, firstLeg, options = {}) {

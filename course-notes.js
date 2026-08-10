@@ -63,6 +63,11 @@ export function buildCourseNoteEvidence(scenario, fitNotes = []) {
     difficultyDirection: scenario?.metrics?.difficultyDirection ?? "matched",
     lengthFit: scenario?.metrics?.lengthFit ?? 0,
     lengthDirection: scenario?.metrics?.lengthDirection ?? "matched",
+    bestMatch: Boolean(scenario?.generationBestMatch),
+    terminationReason: scenario?.generationTerminationReason ?? null,
+    attempts: scenario?.attempts ?? 0,
+    requestedDifficulty: scenario?.preferences?.difficulty ?? "any",
+    requestedLength: scenario?.preferences?.length ?? "any",
     opening: {
       traffic: first.averageTrafficPenalty ?? 0,
       overlap: first.averageOverlapPenalty ?? 0,
@@ -240,6 +245,30 @@ export function buildCourseNoteConcepts(evidence) {
   return concepts.sort((a, b) => b.score - a.score);
 }
 
+function renderBestMatchAdvice(evidence) {
+  if (!evidence.bestMatch) return "";
+
+  const suggestions = ["Regenerate to try for a closer match"];
+  if (
+    evidence.requestedDifficulty !== "any" &&
+    evidence.difficultyFit > 0
+  ) {
+    suggestions.push("choose Any difficulty to give the generator more options");
+  }
+  if (
+    evidence.requestedLength !== "any" &&
+    evidence.lengthFit > 0
+  ) {
+    suggestions.push("choose Any length to give the generator more options");
+  }
+
+  const suggestionText = suggestions.length === 1
+    ? `${suggestions[0]}.`
+    : `${suggestions[0]}; alternatively, ${suggestions.slice(1).join(" and ")}.`;
+
+  return `<div><strong>Closest match found:</strong> The generator did not find a full match within its search budget. ${escapeHtml(suggestionText)}</div>`;
+}
+
 function renderFit(fitNotes) {
   if (!fitNotes.length) return "";
   return `<div><strong>Fit:</strong> This course is ${escapeHtml(fitNotes.join(" and "))} than requested. The notes below describe how it is likely to play despite that mismatch.</div>`;
@@ -249,6 +278,10 @@ export function renderCourseNotes(concepts, evidence, options = {}) {
   const limit = Math.max(1, options.limit ?? 4);
   const chosen = concepts.slice(0, limit);
   const parts = [];
+
+  if (evidence.bestMatch) {
+    parts.push(renderBestMatchAdvice(evidence));
+  }
 
   if (evidence.fitNotes.length) {
     parts.push(renderFit(evidence.fitNotes));
@@ -278,7 +311,7 @@ export function renderCourseNotes(concepts, evidence, options = {}) {
 export function buildCourseNotesHtml(scenario, fitNotes = [], options = {}) {
   if (!scenario) return "";
 
-  const cacheKey = `${fitNotes.join("|")}::${options.includeDiagnostics ? "dev" : "normal"}`;
+  const cacheKey = `${scenario.generationBestMatch ? "best" : "accepted"}::${scenario.generationTerminationReason ?? "-"}::${fitNotes.join("|")}::${options.includeDiagnostics ? "dev" : "normal"}`;
   let scenarioCache = notesCache.get(scenario);
   if (!scenarioCache) {
     scenarioCache = new Map();
