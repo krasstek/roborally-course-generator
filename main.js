@@ -41,14 +41,16 @@ const [
     applyVariantGenerationOptions,
     applyVariantScenarioState,
     buildVariantBundle
-  }
+  },
+  { buildCourseNotesHtml, clearCourseNotesCache }
 ] = await Promise.all([
   import(versionedPath("./render.js")),
   import(versionedPath("./analyze.js")),
   import(versionedPath("./board.js")),
   import(versionedPath("./feature-weights.js")),
   import(versionedPath("./feature-meta.js")),
-  import(versionedPath("./variants.js"))
+  import(versionedPath("./variants.js")),
+  import(versionedPath("./course-notes.js"))
 ]);
 
 // Cache clearing is a performance optimization, not a correctness requirement.
@@ -275,10 +277,11 @@ let courseExplanationState = {
   manualOpen: null
 };
 let routeInspectionState = {
-  legIndex: null,
-  routeId: null,
   kind: null,
   key: null
+};
+let traceSelectionState = {
+  startIndices: new Set()
 };
 let lastRenderDiagnostics = {
   blankFallbackTriggered: false
@@ -1769,6 +1772,9 @@ function updateSetupSummary(scenario) {
   }
 
   if (!scenario) {
+    if (courseExplanationState.scenarioRef) {
+      clearCourseNotesCache(courseExplanationState.scenarioRef);
+    }
     fitNoteEl.textContent = "";
     fitNoteEl.classList.add("hidden");
     summary.classList.add("hidden");
@@ -1789,6 +1795,9 @@ function updateSetupSummary(scenario) {
   }
 
   if (courseExplanationState.scenarioRef !== scenario) {
+    if (courseExplanationState.scenarioRef) {
+      clearCourseNotesCache(courseExplanationState.scenarioRef);
+    }
     courseExplanationState = {
       scenarioRef: scenario,
       manualOpen: null
@@ -1858,10 +1867,17 @@ function updateSetupSummary(scenario) {
     fitNoteEl.classList.add("hidden");
   }
 
-  const explanationHtml = buildCourseExplanationHtml(scenario, noteParts) + buildCourseDiagnosticsHtml(scenario, noteParts);
   const autoOpenExplanation = noteParts.length > 0;
   const explanationVisible = courseExplanationState.manualOpen ?? autoOpenExplanation;
-  explanationCopyEl.innerHTML = explanationHtml;
+  if (explanationVisible) {
+    explanationCopyEl.innerHTML = buildCourseNotesHtml(scenario, noteParts, {
+      includeDiagnostics: Boolean(document.getElementById("dev-view")?.checked)
+    });
+  } else {
+    // Course Notes are deliberately lazy: do not synthesize or retain prose
+    // for a scenario the user has not opened.
+    explanationCopyEl.innerHTML = "";
+  }
   explanationPanelEl.classList.toggle("hidden", !explanationVisible);
   explanationToggleEl.setAttribute("aria-expanded", explanationVisible ? "true" : "false");
   summary.classList.remove("hidden");
@@ -1905,40 +1921,6 @@ function describeCourseLengthText(rawLength) {
   }[describeCourseLengthBand(rawLength)] ?? "medium-length";
 }
 
-function describeDifficultyLead(scenario) {
-  const requestedDifficulty = scenario.preferences.difficulty;
-  if (requestedDifficulty !== "any" && scenario.metrics.difficultyDirection !== "matched") {
-    return scenario.metrics.difficultyDirection === "low"
-      ? "The course comes out easier than requested"
-      : "The course comes out harder than requested";
-  }
-
-  // The acceptance bands deliberately overlap. When a specific band was
-  // requested and matched, describe that matched target rather than running
-  // the raw score back through the generic three-band prose classifier (which
-  // could otherwise call a 150-154 Hard match "moderate").
-  if (requestedDifficulty !== "any") {
-    return {
-      easy: "The course matches the requested easier difficulty range",
-      moderate: "The course matches the requested moderate difficulty range",
-      hard: "The course matches the requested hard difficulty range",
-      brutal: "The course reaches the requested Robots. Must. Die. difficulty range"
-    }[requestedDifficulty] ?? `The course plays ${describeCourseDifficultyText(scenario.metrics.difficultyRaw)}`;
-  }
-
-  return `The course plays ${describeCourseDifficultyText(scenario.metrics.difficultyRaw)}`;
-}
-
-function describeLengthLead(scenario) {
-  if (scenario.preferences.length !== "any" && scenario.metrics.lengthDirection !== "matched") {
-    return scenario.metrics.lengthDirection === "low"
-      ? "The course comes out shorter than requested"
-      : "The course comes out longer than requested";
-  }
-
-  return `The course plays ${describeCourseLengthText(scenario.metrics.lengthRaw)}`;
-}
-
 function escapeHtml(text) {
   return String(text)
     .replaceAll("&", "&amp;")
@@ -1946,107 +1928,6 @@ function escapeHtml(text) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
-}
-
-function formatContributionLabel(id) {
-  switch (id) {
-    case "checkpointLoad":
-      return "it uses many checkpoints";
-    case "playerLoad":
-      return "the player count adds turn overhead";
-    case "actionLoad":
-      return "routes need a lot of programmed actions";
-    case "distanceLoad":
-      return "checkpoints are spaced far apart";
-    case "congestionLoad":
-      return "traffic and blocking slow things down";
-    case "flagAreaLoad":
-      return "checkpoint areas are busy and awkward";
-    case "movingTargetLoad":
-      return "moving targets keep players repositioning";
-    case "actFastLoad":
-      return "Act Fast keeps programming time capped";
-    default:
-      return null;
-  }
-}
-
-function formatShortLengthReliefLabel(id) {
-  switch (id) {
-    case "checkpointLoad":
-      return "it keeps the checkpoint count down";
-    case "playerLoad":
-      return "there is limited player overhead";
-    case "actionLoad":
-      return "routes do not need many programmed actions";
-    case "distanceLoad":
-      return "checkpoints stay relatively close together";
-    case "congestionLoad":
-      return "traffic stays fairly manageable";
-    case "flagAreaLoad":
-      return "checkpoint areas are not too sticky";
-    case "actFastLoad":
-      return "Act Fast keeps programming time capped";
-    default:
-      return null;
-  }
-}
-
-function getShortLengthReasons(scenario, contributionEntries, variantReasons = []) {
-  const reasons = [];
-  const inputs = scenario.metrics.lengthMetrics?.inputs ?? {};
-  const contributions = scenario.metrics.lengthMetrics?.contributions ?? {};
-  const playerCount = scenario.preferences.playerCount ?? inputs.playerCount ?? 4;
-  const checkpointCount = scenario.checkpoints?.length ?? inputs.flagCount ?? 0;
-
-  if (checkpointCount <= 2 || (contributions.checkpointLoad ?? 0) <= 4.4) {
-    reasons.push("it keeps the checkpoint count down");
-  }
-  if (playerCount <= 4 || (contributions.playerLoad ?? 0) <= computePlayerTimeLoad(4)) {
-    reasons.push("there is limited player overhead");
-  }
-  if ((contributions.actionLoad ?? 0) <= 28 || (inputs.totalActionLoad ?? 0) <= 10) {
-    reasons.push("routes do not need many programmed actions");
-  }
-  if ((contributions.distanceLoad ?? 0) <= 12 || (inputs.totalRouteDistance ?? 0) <= 16) {
-    reasons.push("checkpoints stay relatively close together");
-  }
-  if ((contributions.congestionLoad ?? 0) <= 1.6 || (inputs.totalCongestion ?? 0) <= 13) {
-    reasons.push("traffic stays fairly manageable");
-  }
-  if ((contributions.flagAreaLoad ?? 0) <= 1.5 || (inputs.flagAreaScore ?? 0) <= 18) {
-    reasons.push("checkpoint areas are not too sticky");
-  }
-  if ((contributions.actFastLoad ?? 0) < 0) {
-    reasons.push("Act Fast keeps programming time capped");
-  }
-
-  if (!reasons.length) {
-    reasons.push(
-      ...contributionEntries
-        .map(([id]) => formatShortLengthReliefLabel(id))
-        .filter(Boolean)
-    );
-  }
-
-  reasons.push(...variantReasons);
-
-  return reasons
-    .filter((reason, index, list) => list.indexOf(reason) === index)
-    .slice(0, 3);
-}
-
-function joinReasonParts(parts = []) {
-  if (!parts.length) {
-    return "";
-  }
-  if (parts.length === 1) {
-    return parts[0];
-  }
-  if (parts.length === 2) {
-    return `${parts[0]} and ${parts[1]}`;
-  }
-  return `${parts[0]}, ${parts[1]}, and ${parts[2]}`;
 }
 
 function averageValues(values = []) {
@@ -2057,650 +1938,9 @@ function averageValues(values = []) {
   return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
-function getMeaningfulVariantReasons(scenario) {
-  const difficultyHigherReasons = [];
-  const difficultyLowerReasons = [];
-  const lengthLongerReasons = [];
-  const lengthShorterReasons = [];
-  const lengthContributions = scenario.metrics.lengthMetrics?.contributions ?? {};
-  const movingTargetStats = scenario.movingTargetStats ?? {};
-
-  if (scenario.movingTargets && (movingTargetStats.activeCount ?? 0) > 0) {
-    if ((movingTargetStats.difficultyBonus ?? 0) >= 6) {
-      difficultyHigherReasons.push("moving targets add extra uncertainty");
-    }
-    if ((lengthContributions.movingTargetLoad ?? 0) >= 3) {
-      lengthLongerReasons.push("moving targets add extra repositioning");
-    }
-  }
-
-  if (scenario.actFast && scenario.actFastMode && (
-    scenario.actFastMode === "countdown_1m" ||
-    scenario.actFastMode === "countdown_30s" ||
-    scenario.actFastMode === "countdown_2m"
-  )) {
-    difficultyHigherReasons.push("Act Fast makes planning more demanding");
-  }
-  if ((lengthContributions.actFastLoad ?? 0) < 0) {
-    lengthShorterReasons.push("Act Fast keeps programming time capped");
-  }
-
-  if (scenario.classicSharedDeck) {
-    difficultyHigherReasons.push("the shared deck makes card planning less forgiving");
-  }
-
-  if (scenario.lessForeshadowing) {
-    difficultyHigherReasons.push("less foreshadowing makes the route harder to plan ahead");
-  }
-
-  if (scenario.factoryRejects) {
-    difficultyHigherReasons.push("Factory Rejects reduces planning flexibility");
-  }
-
-  if (scenario.competitiveMode && (scenario.metrics.fairnessStdDev ?? 0) >= 6) {
-    difficultyHigherReasons.push("Competitive Mode increases pressure on weaker starts");
-  }
-
-  if (scenario.payToWin && (scenario.sequence.firstLeg.summary.payToWin?.active)) {
-    difficultyHigherReasons.push("Pay to Win makes starting position choice part of the energy economy");
-  }
-
-  if (scenario.cuttingFloor && countBoardLasers(scenario.goalTileMap) > 0) {
-    difficultyHigherReasons.push("Cutting Floor makes board lasers hit harder");
-  }
-
-  if (scenario.flamingOil && countFeatureTypeInTileMap(scenario.goalTileMap, "oil") > 0) {
-    difficultyHigherReasons.push("Flaming Oil makes oil lanes much less forgiving");
-  }
-
-  if (scenario.repulsorOverdrive && countFeatureTypeInSelectedSets("repulsor", scenario.pieceMap, scenario.preferences) > 0) {
-    difficultyHigherReasons.push("Repulsor Overdrive makes repulsor lanes much harsher");
-  }
-
-  if (scenario.setToKill) {
-    difficultyHigherReasons.push("Set to Kill makes open firing lanes more punishing");
-  }
-
-  if (scenario.setToStun) {
-    difficultyLowerReasons.push("Set to Stun softens robot-laser pressure");
-  }
-
-  if (scenario.startupSpinUp) {
-    difficultyLowerReasons.push("Startup Spin-Up softens opening-facing constraints");
-  }
-
-  if (scenario.upgradeWorld) {
-    difficultyHigherReasons.push("Upgrade World adds a bit more upgrade-planning overhead");
-    lengthLongerReasons.push("upgrade spaces become more tempting detours");
-  }
-
-  if (scenario.lighterGame) {
-    difficultyLowerReasons.push("Energy Crisis softens the board pressure");
-    lengthShorterReasons.push("Energy Crisis trims some board friction");
-  }
-
-  if (scenario.lessSpammyGame) {
-    difficultyLowerReasons.push("SPAM Filter makes recovery cleaner");
-    lengthShorterReasons.push("SPAM Filter keeps turns moving");
-  }
-
-  if (scenario.criticalSpam) {
-    difficultyHigherReasons.push("Critical Spam makes damage pressure stick around longer");
-    lengthLongerReasons.push("lingering damage pressure can slow recovery");
-  }
-
-  if (scenario.criticalHaywire) {
-    difficultyHigherReasons.push("Critical Haywire makes damage more disruptive to planning");
-    lengthLongerReasons.push("damage recovery is less forgiving");
-  }
-
-  if (scenario.permanentShutdown && scenario.criticalSpam) {
-    difficultyHigherReasons.push("Permanent Shutdown raises the stakes on already dangerous boards");
-  }
-
-  return {
-    difficulty: {
-      higher: difficultyHigherReasons,
-      lower: difficultyLowerReasons
-    },
-    length: {
-      longer: lengthLongerReasons,
-      shorter: lengthShorterReasons
-    }
-  };
-}
-
-function getDifficultyVariantReasonsForExplanation(scenario, variantReasons, difficultyBand) {
-  if (scenario.preferences.difficulty !== "any" && scenario.metrics.difficultyDirection !== "matched") {
-    return scenario.metrics.difficultyDirection === "high"
-      ? variantReasons.difficulty.higher
-      : variantReasons.difficulty.lower;
-  }
-
-  if (difficultyBand === "hard") {
-    return variantReasons.difficulty.higher;
-  }
-  if (difficultyBand === "easy") {
-    return variantReasons.difficulty.lower;
-  }
-
-  return [
-    ...variantReasons.difficulty.higher,
-    ...variantReasons.difficulty.lower
-  ];
-}
-
-function getLengthVariantReasonsForExplanation(scenario, variantReasons, lengthBand) {
-  if (scenario.preferences.length !== "any" && scenario.metrics.lengthDirection !== "matched") {
-    return scenario.metrics.lengthDirection === "high"
-      ? variantReasons.length.longer
-      : variantReasons.length.shorter;
-  }
-
-  if (lengthBand === "long") {
-    return variantReasons.length.longer;
-  }
-  if (lengthBand === "short") {
-    return variantReasons.length.shorter;
-  }
-
-  return [
-    ...variantReasons.length.longer,
-    ...variantReasons.length.shorter
-  ];
-}
-
-function scoreLegDifficultyForExplanation(leg, isFirstLeg = false) {
-  if (!leg?.analysis?.summary) {
-    return 0;
-  }
-
-  const summary = leg.analysis.summary;
-  return isFirstLeg
-    ? summary.difficultyScore ?? 0
-    : (
-      (summary.averageRouteScore ?? 0) +
-      (summary.congestionScore ?? 0) * 0.45 -
-      (summary.diversityScore ?? 0) * 0.18 +
-      (summary.crossLegOverlap ?? 0) * 6
-    );
-}
-
-function getCheckpointDifficultyReason(scenario, difficultyBand) {
-  const legs = scenario.sequence?.legs || [];
-  if (!legs.length) {
-    return null;
-  }
-
-  const scoredLegs = legs.map((leg, index) => ({
-    checkpoint: leg.to,
-    from: leg.from,
-    score: scoreLegDifficultyForExplanation(leg, index === 0),
-    goal: leg.analysis?.goal ?? null,
-    summary: leg.analysis?.summary ?? {}
-  })).filter((entry) => Number.isFinite(entry.score));
-
-  if (scoredLegs.length < 2) {
-    return null;
-  }
-
-  const mean = averageValues(scoredLegs.map((entry) => entry.score));
-
-  if (difficultyBand === "hard") {
-    const standout = scoredLegs.reduce((best, entry) => (
-      !best || entry.score > best.score ? entry : best
-    ), null);
-    if (!standout || standout.score - mean < 14) {
-      return null;
-    }
-
-    const approachSummary = standout.goal
-      ? analyzeGoalApproaches(scenario.goalTileMap, standout.goal, {
-        lessDeadlyGame: scenario.lessDeadlyGame
-      })
-      : null;
-    const reasons = [];
-    if (approachSummary && (approachSummary.openCount <= 2 || approachSummary.trappedCorners >= 1)) {
-      reasons.push(
-        approachSummary.openCount <= 1
-          ? `Checkpoint ${standout.checkpoint} has only one clean entry side`
-          : `Checkpoint ${standout.checkpoint} has only ${approachSummary.openCount} clean entry sides`
-      );
-    }
-    if ((standout.summary.congestionScore ?? 0) >= 16) {
-      reasons.push(`route congestion is high near Checkpoint ${standout.checkpoint}`);
-    }
-    if ((standout.summary.crossLegOverlap ?? 0) >= 1.2) {
-      reasons.push(`routes into Checkpoint ${standout.checkpoint} overlap heavily with earlier lines`);
-    }
-    if (!approachSummary && (standout.summary.distinctRouteCount ?? 0) <= 2) {
-      reasons.push(`there are not many clean route options into Checkpoint ${standout.checkpoint}`);
-    }
-
-    if (!reasons.length) {
-      reasons.push(`Checkpoint ${standout.checkpoint} has much higher route pressure than the rest of the course`);
-    }
-
-    return joinReasonParts(reasons.slice(0, 2));
-  }
-
-  if (difficultyBand === "easy") {
-    const standout = scoredLegs.reduce((best, entry) => (
-      !best || entry.score < best.score ? entry : best
-    ), null);
-    if (!standout || mean - standout.score < 12) {
-      return null;
-    }
-
-    const reasons = [];
-    if ((standout.summary.congestionScore ?? 0) <= 8) {
-      reasons.push(`traffic stays light around Checkpoint ${standout.checkpoint}`);
-    }
-    if ((standout.summary.crossLegOverlap ?? 0) <= 0.45) {
-      reasons.push(`Checkpoint ${standout.checkpoint} does not force much backtracking`);
-    }
-    if (!standout.goal && (standout.summary.distinctRouteCount ?? 0) >= 3) {
-      reasons.push(`Checkpoint ${standout.checkpoint} has several clean route options`);
-    }
-
-    if (!reasons.length) {
-      reasons.push(`Checkpoint ${standout.checkpoint} is much more forgiving than the rest of the course`);
-    }
-
-    return joinReasonParts(reasons.slice(0, 2));
-  }
-
-  return null;
-}
-
-function uniqueReasons(reasons = [], limit = 3) {
-  return reasons.filter((reason, index, list) => list.indexOf(reason) === index).slice(0, limit);
-}
-
-function getOpeningDifficultyReasons(firstLeg, openingForcedDistance, openingFacingChanges, difficultyBand) {
-  const reasons = [];
-  const overlap = firstLeg.averageOverlapPenalty ?? firstLeg.averageTrafficPenalty ?? 0;
-  const lateral = firstLeg.averageLateralThreat ?? 0;
-  const rear = firstLeg.averageRearThreat ?? 0;
-
-  if (difficultyBand === "hard") {
-    if (openingForcedDistance >= 3.5 || openingFacingChanges >= 2.2) {
-      reasons.push("it forces several moves and facing changes before players can settle");
-    }
-    if (overlap >= 18) {
-      reasons.push("multiple starts crowd into the same early routes");
-    }
-    if (rear >= 22) {
-      reasons.push("rear pressure builds quickly on the opening lanes");
-    } else if (lateral >= 28) {
-      reasons.push("open side lanes leave several starts exposed while they settle");
-    }
-    if ((firstLeg.flagAreaScore ?? 0) >= 24) {
-      reasons.push("Checkpoint 1 is surrounded by active board elements");
-    }
-  } else if (difficultyBand === "easy") {
-    if (openingForcedDistance <= 1.4 && openingFacingChanges <= 1.1) {
-      reasons.push("most starts can line up the first checkpoint without much reorientation");
-    }
-    if (overlap <= 10 && rear <= 10) {
-      reasons.push("the dock launch leaves plenty of room before routes stack up");
-    } else if ((firstLeg.averageTrafficPenalty ?? 0) <= 12) {
-      reasons.push("the dock launch does not create much early traffic");
-    }
-    if ((firstLeg.flagAreaScore ?? 0) <= 18) {
-      reasons.push("Checkpoint 1 has a fairly calm approach area");
-    }
-  } else {
-    if (openingForcedDistance >= 2.5 || openingFacingChanges >= 1.4) {
-      reasons.push("players still need to clean up a few awkward early angles");
-    }
-    if (rear >= 16) {
-      reasons.push("the opening lanes create some tail pressure once robots get moving");
-    } else if (overlap >= 14) {
-      reasons.push("the opening routes overlap enough to create some traffic");
-    } else if (lateral >= 20) {
-      reasons.push("a few starts stay exposed across open side lanes");
-    }
-    if ((firstLeg.flagAreaScore ?? 0) >= 20) {
-      reasons.push("Checkpoint 1 asks for some care instead of being a free pickup");
-    }
-  }
-
-  return uniqueReasons(reasons, 2);
-}
-
-function getLaterCheckpointPressureReasons(scenario, difficultyBand, avgCongestion, avgBacktrack, checkpointDifficultyReason) {
-  const reasons = [];
-
-  if (difficultyBand === "hard") {
-    if (avgCongestion >= 18) {
-      reasons.push("later checkpoints create heavy congestion");
-    }
-    if (avgBacktrack >= 1.2) {
-      reasons.push("later legs repeatedly overlap and force repositioning");
-    }
-  } else if (difficultyBand === "easy") {
-    if (avgCongestion <= 12) {
-      reasons.push("later checkpoints keep traffic manageable");
-    }
-    if (avgBacktrack <= 0.6) {
-      reasons.push("later legs do not punish players with much backtracking");
-    }
-  } else {
-    if (avgCongestion >= 14) {
-      reasons.push("later checkpoints introduce some congestion after the opening");
-    }
-    if (avgBacktrack >= 0.8) {
-      reasons.push("later legs create some route reuse and repositioning");
-    }
-  }
-
-  if (checkpointDifficultyReason) {
-    reasons.push(checkpointDifficultyReason.charAt(0).toLowerCase() + checkpointDifficultyReason.slice(1));
-  }
-
-  return uniqueReasons(reasons, 2);
-}
-
-function describeLengthDrivers(scenario, lengthBand, contributionEntries, lengthVariantReasons) {
-  const reasons = [];
-  const contributions = scenario.metrics.lengthMetrics?.contributions ?? {};
-
-  if (lengthBand === "long") {
-    if ((contributions.checkpointLoad ?? 0) >= 8.8 || scenario.checkpoints.length >= 4) {
-      reasons.push("it uses enough checkpoints to stretch the route");
-    }
-    if ((contributions.actionLoad ?? 0) >= 35) {
-      reasons.push("players need a lot of programmed movement");
-    }
-    if ((contributions.distanceLoad ?? 0) >= 18) {
-      reasons.push("the route covers a lot of board space");
-    }
-    if ((contributions.congestionLoad ?? 0) >= 2.2) {
-      reasons.push("traffic slows the later legs down");
-    }
-  } else if (lengthBand === "short") {
-    if ((contributions.checkpointLoad ?? 0) <= 4.4 || scenario.checkpoints.length <= 2) {
-      reasons.push("it keeps the checkpoint count low");
-    }
-    if ((contributions.actionLoad ?? 0) <= 28) {
-      reasons.push("the routes resolve with relatively few programmed actions");
-    }
-    if ((contributions.distanceLoad ?? 0) <= 12) {
-      reasons.push("the route does not ask for much travel");
-    }
-    if ((contributions.congestionLoad ?? 0) <= 1.6) {
-      reasons.push("traffic rarely stalls the pace");
-    }
-  } else {
-    if ((contributions.checkpointLoad ?? 0) >= 6.6 || scenario.checkpoints.length >= 3) {
-      reasons.push("it has enough checkpoints to feel full without dragging");
-    }
-    if ((contributions.actionLoad ?? 0) >= 35) {
-      reasons.push("players still need a fair amount of programmed movement");
-    }
-    if ((contributions.distanceLoad ?? 0) >= 18) {
-      reasons.push("the route creates some real travel between checkpoints");
-    }
-    if ((contributions.congestionLoad ?? 0) >= 2.2) {
-      reasons.push("some congestion adds time without turning it into a slog");
-    }
-    if (scenario.metrics.routeDrama?.penalty > 0 && scenario.metrics.routeDrama?.score < 5) {
-      reasons.push("the expected routes stay fairly separate, so livelier alternatives score better");
-    }
-  }
-
-  reasons.push(...lengthVariantReasons);
-  if (!reasons.length) {
-    reasons.push(lengthBand === "long"
-      ? "routes take time to resolve"
-      : lengthBand === "short"
-        ? "routes resolve fairly quickly"
-        : "it balances travel and action load cleanly");
-  }
-
-  return uniqueReasons(reasons, 3);
-}
-
-
-function formatDiagnosticNumber(value) {
-  return Number.isFinite(value) ? Number(value.toFixed(1)) : "n/a";
-}
-
-function getLegDifficultyValue(leg) {
-  if (leg.analysis.summary.difficultyScore !== undefined) {
-    return leg.analysis.summary.difficultyScore;
-  }
-
-  return (leg.analysis.summary.averageRouteScore || 0) +
-    (leg.analysis.summary.congestionScore || 0) -
-    (leg.analysis.summary.diversityScore || 0) * 0.2;
-}
-
-function getLegLengthValue(leg) {
-  if (leg.analysis.summary.lengthScore !== undefined) {
-    return leg.analysis.summary.lengthScore;
-  }
-
-  return leg.analysis.summary.averageRouteDistance || 0;
-}
 
 function formatLegLabel(leg) {
   return leg.from === "dock" ? "Dock -> 1" : `${leg.from} -> ${leg.to}`;
-}
-
-function buildCourseDiagnosticsHtml(scenario, noteParts = []) {
-  if (!scenario?.sequence?.legs?.length) {
-    return "";
-  }
-
-  const hardest = scenario.sequence.legs
-    .map((leg) => ({ leg, value: getLegDifficultyValue(leg) }))
-    .sort((left, right) => right.value - left.value)[0];
-  const longest = scenario.sequence.legs
-    .map((leg) => ({ leg, value: getLegLengthValue(leg) }))
-    .sort((left, right) => right.value - left.value)[0];
-  const dangerous = scenario.checkpoints
-    .map((checkpoint, index) => ({
-      index,
-      checkpoint,
-      value: scoreFlagArea(scenario.goalTileMap, checkpoint, {
-        playerCount: scenario.playerCount,
-        ...getRouteAnalysisVariantOptions(scenario.preferences)
-      })
-    }))
-    .sort((left, right) => right.value - left.value)[0];
-  const discardedStarts = scenario.sequence.firstLeg.summary.outliers || [];
-  const fitParts = [];
-  if (scenario.preferences.difficulty !== "any") {
-    fitParts.push(scenario.metrics.difficultyFit === 0
-      ? "difficulty matched"
-      : `${scenario.metrics.difficultyDirection === "low" ? "too easy" : "too hard"} by ${formatDiagnosticNumber(scenario.metrics.difficultyFit)}`);
-  }
-  if (scenario.preferences.length !== "any") {
-    fitParts.push(scenario.metrics.lengthFit === 0
-      ? "length matched"
-      : `${scenario.metrics.lengthDirection === "low" ? "too short" : "too long"} by ${formatDiagnosticNumber(scenario.metrics.lengthFit)}`);
-  }
-  if (!fitParts.length) {
-    fitParts.push("no target bands requested");
-  }
-
-  const diagnostics = [
-    ["Hardest leg", `${formatLegLabel(hardest.leg)} (${formatDiagnosticNumber(hardest.value)})`],
-    ["Longest leg", `${formatLegLabel(longest.leg)} (${formatDiagnosticNumber(longest.value)})`],
-    ["Checkpoint risk", dangerous ? `#${dangerous.index + 1} (${formatDiagnosticNumber(dangerous.value)})` : "n/a"],
-    ["Discarded starts", discardedStarts.length ? discardedStarts.map((item) => `#${item.index + 1}`).join(", ") : "none"],
-    ["Fit", fitParts.join("; ")]
-  ];
-
-  return `\n<div class="diagnostics-grid">${diagnostics.map(([label, value]) => (
-    `<div class="diagnostic-line"><span class="diagnostic-label">${escapeHtml(label)}</span><span class="diagnostic-value">${escapeHtml(value)}</span></div>`
-  )).join("")}</div>`;
-}
-
-function buildCourseExplanationHtml(scenario, noteParts = []) {
-  const parts = [];
-  const firstLeg = scenario.sequence.firstLeg.summary;
-  const openingRoutes = scenario.sequence.firstLeg.starts
-    .filter((item) => item.reachable && item.selectedRoute)
-    .map((item) => item.selectedRoute);
-  const laterLegs = scenario.sequence.legs.slice(1);
-  const requestedDifficulty = scenario.preferences.difficulty;
-  const matchedRequestedDifficultyBand = requestedDifficulty !== "any" && scenario.metrics.difficultyDirection === "matched"
-    ? (requestedDifficulty === "brutal" ? "hard" : requestedDifficulty)
-    : null;
-  const difficultyBand = matchedRequestedDifficultyBand ?? describeCourseDifficultyBand(scenario.metrics.difficultyRaw);
-  const lengthBand = describeCourseLengthBand(scenario.metrics.lengthRaw);
-  const openingForcedDistance = openingRoutes.length
-    ? averageValues(openingRoutes.map((route) => route.forcedDistance || 0))
-    : 0;
-  const openingFacingChanges = openingRoutes.length
-    ? averageValues(openingRoutes.map((route) => {
-      const manualTurns = (route.transitions || []).filter((transition) => transition.action?.type === "turn").length;
-      const conveyorTurns = (route.transitions || []).reduce((sum, transition) => (
-        sum + (transition.conveyorSteps || []).filter((step) => step.turned).length
-      ), 0);
-      return manualTurns + conveyorTurns;
-    }))
-    : 0;
-  const avgCongestion = laterLegs.length
-    ? laterLegs.reduce((sum, leg) => sum + (leg.analysis.summary.congestionScore || 0), 0) / laterLegs.length
-    : 0;
-  const avgBacktrack = laterLegs.length
-    ? laterLegs.reduce((sum, leg) => sum + (leg.analysis.summary.crossLegOverlap || 0), 0) / laterLegs.length
-    : 0;
-  const boardPlacements = (scenario.placements || []).filter((placement) => (
-    scenario.pieceMap?.[placement.pieceId]?.kind !== "dock" && !placement.overlay
-  ));
-  const boardHarshness = computeBoardHarshness(boardPlacements, scenario.pieceMap);
-  const difficultyReasons = [];
-  const variantReasons = getMeaningfulVariantReasons(scenario);
-  const difficultyVariantReasons = getDifficultyVariantReasonsForExplanation(scenario, variantReasons, difficultyBand);
-  const lengthVariantReasons = getLengthVariantReasonsForExplanation(scenario, variantReasons, lengthBand);
-
-  if (difficultyBand === "hard") {
-    if (firstLeg.difficultyScore >= 72 && (openingForcedDistance >= 3.5 || openingFacingChanges >= 2.2)) {
-      difficultyReasons.push("the opening run includes several forced moves and facing changes");
-    }
-    if ((firstLeg.averageRearThreat ?? 0) >= 22) {
-      difficultyReasons.push("rear pressure builds quickly once the opening lanes fill up");
-    } else if ((firstLeg.averageOverlapPenalty ?? 0) >= 18) {
-      difficultyReasons.push("the dock routes crowd together almost immediately");
-    } else if (firstLeg.averageTrafficPenalty >= 18 || avgCongestion >= 18) {
-      difficultyReasons.push("traffic builds up around key routes");
-    }
-    if (firstLeg.flagAreaScore >= 24) {
-      difficultyReasons.push("checkpoint areas are packed with active board elements");
-    }
-    if (boardHarshness.normalized >= 0.58) {
-      difficultyReasons.push("the selected boards are hazard-heavy");
-    }
-    if (avgBacktrack >= 1.2) {
-      difficultyReasons.push("later legs force route overlap and backtracking");
-    }
-    if (scenario.metrics.routeDrama?.level === "moderate" || scenario.metrics.routeDrama?.level === "high") {
-      difficultyReasons.push("expected robot paths cross and converge often enough to create table interaction");
-    }
-    difficultyReasons.push(...difficultyVariantReasons);
-    if (!difficultyReasons.length) {
-      difficultyReasons.push("multiple route and hazard pressures stack up across the course");
-    }
-  } else if (difficultyBand === "easy") {
-    if (boardHarshness.normalized <= 0.36) {
-      difficultyReasons.push("the selected boards are relatively forgiving");
-    }
-    if (firstLeg.flagAreaScore <= 18) {
-      difficultyReasons.push("checkpoint areas are not overly busy");
-    }
-    if ((firstLeg.averageOverlapPenalty ?? 0) <= 10 && (firstLeg.averageRearThreat ?? 0) <= 10 && avgCongestion <= 12) {
-      difficultyReasons.push("the opening stays roomy and traffic stays under control");
-    } else if (firstLeg.averageTrafficPenalty <= 12 && avgCongestion <= 12) {
-      difficultyReasons.push("traffic stays under control");
-    }
-    if (avgBacktrack <= 0.6) {
-      difficultyReasons.push("later legs do not force much backtracking");
-    }
-    if (!difficultyReasons.length) {
-      difficultyReasons.push("its hazards and route pressure stay fairly controlled");
-    }
-    difficultyReasons.push(...difficultyVariantReasons);
-  } else {
-    if (firstLeg.difficultyScore >= 60) {
-      if (openingForcedDistance >= 2.5 || openingFacingChanges >= 1.4) {
-        difficultyReasons.push("the opening run includes a few forced moves and facing changes");
-      }
-    }
-    if ((firstLeg.averageRearThreat ?? 0) >= 16) {
-      difficultyReasons.push("the opening lanes create some real tail pressure");
-    } else if ((firstLeg.averageOverlapPenalty ?? 0) >= 14) {
-      difficultyReasons.push("the opening routes crowd together enough to matter");
-    } else if (firstLeg.averageTrafficPenalty >= 14 || avgCongestion >= 14) {
-      difficultyReasons.push("there is some route congestion around important lines");
-    }
-    if (boardHarshness.normalized >= 0.45 && boardHarshness.normalized < 0.62) {
-      difficultyReasons.push("the selected boards add some hazard pressure without becoming brutal");
-    }
-    if (avgBacktrack >= 0.8 && avgBacktrack < 1.6) {
-      difficultyReasons.push("later legs create some overlap and repositioning");
-    }
-    if (scenario.metrics.routeDrama?.level === "moderate" || scenario.metrics.routeDrama?.level === "high") {
-      difficultyReasons.push("expected robot paths cross and converge enough to create table interaction");
-    }
-    if (!difficultyReasons.length) {
-      difficultyReasons.push("it mixes manageable hazards with a few spots that still need planning");
-    }
-    difficultyReasons.push(...difficultyVariantReasons);
-  }
-
-  const uniqueDifficultyReasons = uniqueReasons(difficultyReasons, 3);
-  const checkpointDifficultyReason = getCheckpointDifficultyReason(scenario, difficultyBand);
-  const openingReasons = getOpeningDifficultyReasons(firstLeg, openingForcedDistance, openingFacingChanges, difficultyBand);
-  const laterPressureReasons = getLaterCheckpointPressureReasons(
-    scenario,
-    difficultyBand,
-    avgCongestion,
-    avgBacktrack,
-    checkpointDifficultyReason
-  );
-
-  const contributionEntries = Object.entries(scenario.metrics.lengthMetrics?.contributions || {})
-    .filter(([id, value]) => value > 0 && (formatContributionLabel(id) || formatShortLengthReliefLabel(id)))
-    .sort((left, right) => right[1] - left[1]);
-  const uniqueLengthReasons = lengthBand === "short"
-    ? getShortLengthReasons(scenario, contributionEntries, lengthVariantReasons)
-    : describeLengthDrivers(scenario, lengthBand, contributionEntries, lengthVariantReasons);
-
-  if (noteParts.length) {
-    const mismatchFocus = scenario.metrics.difficultyFit >= scenario.metrics.lengthFit ? "difficulty" : "length";
-    const multipleMismatchAxes = noteParts.length > 1;
-    parts.push(`<div><strong>Fit:</strong> This course is ${noteParts.join(" and ")} than requested.${multipleMismatchAxes ? ` The larger mismatch is ${mismatchFocus}.` : ""}</div>`);
-  }
-
-  parts.push(
-    `<div><strong>Difficulty:</strong> ${describeDifficultyLead(scenario)} because ${joinReasonParts(uniqueDifficultyReasons.slice(0, 3))}.</div>`
-  );
-  if (openingReasons.length) {
-    parts.push(
-      `<div><strong>Opening:</strong> The Dock to Checkpoint 1 leg ${difficultyBand === "hard" ? "is where players first feel the pressure" : difficultyBand === "easy" ? "stays comparatively forgiving" : "sets the tone"} because ${joinReasonParts(openingReasons)}.</div>`
-    );
-  }
-  if (laterPressureReasons.length) {
-    parts.push(
-      `<div><strong>Later Checkpoints:</strong> ${joinReasonParts(laterPressureReasons)}.</div>`
-    );
-  }
-  parts.push(
-    `<div><strong>Length:</strong> ${describeLengthLead(scenario)} because ${joinReasonParts(uniqueLengthReasons)}.</div>`
-  );
-  const variantImpactSummary = getCourseNoteVariantImpactSummary(scenario);
-  if (variantImpactSummary) {
-    parts.push(
-      `<div><strong>Variant Impact:</strong> ${escapeHtml(variantImpactSummary)}</div>`
-    );
-  }
-
-  return parts.join("");
 }
 
 const UI_SETUP_LAYOUT_CATEGORY = "setup-layout";
@@ -3001,6 +2241,10 @@ function getVariantImpactSummary(scenario) {
       addIdle("hazardousFlags", "no hazardous checkpoint overlap on this course");
     }
   }
+  if (scenario.repairStations) {
+    const stationCount = getPlayableCheckpoints(scenario.checkpoints, scenario.virtualBots).length;
+    addImpact("repairStations", `${stationCount} repair station${stationCount === 1 ? "" : "s"}`);
+  }
   if (scenario.movingTargets) {
     if (hasMovingTargetsEffect(scenario)) {
       addImpact("movingTargets", `${scenario.movingTargetStats?.activeCount ?? 0} moving checkpoint${(scenario.movingTargetStats?.activeCount ?? 0) === 1 ? "" : "s"}`);
@@ -3055,15 +2299,6 @@ function getVariantImpactSummary(scenario) {
     parts.push(`Currently idle here: ${idleImpacts.join(", ")}.`);
   }
   return parts.join(" ");
-}
-
-function getCourseNoteVariantImpactSummary(scenario) {
-  const summary = getVariantImpactSummary(scenario);
-  if (!summary || !summary.includes("Variant impact on this course:")) {
-    return "";
-  }
-
-  return summary.replace(/^Variant impact on this course:\s*/, "");
 }
 
 function getActFastRuleText(mode) {
@@ -3152,6 +2387,10 @@ function updateRulesNote(scenario) {
 
   if (hasMovingTargetsEffect(scenario)) {
     notes.push("Moving Targets: during each register, checkpoints on conveyors move with the belts. If one would leave the conveyor or stop moving, return it to its marked re-entry space (R#) (Altered from previous Robo Rally editions).");
+  }
+
+  if (scenario.repairStations) {
+    notes.push("Repair Stations: at the end of the fifth register, a robot on an ordinary checkpoint may remove one Damage card from its deck, discard pile, hand, or registers and place it in the damage discard pile (patterned after previous Robo Rally editions).");
   }
 
   if (getBoardViewMode() === BOARD_VIEW_MODES.photos && (scenario.overlayPlacements?.length ?? 0) > 0) {
@@ -3549,6 +2788,7 @@ function getVariantBaseChance(variantId, preferences = {}) {
     factoryRejects: { easy: 0.06, moderate: 0.14, hard: 0.22 },
     startupSpinUp: { easy: 0.08, moderate: 0.14, hard: 0.1 },
     hazardousFlags: { easy: 0.08, moderate: 0.16, hard: 0.24 },
+    repairStations: { easy: 0.2, moderate: 0.15, hard: 0.1 },
     movingTargets: { easy: 0.06, moderate: 0.14, hard: 0.22 },
     homeReboot: { easy: 0.06, moderate: 0.12, hard: 0.18 },
     lessForeshadowing: { easy: 0.07, moderate: 0.16, hard: 0.24 },
@@ -8834,6 +8074,7 @@ const VARIANT_DIFFICULTY_ACCOUNTING = Object.freeze({
   dynamicArchiving: "mechanical",
   homeReboot: "mechanical",
   hazardousFlags: "mechanical",
+  repairStations: "mechanical",
   movingTargets: "mechanical+explicit",
   extraDocks: "layout-derived",
   noDocks: "layout-derived",
@@ -9371,7 +8612,10 @@ function buildScenarioReport(scenario, selectedLegIndex) {
   const legOptions = scenario.sequence.legs.map((leg, index) => (
     index === 0 ? (scenario.virtualBots ? "Entry -> 1" : "Dock -> 1") : `${leg.from} -> ${leg.to}`
   ));
-  const goal = scenario.checkpoints[selectedLegIndex === 0 ? 0 : selectedLegIndex];
+  const playableCheckpoints = getPlayableCheckpoints(scenario.checkpoints, scenario.virtualBots);
+  const goal = selectedLegIndex === null
+    ? playableCheckpoints.at(-1) ?? playableCheckpoints[0]
+    : playableCheckpoints[selectedLegIndex] ?? playableCheckpoints[0];
   const outlierReasonByIndex = new Map((summary.outliers || []).map((item) => [item.index, item.reasons ?? null]));
 
   function formatOutlierReasons(reasons) {
@@ -9451,6 +8695,7 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     `Flaming Oil used: ${scenario.flamingOil ? "yes" : "no"}`,
     `Shared Deck used: ${scenario.classicSharedDeck ? "yes" : "no"}`,
     `Hazardous Flags used: ${scenario.hazardousFlags ? "yes" : "no"}`,
+    `Repair Stations used: ${scenario.repairStations ? "yes" : "no"}`,
     `Moving Targets used: ${scenario.movingTargets ? "yes" : "no"}`,
     `Less Foreshadowing used: ${scenario.lessForeshadowing ? "yes" : "no"}`,
     `Staggered Boards used: ${scenario.staggeredBoards ? "yes" : "no"}`,
@@ -9465,8 +8710,8 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     scenario.dockSummaries?.length
       ? `Docks: ${scenario.dockSummaries.map((dock, index) => `${index + 1}:${dock.pieceId}:${dock.boundaryRun?.side ?? "n/a"}:${dock.flipped ? "flipped" : "normal"}`).join(", ")}`
       : "Docks: none",
-    `Showing leg: ${legOptions[selectedLegIndex]}`,
-    `Goal flag: (${goal.x}, ${goal.y})`,
+    `Showing leg: ${selectedLegIndex === null ? "All legs" : legOptions[selectedLegIndex]}`,
+    `Goal flag: ${selectedLegIndex === null ? "all checkpoints" : `(${goal.x}, ${goal.y})`}`,
     `Usable starts: ${scenario.metrics.usableStarts.length}/${scenario.sequence.starts.length}`,
     `Difficulty raw: ${scenario.metrics.difficultyRaw}`,
     `Length raw: ${scenario.metrics.lengthRaw}`,
@@ -9628,17 +8873,83 @@ function getLegRouteEntries(scenario, legIndex, options = {}) {
 }
 
 function getFocusedRouteEntry(scenario, legIndex) {
-  if (routeInspectionState.legIndex !== legIndex || !routeInspectionState.routeId) {
-    return null;
-  }
-
-  return getLegRouteEntries(scenario, legIndex, { includeOutliers: isOutlierRoutesEnabled() })
-    .find((entry) => entry.id === routeInspectionState.routeId) ?? null;
+  if (routeInspectionState.kind !== "start") return null;
+  const startIndex = Number(routeInspectionState.key);
+  const startAnalysis = scenario.sequence.firstLeg.starts.find((entry) => entry.index === startIndex);
+  const fullRoute = startAnalysis?.fullCourseRoute;
+  if (!fullRoute) return null;
+  const route = legIndex === null ? fullRoute : fullRoute.legRoutes?.[legIndex];
+  if (!route) return null;
+  return {
+    id: `start:${startIndex}`,
+    label: legIndex === null
+      ? `Start ${startIndex + 1} — all legs`
+      : `Start ${startIndex + 1} — ${formatLegLabel(scenario.sequence.legs[legIndex])}`,
+    route,
+    startAnalysis
+  };
 }
 
 function formatRouteActions(route) {
   const actions = (route?.transitions || []).map((transition) => transition.action).filter(Boolean);
   return actions.length ? actions.join(" -> ") : "none";
+}
+
+function formatTraceState(state) {
+  if (!state) return "";
+  return `(${state.x},${state.y})${state.facing ? ` ${state.facing}` : ""}`;
+}
+
+function formatBoardTraceEvent(event) {
+  if (!event) return null;
+  if (event.type === "conveyor") {
+    const facing = event.facingBefore && event.facingAfter && event.facingBefore !== event.facingAfter
+      ? `; facing ${event.facingBefore}→${event.facingAfter}`
+      : "";
+    return `conveyor ${event.dir}${event.speed === 2 ? "×2" : ""} ${formatTraceState(event.from)}→${formatTraceState(event.to)}${facing}`;
+  }
+  if (event.type === "oil") return `oil slide ${event.dir} ${formatTraceState(event.from)}→${formatTraceState(event.to)}`;
+  if (event.type === "pusher") return `pusher ${formatTraceState(event.from)}→${formatTraceState(event.to)}`;
+  if (event.type === "gear") return `gear at (${event.at.x},${event.at.y}); facing ${event.facingBefore}→${event.facingAfter}`;
+  return null;
+}
+
+function formatChronologicalRouteTrace(route) {
+  if (!route?.transitions?.length) return ["Trace: none"];
+
+  const startAction = route.absoluteStartAction ?? 0;
+  const checkpointHits = Array.isArray(route.checkpointHits)
+    ? route.checkpointHits
+    : route.checkpointHit ? [route.checkpointHit] : [];
+  const hitsByAction = new Map();
+  checkpointHits.forEach((hit) => {
+    const absoluteAction = hit.action ?? route.absoluteActions;
+    if (!Number.isFinite(absoluteAction)) return;
+    const items = hitsByAction.get(absoluteAction) ?? [];
+    items.push(hit);
+    hitsByAction.set(absoluteAction, items);
+  });
+
+  return route.transitions.map((transition, index) => {
+    const registerNumber = startAction + index + 1;
+    const pieces = [
+      `${registerNumber}. ${transition.action}`,
+      `${formatTraceState(transition.from)}→${formatTraceState(transition.to)}`
+    ];
+    const boardParts = (transition.boardEvents || []).map(formatBoardTraceEvent).filter(Boolean);
+    if (boardParts.length) pieces.push(boardParts.join("; "));
+    else if ((transition.conveyorSteps || []).length) {
+      pieces.push(transition.conveyorSteps
+        .map((step) => formatBoardTraceEvent({ type: "conveyor", ...step }))
+        .join("; "));
+    } else if (transition.gearTurned) {
+      pieces.push("gear turn");
+    }
+
+    const hits = hitsByAction.get(registerNumber) ?? [];
+    if (hits.length) pieces.push(hits.map((hit) => `FLAG ${hit.checkpointId ?? hit.checkpointIndex + 1}`).join(", "));
+    return pieces.join(" → ");
+  });
 }
 
 function formatRouteDetail(scenario, entry) {
@@ -9649,7 +8960,7 @@ function formatRouteDetail(scenario, entry) {
 
   const lines = [
     `${entry.label}: ${route.actions} register${route.actions === 1 ? "" : "s"}, distance ${route.distance}, forced ${route.forcedDistance}, raw score ${route.score}`,
-    `Actions: ${formatRouteActions(route)}`
+    ...formatChronologicalRouteTrace(route)
   ];
 
   if (route.hazard || route.rebootCount || route.conveyorComplexity) {
@@ -9770,7 +9081,7 @@ function updateInspectionDetail(scenario, selectedLegIndex) {
     return;
   }
 
-  const focused = selectedLegIndex === null ? null : getFocusedRouteEntry(scenario, selectedLegIndex);
+  const focused = getFocusedRouteEntry(scenario, selectedLegIndex);
   const lines = routeInspectionState.kind === "start" && focused
     ? formatRouteDetail(scenario, focused)
     : routeInspectionState.kind === "checkpoint"
@@ -9899,9 +9210,7 @@ function getInspectableAtTile(scenario, tile) {
   if (startAnalysis) {
     return {
       kind: "start",
-      key: String(startAnalysis.index),
-      legIndex: 0,
-      routeId: startAnalysis.selectedRoute ? `start:${startAnalysis.index}` : null
+      key: String(startAnalysis.index)
     };
   }
 
@@ -9911,9 +9220,7 @@ function getInspectableAtTile(scenario, tile) {
   if (checkpointIndex >= 0) {
     return {
       kind: "checkpoint",
-      key: String(checkpointIndex),
-      legIndex: checkpointIndex,
-      routeId: null
+      key: String(checkpointIndex)
     };
   }
 
@@ -9924,27 +9231,67 @@ function sameInspection(left, right) {
   return Boolean(left && right && left.kind === right.kind && left.key === right.key);
 }
 
-function clearRouteInspection(options = {}) {
-  const legIndex = options.preserveLeg ? routeInspectionState.legIndex : null;
-  routeInspectionState = { legIndex, routeId: null, kind: null, key: null };
-  const legSelect = document.getElementById("leg-select");
-  if (legSelect) {
-    legSelect.value = legIndex === null ? "none" : String(legIndex);
-  }
+function clearRouteInspection() {
+  routeInspectionState = { kind: null, key: null };
+}
+
+function getTraceableStartIndices(scenario) {
+  return scenario.sequence.firstLeg.starts
+    .filter((entry) => entry.reachable && entry.fullCourseRoute)
+    .map((entry) => entry.index);
+}
+
+function toggleTraceStart(startIndex) {
+  const next = new Set(traceSelectionState.startIndices);
+  if (next.has(startIndex)) next.delete(startIndex);
+  else next.add(startIndex);
+  traceSelectionState = { startIndices: next };
+}
+
+function selectAllTraceStarts(scenario) {
+  traceSelectionState = { startIndices: new Set(getTraceableStartIndices(scenario)) };
+}
+
+function clearTraceStarts() {
+  traceSelectionState = { startIndices: new Set() };
 }
 
 function applyRouteInspection(inspection) {
-  const legSelect = document.getElementById("leg-select");
-  if (!inspection || sameInspection(routeInspectionState, inspection)) {
-    clearRouteInspection({ preserveLeg: true });
+  if (!inspection) {
+    clearRouteInspection();
     return;
   }
-
-  routeInspectionState = inspection;
-  if (legSelect) {
-    legSelect.value = String(inspection.legIndex);
+  if (inspection.kind === "start") {
+    const startIndex = Number(inspection.key);
+    toggleTraceStart(startIndex);
+    routeInspectionState = { kind: "start", key: String(startIndex) };
+    return;
   }
+  routeInspectionState = sameInspection(routeInspectionState, inspection)
+    ? { kind: null, key: null }
+    : inspection;
 }
+
+function getSelectedTraceRoutes(scenario, selectedLegIndex) {
+  const routes = [];
+  for (const startIndex of traceSelectionState.startIndices) {
+    const startAnalysis = scenario.sequence.firstLeg.starts.find((entry) => entry.index === startIndex);
+    const fullRoute = startAnalysis?.fullCourseRoute;
+    if (!fullRoute) continue;
+    const route = selectedLegIndex === null ? fullRoute : fullRoute.legRoutes?.[selectedLegIndex];
+    if (!route) continue;
+    routes.push({ ...route, startIndex, traceIndex: startIndex });
+  }
+  return routes;
+}
+
+function tileTouchesVisibleTrace(scenario, tile, selectedLegIndex) {
+  if (!tile) return false;
+  return getSelectedTraceRoutes(scenario, selectedLegIndex).some((route) =>
+    (route.path || []).some((point) => point.x === tile.x && point.y === tile.y)
+  );
+}
+
 
 function getFullCourseStartRenderAnalysis(firstLeg, starts) {
   return {
@@ -9959,64 +9306,42 @@ function getFullCourseStartRenderAnalysis(firstLeg, starts) {
 function getScenarioRenderState(scenario) {
   const legSelect = document.getElementById("leg-select");
   const devViewEnabled = isDevViewEnabled();
-  const showOutlierRoutes = isOutlierRoutesEnabled();
-  const selectedLegValue = !devViewEnabled
-    ? "none"
-    : legSelect.value === "none"
-    ? "none"
-    : scenario.sequence.legs.some((_, index) => String(index) === legSelect.value)
-      ? legSelect.value
-      : "none";
-  const selectedLegIndex = selectedLegValue === "none" ? null : Number(selectedLegValue);
-  const displayedLeg = selectedLegIndex === null ? null : scenario.sequence.legs[selectedLegIndex];
+  const selectedLegValue = devViewEnabled ? (legSelect?.value ?? "all") : "all";
+  const selectedLegIndex = selectedLegValue === "all" ? null : Number(selectedLegValue);
   const playableCheckpoints = getPlayableCheckpoints(scenario.checkpoints, scenario.virtualBots);
   const goal = selectedLegIndex === null
-    ? playableCheckpoints[0]
+    ? playableCheckpoints.at(-1) ?? playableCheckpoints[0]
     : playableCheckpoints[selectedLegIndex] ?? playableCheckpoints[0];
-  const outlierIndices = new Set((scenario.sequence.firstLeg.summary.outliers || []).map((item) => item.index));
-  const focusedRoute = selectedLegIndex === null ? null : getFocusedRouteEntry(scenario, selectedLegIndex);
-  const renderAnalysis = selectedLegIndex === null
-    ? null
-    : focusedRoute
-      ? selectedLegIndex === 0 && focusedRoute.startAnalysis?.fullCourseRoute
-        ? { routes: [focusedRoute.startAnalysis.fullCourseRoute] }
-        : selectedLegIndex === 0
-          ? {
-            ...scenario.sequence.firstLeg,
-            starts: focusedRoute.startAnalysis ? [focusedRoute.startAnalysis] : []
-          }
-          : { routes: [focusedRoute.route] }
-      : selectedLegIndex === 0
-        ? getFullCourseStartRenderAnalysis(
-          scenario.sequence.firstLeg,
-          showOutlierRoutes
-            ? scenario.sequence.firstLeg.starts
-            : scenario.sequence.firstLeg.starts.filter((startAnalysis) => !outlierIndices.has(startAnalysis.index))
-        )
-        : { routes: displayedLeg.analysis.distinctRoutes };
+  const renderAnalysis = devViewEnabled ? { routes: getSelectedTraceRoutes(scenario, selectedLegIndex) } : null;
   const boardViewMode = getBoardViewMode();
   const iconBoardView = boardViewMode === BOARD_VIEW_MODES.icons;
   const unusableStartIndices = scenario.sequence.firstLeg.starts
     .filter((startAnalysis) => !scenario.metrics.usableStarts.some((item) => item.index === startAnalysis.index))
     .map((startAnalysis) => startAnalysis.index);
   const startNumberByKey = new Map(scenario.sequence.firstLeg.starts.map((startAnalysis) => [
-    `${startAnalysis.start.x},${startAnalysis.start.y}`,
-    startAnalysis.index + 1
+    `${startAnalysis.start.x},${startAnalysis.start.y}`, startAnalysis.index + 1
   ]));
   const energyCostByKey = new Map(scenario.sequence.firstLeg.starts.map((startAnalysis) => [
-    `${startAnalysis.start.x},${startAnalysis.start.y}`,
-    startAnalysis.energyCost
+    `${startAnalysis.start.x},${startAnalysis.start.y}`, startAnalysis.energyCost
   ]));
   const lateEnergyCostByKey = new Map(scenario.sequence.firstLeg.starts.map((startAnalysis) => [
-    `${startAnalysis.start.x},${startAnalysis.start.y}`,
-    startAnalysis.lateEnergyCost
+    `${startAnalysis.start.x},${startAnalysis.start.y}`, startAnalysis.lateEnergyCost
   ]));
   const lateUnavailableByKey = new Map(scenario.sequence.firstLeg.starts.map((startAnalysis) => [
-    `${startAnalysis.start.x},${startAnalysis.start.y}`,
-    startAnalysis.lateUnavailable ?? false
+    `${startAnalysis.start.x},${startAnalysis.start.y}`, startAnalysis.lateUnavailable ?? false
   ]));
+  const selectedStartKeys = new Set(
+    scenario.sequence.firstLeg.starts
+      .filter((startAnalysis) => traceSelectionState.startIndices.has(startAnalysis.index))
+      .map((startAnalysis) => `${startAnalysis.start.x},${startAnalysis.start.y}`)
+  );
   const startLabels = devViewEnabled
     ? scenario.activeStarts.map((start) => startNumberByKey.get(`${start.x},${start.y}`) ?? "")
+    : [];
+  const selectedStartIndices = devViewEnabled
+    ? scenario.activeStarts
+      .map((start, index) => selectedStartKeys.has(`${start.x},${start.y}`) ? index : null)
+      .filter((index) => index !== null)
     : [];
   const startEnergyCosts = scenario.payToWin
     ? scenario.activeStarts.map((start) => energyCostByKey.get(`${start.x},${start.y}`))
@@ -10029,16 +9354,9 @@ function getScenarioRenderState(scenario) {
     : [];
 
   return {
-    devViewEnabled,
-    goal,
-    iconBoardView,
-    renderAnalysis,
-    selectedLegIndex,
-    startLabels,
-    startEnergyCosts,
-    startLateEnergyCosts,
-    startLateUnavailable,
-    unusableStartIndices
+    devViewEnabled, goal, iconBoardView, renderAnalysis, selectedLegIndex,
+    startLabels, selectedStartIndices, startEnergyCosts, startLateEnergyCosts,
+    startLateUnavailable, unusableStartIndices
   };
 }
 
@@ -10053,6 +9371,7 @@ function drawScenarioCanvas(scenario, options = {}) {
     renderAnalysis,
     selectedLegIndex,
     startLabels,
+    selectedStartIndices,
     startEnergyCosts,
     startLateEnergyCosts,
     startLateUnavailable,
@@ -10071,6 +9390,7 @@ function drawScenarioCanvas(scenario, options = {}) {
     showMovingTargetHits: devViewEnabled,
     starts: scenario.virtualBots ? [] : scenario.activeStarts,
     startLabels,
+    selectedStartIndices,
     startEnergyCosts,
     startLateEnergyCosts,
     startLateUnavailable,
@@ -10079,11 +9399,11 @@ function drawScenarioCanvas(scenario, options = {}) {
     unusableStartIndices,
     edgeOutlineColor: scenario.lessDeadlyGame ? "#f2c230" : null,
     showBoardLabels: false,
-    showStartFacing: devViewEnabled && selectedLegIndex !== null,
+    showStartFacing: devViewEnabled,
     showAllStartMarkers: devViewEnabled && !scenario.virtualBots,
     noDockStarts: Boolean(scenario.noDocks),
     hideUnusableStarts: Boolean(scenario.noDocks && !devViewEnabled),
-    showWalls: iconBoardView || (devViewEnabled && selectedLegIndex !== null),
+    showWalls: iconBoardView || devViewEnabled,
     showPieceImages: !iconBoardView,
     showFootprints: true,
     showFeatureIcons: iconBoardView
@@ -10146,35 +9466,29 @@ function renderScenario(scenario) {
   const devViewEnabled = isDevViewEnabled();
   const legOptions = scenario.sequence.legs.map((leg, index) => ({
     value: String(index),
-    label: index === 0 ? (scenario.virtualBots ? "Entry -> 1" : "Dock -> 1") : `${leg.from} -> ${leg.to}`
+    label: index === 0 ? (scenario.virtualBots ? "Entry → 1" : "Start → 1") : `${leg.from} → ${leg.to}`
   }));
-
-  const previousLegValue = legSelect.value;
-  legSelect.innerHTML = "";
-  const noneElement = document.createElement("option");
-  noneElement.value = "none";
-  noneElement.textContent = "None";
-  legSelect.appendChild(noneElement);
-  legOptions.forEach((option) => {
-    const element = document.createElement("option");
-    element.value = option.value;
-    element.textContent = option.label;
-    legSelect.appendChild(element);
-  });
-
-  const selectedLegValue = !devViewEnabled
-    ? "none"
-    : previousLegValue === "none"
-    ? "none"
-    : legOptions.some((option) => option.value === previousLegValue)
+  const previousLegValue = legSelect?.value ?? "all";
+  if (legSelect) {
+    legSelect.innerHTML = "";
+    const all = document.createElement("option");
+    all.value = "all";
+    all.textContent = "All legs";
+    legSelect.appendChild(all);
+    legOptions.forEach((option) => {
+      const el = document.createElement("option");
+      el.value = option.value;
+      el.textContent = option.label;
+      legSelect.appendChild(el);
+    });
+    legSelect.value = previousLegValue === "all" || legOptions.some((o) => o.value === previousLegValue)
       ? previousLegValue
-      : "none";
-  legSelect.value = selectedLegValue;
+      : "all";
+  }
   const renderState = drawScenarioCanvas(scenario);
   updateInspectionDetail(scenario, renderState.selectedLegIndex);
-
-  if (renderState.devViewEnabled) {
-    document.getElementById("report").textContent = buildScenarioReport(scenario, renderState.selectedLegIndex ?? 0);
+  if (devViewEnabled) {
+    document.getElementById("report").textContent = buildScenarioReport(scenario, renderState.selectedLegIndex);
   }
 }
 
@@ -10261,6 +9575,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     classicSharedDeck,
     repulsorOverdrive,
     hazardousFlags,
+    repairStations,
     movingTargets,
     staggeredBoards,
     lessForeshadowing,
@@ -10776,6 +10091,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         repulsorOverdrive: effectiveVariantBundle.repulsorOverdrive,
         upgradeWorld: effectiveVariantBundle.upgradeWorld,
         hazardousFlags,
+        repairStations: effectiveVariantBundle.repairStations,
         movingTargets,
         payToWin: effectiveVariantBundle.payToWin,
         lighterGame,
@@ -10833,6 +10149,7 @@ function serializeScenario(scenario) {
     lighterGame: scenario.lighterGame,
     classicSharedDeck: scenario.classicSharedDeck,
     hazardousFlags: scenario.hazardousFlags,
+    repairStations: scenario.repairStations,
     movingTargets: scenario.movingTargets,
     staggeredBoards: scenario.staggeredBoards,
     lessForeshadowing: scenario.lessForeshadowing,
@@ -10891,6 +10208,7 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
   const lighterGame = Boolean(snapshot.lighterGame);
   const classicSharedDeck = Boolean(snapshot.classicSharedDeck);
   const hazardousFlags = Boolean(snapshot.hazardousFlags);
+  const repairStations = Boolean(snapshot.repairStations);
   const movingTargets = Boolean(snapshot.movingTargets);
   const staggeredBoards = Boolean(snapshot.staggeredBoards);
   const lessForeshadowing = Boolean(snapshot.lessForeshadowing);
@@ -10955,6 +10273,7 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     upgradeWorld,
     lighterGame,
     hazardousFlags,
+    repairStations,
     lessForeshadowing
   }));
   const metrics = classifyCandidate(sequence, {
@@ -10968,6 +10287,7 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     flamingOil,
     factoryRejects,
     hazardousFlags,
+    repairStations,
     movingTargets,
     payToWin,
     startupSpinUp,
@@ -11067,6 +10387,7 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
       virtualBots,
       upgradeWorld,
       hazardousFlags,
+      repairStations,
       movingTargets,
       lessSpammyGame,
       criticalSpam,
@@ -11160,7 +10481,7 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
 
 function detectScenarioExplanationIssues(scenario) {
   const issues = [];
-  const explanationHtml = buildCourseExplanationHtml(scenario, []);
+  const explanationHtml = buildCourseNotesHtml(scenario, [], { includeDiagnostics: true });
   const checks = [
     {
       active: scenario.metrics.difficultyDirection === "high",
@@ -11347,6 +10668,8 @@ async function start() {
     }
 
     currentScenario = generation.scenario;
+    clearTraceStarts();
+    clearRouteInspection();
     await ensureScenarioImages(assets, currentScenario);
     pruneImageCache(assets, [
       ...getPlacementImagePieceIds(currentScenario.placements, currentScenario.pieceMap),
@@ -11369,13 +10692,24 @@ document.getElementById("about-button").addEventListener("click", () => {
   openAboutDialog();
 });
 document.getElementById("canvas")?.addEventListener("click", (event) => {
-  if (!currentScenario || !isDevViewEnabled()) {
-    return;
-  }
-
+  if (!currentScenario || !isDevViewEnabled()) return;
   const tile = getCanvasTileFromEvent(event);
-  const inspection = getInspectableAtTile(currentScenario, tile);
-  applyRouteInspection(inspection);
+  applyRouteInspection(getInspectableAtTile(currentScenario, tile));
+  renderScenario(currentScenario);
+});
+
+document.getElementById("canvas")?.addEventListener("dblclick", (event) => {
+  if (!currentScenario || !isDevViewEnabled()) return;
+  event.preventDefault();
+  const tile = getCanvasTileFromEvent(event);
+  const legValue = document.getElementById("leg-select")?.value ?? "all";
+  const legIndex = legValue === "all" ? null : Number(legValue);
+  if (tileTouchesVisibleTrace(currentScenario, tile, legIndex)) {
+    selectAllTraceStarts(currentScenario);
+  } else {
+    clearTraceStarts();
+    clearRouteInspection();
+  }
   renderScenario(currentScenario);
 });
 
@@ -11405,10 +10739,7 @@ document.getElementById("about-dialog").addEventListener("click", (event) => {
 });
 
 document.getElementById("leg-select").addEventListener("change", () => {
-  routeInspectionState = { legIndex: null, routeId: null, kind: null, key: null };
-  if (currentScenario) {
-    renderScenario(currentScenario);
-  }
+  if (currentScenario) renderScenario(currentScenario);
 });
 
 document.getElementById("board-view-mode").addEventListener("change", () => {
@@ -11443,7 +10774,6 @@ document.getElementById("dev-view").addEventListener("change", () => {
 });
 
 document.getElementById("show-outlier-routes").addEventListener("change", () => {
-  routeInspectionState = { legIndex: null, routeId: null, kind: null, key: null };
   if (currentScenario) {
     renderScenario(currentScenario);
   }

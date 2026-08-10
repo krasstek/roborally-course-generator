@@ -8,7 +8,7 @@
   <meta name="mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="mobile-web-app-title" content="RoboRally" />
   <meta name="application-name" content="RoboRally Course Generator" />
-  <meta name="app-version" content="20260810040248" />
+  <meta name="app-version" content="20260810132646" />
   <title>RoboRally Course Generator</title>
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="icon" type="image/png" sizes="16x16" href="./assets/icons/favicon-16.png" />
@@ -844,32 +844,33 @@
       position: fixed;
       inset: 0;
       display: none;
-      background: rgba(17, 21, 26, 0.62);
-      backdrop-filter: blur(5px);
+      align-items: center;
+      justify-content: center;
+      padding:
+        max(16px, env(safe-area-inset-top))
+        max(16px, env(safe-area-inset-right))
+        max(16px, env(safe-area-inset-bottom))
+        max(16px, env(safe-area-inset-left));
+      box-sizing: border-box;
+      background: rgba(17, 21, 26, 0.78);
       z-index: 1000;
+      overflow: hidden;
+      overscroll-behavior: contain;
     }
 
     .overlay.visible {
-      display: block;
+      display: flex;
     }
 
     .overlay-card {
-      position: fixed;
-      top: 40vw;
-      left: 50%;
-      transform: translate(-50%, -50%);
+      position: relative;
+      top: auto;
+      left: auto;
+      transform: none;
       min-width: 260px;
       max-width: 360px;
-      width: min(
-        360px,
-        calc(100vw - max(16px, env(safe-area-inset-left)) - max(16px, env(safe-area-inset-right)) - 32px)
-      );
-      max-height: calc(
-        100dvh -
-        max(16px, env(safe-area-inset-top)) -
-        max(16px, env(safe-area-inset-bottom)) -
-        32px
-      );
+      width: min(360px, 100%);
+      max-height: 100%;
       padding: 18px 20px;
       border-radius: 12px;
       background: linear-gradient(180deg, rgba(236, 240, 242, 0.99) 0%, rgba(210, 218, 223, 0.98) 100%);
@@ -1214,13 +1215,8 @@
 
       .overlay-card {
         min-width: 0;
-        width: calc(100vw - max(16px, env(safe-area-inset-left)) - max(16px, env(safe-area-inset-right)) - 32px);
-        max-height: calc(
-          100dvh -
-          max(16px, env(safe-area-inset-top)) -
-          max(16px, env(safe-area-inset-bottom)) -
-          32px
-        );
+        width: 100%;
+        max-height: 100%;
         padding: 16px;
       }
 
@@ -1350,7 +1346,7 @@
         <label id="trace-leg-label" class="hidden">
           Trace leg
           <select id="leg-select">
-            <option value="none">None</option>
+            <option value="all" selected>All legs</option>
           </select>
         </label>
         <label class="toggle-label">

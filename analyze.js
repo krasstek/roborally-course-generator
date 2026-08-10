@@ -934,7 +934,9 @@ function moveOneStep(tileMap, state, dir, mode, options = {}, moveBudget = null)
       to: { x: next.x, y: next.y },
       dir,
       speed: belt?.speed ?? 1,
-      turned
+      turned,
+      facingBefore: state.facing,
+      facingAfter: resolvedState.facing
     }] : [],
     hazard: getTilePenalty(nextTile, options) +
       (hasHomingMissile(nextTile)
@@ -1437,13 +1439,19 @@ function getEndOfRegisterFeaturePenalty(tileMap, state, options = {}) {
     penalty += 2.4;
   }
 
-  // Radiation and Repair Docks are end-of-turn effects, but the nominal route
-  // register is not trusted. Score their expected 1/5 exposure/value instead.
+  // Radiation is an end-of-turn effect, but the nominal route register is
+  // not trusted. Score its expected 1/5 exposure instead.
   if (hasFeatureType(tile, "radiation")) {
     penalty += 4.5 / REGISTER_COUNT;
   }
-  if (hasFeatureType(tile, "repairDock")) {
-    penalty -= (3.4 / REGISTER_COUNT) * 0.82;
+
+  // Repair Stations are an optional rule on ordinary checkpoints, not a
+  // standalone board feature. Flag 0 is excluded from the playable checkpoint map.
+  if (options.repairStations) {
+    const checkpoint = (tile.features || []).find((feature) => feature.type === "checkpoint");
+    if (checkpoint && Number(checkpoint.id ?? 1) !== 0) {
+      penalty -= (3.4 / REGISTER_COUNT) * 0.82;
+    }
   }
 
   for (const feature of tile.features || []) {
@@ -1465,6 +1473,7 @@ export function simulateAction(tileMap, startState, action, options = {}) {
   const state = cloneState(startState);
   const traversed = [];
   const conveyorSteps = [];
+  const boardEvents = [];
   let hazard = getTilePenalty(tileMap.get(tileKey(state.x, state.y)), {
     ...options,
     randomizerAtRegisterStart: true
@@ -1556,6 +1565,7 @@ export function simulateAction(tileMap, startState, action, options = {}) {
     }
 
     if (distance > manualDistanceBefore && isOil(tileMap.get(tileKey(state.x, state.y)))) {
+      const oilStart = cloneState(state);
       const oilSlide = slideOnOil(tileMap, state, manualMoveDir, options);
       traversed.push(...oilSlide.traversed);
       hazard += oilSlide.hazard;
@@ -1565,6 +1575,15 @@ export function simulateAction(tileMap, startState, action, options = {}) {
       state.x = oilSlide.state.x;
       state.y = oilSlide.state.y;
       state.facing = oilSlide.state.facing;
+      if (oilSlide.distance > 0) {
+        boardEvents.push({
+          type: "oil",
+          from: oilStart,
+          to: cloneState(oilSlide.state),
+          dir: manualMoveDir,
+          distance: oilSlide.distance
+        });
+      }
       if (oilSlide.crashed || oilSlide.blocked || oilSlide.rebooted) {
         return {
           action: action.id,
@@ -1582,6 +1601,10 @@ export function simulateAction(tileMap, startState, action, options = {}) {
   const blue = resolveConveyorPhase(tileMap, state, 2, options);
   traversed.push(...blue.traversed);
   conveyorSteps.push(...blue.conveyorSteps);
+  boardEvents.push(...(blue.conveyorSteps || []).map((step) => ({
+    type: "conveyor",
+    ...step
+  })));
   hazard += blue.hazard;
   rebootPenalty += blue.rebootPenalty || 0;
   distance += blue.distance;
@@ -1597,6 +1620,10 @@ export function simulateAction(tileMap, startState, action, options = {}) {
     const green = resolveConveyorPhase(tileMap, state, 1, options);
     traversed.push(...green.traversed);
     conveyorSteps.push(...green.conveyorSteps);
+    boardEvents.push(...(green.conveyorSteps || []).map((step) => ({
+      type: "conveyor",
+      ...step
+    })));
     hazard += green.hazard;
     rebootPenalty += green.rebootPenalty || 0;
     distance += green.distance;
@@ -1613,6 +1640,10 @@ export function simulateAction(tileMap, startState, action, options = {}) {
     const waterGreen = resolveConveyorPhase(tileMap, state, 1, { ...options, waterOnly: true });
     traversed.push(...waterGreen.traversed);
     conveyorSteps.push(...waterGreen.conveyorSteps);
+    boardEvents.push(...(waterGreen.conveyorSteps || []).map((step) => ({
+      type: "conveyor",
+      ...step
+    })));
     hazard += waterGreen.hazard;
     rebootPenalty += waterGreen.rebootPenalty || 0;
     distance += waterGreen.distance;
@@ -1626,6 +1657,7 @@ export function simulateAction(tileMap, startState, action, options = {}) {
   }
 
   if (!crashed && !rebooted) {
+    const pushStart = cloneState(state);
     const pushed = resolvePushPhase(tileMap, state, options);
     traversed.push(...pushed.traversed);
     hazard += pushed.hazard;
@@ -1638,6 +1670,14 @@ export function simulateAction(tileMap, startState, action, options = {}) {
     state.x = pushed.state.x;
     state.y = pushed.state.y;
     state.facing = pushed.state.facing;
+    if (pushed.distance > 0) {
+      boardEvents.push({
+        type: "pusher",
+        from: pushStart,
+        to: cloneState(pushed.state),
+        distance: pushed.distance
+      });
+    }
   }
 
   let gearTurned = false;
@@ -1648,6 +1688,14 @@ export function simulateAction(tileMap, startState, action, options = {}) {
     state.x = rotated.x;
     state.y = rotated.y;
     state.facing = rotated.facing;
+    if (gearTurned) {
+      boardEvents.push({
+        type: "gear",
+        at: { x: state.x, y: state.y },
+        facingBefore: facingBeforeGear,
+        facingAfter: state.facing
+      });
+    }
   }
 
   if (!crashed && !rebooted) {
@@ -1676,6 +1724,7 @@ export function simulateAction(tileMap, startState, action, options = {}) {
     rebootChoices,
     traversed,
     conveyorSteps,
+    boardEvents,
     gearTurned,
     hazard,
     rebootPenalty,
@@ -3575,6 +3624,7 @@ export function analyzeCourse(tileMap, starts, goal, options = {}) {
       flamingOil: options.flamingOil,
       repulsorOverdrive: options.repulsorOverdrive,
       startupSpinUp: options.startupSpinUp,
+      repairStations: options.repairStations,
       playerCount,
       rebootTokens,
       boardRects: options.boardRects,
@@ -4025,6 +4075,7 @@ export function analyzeFullCourse(tileMap, starts, flags, options = {}) {
     flamingOil: options.flamingOil,
     repulsorOverdrive: options.repulsorOverdrive,
     lessForeshadowing: options.lessForeshadowing,
+    repairStations: Boolean(options.repairStations),
     playerCount,
     virtualBots: Boolean(options.virtualBots),
     rebootTokens: options.rebootTokens,
@@ -4041,7 +4092,8 @@ export function analyzeFullCourse(tileMap, starts, flags, options = {}) {
       ...routeOptions,
       rebootTokens,
       maxRoutes,
-      startupSpinUp: options.startupSpinUp
+      startupSpinUp: options.startupSpinUp,
+      repairStations: options.repairStations
     })).sort((left, right) => left.score - right.score);
     return selectDistinctRoutes(fullRoutes, flags.at(-1), maxRoutes)
       .map((route) => prepareFullCourseCandidate(route, flags, options))

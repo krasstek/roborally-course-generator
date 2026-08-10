@@ -1095,6 +1095,7 @@ function drawStarts(
   visibleFeatureTypes = null,
   showAllStartMarkers = false,
   startLabels = [],
+  selectedStartIndices = new Set(),
   startEnergyCosts = [],
   startLateEnergyCosts = [],
   startLateUnavailable = [],
@@ -1185,6 +1186,16 @@ function drawStarts(
       ctx.strokeStyle = "#113a78";
       ctx.lineWidth = 1.25;
       ctx.stroke();
+    }
+
+    if (selectedStartIndices.has(index) && !unusableStartIndices.has(index)) {
+      ctx.save();
+      ctx.strokeStyle = "#ffd43b";
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.arc(badgeCenterX, badgeCenterY, badgeSize * 0.68, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
     }
 
     const startLabel = hasExplicitStartLabel
@@ -1502,7 +1513,10 @@ function drawRoutes(ctx, analysis, bounds, tileSize, margin, options = {}) {
   ctx.lineJoin = "round";
 
   const routeEntries = Array.isArray(analysis.routes)
-    ? analysis.routes.map((route, index) => ({ index, route }))
+    ? analysis.routes.map((route, index) => ({
+        index: route.startIndex ?? route.traceIndex ?? index,
+        route
+      }))
     : analysis.starts
       .filter((startAnalysis) => startAnalysis.routes.length)
       .map((startAnalysis) => ({
@@ -1691,6 +1705,7 @@ export function render(canvas, pieces, imageMap = {}, options = {}) {
   const showFeatureIcons = options.showFeatureIcons ?? false;
   const showAllStartMarkers = options.showAllStartMarkers ?? (showFeatureIcons || !showPieceImages);
   const startLabels = options.startLabels ?? [];
+  const selectedStartIndices = new Set(options.selectedStartIndices ?? []);
   const startEnergyCosts = options.startEnergyCosts ?? [];
   const startLateEnergyCosts = options.startLateEnergyCosts ?? [];
   const startLateUnavailable = options.startLateUnavailable ?? [];
@@ -1736,6 +1751,7 @@ export function render(canvas, pieces, imageMap = {}, options = {}) {
     visibleFeatureTypes,
     showAllStartMarkers,
     startLabels,
+    selectedStartIndices,
     startEnergyCosts,
     startLateEnergyCosts,
     startLateUnavailable,

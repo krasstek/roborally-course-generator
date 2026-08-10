@@ -32,7 +32,8 @@ const VARIANT_COMPLEXITY = {
   staggeredBoards: 1,
   virtualBots: 2,
   noDocks: 1,
-  sandwichedDock: 1
+  sandwichedDock: 1,
+  repairStations: 1
 };
 
 const VARIANT_CATEGORIES = {
@@ -258,6 +259,16 @@ const VARIANT_DEFINITION_ROWS = [
     description: "Board elements under checkpoints stay active without moving the checkpoints.",
     cost: VARIANT_COMPLEXITY.hazardousFlags,
     applyBundle: applyBooleanField("hazardousFlags")
+  },
+  {
+    id: "repairStations",
+    label: "Repair Stations",
+    category: VARIANT_CATEGORIES.factoryFloor,
+    controlId: "variant-repair-stations",
+    defaultState: "off",
+    description: "Ordinary checkpoints act as repair stations at the end of the fifth register. The Virtual Bots entry is not a repair station.",
+    cost: VARIANT_COMPLEXITY.repairStations,
+    applyBundle: applyBooleanField("repairStations")
   },
   {
     id: "movingTargets",
@@ -493,6 +504,7 @@ export function applyVariantAnalysisOptions(baseOptions = {}, variantBundle = {}
     virtualBots: Boolean(variantBundle.virtualBots),
     trafficGraceRegisters: variantBundle.virtualBots ? 5 : 0,
     hazardousFlags: Boolean(variantBundle.hazardousFlags),
+    repairStations: Boolean(variantBundle.repairStations),
     movingTargets: Boolean(variantBundle.movingTargets),
     lessForeshadowing: Boolean(variantBundle.lessForeshadowing)
   };
