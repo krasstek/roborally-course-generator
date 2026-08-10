@@ -115,7 +115,6 @@ const BOARD_SELECTION_FALLBACK_ATTEMPT = 12;
 const BOARD_PROFILE_HAZARD_DENSITY_THRESHOLD = 0.16;
 const BOARD_PROFILE_HAZARD_DENSITY_WEIGHT = 2.4;
 const SAVED_SCENARIO_KEY = "roborally-course-generator:last-scenario";
-const BOARD_AUDIT_NOTES_KEY = "roborally-course-generator:board-audit-notes";
 const AUDIT_RENDER_TILE_SIZE = 40;
 const AUDIT_RENDER_MARGIN = 30;
 const BOARD_VIEW_MODES = {
@@ -138,8 +137,12 @@ const AUDIT_FEATURE_TYPES = [
   { id: "portal", label: "Portals" },
   { id: "push", label: "Push Panels" },
   { id: "randomizer", label: "Randomizers" },
+  { id: "radiation", label: "Radiation" },
+  { id: "radioactiveWaste", label: "Radioactive Waste" },
   { id: "ramp", label: "Ramps" },
+  { id: "redWall", label: "Red Walls" },
   { id: "repulsor", label: "Repulsor Fields" },
+  { id: "greenWall", label: "Green Walls" },
   { id: "start", label: "Starts" },
   { id: "teleporter", label: "Teleporters" },
   { id: "trapdoor", label: "Trapdoors" },
@@ -1215,28 +1218,6 @@ function formatBoardLabel(pieceId, pieceMap) {
     : `${name} (${expansion})`;
 }
 
-function loadBoardAuditNotes() {
-  try {
-    return JSON.parse(localStorage.getItem(BOARD_AUDIT_NOTES_KEY) || "{}");
-  } catch {
-    return {};
-  }
-}
-
-function saveBoardAuditNote(pieceId, note) {
-  const notes = loadBoardAuditNotes();
-  if (note) {
-    notes[pieceId] = note;
-  } else {
-    delete notes[pieceId];
-  }
-
-  try {
-    localStorage.setItem(BOARD_AUDIT_NOTES_KEY, JSON.stringify(notes));
-  } catch {
-    // ignore storage failures
-  }
-}
 
 function summarizeFeature(feature) {
   return formatFeatureLabel(feature);
@@ -1618,14 +1599,12 @@ function renderBoardAudit(assets) {
   const piece = getAuditPiece(assets);
   const imageCanvas = document.getElementById("audit-image-canvas");
   const jsonCanvas = document.getElementById("audit-json-canvas");
-  const notesInput = document.getElementById("audit-feedback");
 
   if (!piece) {
     const imageCtx = imageCanvas.getContext("2d");
     const jsonCtx = jsonCanvas.getContext("2d");
     imageCtx.clearRect(0, 0, imageCanvas.width, imageCanvas.height);
     jsonCtx.clearRect(0, 0, jsonCanvas.width, jsonCanvas.height);
-    notesInput.value = "";
     updateAuditReadout(assets);
     return;
   }
@@ -1651,10 +1630,6 @@ function renderBoardAudit(assets) {
   });
   drawAuditRenderHover(jsonCanvas, piece, boardAuditState.hoverTile);
 
-  const notes = loadBoardAuditNotes();
-  if (document.activeElement !== notesInput) {
-    notesInput.value = notes[piece.id] ?? "";
-  }
 
   updateAuditReadout(assets);
 }
@@ -1673,7 +1648,6 @@ function initializeBoardAudit(assets) {
   const select = document.getElementById("audit-board-select");
   const imageCanvas = document.getElementById("audit-image-canvas");
   const jsonCanvas = document.getElementById("audit-json-canvas");
-  const notesInput = document.getElementById("audit-feedback");
   const featureFilters = document.getElementById("audit-feature-filters");
   const allButton = document.getElementById("audit-filter-all");
   const noneButton = document.getElementById("audit-filter-none");
@@ -1760,14 +1734,6 @@ function initializeBoardAudit(assets) {
     renderBoardAudit(assets);
   });
 
-  notesInput.addEventListener("input", () => {
-    const pieceId = boardAuditState.pieceId;
-    if (!pieceId) {
-      return;
-    }
-
-    saveBoardAuditNote(pieceId, notesInput.value.trim());
-  });
 
   boardAuditInitialized = true;
   renderBoardAudit(assets);
@@ -4590,15 +4556,26 @@ function tileHasRepulsorOnEdge(features = [], edge) {
   return features.some((feature) => feature.type === "repulsor" && (feature.sides || []).includes(edge));
 }
 
+function tileHasRedWallOnSide(features = [], side) {
+  return features.some((feature) => feature.type === "redWall" && (feature.sides || []).includes(side));
+}
+
 function tileHasLedgeOnSide(features = [], side) {
   return features.some((feature) => feature.type === "ledge" && (feature.sides || []).includes(side));
 }
 
 function tileHasLaserSupportBlock(features = [], side, options = {}) {
-  if (tileHasWallOnSide(features, side) || tileHasRepulsorOnEdge(features, side)) {
+  if (
+    tileHasWallOnSide(features, side) ||
+    tileHasRepulsorOnEdge(features, side) ||
+    tileHasRedWallOnSide(features, side)
+  ) {
     return true;
   }
 
+  // A ledge only provides a physical laser-support wall from its LOWER tile.
+  // The neighboring upper/platform tile does not have a wall face on that edge.
+  // Green wall markers never provide support by themselves.
   return Boolean(options.includeLowerLedge && tileHasLedgeOnSide(features, side));
 }
 
@@ -4653,7 +4630,7 @@ function laserTileHasValidContinuation(tile, laser, candidateFeatureMap, current
     }
 
     const neighborFeatures = candidateFeatureMap.get(neighborKey) ?? currentTileMap.get(neighborKey)?.features ?? [];
-    if (tileHasLaserSupportBlock(neighborFeatures, getOppositeSide(side), { includeLowerLedge: true })) {
+    if (tileHasLaserSupportBlock(neighborFeatures, getOppositeSide(side), { includeLowerLedge: false })) {
       return true;
     }
 
@@ -8839,6 +8816,38 @@ function getSharedDeckPlayerPressure(playerCount = 4) {
   return clamp(((playerCount || 4) - 2) / 4, 0, 1);
 }
 
+const VARIANT_DIFFICULTY_ACCOUNTING = Object.freeze({
+  actFast: "explicit",
+  lighterGame: "mechanical+explicit",
+  upgradeWorld: "mechanical",
+  lessSpammyGame: "mechanical+explicit",
+  criticalSpam: "mechanical+explicit",
+  criticalHaywire: "mechanical+explicit",
+  permanentShutdown: "mechanical+explicit",
+  lessDeadlyGame: "mechanical",
+  moreDeadlyGame: "mechanical",
+  cuttingFloor: "mechanical+explicit",
+  flamingOil: "mechanical+explicit",
+  repulsorOverdrive: "mechanical",
+  setToKill: "mechanical",
+  setToStun: "mechanical",
+  dynamicArchiving: "mechanical",
+  homeReboot: "mechanical",
+  hazardousFlags: "mechanical",
+  movingTargets: "mechanical+explicit",
+  extraDocks: "layout-derived",
+  noDocks: "layout-derived",
+  sandwichedDock: "layout-derived",
+  factoryRejects: "explicit",
+  startupSpinUp: "mechanical",
+  virtualBots: "mechanical",
+  lessForeshadowing: "explicit",
+  classicSharedDeck: "explicit",
+  competitiveMode: "explicit+balance-gate",
+  payToWin: "explicit+pricing",
+  staggeredBoards: "layout-derived"
+});
+
 function applyVariantDifficultyModifiers(raw, preferences = {}, boardHarshness = null) {
   let adjusted = raw;
   const harshness = boardHarshness ?? computeBoardHarshness();
@@ -8890,6 +8899,16 @@ function applyVariantDifficultyModifiers(raw, preferences = {}, boardHarshness =
   }
   if (preferences.movingTargetStats?.activeCount) {
     adjusted += preferences.movingTargetStats.difficultyBonus;
+  }
+
+  // Setup-choice rules whose difficulty is primarily strategic rather than
+  // geometric need a small explicit contribution. These apply identically
+  // whether the rule was randomly selected or explicitly forced.
+  if (preferences.competitiveMode) {
+    adjusted += 1.8;
+  }
+  if (preferences.payToWin) {
+    adjusted += 1.4;
   }
 
   return Number(adjusted.toFixed(2));
@@ -10675,24 +10694,12 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     await reportStage("Checking difficulty, length, and final fit", evaluationsUsed);
     const metrics = classifyCandidate(sequence, {
       ...generationPreferences,
+      ...effectiveVariantBundle,
       actFast,
       actFastMode,
       flagCount,
       classicSharedDeck,
-      criticalSpam,
-      criticalHaywire,
-      permanentShutdown,
-      cuttingFloor: effectiveVariantBundle.cuttingFloor,
-      flamingOil: effectiveVariantBundle.flamingOil,
-      factoryRejects,
-      repulsorOverdrive: effectiveVariantBundle.repulsorOverdrive,
-      upgradeWorld: effectiveVariantBundle.upgradeWorld,
-      hazardousFlags,
-      movingTargets,
-      payToWin: effectiveVariantBundle.payToWin,
-      lighterGame,
-      lessSpammyGame,
-      lessForeshadowing
+      movingTargets
     }, {
       boardPlacements: scenarioBoardPlacements,
       pieceMap,

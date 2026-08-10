@@ -5,7 +5,7 @@ export const BOARD_PROFILE_DENSITY_COMPONENT_WEIGHTS = {
   portal: 0.85,
   push: 0.8
 };
-export const RANDOMIZER_CONTROL_PENALTY = 6;
+export const RANDOMIZER_CONTROL_PENALTY = 11;
 export const FLAG_APPROACH_WEIGHTS = {
   singleOpenBase: 30,
   singleOpenTraffic: 18,
@@ -34,7 +34,11 @@ const FLAG_AREA_FEATURE_WEIGHTS = {
   gear: 1.5,
   portal: 1.2,
   teleporter: 2.4,
-  randomizer: 3.2,
+  randomizer: 5.2,
+  radiation: 1.4,
+  radioactiveWaste: 3.7,
+  redWall: 2.2,
+  greenWall: 0.15,
   oil: 2.2,
   ledge: 1.35,
   ramp: 0.75,
@@ -217,6 +221,37 @@ export function getBoardProfileDelta(feature) {
       hazardCount: 1
     };
   }
+  if (feature.type === "radiation") {
+    return {
+      ...base,
+      hazardWeight: 0.9 * 0.2,
+      complexityWeight: 0.35,
+      swingWeight: 0.45 * 0.2,
+      hazardCount: 1
+    };
+  }
+  if (feature.type === "radioactiveWaste") {
+    return {
+      ...base,
+      hazardWeight: 2.3,
+      complexityWeight: 1.55,
+      swingWeight: 1.4,
+      hazardCount: 1
+    };
+  }
+  if (feature.type === "redWall") {
+    return {
+      ...base,
+      congestionWeight: Math.max(1, (feature.sides || []).length) * 0.9,
+      complexityWeight: 0.8
+    };
+  }
+  if (feature.type === "greenWall") {
+    return {
+      ...base,
+      complexityWeight: 0.45
+    };
+  }
   if (feature.type === "oil") {
     return { ...base, hazardWeight: 1.2, complexityWeight: 1.8, swingWeight: 0.7 };
   }
@@ -299,6 +334,18 @@ export function getTilePenaltyForFeature(feature, options = {}) {
   if (feature.type === "randomizer") {
     return RANDOMIZER_CONTROL_PENALTY;
   }
+  if (feature.type === "radiation") {
+    return 1.2 * 0.2;
+  }
+  if (feature.type === "radioactiveWaste") {
+    return 2.4;
+  }
+  if (feature.type === "redWall") {
+    return 0.8;
+  }
+  if (feature.type === "greenWall") {
+    return 0;
+  }
   if (feature.type === "oil") {
     return Number((2.8 * oilMultiplier).toFixed(2));
   }
@@ -365,6 +412,9 @@ export function getFlagAreaFeatureScore(feature, dist, options = {}) {
   if (feature.type === "portal") return FLAG_AREA_FEATURE_WEIGHTS.portal * proximityWeight;
   if (feature.type === "teleporter") return FLAG_AREA_FEATURE_WEIGHTS.teleporter * proximityWeight;
   if (feature.type === "randomizer") return FLAG_AREA_FEATURE_WEIGHTS.randomizer * proximityWeight;
+  if (feature.type === "radiation") return FLAG_AREA_FEATURE_WEIGHTS.radiation * 0.2 * proximityWeight;
+  if (feature.type === "radioactiveWaste") return FLAG_AREA_FEATURE_WEIGHTS.radioactiveWaste * proximityWeight;
+  if (feature.type === "repairDock") return FLAG_AREA_FEATURE_WEIGHTS.repairDock * 0.2 * proximityWeight;
   if (feature.type === "oil") return Number((FLAG_AREA_FEATURE_WEIGHTS.oil * proximityWeight * oilMultiplier).toFixed(2));
   if (feature.type === "ledge") return FLAG_AREA_FEATURE_WEIGHTS.ledge * proximityWeight;
   if (feature.type === "ramp") return FLAG_AREA_FEATURE_WEIGHTS.ramp * proximityWeight;

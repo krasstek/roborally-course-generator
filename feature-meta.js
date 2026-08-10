@@ -29,7 +29,8 @@ export function normalizeFeature(feature) {
     case "water":
     case "chopShop":
     case "homingMissile":
-      return { type: feature.type };
+    case "radiation":
+    case "radioactiveWaste":
     case "belt": {
       const normalizedBelt = {
         type: "belt",
@@ -53,6 +54,8 @@ export function normalizeFeature(feature) {
       };
     case "wall":
     case "repulsor":
+    case "redWall":
+    case "greenWall":
       return {
         type: feature.type,
         sides: normalizeSides(feature.sides)
@@ -122,7 +125,10 @@ export function formatFeatureLabel(feature, options = {}) {
     case "battery":
     case "randomizer":
     case "water":
+    case "radiation":
       return feature.type;
+    case "radioactiveWaste":
+      return "radioactive waste";
     case "chopShop":
       return "chop shop";
     case "belt":
@@ -140,6 +146,10 @@ export function formatFeatureLabel(feature, options = {}) {
       return `trapdoor${formatTiming(feature.timing, compact ? "," : ", ")}`;
     case "wall":
       return `wall ${((feature.sides || []).join(compact ? "," : ", ")) || "?"}`;
+    case "redWall":
+      return `red wall ${((feature.sides || []).join(compact ? "," : ", ")) || "?"}`;
+    case "greenWall":
+      return `green wall ${((feature.sides || []).join(compact ? "," : ", ")) || "?"}`;
     case "repulsor":
       return `repulsor ${((feature.sides || []).join(compact ? "," : ", ")) || "?"}`;
     case "push":
@@ -154,6 +164,10 @@ export function formatFeatureLabel(feature, options = {}) {
       return `crusher${formatTiming(feature.timing, compact ? "," : ", ")}`;
     case "homingMissile":
       return "homing missile";
+    case "radiation":
+      return "radiation";
+    case "radioactiveWaste":
+      return "radioactive waste";
     case "portal":
       return `portal ${feature.id ?? "?"}`;
     case "teleporter":
@@ -183,6 +197,10 @@ export function summarizeFeatureDetails(feature) {
       return `laser dir=${feature.dir ?? "?"} damage=${feature.damage ?? 1}`;
     case "wall":
       return `wall sides=${(feature.sides || []).join(",")}`;
+    case "redWall":
+      return `red wall sides=${(feature.sides || []).join(",")}`;
+    case "greenWall":
+      return `green wall sides=${(feature.sides || []).join(",")}`;
     case "repulsor":
       return `repulsor sides=${(feature.sides || []).join(",")}`;
     case "push":
@@ -222,6 +240,10 @@ export function getFeatureTypeSymbol(featureType) {
   switch (featureType) {
     case "wall":
       return "#";
+    case "redWall":
+      return "R|";
+    case "greenWall":
+      return "G|";
     case "belt":
       return "=>";
     case "repulsor":
@@ -246,6 +268,10 @@ export function getFeatureTypeSymbol(featureType) {
       return "TP";
     case "randomizer":
       return "R?";
+    case "radiation":
+      return "RD";
+    case "radioactiveWaste":
+      return "RW";
     case "homingMissile":
       return "HM";
     case "chopShop":

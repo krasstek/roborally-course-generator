@@ -569,6 +569,14 @@ function drawFeatureIcon(ctx, feature, left, top, size) {
       drawIconBadge(ctx, left, top, size, { fill: "#8b98a4", stroke: "#43505b" });
       drawBadgeText(ctx, "?", left, top, size, { color: "#ffffff", bold: true });
       return;
+    case "radiation":
+      drawIconBadge(ctx, left, top, size, { fill: "#b7cf48", stroke: "#586b14" });
+      drawBadgeText(ctx, "☢", left, top, size, { color: "#1e2508", bold: true });
+      return;
+    case "radioactiveWaste":
+      drawIconBadge(ctx, left, top, size, { fill: "#789638", stroke: "#344716" });
+      drawBadgeText(ctx, "RW", left, top, size, { color: "#f6ffd8", bold: true });
+      return;
     case "water":
       drawIconBadge(ctx, left, top, size, { fill: "#5aa9d6", stroke: "#245b7b" });
       ctx.save();
@@ -1022,10 +1030,32 @@ function drawFeatures(
             lineWidth: 2
           });
         });
+      filteredFeatures
+        .filter((feature) => feature.type === "redWall")
+        .forEach((feature) => {
+          drawWalls(ctx, feature.sides, px, py, tileSize, {
+            strokeStyle: "#d72f2f",
+            lineWidth: 4
+          });
+        });
+      filteredFeatures
+        .filter((feature) => feature.type === "greenWall")
+        .forEach((feature) => {
+          drawWalls(ctx, feature.sides, px, py, tileSize, {
+            strokeStyle: "#36a852",
+            lineWidth: 4
+          });
+        });
     }
 
     if (showFeatureIcons) {
-      drawTileFeatureIcons(ctx, filteredFeatures, px, py, tileSize);
+      drawTileFeatureIcons(
+        ctx,
+        filteredFeatures.filter((feature) => feature.type !== "redWall" && feature.type !== "greenWall"),
+        px,
+        py,
+        tileSize
+      );
       continue;
     }
 
@@ -1035,7 +1065,11 @@ function drawFeatures(
 
     let line = 0;
     for (const feature of filteredFeatures) {
-      if (feature.type === "wall") {
+      if (
+        feature.type === "wall" ||
+        feature.type === "redWall" ||
+        feature.type === "greenWall"
+      ) {
         continue;
       }
 

@@ -191,6 +191,45 @@ function getWalls(tile) {
   return walls;
 }
 
+function hasEdgeFeature(tile, type, side) {
+  return (tile?.features || []).some((feature) => (
+    feature.type === type &&
+    (feature.sides || []).includes(side)
+  ));
+}
+
+function isBoundaryBlockedByWalls(tileMap, from, to, dir) {
+  const fromTile = tileMap.get(tileKey(from.x, from.y));
+  const toTile = tileMap.get(tileKey(to.x, to.y));
+  const opposite = OPPOSITE[dir];
+
+  // Ordinary walls remain fully bidirectional and independent of any
+  // red/green overlay markers.
+  const fromWalls = getWalls(fromTile);
+  const toWalls = getWalls(toTile);
+  if (fromWalls.has(dir) || toWalls.has(opposite)) {
+    return true;
+  }
+
+  const redFrom = hasEdgeFeature(fromTile, "redWall", dir);
+  const redTo = hasEdgeFeature(toTile, "redWall", opposite);
+  const greenFrom = hasEdgeFeature(fromTile, "greenWall", dir);
+  const greenTo = hasEdgeFeature(toTile, "greenWall", opposite);
+
+  // A red wall by itself is an ordinary wall. A matching green edge on the
+  // opposite tile only opens travel from GREEN -> RED across that exact border.
+  if (redFrom) {
+    return true;
+  }
+  if (redTo && !greenFrom) {
+    return true;
+  }
+
+  // Green alone contributes no blocking effect. greenTo only matters when
+  // paired with redFrom, which is already blocked in this direction.
+  return false;
+}
+
 function getBelt(tile) {
   return (tile?.features || []).find((feature) => feature.type === "belt") ?? null;
 }
@@ -232,6 +271,21 @@ function hasCrusher(tile) {
 
 function hasTrapdoor(tile) {
   return (tile?.features || []).some((feature) => feature.type === "trapdoor");
+}
+
+function hasExplicitTiming(feature) {
+  return Array.isArray(feature?.timing) && feature.timing.length > 0;
+}
+
+function getFeatureDutyCycle(feature, fallback = 1) {
+  if (!hasExplicitTiming(feature)) return fallback;
+  return Math.max(0, Math.min(1, new Set(feature.timing).size / REGISTER_COUNT));
+}
+
+function hasUntimedFeature(tile, type) {
+  return (tile?.features || []).some((feature) => (
+    feature.type === type && !hasExplicitTiming(feature)
+  ));
 }
 
 function hasHomingMissile(tile) {
@@ -374,6 +428,25 @@ function getTilePenalty(tile, options = {}) {
   // scoring. This intentionally captures many board effects without turning the
   // analyzer into a full combat or timing simulator.
   for (const feature of tile?.features || []) {
+    // Randomizers affect the card played only when the robot STARTS a register
+    // on the space. Traversing or merely ending the current movement on one
+    // does not alter the current register.
+    if (feature.type === "randomizer" && !options.randomizerAtRegisterStart) {
+      continue;
+    }
+    if (
+      feature.type === "radiation" ||
+      feature.type === "radioactiveWaste" ||
+      feature.type === "repairDock" ||
+      (hasExplicitTiming(feature) && (
+        feature.type === "push" ||
+        feature.type === "crusher" ||
+        feature.type === "trapdoor"
+      ))
+    ) {
+      continue;
+    }
+
     penalty += getTilePenaltyForFeature(feature, {
       batteryActive: isBatteryActive(options),
       rebootDamagePenalty: getRebootDamagePenalty(options),
@@ -399,10 +472,7 @@ function isExposedToPitOrEdge(tileMap, point, dir, options = {}) {
     y: point.y + DIRS[dir].dy
   };
   const toTile = tileMap.get(tileKey(next.x, next.y));
-  const fromWalls = getWalls(fromTile);
-  const toWalls = getWalls(toTile);
-
-  if (fromWalls.has(dir) || toWalls.has(OPPOSITE[dir])) {
+  if (isBoundaryBlockedByWalls(tileMap, point, next, dir)) {
     return false;
   }
 
@@ -479,11 +549,6 @@ function canMoveBetween(tileMap, from, to, dir, options = {}) {
     return { ok: false, crash: EDGE_BEHAVIOR === "pit" && !lessDeadlyGame, offBoard: true };
   }
 
-  const fromWalls = getWalls(fromTile);
-  if (fromWalls.has(dir)) {
-    return { ok: false, crash: false, offBoard: false };
-  }
-
   const toTile = tileMap.get(tileKey(to.x, to.y));
   const fromRepulsor = getRepulsor(fromTile, dir);
   const toRepulsor = getRepulsor(toTile, OPPOSITE[dir]);
@@ -496,7 +561,6 @@ function canMoveBetween(tileMap, from, to, dir, options = {}) {
     };
   }
 
-  const toWalls = getWalls(toTile);
   const fromLedges = getLedgeSides(fromTile);
   const toLedges = getLedgeSides(toTile);
 
@@ -509,7 +573,7 @@ function canMoveBetween(tileMap, from, to, dir, options = {}) {
     };
   }
 
-  if (fromWalls.has(dir) || toWalls.has(OPPOSITE[dir])) {
+  if (isBoundaryBlockedByWalls(tileMap, from, to, dir)) {
     return { ok: false, crash: false, offBoard: false };
   }
 
@@ -1102,7 +1166,7 @@ function resolveConveyorPhase(tileMap, state, eligibleSpeed, options = {}) {
 
 function resolvePushPhase(tileMap, state, options = {}) {
   const tile = tileMap.get(tileKey(state.x, state.y));
-  const pushes = getPushes(tile);
+  const pushes = getPushes(tile).filter((push) => !hasExplicitTiming(push));
 
   if (!pushes.length) {
     return {
@@ -1172,7 +1236,7 @@ function resolvePushPhase(tileMap, state, options = {}) {
 function resolveCrusherPhase(tileMap, state, options = {}) {
   const tile = tileMap.get(tileKey(state.x, state.y));
 
-  if (!hasCrusher(tile) && !hasTrapdoor(tile)) {
+  if (!hasUntimedFeature(tile, "crusher") && !hasUntimedFeature(tile, "trapdoor")) {
     return {
       state: cloneState(state),
       traversed: [],
@@ -1186,7 +1250,7 @@ function resolveCrusherPhase(tileMap, state, options = {}) {
     };
   }
 
-  if (hasTrapdoor(tile)) {
+  if (hasUntimedFeature(tile, "trapdoor")) {
     return {
       state: cloneState(state),
       traversed: [{ x: state.x, y: state.y }],
@@ -1240,11 +1304,171 @@ function resolveCrusherPhase(tileMap, state, options = {}) {
   };
 }
 
+function hasFeatureType(tile, type) {
+  return (tile?.features || []).some((feature) => feature.type === type);
+}
+
+function getTimedHazardSeverity(feature, options = {}) {
+  if (!feature?.type) return 0;
+  if (feature.type === "flamethrower") return 5.2;
+  if (feature.type === "push") return 3.2;
+  if (feature.type === "crusher") return 8.5;
+  if (feature.type === "trapdoor") return 9.5;
+  if (feature.type === "radiation") return 4.5;
+  return 0;
+}
+
+function getTimedHazardClusterPenalty(tileMap, state, options = {}) {
+  const entries = [];
+  for (let dy = -1; dy <= 1; dy += 1) {
+    for (let dx = -1; dx <= 1; dx += 1) {
+      if (Math.abs(dx) + Math.abs(dy) > 1) continue;
+      const tile = tileMap.get(tileKey(state.x + dx, state.y + dy));
+      for (const feature of tile?.features || []) {
+        if (!hasExplicitTiming(feature)) continue;
+        const severity = getTimedHazardSeverity(feature, options);
+        if (severity <= 0) continue;
+        entries.push({
+          feature,
+          severity,
+          proximity: dx === 0 && dy === 0 ? 1 : 0.55,
+          registers: new Set(feature.timing)
+        });
+      }
+    }
+  }
+
+  let penalty = 0;
+  for (let i = 0; i < entries.length; i += 1) {
+    for (let j = i + 1; j < entries.length; j += 1) {
+      const shared = [...entries[i].registers].filter((register) => entries[j].registers.has(register)).length;
+      if (!shared) continue;
+      const correlation = shared / REGISTER_COUNT;
+      penalty += (
+        Math.min(entries[i].severity, entries[j].severity) *
+        correlation *
+        entries[i].proximity *
+        entries[j].proximity *
+        0.32
+      );
+    }
+  }
+  return Number(penalty.toFixed(2));
+}
+
+function getExpectedTimedPushPenalty(tileMap, state, feature, options = {}) {
+  const duty = getFeatureDutyCycle(feature);
+  if (duty <= 0 || !feature.dir) return 0;
+
+  const hypothetical = moveOneStep(tileMap, state, feature.dir, "push", options);
+  if (hypothetical.crashed || hypothetical.rebooted) {
+    return Number((7.5 * duty).toFixed(2));
+  }
+  if (hypothetical.blocked || hypothetical.distance <= 0) {
+    return Number((1.2 * duty).toFixed(2));
+  }
+
+  const goal = options.goal;
+  if (!goal) return Number((1.6 * duty).toFixed(2));
+
+  const before = heuristic(state, goal);
+  const after = heuristic(hypothetical.state, goal);
+  const delta = before - after;
+  if (delta > 0) {
+    // Deliberately exploiting a timed pusher is much less reliable than merely
+    // being exposed to it, especially for 1/5 timing.
+    const exploitReliability = 0.34 + duty * 0.28;
+    return Number((-Math.min(3.4, delta * 1.15) * duty * exploitReliability).toFixed(2));
+  }
+  return Number((Math.min(3.6, Math.abs(delta) * 1.15 + 1.1) * duty).toFixed(2));
+}
+
+function getExpectedTimedCrusherPenalty(tileMap, state, feature, options = {}) {
+  const duty = getFeatureDutyCycle(feature);
+  if (duty <= 0) return 0;
+
+  const harm = 9.5 * duty;
+  const goal = options.goal;
+  if (!goal || options.recoveryRule !== "reboot_tokens") {
+    return Number(harm.toFixed(2));
+  }
+
+  const rebootToken = getRebootTokenForPoint(state, options.boardRects, options.rebootTokens);
+  if (!rebootToken) return Number(harm.toFixed(2));
+
+  const shortcut = heuristic(state, goal) - heuristic(rebootToken, goal);
+  if (shortcut <= 0) return Number(harm.toFixed(2));
+
+  const exploitReliability = 0.2 + duty * 0.25;
+  const exploitCredit = Math.min(6.5, shortcut * 0.9) * duty * exploitReliability;
+  return Number((harm - exploitCredit).toFixed(2));
+}
+
+function getExpectedTimedTrapdoorPenalty(tileMap, state, feature, options = {}) {
+  const duty = getFeatureDutyCycle(feature);
+  if (duty <= 0) return 0;
+
+  const harm = 10.5 * duty;
+  const goal = options.goal;
+  if (!goal || options.recoveryRule !== "reboot_tokens") {
+    return Number(harm.toFixed(2));
+  }
+
+  const rebootToken = getRebootTokenForPoint(state, options.boardRects, options.rebootTokens);
+  if (!rebootToken) return Number(harm.toFixed(2));
+  const shortcut = heuristic(state, goal) - heuristic(rebootToken, goal);
+  if (shortcut <= 0) return Number(harm.toFixed(2));
+
+  // A timed pit is even harder to exploit precisely than a timed pusher.
+  const exploitReliability = 0.16 + duty * 0.22;
+  const exploitCredit = Math.min(6, shortcut * 0.8) * duty * exploitReliability;
+  return Number((harm - exploitCredit).toFixed(2));
+}
+
+function getEndOfRegisterFeaturePenalty(tileMap, state, options = {}) {
+  const tile = tileMap.get(tileKey(state.x, state.y));
+  if (!tile) return 0;
+
+  let penalty = 0;
+
+  // Radioactive Waste is effectively 5/5: every register spent here hurts,
+  // partly offset by the energy/free-upgrade choice.
+  if (hasFeatureType(tile, "radioactiveWaste")) {
+    penalty += 2.4;
+  }
+
+  // Radiation and Repair Docks are end-of-turn effects, but the nominal route
+  // register is not trusted. Score their expected 1/5 exposure/value instead.
+  if (hasFeatureType(tile, "radiation")) {
+    penalty += 4.5 / REGISTER_COUNT;
+  }
+  if (hasFeatureType(tile, "repairDock")) {
+    penalty -= (3.4 / REGISTER_COUNT) * 0.82;
+  }
+
+  for (const feature of tile.features || []) {
+    if (!hasExplicitTiming(feature)) continue;
+    if (feature.type === "push") {
+      penalty += getExpectedTimedPushPenalty(tileMap, state, feature, options);
+    } else if (feature.type === "crusher") {
+      penalty += getExpectedTimedCrusherPenalty(tileMap, state, feature, options);
+    } else if (feature.type === "trapdoor") {
+      penalty += getExpectedTimedTrapdoorPenalty(tileMap, state, feature, options);
+    }
+  }
+
+  penalty += getTimedHazardClusterPenalty(tileMap, state, options);
+  return Number(penalty.toFixed(2));
+}
+
 export function simulateAction(tileMap, startState, action, options = {}) {
   const state = cloneState(startState);
   const traversed = [];
   const conveyorSteps = [];
-  let hazard = getTilePenalty(tileMap.get(tileKey(state.x, state.y)), options);
+  let hazard = getTilePenalty(tileMap.get(tileKey(state.x, state.y)), {
+    ...options,
+    randomizerAtRegisterStart: true
+  });
   let rebootPenalty = 0;
   let distance = 0;
   let forcedDistance = 0;
@@ -1439,6 +1663,10 @@ export function simulateAction(tileMap, startState, action, options = {}) {
     state.x = crushed.state.x;
     state.y = crushed.state.y;
     state.facing = crushed.state.facing;
+  }
+
+  if (!crashed && !rebooted) {
+    hazard += getEndOfRegisterFeaturePenalty(tileMap, state, options);
   }
 
   return {
@@ -1808,7 +2036,11 @@ function enumerateRoutes(tileMap, start, goal, options = {}) {
     }
 
     for (const action of ACTIONS) {
-      const transition = simulateAction(tileMap, current.finalState, action, simulationOptions);
+      const transition = simulateAction(tileMap, current.finalState, action, {
+        ...simulationOptions,
+        goal,
+        registerIndex: current.actions % REGISTER_COUNT
+      });
       if (transition.crashed || transition.blocked) {
         continue;
       }
@@ -2034,7 +2266,11 @@ function enumerateFullCourseRoutes(tileMap, start, flags, options = {}) {
     const currentTarget = getFullCourseTarget(flags, current.checkpointIndex, current.actions, options);
 
     for (const action of ACTIONS) {
-      const transition = simulateAction(tileMap, current.finalState, action, simulationOptions);
+      const transition = simulateAction(tileMap, current.finalState, action, {
+        ...simulationOptions,
+        goal: currentTarget,
+        registerIndex: current.actions % REGISTER_COUNT
+      });
       if (transition.crashed || transition.blocked) {
         continue;
       }
@@ -2520,6 +2756,80 @@ function rearThreatPenalty(tileMap, routeA, routeB, options = {}) {
   return rounded;
 }
 
+function sustainedConvoyFrontPenalty(tileMap, leadRoute, trailingRoute, options = {}) {
+  if (!leadRoute || !trailingRoute) {
+    return 0;
+  }
+
+  const leadPath = getTrafficPath(leadRoute);
+  const trailingPath = getTrafficPath(trailingRoute);
+  if (!leadPath.length || !trailingPath.length) {
+    return 0;
+  }
+
+  const { rear: multiplier } = getRobotLaserThreatMultipliers(options);
+  const exposed = [];
+
+  for (let leadIndex = 0; leadIndex < leadPath.length; leadIndex += 1) {
+    const lead = leadPath[leadIndex];
+    const leadDir = getRouteDirectionAt(leadPath, leadIndex);
+    if (!leadDir || lead.jump) {
+      exposed.push(false);
+      continue;
+    }
+
+    let threatened = false;
+    for (
+      let trailingIndex = Math.max(0, leadIndex - 1);
+      trailingIndex <= Math.min(trailingPath.length - 1, leadIndex + 1);
+      trailingIndex += 1
+    ) {
+      const trailing = trailingPath[trailingIndex];
+      const trailingDir = getRouteDirectionAt(trailingPath, trailingIndex);
+      if (!trailingDir || trailing.jump || trailingDir !== leadDir) {
+        continue;
+      }
+      if (!isBehindAlongDir(lead, trailing, leadDir)) {
+        continue;
+      }
+
+      const distance = heuristic(lead, trailing);
+      if (distance < 1 || distance > 4) {
+        continue;
+      }
+      if (!hasLineOfSight(tileMap, lead, trailing)) {
+        continue;
+      }
+
+      threatened = true;
+      break;
+    }
+
+    exposed.push(threatened);
+  }
+
+  let penalty = 0;
+  let runLength = 0;
+
+  const scoreRun = (length) => {
+    if (length <= 0) return 0;
+    if (length === 1) return 1.2;
+    if (length === 2) return 4;
+    return Math.min(12, 7 + (length - 3) * 2.2);
+  };
+
+  for (let index = 0; index <= exposed.length; index += 1) {
+    if (exposed[index]) {
+      runLength += 1;
+      continue;
+    }
+    penalty += scoreRun(runLength);
+    runLength = 0;
+  }
+
+  return Number((penalty * multiplier).toFixed(2));
+}
+
 function areOppositeDirections(dirA, dirB) {
   return (
     (dirA === "N" && dirB === "S") ||
@@ -2634,12 +2944,70 @@ function oilPushRiskPenalty(tileMap, routeA, routeB) {
   return Number(penalty.toFixed(2));
 }
 
+function isRandomizerTile(tile) {
+  return (tile?.features || []).some((feature) => feature.type === "randomizer");
+}
+
+function getAdjacentRandomizerCount(tileMap, point) {
+  let count = 0;
+  for (const dir of Object.keys(DIRS)) {
+    const adjacent = {
+      x: point.x + DIRS[dir].dx,
+      y: point.y + DIRS[dir].dy
+    };
+    if (isRandomizerTile(tileMap.get(tileKey(adjacent.x, adjacent.y)))) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function randomizerTrafficRiskPenalty(tileMap, routeA, routeB) {
+  if (!routeA || !routeB) return 0;
+
+  const pathA = getTrafficPath(routeA);
+  const pathB = getTrafficPath(routeB);
+  let penalty = 0;
+
+  for (let indexA = 0; indexA < pathA.length; indexA += 1) {
+    const pointA = pathA[indexA];
+    if (pointA.jump) continue;
+
+    const adjacentRandomizers = getAdjacentRandomizerCount(tileMap, pointA);
+    if (!adjacentRandomizers) continue;
+
+    for (
+      let indexB = Math.max(0, indexA - 1);
+      indexB <= Math.min(pathB.length - 1, indexA + 1);
+      indexB += 1
+    ) {
+      const pointB = pathB[indexB];
+      if (pointB.jump) continue;
+
+      const distance = heuristic(pointA, pointB);
+      if (distance < 1 || distance > 2) continue;
+
+      const timeDelta = Math.abs(indexA - indexB);
+      const proximityWeight = distance === 1 ? 1 : 0.42;
+      const timingWeight = timeDelta === 0 ? 1 : 0.48;
+
+      // This is intentionally only a pressure heuristic: independent route
+      // projections cannot prove a push will occur, but nearby traffic makes
+      // being displaced onto a randomizer materially more dangerous.
+      penalty += adjacentRandomizers * 2.6 * proximityWeight * timingWeight;
+    }
+  }
+
+  return Number(penalty.toFixed(2));
+}
+
 function routeThreatPenalty(tileMap, routeA, routeB, options = {}) {
   return Number((
     lateralThreatPenalty(tileMap, routeA, routeB, options) +
     rearThreatPenalty(tileMap, routeA, routeB, options) * 0.45 +
     rearThreatPenalty(tileMap, routeB, routeA, options) * 0.12 +
-    oilPushRiskPenalty(tileMap, routeA, routeB) * 0.08
+    oilPushRiskPenalty(tileMap, routeA, routeB) * 0.08 +
+    randomizerTrafficRiskPenalty(tileMap, routeA, routeB) * 0.12
   ).toFixed(2));
 }
 
@@ -3362,6 +3730,36 @@ function getLegAwareFullRouteOverlap(route, other, flags) {
   return overlap;
 }
 
+function getLegAwareConvoyFrontPenalty(tileMap, route, other, flags, options = {}) {
+  const routeLegs = route?.legRoutes ?? [];
+  const otherLegs = other?.legRoutes ?? [];
+  const legCount = Math.min(flags.length, routeLegs.length, otherLegs.length);
+
+  if (!legCount) {
+    return sustainedConvoyFrontPenalty(tileMap, route, other, options);
+  }
+
+  let pressure = 0;
+  for (let legIndex = 0; legIndex < legCount; legIndex += 1) {
+    const routeLeg = routeLegs[legIndex];
+    const otherLeg = otherLegs[legIndex];
+    if (!routeLeg || !otherLeg) continue;
+
+    const legWeight = legIndex === 0
+      ? FULL_COURSE_OPENING_LEG_TRAFFIC_WEIGHT
+      : FULL_COURSE_LATER_LEG_TRAFFIC_WEIGHT;
+
+    pressure += sustainedConvoyFrontPenalty(
+      tileMap,
+      routeLeg,
+      otherLeg,
+      options
+    ) * legWeight;
+  }
+
+  return Number(pressure.toFixed(2));
+}
+
 function getFullRouteTrafficPenalty(tileMap, route, selectedRoutes, flags, options = {}) {
   if (!route || !selectedRoutes.length) {
     return 0;
@@ -3374,6 +3772,9 @@ function getFullRouteTrafficPenalty(tileMap, route, selectedRoutes, flags, optio
   let rearThreat = 0;
   let oncomingTraffic = 0;
   let oilPushRisk = 0;
+  let randomizerTrafficRisk = 0;
+  let convoyFrontPressure = 0;
+  let convoyFollowers = 0;
 
   for (const other of selectedRoutes) {
     if (!other || other === route) {
@@ -3397,14 +3798,36 @@ function getFullRouteTrafficPenalty(tileMap, route, selectedRoutes, flags, optio
     // cost of likely blocking/pushing conflicts in opposing traffic.
     oncomingTraffic += oncomingTrafficPenalty(tileMap, route, other, options) * trafficScale;
     oilPushRisk += oilPushRiskPenalty(tileMap, route, other) * trafficScale;
+    randomizerTrafficRisk += randomizerTrafficRiskPenalty(tileMap, route, other) * trafficScale;
+
+    const pairConvoyFrontPressure = getLegAwareConvoyFrontPenalty(
+      tileMap,
+      route,
+      other,
+      flags,
+      options
+    ) * trafficScale;
+    if (pairConvoyFrontPressure > 0) {
+      convoyFollowers += 1;
+      convoyFrontPressure += pairConvoyFrontPressure;
+    }
   }
+
+  // Several robots following the same leader make the lane progressively less
+  // attractive, but cap the crowd multiplier so large-player games do not
+  // explode numerically.
+  const convoyCrowdMultiplier = convoyFollowers <= 1
+    ? 1
+    : Math.min(1.9, 1 + (convoyFollowers - 1) * 0.45);
 
   return Number((
     overlapPressure * 0.22 +
     lateralThreat * 0.035 +
     rearThreat * 0.03 +
     oncomingTraffic * 0.06 +
-    oilPushRisk * 0.08
+    oilPushRisk * 0.08 +
+    randomizerTrafficRisk * 0.12 +
+    convoyFrontPressure * convoyCrowdMultiplier * 0.65
   ).toFixed(2));
 }
 
@@ -3443,7 +3866,10 @@ function selectFullCourseRoutesForStarts(tileMap, startAnalyses, flags, options 
       for (const candidate of analysis.fullCourseRoutes) {
         const trafficPenalty = getFullRouteTrafficPenalty(tileMap, candidate, otherRoutes, flags, options);
         const rawGap = Math.max(0, candidate.score - analysis.fullCourseRoutes[0].score);
-        const value = candidate.score + trafficPenalty + rawGap * 0.18;
+        // candidate.score already contains the geometric cost of taking a
+        // detour. Keep only a tiny tie-breaking surcharge here so traffic can
+        // make a slightly longer but safer later-leg route genuinely win.
+        const value = candidate.score + trafficPenalty + rawGap * 0.04;
         if (value < bestValue - 0.001) {
           bestValue = value;
           bestRoute = candidate;

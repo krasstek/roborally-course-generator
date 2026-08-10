@@ -149,7 +149,7 @@
           "type": "belt",
           "dir": "W",
           "speed": 2,
-          "turn": "left"
+          "turn": "right"
         }
       ]
     },
