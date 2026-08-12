@@ -8,7 +8,7 @@
   <meta name="mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="mobile-web-app-title" content="RoboRally" />
   <meta name="application-name" content="RoboRally Course Generator" />
-  <meta name="app-version" content="20260810204854" />
+  <meta name="app-version" content="20260812073041" />
   <title>RoboRally Course Generator</title>
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="icon" type="image/png" sizes="16x16" href="./assets/icons/favicon-16.png" />
@@ -1112,12 +1112,36 @@
       box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.42);
     }
 
+    .report-heading-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
     .report-title {
-      margin: 0 0 12px;
+      margin: 0;
       font-size: 18px;
       text-transform: uppercase;
       letter-spacing: 0.08em;
       color: var(--accent-dark);
+    }
+
+    .report-copy-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 7px;
+      flex-wrap: wrap;
+    }
+
+    .report-copy-button {
+      min-height: 32px;
+      padding: 6px 9px;
+      font-size: 12px;
+      flex: 0 0 auto;
+      white-space: nowrap;
     }
 
     .hidden {
@@ -1498,7 +1522,13 @@
       </div>
     </section>
     <aside id="report-panel" class="panel sidebar hidden">
-      <h2 class="report-title">Course Evaluation</h2>
+      <div class="report-heading-row">
+        <h2 class="report-title">Course Evaluation</h2>
+        <div class="report-copy-actions">
+          <button id="copy-course-evaluation-summary" class="secondary-button report-copy-button" type="button" title="Copy key Course Evaluation statistics to clipboard">Copy summary</button>
+          <button id="copy-course-evaluation-all" class="secondary-button report-copy-button" type="button" title="Copy the full Course Evaluation to clipboard">Copy all</button>
+        </div>
+      </div>
       <div id="inspection-detail" class="route-inspector hidden"></div>
       <pre id="report"></pre>
     </aside>

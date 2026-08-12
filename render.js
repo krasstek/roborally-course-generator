@@ -1098,6 +1098,7 @@ function drawStarts(
   selectedStartIndices = new Set(),
   startEnergyCosts = [],
   startLateEnergyCosts = [],
+  startEarlyUnavailable = [],
   startLateUnavailable = [],
   noDockStarts = false,
   hideUnusableStarts = false
@@ -1125,6 +1126,7 @@ function drawStarts(
     const hasEnergyCost = rawEnergyCost !== null && rawEnergyCost !== undefined && Number.isFinite(energyCost);
     const rawLateEnergyCost = startLateEnergyCosts[index];
     const lateEnergyCost = Number(rawLateEnergyCost);
+    const earlyUnavailable = Boolean(startEarlyUnavailable[index]);
     const lateUnavailable = Boolean(startLateUnavailable[index]);
     const hasDistinctLateEnergyCost = (
       rawLateEnergyCost !== null &&
@@ -1132,19 +1134,24 @@ function drawStarts(
       Number.isFinite(lateEnergyCost) &&
       lateEnergyCost !== energyCost
     );
-    const hasSecondaryCostDisplay = lateUnavailable || hasDistinctLateEnergyCost;
+    const hasSecondaryCostDisplay = earlyUnavailable || lateUnavailable || hasDistinctLateEnergyCost;
     const energyCostLabel = hasEnergyCost
-      ? lateUnavailable
-        ? `${energyCost}/—`
-        : hasDistinctLateEnergyCost
-          ? `${energyCost}/${lateEnergyCost}`
-          : String(energyCost)
+      ? earlyUnavailable && lateUnavailable
+        ? "—/—"
+        : earlyUnavailable
+          ? Number.isFinite(lateEnergyCost) ? `—/${lateEnergyCost}` : "—"
+          : lateUnavailable
+            ? `${energyCost}/—`
+            : hasDistinctLateEnergyCost
+              ? `${energyCost}/${lateEnergyCost}`
+              : String(energyCost)
       : "";
     const explicitStartLabel = startLabels[index];
     const hasExplicitStartLabel = explicitStartLabel !== null && explicitStartLabel !== undefined && explicitStartLabel !== "";
-    const devPayToWinStart = hasEnergyCost && hasExplicitStartLabel;
+    const startIsUnusable = unusableStartIndices.has(index);
+    const devPayToWinStart = hasEnergyCost && hasExplicitStartLabel && !startIsUnusable;
 
-    if (unusableStartIndices.has(index)) {
+    if (startIsUnusable) {
       // Unusable/pruned starts stay red squares in every view.
       ctx.fillStyle = "rgba(232, 92, 62, 0.9)";
       ctx.fillRect(badgeLeft, badgeTop, badgeSize, badgeSize);
@@ -1188,7 +1195,7 @@ function drawStarts(
       ctx.stroke();
     }
 
-    if (selectedStartIndices.has(index) && !unusableStartIndices.has(index)) {
+    if (selectedStartIndices.has(index) && !startIsUnusable) {
       ctx.save();
       ctx.strokeStyle = "#ffd43b";
       ctx.lineWidth = 4;
@@ -1200,14 +1207,14 @@ function drawStarts(
 
     const startLabel = hasExplicitStartLabel
       ? explicitStartLabel
-      : hasEnergyCost
+      : hasEnergyCost && !startIsUnusable
         ? energyCostLabel
-        : showAllStartMarkers
+        : showAllStartMarkers && !startIsUnusable
           ? "S"
           : "";
 
     if (startLabel) {
-      ctx.fillStyle = noDockStarts && !hasEnergyCost && !unusableStartIndices.has(index)
+      ctx.fillStyle = noDockStarts && !hasEnergyCost && !startIsUnusable
         ? "#111111"
         : "#ffffff";
       ctx.font = hasEnergyCost && !hasExplicitStartLabel && hasSecondaryCostDisplay
@@ -1708,6 +1715,7 @@ export function render(canvas, pieces, imageMap = {}, options = {}) {
   const selectedStartIndices = new Set(options.selectedStartIndices ?? []);
   const startEnergyCosts = options.startEnergyCosts ?? [];
   const startLateEnergyCosts = options.startLateEnergyCosts ?? [];
+  const startEarlyUnavailable = options.startEarlyUnavailable ?? [];
   const startLateUnavailable = options.startLateUnavailable ?? [];
   const noDockStarts = Boolean(options.noDockStarts);
   const hideUnusableStarts = Boolean(options.hideUnusableStarts);
@@ -1754,6 +1762,7 @@ export function render(canvas, pieces, imageMap = {}, options = {}) {
     selectedStartIndices,
     startEnergyCosts,
     startLateEnergyCosts,
+    startEarlyUnavailable,
     startLateUnavailable,
     noDockStarts,
     hideUnusableStarts

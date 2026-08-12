@@ -286,9 +286,9 @@ const VARIANT_DEFINITION_ROWS = [
     category: VARIANT_CATEGORIES.setup,
     controlId: "variant-extra-docks",
     defaultState: "off",
-    description: "Adds an extra docking bay if the selected sets have one and the layout has room.",
+    description: "Uses more than one physical docking bay. This is a distinct starting-layout option and cannot be combined with No Docks or Sandwiched Dock.",
     cost: VARIANT_COMPLEXITY.extraDocks,
-    incompatibleWith: ["virtualBots", "noDocks"],
+    incompatibleWith: ["virtualBots", "noDocks", "sandwichedDock"],
     availability: {
       type: "physicalDockGroupsAtLeast",
       count: 2,
@@ -307,9 +307,9 @@ const VARIANT_DEFINITION_ROWS = [
     category: VARIANT_CATEGORIES.setup,
     controlId: "variant-no-docks",
     defaultState: "off",
-    description: "Uses a clear outer edge of a factory board as the starting strip instead of a docking bay.",
+    description: "Uses one full exposed outer board edge as the starting zone instead of a docking bay. This cannot be combined with Extra Docks or Sandwiched Dock.",
     cost: VARIANT_COMPLEXITY.noDocks,
-    incompatibleWith: ["extraDocks", "virtualBots", "homeReboot", "sandwichedDock"],
+    incompatibleWith: ["virtualBots", "homeReboot", "extraDocks", "sandwichedDock"],
     applyBundle: applyBooleanField("noDocks")
   },
   {
@@ -318,9 +318,9 @@ const VARIANT_DEFINITION_ROWS = [
     category: VARIANT_CATEGORIES.setup,
     controlId: "variant-sandwiched-dock",
     defaultState: "off",
-    description: "Allows a docking bay to sit between factory boards, with factory boards adjoining both long sides.",
+    description: "Places a physical docking bay between factory boards, with factory boards adjoining both long sides. This cannot be combined with Extra Docks or No Docks.",
     cost: VARIANT_COMPLEXITY.sandwichedDock,
-    incompatibleWith: ["noDocks", "virtualBots"],
+    incompatibleWith: ["virtualBots", "extraDocks", "noDocks"],
     applyBundle: applyBooleanField("sandwichedDock")
   },
   {
@@ -382,7 +382,7 @@ const VARIANT_DEFINITION_ROWS = [
     category: VARIANT_CATEGORIES.setup,
     controlId: "variant-competitive-mode",
     defaultState: "off",
-    description: "Before the game, players block starting spaces with energy cubes before choosing from the remaining starts.",
+    description: "Before the game, players block starting spaces with energy cubes, then choose strategically from the remaining starts. Generation evaluates roughly twice as many starting choices as players and can take longer.",
     cost: VARIANT_COMPLEXITY.competitiveMode,
     incompatibleWith: ["payToWin", "virtualBots"],
     applyBundle: applyBooleanField("competitiveMode")
@@ -476,6 +476,12 @@ export function applyVariantGenerationOptions(baseOptions = {}, variantBundle = 
     extraDocks: Boolean(variantBundle.extraDocks),
     noDocks: Boolean(variantBundle.noDocks),
     sandwichedDock: Boolean(variantBundle.sandwichedDock),
+    startingEnergy: Number.isFinite(variantBundle.startingEnergy)
+      ? Number(variantBundle.startingEnergy)
+      : baseOptions.startingEnergy,
+    startingEnergyDelta: Number.isFinite(variantBundle.startingEnergyDelta)
+      ? Number(variantBundle.startingEnergyDelta)
+      : baseOptions.startingEnergyDelta,
     virtualBots: Boolean(variantBundle.virtualBots),
     recoveryRule: variantBundle.recoveryRule ?? baseOptions.recoveryRule
   };
@@ -486,6 +492,12 @@ export function applyVariantAnalysisOptions(baseOptions = {}, variantBundle = {}
     ...baseOptions,
     competitiveMode: Boolean(variantBundle.competitiveMode),
     payToWin: Boolean(variantBundle.payToWin),
+    startingEnergy: Number.isFinite(variantBundle.startingEnergy)
+      ? Number(variantBundle.startingEnergy)
+      : baseOptions.startingEnergy,
+    startingEnergyDelta: Number.isFinite(variantBundle.startingEnergyDelta)
+      ? Number(variantBundle.startingEnergyDelta)
+      : baseOptions.startingEnergyDelta,
     recoveryRule: variantBundle.recoveryRule ?? baseOptions.recoveryRule,
     lessDeadlyGame: Boolean(variantBundle.lessDeadlyGame),
     lessSpammyGame: Boolean(variantBundle.lessSpammyGame),
@@ -514,6 +526,12 @@ export function applyVariantScenarioState(baseScenario = {}, variantBundle = {})
   const next = {
     ...baseScenario,
     recoveryRule: variantBundle.recoveryRule ?? baseScenario.recoveryRule,
+    startingEnergy: Number.isFinite(variantBundle.startingEnergy)
+      ? Number(variantBundle.startingEnergy)
+      : baseScenario.startingEnergy,
+    startingEnergyDelta: Number.isFinite(variantBundle.startingEnergyDelta)
+      ? Number(variantBundle.startingEnergyDelta)
+      : baseScenario.startingEnergyDelta,
     variantComplexityBudget: variantBundle.variantComplexityBudget ?? baseScenario.variantComplexityBudget ?? 0,
     variantComplexityUsed: variantBundle.variantComplexityUsed ?? baseScenario.variantComplexityUsed ?? 0
   };

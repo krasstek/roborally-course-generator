@@ -295,23 +295,13 @@ export function renderCourseNotes(concepts, evidence, options = {}) {
     });
   }
 
-  if (options.includeDiagnostics && evidence.later.hardestLeg) {
-    parts.push(
-      `<div class="diagnostics-grid">` +
-      `<div class="diagnostic-line"><span class="diagnostic-label">Strongest pressure</span><span class="diagnostic-value">${escapeHtml(evidence.later.hardestLeg.label)}</span></div>` +
-      `<div class="diagnostic-line"><span class="diagnostic-label">Later congestion</span><span class="diagnostic-value">${escapeHtml(evidence.later.congestion.toFixed(1))}</span></div>` +
-      `<div class="diagnostic-line"><span class="diagnostic-label">Later route overlap</span><span class="diagnostic-value">${escapeHtml(evidence.later.overlap.toFixed(2))}</span></div>` +
-      `</div>`
-    );
-  }
-
   return parts.join("");
 }
 
 export function buildCourseNotesHtml(scenario, fitNotes = [], options = {}) {
   if (!scenario) return "";
 
-  const cacheKey = `${scenario.generationBestMatch ? "best" : "accepted"}::${scenario.generationTerminationReason ?? "-"}::${fitNotes.join("|")}::${options.includeDiagnostics ? "dev" : "normal"}`;
+  const cacheKey = `${scenario.generationBestMatch ? "best" : "accepted"}::${scenario.generationTerminationReason ?? "-"}::${fitNotes.join("|")}`;
   let scenarioCache = notesCache.get(scenario);
   if (!scenarioCache) {
     scenarioCache = new Map();
