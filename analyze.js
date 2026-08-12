@@ -3796,6 +3796,44 @@ function selectAndScoreStartAnalyses(tileMap, startAnalyses, goal, playerCount, 
     ? Math.min(1, Math.max(0, (playerCount - 1) / (routeCapableStarts - 1)))
     : 0;
 
+  if (options.skipTraffic) {
+    startAnalyses.forEach((analysis) => {
+      const selectedRoute = analysis.routes[0] ?? null;
+      analysis.selectedRouteIndex = 0;
+      analysis.selectedRoute = selectedRoute;
+      analysis.bestScore = selectedRoute?.score ?? Infinity;
+      analysis.bestDistance = selectedRoute?.distance ?? Infinity;
+      analysis.bestActions = selectedRoute?.actions ?? Infinity;
+      if (!selectedRoute) {
+        analysis.overlapPenalty = Infinity;
+        analysis.lateralThreat = Infinity;
+        analysis.rearThreat = Infinity;
+        analysis.routeThreat = Infinity;
+        analysis.trafficRanged = Infinity;
+        analysis.trafficNearby = Infinity;
+        analysis.trafficCompetition = Infinity;
+        analysis.trafficScale = 0;
+        analysis.trafficPenalty = Infinity;
+        analysis.adjustedScore = Infinity;
+        return;
+      }
+      analysis.overlapPenalty = 0;
+      analysis.lateralThreat = 0;
+      analysis.rearThreat = 0;
+      analysis.routeThreat = 0;
+      analysis.trafficRanged = 0;
+      analysis.trafficNearby = 0;
+      analysis.trafficCompetition = 0;
+      analysis.trafficScale = 0;
+      analysis.trafficPenalty = 0;
+      analysis.courseScoreAdjustment = Number(analysis.courseScoreAdjustment ?? 0);
+      analysis.adjustedScore = Number((
+        analysis.bestScore + analysis.courseScoreAdjustment
+      ).toFixed(2));
+    });
+    return { activeSet, trafficScale: 0 };
+  }
+
   const selectedRouteIndices = assignRoutesWithOverlap(
     tileMap,
     startAnalyses,
@@ -6014,6 +6052,216 @@ function stitchContextualLegs(legs, flags) {
   };
 }
 
+function cloneContextualFullRouteForReuse(route) {
+  if (!route) return route;
+  return {
+    ...route,
+    path: route.path ? [...route.path] : route.path,
+    trafficPath: route.trafficPath ? [...route.trafficPath] : route.trafficPath,
+    legRoutes: (route.legRoutes || []).map((leg) => leg
+      ? {
+        ...leg,
+        path: leg.path ? [...leg.path] : leg.path,
+        trafficPath: leg.trafficPath ? [...leg.trafficPath] : leg.trafficPath,
+        programHistoryEnd: leg.programHistoryEnd ? [...leg.programHistoryEnd] : leg.programHistoryEnd
+      }
+      : leg)
+  };
+}
+
+function analyzeSeededFullCourseContextual(tileMap, starts, flags, options = {}) {
+  const playerCount = options.playerCount ?? starts.length;
+  const seedAnalyses = Array.isArray(options.contextualSeedStartAnalyses)
+    ? options.contextualSeedStartAnalyses
+    : [];
+  const seedByIndex = new Map(seedAnalyses.map((analysis, index) => [
+    Number.isInteger(analysis?.index) ? analysis.index : index,
+    analysis
+  ]));
+
+  const startAnalyses = starts.map((start, index) => {
+    const sourceIndex = Number.isInteger(start.analysisIndex) ? start.analysisIndex : index;
+    const seed = seedByIndex.get(sourceIndex) ?? null;
+    const sourceRoutes = seed?.fullCourseRoutes?.length
+      ? seed.fullCourseRoutes
+      : (seed?.fullCourseRoute ? [seed.fullCourseRoute] : []);
+    const fullCourseRoutes = sourceRoutes
+      .map(cloneContextualFullRouteForReuse)
+      .filter(Boolean)
+      .sort((left, right) => left.score - right.score);
+    const fullCourseRoute = fullCourseRoutes[0] ?? null;
+
+    return buildStartAnalysisForSelectedFullRoute({
+      index: sourceIndex,
+      start,
+      reachable: Boolean(fullCourseRoute),
+      fullCourseRoutes,
+      fullCourseRoute,
+      fullCourseRouteIndex: fullCourseRoute ? 0 : null,
+      fullCourseTrafficPenalty: 0
+    }, flags);
+  });
+
+  const requiredSurvivingStarts = options.competitiveMode
+    ? starts.length
+    : Math.max(1, playerCount);
+  const survivingStarts = startAnalyses.filter((analysis) => analysis.fullCourseRoute).length;
+  if (options.contextualEarlyExit && survivingStarts < requiredSurvivingStarts) {
+    const error = new Error(
+      `Seeded contextual start capacity lost: ${survivingStarts}/${requiredSurvivingStarts} required starts remain`
+    );
+    error.code = "CONTEXTUAL_START_CAPACITY_LOST";
+    error.contextualSearchHealth = {
+      zeroRouteCapFailures: 0,
+      distinctStarts: 0,
+      cappedContextsThisLeg: 0,
+      cappedStartsThisLeg: 0,
+      survivingStarts,
+      requiredStarts: requiredSurvivingStarts,
+      sourceStarts: starts.length,
+      lostStarts: Math.max(0, starts.length - survivingStarts),
+      legIndex: Math.max(0, flags.length - 1),
+      legNumber: Math.max(1, flags.length),
+      flagCount: flags.length,
+      competitiveMode: Boolean(options.competitiveMode),
+      seededRoutes: true,
+      survivorHistory: [{
+        legIndex: Math.max(0, flags.length - 1),
+        legNumber: Math.max(1, flags.length),
+        survivingStarts,
+        requiredStarts: requiredSurvivingStarts,
+        sourceStarts: starts.length,
+        lostStarts: Math.max(0, starts.length - survivingStarts),
+        cappedContextsThisLeg: 0,
+        cappedStartsThisLeg: 0,
+        totalCappedContexts: 0,
+        distinctCappedStarts: 0,
+        seededRoutes: true
+      }]
+    };
+    throw error;
+  }
+
+  const selection = options.skipFullCourseTraffic
+    ? {
+      starts: startAnalyses,
+      selectionPasses: 0,
+      routeSwitches: 0,
+      averageTrafficPenalty: 0
+    }
+    : selectFullCourseRoutesForStarts(tileMap, startAnalyses, flags, {
+      ...options,
+      playerCount
+    });
+  const selectedStartAnalyses = selection.starts.map((analysis) => (
+    buildStartAnalysisForSelectedFullRoute(analysis, flags)
+  ));
+  const fullScores = selectedStartAnalyses
+    .filter((item) => item.reachable && item.fullCourseRoute)
+    .map((item) => item.fullCourseRoute.score + (item.fullCourseTrafficPenalty ?? 0));
+  const meanFullScore = average(fullScores);
+  const adjustedStartAnalyses = selectedStartAnalyses.map((analysis) => {
+    if (!analysis.fullCourseRoute) return analysis;
+    const fullScore = analysis.fullCourseRoute.score + (analysis.fullCourseTrafficPenalty ?? 0);
+    const rawDelta = fullScore - meanFullScore;
+    return {
+      ...analysis,
+      courseEstimate: {
+        ...analysis.courseEstimate,
+        meanFullScore: Number(meanFullScore.toFixed(2)),
+        delta: Number(rawDelta.toFixed(2))
+      },
+      courseScoreAdjustment: Number(clamp(rawDelta * 0.32, -10, 10).toFixed(2))
+    };
+  });
+
+  selectAndScoreStartAnalyses(
+    tileMap,
+    adjustedStartAnalyses,
+    flags[0],
+    playerCount,
+    null,
+    options
+  );
+  const expectedLegAnalyses = buildExpectedLegAnalysesFromFullRoutes(
+    adjustedStartAnalyses,
+    flags,
+    playerCount
+  );
+  const finalSummary = summarizeFirstLegAnalyses(
+    tileMap,
+    adjustedStartAnalyses,
+    flags[0],
+    flags,
+    playerCount,
+    options,
+    new Set(),
+    new Map()
+  );
+
+  return {
+    goal: flags[0],
+    flags,
+    starts: adjustedStartAnalyses,
+    expectedLegAnalyses: expectedLegAnalyses.slice(1),
+    summary: {
+      ...finalSummary.summary,
+      courseContinuationMean: Number(meanFullScore.toFixed(2)),
+      courseContinuationWeighted: true,
+      fullCourseRoutes: true,
+      contextualLegRoutes: true,
+      contextualLegCache: {
+        entries: 0,
+        templateEntries: 0,
+        hits: 0,
+        exactHits: 0,
+        templateHits: 0,
+        misses: 0,
+        templateFallbacks: 0,
+        zeroRouteCapFailures: 0,
+        zeroRouteFailureStarts: 0,
+        seededRoutes: true,
+        seededStartCount: survivingStarts,
+        survivorHistory: [{
+          legIndex: Math.max(0, flags.length - 1),
+          legNumber: Math.max(1, flags.length),
+          survivingStarts,
+          requiredStarts: requiredSurvivingStarts,
+          sourceStarts: starts.length,
+          lostStarts: Math.max(0, starts.length - survivingStarts),
+          cappedContextsThisLeg: 0,
+          cappedStartsThisLeg: 0,
+          totalCappedContexts: 0,
+          distinctCappedStarts: 0,
+          seededRoutes: true
+        }],
+        survivingStarts,
+        requiredSurvivingStarts,
+        capacityPolicy: options.competitiveMode ? "all-starts" : "player-count-floor",
+        zeroRouteCapsByLeg: flags.map((_, legIndex) => ({
+          leg: legIndex + 1,
+          contexts: 0,
+          starts: 0
+        }))
+      },
+      fullCourseTraffic: {
+        passes: selection.selectionPasses,
+        routeSwitches: selection.routeSwitches,
+        averagePenalty: selection.averageTrafficPenalty,
+        legAwareOverlap: true,
+        contextualLegRoutes: true,
+        seededRoutes: true,
+        openingRoutesPerStart: 1,
+        laterRoutesPerContext: 1,
+        stitchedBeamWidth: 1,
+        completionPool: 1,
+        openingLegWeight: FULL_COURSE_OPENING_LEG_TRAFFIC_WEIGHT,
+        laterLegWeight: FULL_COURSE_LATER_LEG_TRAFFIC_WEIGHT
+      }
+    }
+  };
+}
+
 function analyzeFullCourseContextual(
   tileMap,
   starts,
@@ -6033,6 +6281,7 @@ function analyzeFullCourseContextual(
   const zeroRouteFailureStarts = new Set();
   const zeroRouteCapsByLeg = flags.map(() => 0);
   const zeroRouteFailureStartsByLeg = flags.map(() => new Set());
+  const survivorHistory = [];
   const earlyExitEnabled = Boolean(options.contextualEarlyExit);
   const requiredSurvivingStarts = options.competitiveMode
     ? starts.length
@@ -6165,7 +6414,10 @@ function analyzeFullCourseContextual(
           ),
         maxActions:
           options.contextualLegMaxActions ??
-          CONTEXTUAL_LEG_MAX_ACTIONS
+          CONTEXTUAL_LEG_MAX_ACTIONS,
+        optionalRouteBudgetRatio:
+          options.contextualOptionalRouteBudgetRatio ??
+          CONTEXTUAL_OPTIONAL_ROUTE_BUDGET_RATIO
       }
     );
 
@@ -6227,19 +6479,29 @@ function analyzeFullCourseContextual(
     };
   });
 
-  const abortIfStartCapacityLost = (legIndex) => {
-    if (!earlyExitEnabled) {
-      return;
-    }
-
+  const recordSurvivorHealthAndAbortIfLost = (legIndex) => {
     const survivingStarts = startPartials.filter((entry) => entry.partials.length).length;
-    if (survivingStarts >= requiredSurvivingStarts) {
-      return;
-    }
-
     const cappedContextsThisLeg = zeroRouteCapsByLeg[legIndex] ?? 0;
     const cappedStartsThisLeg = zeroRouteFailureStartsByLeg[legIndex]?.size ?? 0;
     const lostStarts = Math.max(0, startPartials.length - survivingStarts);
+    const snapshot = {
+      legIndex,
+      legNumber: legIndex + 1,
+      survivingStarts,
+      requiredStarts: requiredSurvivingStarts,
+      sourceStarts: startPartials.length,
+      lostStarts,
+      cappedContextsThisLeg,
+      cappedStartsThisLeg,
+      totalCappedContexts: zeroRouteCapFailures,
+      distinctCappedStarts: zeroRouteFailureStarts.size
+    };
+    survivorHistory.push(snapshot);
+
+    if (!earlyExitEnabled || survivingStarts >= requiredSurvivingStarts) {
+      return;
+    }
+
     const error = new Error(
       `Contextual start capacity lost after leg ${legIndex + 1}: ${survivingStarts}/${requiredSurvivingStarts} required starts remain; ${cappedContextsThisLeg} capped route contexts this leg`
     );
@@ -6256,14 +6518,15 @@ function analyzeFullCourseContextual(
       legIndex,
       legNumber: legIndex + 1,
       flagCount: flags.length,
-      competitiveMode: Boolean(options.competitiveMode)
+      competitiveMode: Boolean(options.competitiveMode),
+      survivorHistory: survivorHistory.map((entry) => ({ ...entry }))
     };
     throw error;
   };
 
   // A capped branch is only telemetry. Abort after the whole opening leg has
   // been evaluated, and only if too few starts retain any viable continuation.
-  abortIfStartCapacityLost(0);
+  recordSurvivorHealthAndAbortIfLost(0);
 
   for (let legIndex = 1; legIndex < flags.length; legIndex += 1) {
     for (const entry of startPartials) {
@@ -6299,7 +6562,7 @@ function analyzeFullCourseContextual(
 
     // Multiple capped contexts may belong to alternate branches of the same
     // start. Judge the course by surviving starts only after the leg is done.
-    abortIfStartCapacityLost(legIndex);
+    recordSurvivorHealthAndAbortIfLost(legIndex);
   }
 
   const startAnalyses = startPartials.map((entry) => {
@@ -6429,6 +6692,7 @@ function analyzeFullCourseContextual(
         templateFallbacks,
         zeroRouteCapFailures,
         zeroRouteFailureStarts: zeroRouteFailureStarts.size,
+        survivorHistory: survivorHistory.map((entry) => ({ ...entry })),
         survivingStarts: startPartials.filter((entry) => entry.partials.length).length,
         requiredSurvivingStarts,
         capacityPolicy: options.competitiveMode ? "all-starts" : "player-count-floor",
@@ -6444,9 +6708,10 @@ function analyzeFullCourseContextual(
         averagePenalty: selection.averageTrafficPenalty,
         legAwareOverlap: true,
         contextualLegRoutes: true,
-        openingRoutesPerStart: CONTEXTUAL_OPENING_ROUTES,
-        laterRoutesPerContext: CONTEXTUAL_LATER_ROUTES,
-        stitchedBeamWidth: CONTEXTUAL_BEAM_WIDTH,
+        openingRoutesPerStart: options.contextualOpeningRoutes ?? CONTEXTUAL_OPENING_ROUTES,
+        laterRoutesPerContext: options.contextualLaterRoutes ?? CONTEXTUAL_LATER_ROUTES,
+        stitchedBeamWidth: options.contextualBeamWidth ?? CONTEXTUAL_BEAM_WIDTH,
+        completionPool: options.contextualCompletionPool ?? CONTEXTUAL_COMPLETION_POOL,
         openingLegWeight:
           FULL_COURSE_OPENING_LEG_TRAFFIC_WEIGHT,
         laterLegWeight:
@@ -6457,6 +6722,14 @@ function analyzeFullCourseContextual(
 }
 
 export function analyzeFullCourse(tileMap, starts, flags, options = {}) {
+  if (options.contextualLegSearch && Array.isArray(options.contextualSeedStartAnalyses)) {
+    return analyzeSeededFullCourseContextual(
+      tileMap,
+      starts,
+      flags,
+      options
+    );
+  }
   if (options.contextualLegSearch) {
     return analyzeFullCourseContextual(
       tileMap,
@@ -6865,6 +7138,7 @@ export function recomputeFirstLegPressure(tileMap, firstLeg, options = {}) {
         : buildStartAnalysisForSelectedFullRoute(analysis, firstLeg.flags)
     ));
     fullCourseTraffic = {
+      ...(firstLeg.summary.fullCourseTraffic ?? {}),
       passes: selection.selectionPasses,
       routeSwitches: selection.routeSwitches,
       averagePenalty: selection.averageTrafficPenalty
@@ -6930,6 +7204,7 @@ export function analyzeFlagLeg(tileMap, from, goal, options = {}) {
   routeStarts.forEach((routeStart) => {
     const routes = enumerateRoutes(tileMap, routeStart, goal, {
       maxRoutes: routesPerFacing,
+      maxActions: options.maxActions,
       maxExpansions: options.maxExpansions,
       recoveryRule: options.recoveryRule,
       lessDeadlyGame: options.lessDeadlyGame,

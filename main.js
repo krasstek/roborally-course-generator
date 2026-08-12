@@ -160,6 +160,16 @@ const LIGHT_START_SPREAD_WEIGHT = 0.22;
 const LIGHT_START_MAX_EXPANSIONS = 7000;
 const LIGHT_START_MAX_ACTIONS = 18;
 const LIGHT_START_OUTLIER_Z = 2.5;
+// Universal cheap course preflight. These searches intentionally use a much
+// smaller budget than final contextual analysis: they are an audition, not a
+// proof of reachability. A candidate that cannot establish a healthy opening
+// pool cheaply is reshuffled rather than allowed to consume a long rich search.
+const COURSE_PREFLIGHT_OPENING_EXPANSIONS = 1400;
+const COURSE_PREFLIGHT_LATER_EXPANSIONS = 1200;
+const COURSE_PREFLIGHT_OPENING_MAX_ACTIONS = 18;
+const COURSE_PREFLIGHT_LATER_MAX_ACTIONS = 20;
+const COURSE_PREFLIGHT_DIFFICULTY_MARGIN = 35;
+const COURSE_PREFLIGHT_LENGTH_MARGIN = 40;
 const FULL_START_OUTLIER_Z = 2.25;
 const NORMAL_START_FAIRNESS_STDDEV_LIMIT = 14;
 const SCENARIO_RENDER_INTERVAL_MS = 125;
@@ -1033,6 +1043,108 @@ function summarizeRouteSearchDelta(before, after) {
     durationMs: Number(durationMs.toFixed(2)),
     capped,
     slowest
+  };
+}
+
+function cloneContextualSearchHealth(health = null) {
+  if (!health) return null;
+  return {
+    zeroRouteCapFailures: health.zeroRouteCapFailures ?? 0,
+    distinctStarts: health.distinctStarts ?? 0,
+    cappedContextsThisLeg: health.cappedContextsThisLeg ?? 0,
+    cappedStartsThisLeg: health.cappedStartsThisLeg ?? 0,
+    survivingStarts: health.survivingStarts ?? 0,
+    requiredStarts: health.requiredStarts ?? 0,
+    sourceStarts: health.sourceStarts ?? 0,
+    lostStarts: health.lostStarts ?? 0,
+    legIndex: health.legIndex ?? null,
+    legNumber: health.legNumber ?? null,
+    flagCount: health.flagCount ?? 0,
+    survivorHistory: Array.isArray(health.survivorHistory)
+      ? health.survivorHistory.map((entry) => ({ ...entry }))
+      : []
+  };
+}
+
+function compactRouteWork(work = null) {
+  if (!work) return null;
+  return {
+    searches: work.searches ?? 0,
+    expansions: work.expansions ?? 0,
+    durationMs: work.durationMs ?? 0,
+    capped: work.capped ?? 0
+  };
+}
+
+function formatSurvivorHistory(history = []) {
+  if (!Array.isArray(history) || !history.length) return "n/a";
+  const first = history[0]?.sourceStarts;
+  const survivors = history.map((entry) => entry.survivingStarts);
+  return [first, ...survivors].filter(Number.isFinite).join(" -> ");
+}
+
+function formatCappedContextHistory(history = []) {
+  if (!Array.isArray(history) || !history.length) return "n/a";
+  return history.map((entry) => entry.cappedContextsThisLeg ?? 0).join("/");
+}
+
+function getGenerationRejectionCategory(scenario, fallbackReason = "") {
+  const failures = scenario?.metrics?.hardFailures ?? [];
+  if (failures.includes("normal-start-balance")) return "balance";
+  if (failures.includes("usable-starts") || failures.includes("reachable-starts")) return "start-capacity";
+  if (failures.includes("unused-board")) return "unused-board";
+  if (failures.includes("too-short")) return "too-short";
+  if (failures.some((failure) => String(failure).startsWith("leg-"))) return "later-leg";
+  if ((scenario?.metrics?.difficultyFit ?? 0) > 0) return "difficulty";
+  if ((scenario?.metrics?.lengthFit ?? 0) > 0) return "length";
+
+  const text = String(fallbackReason || "").toLowerCase();
+  if (text.includes("route capacity")) return "route-capacity";
+  if (text.includes("gross mismatch")) return "gross-mismatch";
+  if (text.includes("checkpoint") || text.includes("choosing checkpoints")) return "checkpoint-layout";
+  if (text.includes("reboot")) return "reboot-layout";
+  if (text.includes("sandwiched")) return "sandwiched-layout";
+  if (text.includes("pay to win")) return "pay-to-win";
+  if (text.includes("extra dock")) return "extra-docks";
+  return "other";
+}
+
+function summarizeGenerationRejectionEvents(events = []) {
+  const byCategory = new Map();
+  for (const event of events) {
+    const category = event.category || "other";
+    const current = byCategory.get(category) ?? {
+      category,
+      count: 0,
+      routeSearches: 0,
+      routeExpansions: 0,
+      routeSearchMs: 0,
+      cappedRouteSearches: 0
+    };
+    current.count += 1;
+    current.routeSearches += event.routeSearches ?? 0;
+    current.routeExpansions += event.routeExpansions ?? 0;
+    current.routeSearchMs += event.routeSearchMs ?? 0;
+    current.cappedRouteSearches += event.cappedRouteSearches ?? 0;
+    byCategory.set(category, current);
+  }
+
+  const categories = [...byCategory.values()]
+    .map((entry) => ({
+      ...entry,
+      routeSearchMs: Number(entry.routeSearchMs.toFixed(2))
+    }))
+    .sort((left, right) => (
+      right.routeExpansions - left.routeExpansions ||
+      right.count - left.count ||
+      left.category.localeCompare(right.category)
+    ));
+
+  return {
+    total: events.length,
+    totalRouteExpansions: categories.reduce((sum, entry) => sum + entry.routeExpansions, 0),
+    totalCappedRouteSearches: categories.reduce((sum, entry) => sum + entry.cappedRouteSearches, 0),
+    categories
   };
 }
 
@@ -8041,6 +8153,482 @@ function selectLightweightPressurePool(entries, targetCount) {
   return new Set(selected.map((item) => item.entry.index));
 }
 
+
+function getCoursePreflightOpeningMinimum(startCount, playerCount, preferences = {}) {
+  if (preferences.virtualBots) {
+    return Math.min(startCount, 1);
+  }
+
+  // Normal benefits from a little surplus so the opening screen does not hand
+  // the expensive stage a field that is already down to the bare player floor.
+  // Competitive and Pay to Win keep their mode-specific final guarantees for
+  // the rich stage; this preflight only rejects obviously search-hostile opens.
+  const surplus = preferences.payToWin ? 0 : LIGHT_START_SURPLUS;
+  return Math.min(startCount, Math.max(1, playerCount + surplus));
+}
+
+function uniquePreflightStates(routes = []) {
+  const seen = new Set();
+  const states = [];
+  for (const route of routes) {
+    const state = route?.finalState;
+    if (!state || !Number.isFinite(state.x) || !Number.isFinite(state.y)) continue;
+    const key = `${state.x},${state.y},${state.facing ?? "E"}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    states.push({ x: state.x, y: state.y, facing: state.facing ?? "E" });
+  }
+  return states;
+}
+
+function getIntrinsicOpeningOutliers(analyses = [], playerCount = 4) {
+  const routed = analyses.filter((analysis) => (
+    analysis.reachable &&
+    analysis.selectedRoute &&
+    Number.isFinite(analysis.bestScore) &&
+    Number.isFinite(analysis.bestActions)
+  ));
+  const minimumPool = Math.min(
+    routed.length,
+    Math.max(playerCount, playerCount + LIGHT_START_SURPLUS)
+  );
+  const remaining = routed.slice();
+  const outliers = [];
+
+  while (remaining.length > minimumPool) {
+    const ranked = rankNormalStartOutliers(
+      remaining.map((analysis) => ({
+        ...analysis,
+        adjustedScore: analysis.bestScore
+      })),
+      "adjustedScore",
+      LIGHT_START_OUTLIER_Z
+    );
+    const candidate = ranked[0];
+    if (!candidate) break;
+
+    outliers.push({
+      index: candidate.entry.index,
+      score: candidate.score,
+      delta: Number(candidate.scoreDelta.toFixed(2)),
+      actionDelta: Number(candidate.actionDelta.toFixed(2)),
+      reasons: {
+        lightweightPruned: true,
+        stage: "intrinsic-first-leg-outlier",
+        scoreZ: Number(candidate.scoreZ.toFixed(2)),
+        actionZ: Number(candidate.actionZ.toFixed(2)),
+        minimumPool,
+        maxExpansions: COURSE_PREFLIGHT_OPENING_EXPANSIONS
+      }
+    });
+    const removeIndex = remaining.findIndex((entry) => entry.index === candidate.entry.index);
+    if (removeIndex >= 0) remaining.splice(removeIndex, 1);
+  }
+
+  return {
+    outliers,
+    excludedIndices: new Set(outliers.map((entry) => entry.index)),
+    minimumPool
+  };
+}
+
+function buildCoursePreflightSequence(tileMap, starts, flags, playerCount, options = {}) {
+  if (!flags.length || !starts.length) {
+    return {
+      valid: false,
+      reason: "no starts or checkpoints available for preflight",
+      opening: null,
+      sequence: null,
+      openingRoutedCount: 0,
+      requiredOpeningCount: 0,
+      intrinsicOutliers: [],
+      excludedIndices: new Set(),
+      laterLegs: []
+    };
+  }
+
+  const movingTargetTimelines = options.movingTargetTimelines ?? buildMovingTargetTimelines(
+    tileMap,
+    flags,
+    options.movingTargets,
+    { maxActions: 16 }
+  );
+  const firstGoal = flags[0];
+  const opening = analyzeCourse(tileMap, starts, firstGoal, {
+    flags: [firstGoal],
+    maxRoutes: 1,
+    skipTraffic: true,
+    playerCount,
+    maxActions: COURSE_PREFLIGHT_OPENING_MAX_ACTIONS,
+    maxExpansions: COURSE_PREFLIGHT_OPENING_EXPANSIONS,
+    recoveryRule: options.recoveryRule,
+    ...getRouteAnalysisVariantOptions(options),
+    startupSpinUp: options.startupSpinUp,
+    rebootTokens: options.rebootTokens,
+    boardRects: options.boardRects,
+    dynamicGoal: movingTargetTimelines?.[0] ?? null
+  });
+  const routedOpening = opening.starts.filter((analysis) => (
+    analysis.reachable && analysis.selectedRoute
+  ));
+  const requiredOpeningCount = getCoursePreflightOpeningMinimum(
+    starts.length,
+    playerCount,
+    options
+  );
+
+  const normalOpeningPruning = (
+    !options.competitiveMode &&
+    !options.payToWin &&
+    !options.virtualBots
+  )
+    ? getIntrinsicOpeningOutliers(opening.starts, playerCount)
+    : { outliers: [], excludedIndices: new Set(), minimumPool: starts.length };
+
+  if (routedOpening.length < requiredOpeningCount) {
+    return {
+      valid: false,
+      reason: `cheap opening sketch found ${routedOpening.length}/${requiredOpeningCount} desired routed starts`,
+      opening,
+      sequence: null,
+      openingRoutedCount: routedOpening.length,
+      requiredOpeningCount,
+      intrinsicOutliers: normalOpeningPruning.outliers,
+      excludedIndices: normalOpeningPruning.excludedIndices,
+      laterLegs: []
+    };
+  }
+
+  if (options.reusableContextualRoutes) {
+    let seededAnalysis = null;
+    try {
+      seededAnalysis = analyzeFullCourse(tileMap, starts, flags, {
+        flags,
+        playerCount,
+        recoveryRule: options.recoveryRule,
+        ...getRouteAnalysisVariantOptions(options),
+        startupSpinUp: options.startupSpinUp,
+        rebootTokens: options.rebootTokens,
+        boardRects: options.boardRects,
+        dynamicGoals: movingTargetTimelines,
+        payToWin: options.payToWin,
+        competitiveMode: options.competitiveMode,
+        virtualBots: false,
+        contextualLegSearch: true,
+        contextualEarlyExit: true,
+        contextualOpeningRoutes: 1,
+        contextualLaterRoutes: 1,
+        contextualBeamWidth: 1,
+        contextualCompletionPool: 1,
+        contextualOpeningExpansions: COURSE_PREFLIGHT_OPENING_EXPANSIONS,
+        contextualLaterExpansions: COURSE_PREFLIGHT_LATER_EXPANSIONS,
+        contextualLegMaxActions: COURSE_PREFLIGHT_LATER_MAX_ACTIONS,
+        skipFullCourseTraffic: true,
+        skipTraffic: true,
+        diverseFullCourseSearch: false
+      });
+    } catch (error) {
+      if (error?.code === "CONTEXTUAL_START_CAPACITY_LOST") {
+        const health = error.contextualSearchHealth ?? {};
+        return {
+          valid: false,
+          reason: `cheap coherent route sketch kept ${health.survivingStarts ?? 0}/${health.requiredStarts ?? playerCount} required starts through leg ${health.legNumber ?? "?"}`,
+          opening,
+          sequence: null,
+          openingRoutedCount: routedOpening.length,
+          requiredOpeningCount,
+          coherentRoutedCount: health.survivingStarts ?? 0,
+          intrinsicOutliers: normalOpeningPruning.outliers,
+          excludedIndices: normalOpeningPruning.excludedIndices,
+          laterLegs: [],
+          seedFailureHealth: health
+        };
+      }
+      throw error;
+    }
+
+    const coherentRoutedCount = seededAnalysis.starts.filter((analysis) => (
+      analysis.reachable && analysis.fullCourseRoute
+    )).length;
+    if (coherentRoutedCount < Math.max(1, playerCount)) {
+      return {
+        valid: false,
+        reason: `cheap coherent route sketch found ${coherentRoutedCount}/${playerCount} required full-course starts`,
+        opening,
+        sequence: null,
+        openingRoutedCount: routedOpening.length,
+        requiredOpeningCount,
+        coherentRoutedCount,
+        intrinsicOutliers: normalOpeningPruning.outliers,
+        excludedIndices: normalOpeningPruning.excludedIndices,
+        laterLegs: seededAnalysis.expectedLegAnalyses ?? []
+      };
+    }
+
+    const seededLegs = [
+      { from: "dock", to: 1, analysis: seededAnalysis },
+      ...(seededAnalysis.expectedLegAnalyses || []).map((analysis, index) => ({
+        from: index + 1,
+        to: index + 2,
+        analysis
+      }))
+    ];
+    const totalDifficulty = Number(seededLegs.reduce((sum, leg) => {
+      if (leg.analysis.summary.difficultyScore !== undefined) {
+        return sum + leg.analysis.summary.difficultyScore;
+      }
+      return sum + (leg.analysis.summary.averageRouteScore ?? 0);
+    }, 0).toFixed(2));
+    const totalLength = Number(seededLegs.reduce((sum, leg) => {
+      if (leg.analysis.summary.lengthScore !== undefined) {
+        return sum + leg.analysis.summary.lengthScore;
+      }
+      return sum + (leg.analysis.summary.averageRouteDistance ?? 0);
+    }, 0).toFixed(2));
+    const totalActions = Number(seededLegs.reduce((sum, leg) => {
+      if (leg.analysis.summary.actionScore !== undefined) {
+        return sum + leg.analysis.summary.actionScore;
+      }
+      return sum + (leg.analysis.summary.averageRouteActions ?? 0);
+    }, 0).toFixed(2));
+
+    return {
+      valid: true,
+      reason: null,
+      opening,
+      openingRoutedCount: routedOpening.length,
+      requiredOpeningCount,
+      coherentRoutedCount,
+      intrinsicOutliers: normalOpeningPruning.outliers,
+      excludedIndices: normalOpeningPruning.excludedIndices,
+      laterLegs: seededAnalysis.expectedLegAnalyses ?? [],
+      seedStartAnalyses: seededAnalysis.starts,
+      reusableContextualRoutes: true,
+      sequence: {
+        starts,
+        firstLeg: seededAnalysis,
+        legs: seededLegs,
+        movingTargetTimelines,
+        summary: {
+          totalDifficulty,
+          totalLength,
+          totalActions
+        }
+      }
+    };
+  }
+
+  let routeStates = uniquePreflightStates(
+    routedOpening.map((analysis) => analysis.selectedRoute)
+  );
+  const laterLegs = [];
+
+  for (let legIndex = 1; legIndex < flags.length; legIndex += 1) {
+    const leg = analyzeFlagLeg(tileMap, flags[legIndex - 1], flags[legIndex], {
+      routesPerFacing: 1,
+      maxDistinctRoutes: 4,
+      maxActions: COURSE_PREFLIGHT_LATER_MAX_ACTIONS,
+      maxExpansions: COURSE_PREFLIGHT_LATER_EXPANSIONS,
+      startStates: routeStates,
+      playerCount,
+      recoveryRule: options.recoveryRule,
+      ...getRouteAnalysisVariantOptions(options),
+      rebootTokens: options.rebootTokens,
+      boardRects: options.boardRects,
+      dynamicGoal: movingTargetTimelines?.[legIndex] ?? null
+    });
+
+    if (!leg.distinctRoutes?.length) {
+      return {
+        valid: false,
+        reason: `cheap route sketch found no continuation for leg ${legIndex + 1}`,
+        opening,
+        sequence: null,
+        openingRoutedCount: routedOpening.length,
+        requiredOpeningCount,
+        intrinsicOutliers: normalOpeningPruning.outliers,
+        excludedIndices: normalOpeningPruning.excludedIndices,
+        laterLegs
+      };
+    }
+
+    // The preflight explicitly excludes traffic. Preserve only intrinsic route
+    // cost/distance/actions for the broad course-profile estimate.
+    const intrinsicLeg = {
+      ...leg,
+      summary: {
+        ...leg.summary,
+        congestionScore: 0,
+        diversityScore: 0,
+        intraLegOverlap: 0,
+        crossLegOverlap: 0,
+        intraLegThreat: 0,
+        crossLegThreat: 0
+      }
+    };
+    laterLegs.push(intrinsicLeg);
+    routeStates = uniquePreflightStates(leg.distinctRoutes);
+  }
+
+  const firstLeg = {
+    ...opening,
+    flags,
+    summary: {
+      ...opening.summary,
+      averageTrafficPenalty: 0,
+      averageOverlapPenalty: 0,
+      averageLateralThreat: 0,
+      averageRearThreat: 0
+    }
+  };
+  const legs = [
+    { from: "dock", to: 1, analysis: firstLeg },
+    ...laterLegs.map((leg, index) => ({
+      from: index + 1,
+      to: index + 2,
+      analysis: leg
+    }))
+  ];
+  const totalDifficulty = Number((
+    (firstLeg.summary.difficultyScore ?? 0) +
+    laterLegs.reduce((sum, leg) => sum + (leg.summary.averageRouteScore ?? 0), 0)
+  ).toFixed(2));
+  const totalLength = Number((
+    (firstLeg.summary.lengthScore ?? 0) +
+    laterLegs.reduce((sum, leg) => sum + (leg.summary.averageRouteDistance ?? 0), 0)
+  ).toFixed(2));
+  const totalActions = Number((
+    (firstLeg.summary.actionScore ?? 0) +
+    laterLegs.reduce((sum, leg) => sum + (leg.summary.averageRouteActions ?? 0), 0)
+  ).toFixed(2));
+
+  return {
+    valid: true,
+    reason: null,
+    opening,
+    openingRoutedCount: routedOpening.length,
+    requiredOpeningCount,
+    intrinsicOutliers: normalOpeningPruning.outliers,
+    excludedIndices: normalOpeningPruning.excludedIndices,
+    laterLegs,
+    sequence: {
+      starts,
+      firstLeg,
+      legs,
+      movingTargetTimelines,
+      summary: {
+        totalDifficulty,
+        totalLength,
+        totalActions
+      }
+    }
+  };
+}
+
+function getPreflightGrossCourseMismatch(metrics, preferences = {}) {
+  const difficultyBand = GROSS_DIFFICULTY_ABORT_BANDS[preferences.difficulty];
+  const lengthBand = GROSS_LENGTH_ABORT_BANDS[preferences.length];
+
+  if (difficultyBand && Number.isFinite(metrics?.difficultyRaw)) {
+    if (
+      Number.isFinite(difficultyBand.min) &&
+      metrics.difficultyRaw + COURSE_PREFLIGHT_DIFFICULTY_MARGIN < difficultyBand.min
+    ) {
+      return {
+        abort: true,
+        reason: "difficulty-too-low",
+        metric: "difficulty",
+        value: metrics.difficultyRaw,
+        limit: difficultyBand.min,
+        requested: preferences.difficulty
+      };
+    }
+    if (
+      Number.isFinite(difficultyBand.max) &&
+      metrics.difficultyRaw - COURSE_PREFLIGHT_DIFFICULTY_MARGIN > difficultyBand.max
+    ) {
+      return {
+        abort: true,
+        reason: "difficulty-too-high",
+        metric: "difficulty",
+        value: metrics.difficultyRaw,
+        limit: difficultyBand.max,
+        requested: preferences.difficulty
+      };
+    }
+  }
+
+  if (lengthBand && Number.isFinite(metrics?.lengthRaw)) {
+    if (
+      Number.isFinite(lengthBand.min) &&
+      metrics.lengthRaw + COURSE_PREFLIGHT_LENGTH_MARGIN < lengthBand.min
+    ) {
+      return {
+        abort: true,
+        reason: "length-too-low",
+        metric: "length",
+        value: metrics.lengthRaw,
+        limit: lengthBand.min,
+        requested: preferences.length
+      };
+    }
+    if (
+      Number.isFinite(lengthBand.max) &&
+      metrics.lengthRaw - COURSE_PREFLIGHT_LENGTH_MARGIN > lengthBand.max
+    ) {
+      return {
+        abort: true,
+        reason: "length-too-high",
+        metric: "length",
+        value: metrics.lengthRaw,
+        limit: lengthBand.max,
+        requested: preferences.length
+      };
+    }
+  }
+
+  return { abort: false };
+}
+
+function classifyCoursePreflight(preflight, preferences, context = {}) {
+  if (!preflight?.sequence) return null;
+  const boardHarshness = computeBoardHarshness(context.boardPlacements, context.pieceMap);
+  const checkpointPressure = computeLaterCheckpointPressure(
+    context.tileMap,
+    context.checkpoints,
+    preferences
+  );
+  const movingTargetStats = preferences.movingTargets
+    ? summarizeMovingTargets(context.tileMap, context.checkpoints, preferences)
+    : summarizeMovingTargets(null, [], preferences);
+  const difficultyRaw = applyVariantDifficultyModifiers(
+    computeDifficultyRaw(preflight.sequence, checkpointPressure),
+    {
+      ...preferences,
+      movingTargetStats,
+      goalTileMap: context.goalTileMap ?? context.tileMap
+    },
+    boardHarshness
+  );
+  const lengthMetrics = computeLengthMetrics(
+    preflight.sequence,
+    preferences.flagCount,
+    preferences.playerCount,
+    context.boardPlacements?.length ?? 1,
+    { ...preferences, movingTargetStats },
+    boardHarshness
+  );
+
+  return {
+    difficultyRaw,
+    lengthRaw: lengthMetrics.raw,
+    lengthFitRaw: shouldUseCompactLengthFit(preferences)
+      ? lengthMetrics.compactnessRaw
+      : lengthMetrics.raw,
+    lengthMetrics
+  };
+}
+
 function getLightweightStartPruning(tileMap, starts, flags, playerCount, options = {}) {
   const minimumPool = getLightweightPressurePoolTarget(starts.length, playerCount);
   if (
@@ -8204,7 +8792,10 @@ function mergeLightweightPrunedStarts(firstLeg, prePruning, originalStartCount) 
       // Pre-pruned starts only had the cheap first-leg check, so do not count
       // them as full-course reachable without running the expensive search.
       reachableStarts: firstLeg.summary.reachableStarts,
-      outliers: [...prePruning.outliers],
+      outliers: [
+        ...prePruning.outliers,
+        ...(firstLeg.summary.outliers || []).filter((outlier) => !prePruning.excludedIndices.has(outlier.index))
+      ],
       lightweightStartPruning: {
         active: true,
         minimumPool: prePruning.minimumPool,
@@ -8322,7 +8913,9 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
     ? {
       starts: starts.map((start, index) => ({
         ...start,
-        analysisIndex: index
+        analysisIndex: Number.isInteger(start.analysisIndex)
+          ? start.analysisIndex
+          : index
       })),
       analyses: [],
       excludedIndices: new Set(),
@@ -8366,8 +8959,20 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
       boardRects: options.boardRects,
       dynamicGoals: movingTargetTimelines,
       payToWin: options.payToWin,
+      competitiveMode: options.competitiveMode,
+      virtualBots: options.virtualBots,
       contextualLegSearch,
       contextualEarlyExit: Boolean(options.contextualEarlyExit),
+      contextualOpeningRoutes: options.contextualOpeningRoutes,
+      contextualLaterRoutes: options.contextualLaterRoutes,
+      contextualBeamWidth: options.contextualBeamWidth,
+      contextualCompletionPool: options.contextualCompletionPool,
+      contextualSeedStartAnalyses: options.contextualSeedStartAnalyses,
+      contextualOpeningExpansions: options.contextualOpeningExpansions,
+      contextualLaterExpansions: options.contextualLaterExpansions,
+      contextualLegMaxActions: options.contextualLegMaxActions,
+      contextualOptionalRouteBudgetRatio: options.contextualOptionalRouteBudgetRatio,
+      skipFullCourseTraffic: Boolean(options.skipFullCourseTraffic),
       diverseFullCourseSearch: false
     }, playerCount)
   );
@@ -8417,7 +9022,7 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
 
     return sum + (leg.analysis.summary.averageRouteActions || 0);
   }, 0);
-  const courseAdjustedFirstLeg = (options.competitiveMode || options.virtualBots)
+  const courseAdjustedFirstLeg = (options.competitiveMode || options.virtualBots || options.skipNormalStartBalancing)
     ? {
       ...firstLeg,
       summary: {
@@ -10024,6 +10629,70 @@ function buildScenarioCopySummary(scenario) {
         `Physical cache: ${profile.physicalCacheHits ?? 0}/${(profile.physicalCacheHits ?? 0) + (profile.physicalCacheMisses ?? 0)} hits`
       );
     }
+    const rejectionSummary = diagnostics.rejectionSummary ?? summarizeGenerationRejectionEvents(
+      diagnostics.rejectionEvents ?? []
+    );
+    if (rejectionSummary.total > 0) {
+      lines.push(
+        `Rejected evaluations: ${rejectionSummary.total}; ${rejectionSummary.categories.map((entry) => `${entry.category} ${entry.count}`).join(", ")}`,
+        `Rejected route work: ${rejectionSummary.categories.map((entry) => `${entry.category} ${entry.routeExpansions} exp/${entry.cappedRouteSearches} capped`).join(", ")}`
+      );
+    }
+
+    const preflightFailureEvents = (diagnostics.rejectionEvents ?? []).filter(
+      (event) => event.diagnostics?.preflight
+    );
+    for (const event of preflightFailureEvents.slice(0, 8)) {
+      const detail = event.diagnostics.preflight;
+      const profileBits = [];
+      if (Number.isFinite(detail.difficultyRaw)) profileBits.push(`difficulty ${detail.difficultyRaw}`);
+      if (Number.isFinite(detail.lengthRaw)) profileBits.push(`length ${detail.lengthRaw}`);
+      lines.push(
+        `Preflight rejection e${event.evaluation ?? "?"}: opening ${detail.openingRoutedCount ?? 0}/${detail.requiredOpeningCount ?? "?"}${Number.isFinite(detail.coherentRoutedCount) ? `, coherent ${detail.coherentRoutedCount}` : ""}, intrinsic pruned ${(detail.intrinsicPruned ?? []).length}, ${detail.work?.expansions ?? event.routeExpansions ?? 0} exp/${detail.work?.capped ?? event.cappedRouteSearches ?? 0} capped${profileBits.length ? `, rough ${profileBits.join(", ")}` : ""}`
+      );
+    }
+
+    const anyAnyFailureEvents = (diagnostics.rejectionEvents ?? []).filter(
+      (event) => event.diagnostics?.anyAny
+    );
+    for (const event of anyAnyFailureEvents.slice(0, 8)) {
+      const detail = event.diagnostics.anyAny;
+      const fastHealth = detail.fastFailureHealth;
+      const escalationHealth = detail.escalationFailureHealth;
+      const fastHistory = formatSurvivorHistory(
+        fastHealth?.survivorHistory?.length
+          ? fastHealth.survivorHistory
+          : detail.fastSurvivorHistory
+      );
+      const escalationHistory = formatSurvivorHistory(
+        escalationHealth?.survivorHistory ?? []
+      );
+      lines.push(
+        `Any/Any failure e${event.evaluation ?? "?"}: fast ${detail.fastWork?.expansions ?? 0} exp/${detail.fastWork?.capped ?? 0} capped, survival ${fastHistory}, zero-route caps/leg ${formatCappedContextHistory(fastHealth?.survivorHistory?.length ? fastHealth.survivorHistory : detail.fastSurvivorHistory)}${fastHealth?.legNumber ? `, failed after leg ${fastHealth.legNumber}` : detail.fastBalanceRejected ? ", balance rejected" : ""}; escalation ${detail.escalated ? `${detail.escalationWork?.expansions ?? 0} exp/${detail.escalationWork?.capped ?? 0} capped${escalationHealth ? `, survival ${escalationHistory}, zero-route caps/leg ${formatCappedContextHistory(escalationHealth.survivorHistory)}, failed after leg ${escalationHealth.legNumber ?? "?"}` : ""}` : "none"}`
+      );
+    }
+  }
+
+  const acceptedPreflight = summary.coursePreflight ?? null;
+  if (acceptedPreflight?.active) {
+    lines.push(
+      `Preflight: opening ${acceptedPreflight.openingRoutedCount ?? 0}/${acceptedPreflight.requiredOpeningCount ?? "?"}${Number.isFinite(acceptedPreflight.coherentRoutedCount) ? `, coherent ${acceptedPreflight.coherentRoutedCount}` : ""}, intrinsic pruned ${(acceptedPreflight.intrinsicPruned ?? []).length}, rough difficulty ${acceptedPreflight.difficultyRaw ?? "n/a"}, length ${acceptedPreflight.lengthRaw ?? "n/a"}, ${acceptedPreflight.routeExpansions ?? 0} exp/${acceptedPreflight.cappedRouteSearches ?? 0} capped, no traffic${acceptedPreflight.routesReused ? ", routes reused" : ""}`
+    );
+  }
+
+  const anyAnyAcceptedDiagnostics = summary.anyAnyDiagnostics ?? null;
+  if (anyAnyAcceptedDiagnostics) {
+    const fastHistory = formatSurvivorHistory(
+      anyAnyAcceptedDiagnostics.fastFailureHealth?.survivorHistory?.length
+        ? anyAnyAcceptedDiagnostics.fastFailureHealth.survivorHistory
+        : anyAnyAcceptedDiagnostics.fastSurvivorHistory
+    );
+    const escalationHistory = formatSurvivorHistory(
+      anyAnyAcceptedDiagnostics.escalationSurvivorHistory ?? []
+    );
+    lines.push(
+      `Any/Any work: fast ${anyAnyAcceptedDiagnostics.fastWork?.expansions ?? 0} exp/${anyAnyAcceptedDiagnostics.fastWork?.capped ?? 0} capped, survival ${fastHistory}, zero-route caps/leg ${formatCappedContextHistory(anyAnyAcceptedDiagnostics.fastFailureHealth?.survivorHistory?.length ? anyAnyAcceptedDiagnostics.fastFailureHealth.survivorHistory : anyAnyAcceptedDiagnostics.fastSurvivorHistory)}; escalation ${anyAnyAcceptedDiagnostics.escalated ? `${anyAnyAcceptedDiagnostics.escalationWork?.expansions ?? 0} exp/${anyAnyAcceptedDiagnostics.escalationWork?.capped ?? 0} capped, survival ${escalationHistory}, zero-route caps/leg ${formatCappedContextHistory(anyAnyAcceptedDiagnostics.escalationSurvivorHistory)}` : "none"}`
+    );
   }
 
   lines.push(
@@ -10031,7 +10700,7 @@ function buildScenarioCopySummary(scenario) {
     `Boards: ${(scenario.mainBoardIds ?? []).map((pieceId, index) => `${pieceId}@${scenario.mainRotations?.[index] ?? 0}`).join(", ") || "none"}`,
     scenario.competitiveMode && summary.competitiveStaging?.active
       ? `Starts: ${summary.competitiveStaging.routedStartCount ?? "?"} routed -> ${scenario.metrics?.usableStarts?.length ?? "?"} selected / ${summary.competitiveStaging.sourceStartCount ?? "?"} total`
-      : `Starts: ${summary.reachableStarts ?? "?"} reachable -> ${scenario.metrics?.usableStarts?.length ?? "?"} usable / ${scenario.sequence?.starts?.length ?? "?"} total`
+      : `Starts: ${summary.reachableStarts ?? "?"} reachable -> ${scenario.metrics?.usableStarts?.length ?? "?"} usable / ${summary.coursePreflight?.sourceStartCount ?? summary.contextualStaging?.sourceStartCount ?? scenario.sequence?.starts?.length ?? "?"} total`
   );
 
   if (balance?.active) {
@@ -10068,10 +10737,23 @@ function buildScenarioCopySummary(scenario) {
   );
 
   if (contextualCache) {
+    const routeStrategy = summary.fullCourseTraffic ?? null;
     lines.push(
-      `Contextual cache: cappedContexts ${contextualCache.zeroRouteCapFailures ?? 0} across ${contextualCache.zeroRouteFailureStarts ?? 0} starts, survivors ${contextualCache.survivingStarts ?? "n/a"}/${contextualCache.requiredSurvivingStarts ?? "n/a"}, exactHits ${contextualCache.exactHits ?? 0}, templateHits ${contextualCache.templateHits ?? 0}, misses ${contextualCache.misses ?? 0}`
+      `Contextual cache: cappedContexts ${contextualCache.zeroRouteCapFailures ?? 0} across ${contextualCache.zeroRouteFailureStarts ?? 0} starts, survivors ${contextualCache.survivingStarts ?? summary.reachableStarts ?? "?"}/${contextualCache.requiredSurvivingStarts ?? scenario.preferences?.playerCount ?? "?"}, exactHits ${contextualCache.exactHits ?? 0}, templateHits ${contextualCache.templateHits ?? 0}, misses ${contextualCache.misses ?? 0}`
     );
+    if (summary.contextualSearchMode || routeStrategy) {
+      lines.push(
+        `Contextual strategy: ${summary.contextualSearchMode ?? "standard"}, opening ${routeStrategy?.openingRoutesPerStart ?? "?"}, later ${routeStrategy?.laterRoutesPerContext ?? "?"}, beam ${routeStrategy?.stitchedBeamWidth ?? "?"}, completion ${routeStrategy?.completionPool ?? "?"}`
+      );
+    }
+    if (summary.contextualStaging?.active) {
+      const staging = summary.contextualStaging;
+      lines.push(
+        `Start staging: ${staging.sourceStartCount ?? "?"} source -> ${staging.preliminaryRoutedCount ?? "?"} first-leg-routed -> ${staging.selectedStartCount ?? "?"} rich, target ${staging.targetPoolSize ?? "?"}, reserve-fill ${staging.unresolvedFillCount ?? 0}, escalated ${staging.escalated ? "yes" : "no"}${staging.escalationReason ? ` (${staging.escalationReason})` : ""}`
+      );
+    }
   }
+
 
   if (scenario.metrics?.hardFailures?.length) {
     lines.push(`Hard failures: ${scenario.metrics.hardFailures.join(", ")}`);
@@ -10251,7 +10933,7 @@ function buildScenarioReport(scenario, selectedLegIndex) {
       : "Docks: none",
     `Showing leg: ${selectedLegIndex === null ? "All legs" : legOptions[selectedLegIndex]}`,
     `Goal flag: ${selectedLegIndex === null ? "all checkpoints" : `(${goal.x}, ${goal.y})`}`,
-    `Usable starts: ${scenario.metrics.usableStarts.length}/${scenario.sequence.starts.length}`,
+    `Usable starts: ${scenario.metrics.usableStarts.length}/${scenario.sequence.firstLeg?.summary?.contextualStaging?.sourceStartCount ?? scenario.sequence.starts.length}`,
     `Difficulty raw: ${scenario.metrics.difficultyRaw}`,
     `Length raw: ${scenario.metrics.lengthRaw}`,
     `Length inputs: flags ${scenario.metrics.lengthMetrics.inputs.flagCount}, players ${scenario.metrics.lengthMetrics.inputs.playerCount}, actionScore ${scenario.metrics.lengthMetrics.inputs.totalActionLoad}, distanceScore ${scenario.metrics.lengthMetrics.inputs.totalRouteDistance}, congestion ${scenario.metrics.lengthMetrics.inputs.totalCongestion}, flagArea ${scenario.metrics.lengthMetrics.inputs.flagAreaScore}, totalDifficulty ${scenario.metrics.lengthMetrics.inputs.totalDifficulty}`,
@@ -10460,7 +11142,7 @@ function setGeneratingOverlay(visible, text = "", details = {}) {
     headingEl.textContent = userState.heading;
   }
   if (attemptEl) {
-    attemptEl.textContent = `Course attempt ${Math.max(1, attempt)}`;
+    attemptEl.textContent = `Course attempt ${Math.max(1, attempt)} / 20`;
   }
   if (activityEl) {
     activityEl.textContent = userState.activity;
@@ -11455,6 +12137,23 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
   let evaluationsUsed = 0;
   let bestScenario = null;
   let staleRetries = 0;
+  const rejectionEvents = [];
+  const recordRejectionEvent = (telemetryBefore, category, reason, details = null) => {
+    const routeDelta = summarizeRouteSearchDelta(
+      telemetryBefore,
+      getAnalysisTelemetrySnapshotSafe()
+    );
+    rejectionEvents.push({
+      evaluation: evaluationsUsed,
+      category: category || "other",
+      reason: reason || category || "candidate rejected",
+      routeSearches: routeDelta.searches,
+      routeExpansions: routeDelta.expansions,
+      routeSearchMs: routeDelta.durationMs,
+      cappedRouteSearches: routeDelta.capped,
+      ...(details ? { diagnostics: details } : {})
+    });
+  };
 
   for (let retry = 0; retry < retryBudget; retry += 1) {
     // The generation-level expansion budget is intentionally soft, but a
@@ -11479,6 +12178,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         : "Choosing checkpoints",
       evaluationsUsed
     );
+    const retryTelemetryBefore = getAnalysisTelemetrySnapshotSafe();
     const pickedCheckpoints = pickFlags(
       flagCandidates,
       flagCount + (virtualBots ? 1 : 0),
@@ -11497,6 +12197,11 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     );
 
     if (!pickedCheckpoints) {
+      recordRejectionEvent(
+        retryTelemetryBefore,
+        "checkpoint-layout",
+        "checkpoint selection produced no valid flag sequence"
+      );
       staleRetries += 1;
       if (retry > 0 && staleRetries >= stallLimit) {
         break;
@@ -11536,6 +12241,10 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     let rebootTokens = [];
     let sequence = null;
     let effectiveVariantBundle = variantBundle;
+    let sequenceFailureCategory = "analysis";
+    let sequenceFailureReason = "course analysis did not produce a sequence";
+    let sequenceFailureDiagnostics = null;
+    let coursePreflight = null;
 
     for (let pass = 0; pass < 4; pass += 1) {
       scenarioPlacements = [
@@ -11564,6 +12273,8 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
           resolved.starts.some((start) => pointOnPlacement(start, dockPlacement, pieceMap))
         )).length;
         if (rebootTokens.length < dockCountWithStarts) {
+          sequenceFailureCategory = "reboot-layout";
+          sequenceFailureReason = "home reboot placement could not cover every dock with starts";
           sequence = null;
           break;
         }
@@ -11577,6 +12288,8 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       }
       const courseAvailability = applyCourseVariantAvailability(variantBundle, goalTileMap, preferences);
       if (courseAvailability.blockedForced.length) {
+        sequenceFailureCategory = "variant-availability";
+        sequenceFailureReason = `forced variant unavailable: ${courseAvailability.blockedForced.join(", ")}`;
         sequence = null;
         break;
       }
@@ -11591,6 +12304,13 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         evaluationsUsed
       );
       try {
+        const unconstrainedNormalRouting = (
+          generationPreferences.difficulty === "any" &&
+          generationPreferences.length === "any" &&
+          !competitiveMode &&
+          !payToWin &&
+          !virtualBots
+        );
         const baseAnalysisOptions = applyVariantAnalysisOptions({
           rebootTokens,
           boardRects: scenarioBoardRects,
@@ -11598,6 +12318,142 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
           length: generationPreferences.length,
           contextualEarlyExit: true
         }, effectiveVariantBundle);
+        const indexedActiveStarts = activeStarts.map((start, index) => ({
+          ...start,
+          analysisIndex: Number.isInteger(start.analysisIndex) ? start.analysisIndex : index
+        }));
+
+        // Before paying for contextual alternatives or traffic, give every
+        // non-Virtual-Bots candidate a cheap intrinsic audition. The opening
+        // checks all starts with one route and no traffic; later legs preserve
+        // only a few arrival facings. This is deliberately broad: reject only
+        // search-hostile openings/continuations or a course profile that is way
+        // outside the requested ballpark.
+        if (!virtualBots && playableCheckpoints.length) {
+          await reportStage(
+            `Quick course preflight — ${indexedActiveStarts.length} starts, no traffic`,
+            evaluationsUsed
+          );
+          const preflightTelemetryBefore = getAnalysisTelemetrySnapshotSafe();
+          coursePreflight = buildCoursePreflightSequence(
+            goalTileMap,
+            indexedActiveStarts,
+            playableCheckpoints,
+            preferences.playerCount,
+            {
+              ...baseAnalysisOptions,
+              ...effectiveVariantBundle,
+              competitiveMode,
+              payToWin: effectiveVariantBundle.payToWin,
+              virtualBots: false,
+              movingTargets,
+              reusableContextualRoutes: unconstrainedNormalRouting
+            }
+          );
+          coursePreflight.work = compactRouteWork(summarizeRouteSearchDelta(
+            preflightTelemetryBefore,
+            getAnalysisTelemetrySnapshotSafe()
+          ));
+
+          if (!coursePreflight.valid) {
+            const reason = `preflight route sketch inconclusive: ${coursePreflight.reason}`;
+            console.debug(`Early course retry: ${reason}`);
+            await reportStage(`Trying another checkpoint layout — ${reason}`, evaluationsUsed);
+            sequenceFailureCategory = "preflight-route";
+            sequenceFailureReason = reason;
+            sequenceFailureDiagnostics = {
+              preflight: {
+                openingRoutedCount: coursePreflight.openingRoutedCount,
+                requiredOpeningCount: coursePreflight.requiredOpeningCount,
+                coherentRoutedCount: coursePreflight.coherentRoutedCount ?? null,
+                intrinsicPruned: coursePreflight.intrinsicOutliers?.map((entry) => entry.index) ?? [],
+                work: coursePreflight.work
+              }
+            };
+            sequence = null;
+            break;
+          }
+
+          coursePreflight.metrics = classifyCoursePreflight(
+            coursePreflight,
+            {
+              ...generationPreferences,
+              ...effectiveVariantBundle,
+              actFast,
+              actFastMode,
+              flagCount,
+              classicSharedDeck,
+              movingTargets
+            },
+            {
+              boardPlacements: scenarioBoardPlacements,
+              pieceMap,
+              checkpoints: playableCheckpoints,
+              tileMap: scenarioTileMap,
+              goalTileMap
+            }
+          );
+          const preflightMismatch = getPreflightGrossCourseMismatch(
+            coursePreflight.metrics,
+            generationPreferences
+          );
+          if (preflightMismatch.abort) {
+            const mismatchText = formatGrossCourseMismatch(preflightMismatch);
+            const reason = `preflight gross mismatch: ${mismatchText}`;
+            console.debug(`Early course retry: ${reason}`);
+            await reportStage(`Trying another checkpoint layout — ${reason}`, evaluationsUsed);
+            sequenceFailureCategory = "preflight-profile";
+            sequenceFailureReason = reason;
+            sequenceFailureDiagnostics = {
+              preflight: {
+                openingRoutedCount: coursePreflight.openingRoutedCount,
+                requiredOpeningCount: coursePreflight.requiredOpeningCount,
+                coherentRoutedCount: coursePreflight.coherentRoutedCount ?? null,
+                intrinsicPruned: coursePreflight.intrinsicOutliers?.map((entry) => entry.index) ?? [],
+                difficultyRaw: coursePreflight.metrics?.difficultyRaw ?? null,
+                lengthRaw: coursePreflight.metrics?.lengthRaw ?? null,
+                work: coursePreflight.work
+              }
+            };
+            sequence = null;
+            break;
+          }
+        } else {
+          coursePreflight = null;
+        }
+
+        const preflightExcludedIndices = coursePreflight?.excludedIndices ?? new Set();
+        const analysisStarts = indexedActiveStarts.filter((start) => (
+          !preflightExcludedIndices.has(start.analysisIndex)
+        ));
+        const fastAnyAnalysisOptions = unconstrainedNormalRouting
+          ? {
+            ...baseAnalysisOptions,
+            // Any/Any reuses the coherent no-traffic routes produced by preflight.
+            // No route rediscovery is needed here; this pass adds traffic/fairness
+            // to those exact routes. A balance-only rejection may still justify one
+            // richer comparison because one route per start can be unrepresentative.
+            contextualOpeningRoutes: 1,
+            contextualLaterRoutes: 1,
+            contextualBeamWidth: 1,
+            contextualCompletionPool: 1,
+            contextualSeedStartAnalyses: coursePreflight?.seedStartAnalyses ?? null
+          }
+          : baseAnalysisOptions;
+        const targetedNormalRouting = (
+          !unconstrainedNormalRouting &&
+          !competitiveMode &&
+          !payToWin &&
+          !virtualBots &&
+          !effectiveNoDocks &&
+          !sandwichedDock &&
+          scenarioDockPlacements.length === 1 &&
+          (
+            generationPreferences.difficulty === "hard" ||
+            generationPreferences.difficulty === "brutal" ||
+            generationPreferences.length === "long"
+          )
+        );
 
         if (
           pass === 0 &&
@@ -11638,10 +12494,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
             `Checking all competitive starts — ${activeStarts.length} starting spaces`,
             evaluationsUsed
           );
-          const indexedStarts = activeStarts.map((start, index) => ({
-            ...start,
-            analysisIndex: index
-          }));
+          const indexedStarts = analysisStarts;
           const preliminary = analyzeFlagSequence(
             goalTileMap,
             indexedStarts,
@@ -11666,6 +12519,8 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
             const reason = `competitive start validation failed: ${failedStarts.length} unrouted; ${preliminaryCache.zeroRouteCapFailures ?? 0} capped route contexts recorded`;
             console.debug(`Early course abort: ${reason}`);
             await reportStage(`Trying another course — ${reason}`, evaluationsUsed);
+            sequenceFailureCategory = "competitive-start-capacity";
+            sequenceFailureReason = reason;
             sequence = null;
             break;
           }
@@ -11677,6 +12532,8 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
           const selectedSet = new Set(selectedIndices);
           const selectedStarts = indexedStarts.filter((start) => selectedSet.has(start.analysisIndex));
           if (selectedStarts.length < preferences.playerCount) {
+            sequenceFailureCategory = "competitive-start-capacity";
+            sequenceFailureReason = `competitive refinement selected only ${selectedStarts.length}/${preferences.playerCount} required starts`;
             sequence = null;
             break;
           }
@@ -11707,14 +12564,263 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
             preliminaryScoreStdDev: preliminary.firstLeg.summary.scoreStdDev ?? 0,
             method: "all-start-validity+perfect-selection"
           };
-        } else {
+        } else if (unconstrainedNormalRouting) {
+          let fastAnyFailed = false;
+          let fastAnyEscalated = false;
+          let fastAnyCapacityError = null;
+          let fastFailureHealth = null;
+          let escalationFailureHealth = null;
+          let escalationWork = null;
+          const fastTelemetryBefore = getAnalysisTelemetrySnapshotSafe();
+
+          try {
+            sequence = analyzeFlagSequence(
+              goalTileMap,
+              analysisStarts,
+              playableCheckpoints,
+              preferences.playerCount,
+              fastAnyAnalysisOptions
+            );
+          } catch (error) {
+            if (error?.code !== "CONTEXTUAL_START_CAPACITY_LOST") {
+              throw error;
+            }
+            fastAnyFailed = true;
+            fastAnyCapacityError = error;
+            fastFailureHealth = cloneContextualSearchHealth(error.contextualSearchHealth);
+          }
+
+          const fastWork = compactRouteWork(summarizeRouteSearchDelta(
+            fastTelemetryBefore,
+            getAnalysisTelemetrySnapshotSafe()
+          ));
+          const fastBalanceRejected = Boolean(
+            sequence?.firstLeg?.summary?.normalStartBalance?.reject
+          );
+          const fastSurvivorHistory = fastFailureHealth?.survivorHistory?.length
+            ? fastFailureHealth.survivorHistory
+            : (sequence?.firstLeg?.summary?.contextualLegCache?.survivorHistory ?? []);
+
+          // Any/Any has an effectively unlimited supply of alternative checkpoint
+          // layouts. If the cheap contextual proof loses start capacity, do not
+          // spend a second rich pass trying to rescue this particular layout.
+          // Preserve the diagnostics and immediately let the outer retry loop pick
+          // another checkpoint sequence. A Normal balance rejection is different:
+          // the fast beam may simply have chosen an unrepresentative single route,
+          // so that case may still justify one richer comparison.
+          if (fastAnyFailed) {
+            fastAnyCapacityError.anyAnyDiagnostics = {
+              fastFailed: true,
+              fastBalanceRejected: false,
+              fastWork,
+              fastFailureHealth,
+              fastSurvivorHistory: fastSurvivorHistory.map((entry) => ({ ...entry })),
+              escalated: false,
+              escalationWork: null,
+              escalationFailureHealth: null
+            };
+            throw fastAnyCapacityError;
+          }
+
+          if (fastBalanceRejected) {
+            fastAnyEscalated = true;
+            await reportStage(
+              "Escalating Any/Any balance analysis — quick single-route balance was inconclusive",
+              evaluationsUsed
+            );
+            const escalationTelemetryBefore = getAnalysisTelemetrySnapshotSafe();
+            try {
+              sequence = analyzeFlagSequence(
+                goalTileMap,
+                analysisStarts,
+                playableCheckpoints,
+                preferences.playerCount,
+                baseAnalysisOptions
+              );
+            } catch (error) {
+              escalationWork = compactRouteWork(summarizeRouteSearchDelta(
+                escalationTelemetryBefore,
+                getAnalysisTelemetrySnapshotSafe()
+              ));
+              if (error?.code === "CONTEXTUAL_START_CAPACITY_LOST") {
+                escalationFailureHealth = cloneContextualSearchHealth(error.contextualSearchHealth);
+                error.anyAnyDiagnostics = {
+                  fastFailed: false,
+                  fastBalanceRejected,
+                  fastWork,
+                  fastFailureHealth,
+                  fastSurvivorHistory: fastSurvivorHistory.map((entry) => ({ ...entry })),
+                  escalated: true,
+                  escalationWork,
+                  escalationFailureHealth
+                };
+              }
+              throw error;
+            }
+            escalationWork = compactRouteWork(summarizeRouteSearchDelta(
+              escalationTelemetryBefore,
+              getAnalysisTelemetrySnapshotSafe()
+            ));
+          }
+
+          if (sequence?.firstLeg?.summary) {
+            const reusedPreflightRoutes = Boolean(
+              sequence.firstLeg.summary.contextualLegCache?.seededRoutes
+            );
+            sequence.firstLeg.summary.contextualSearchMode = fastAnyEscalated
+              ? "any-any-balance-escalated"
+              : reusedPreflightRoutes
+                ? "any-any-preflight-reused"
+                : "any-any-fast";
+            sequence.firstLeg.summary.anyAnyDiagnostics = {
+              fastFailed: fastAnyFailed,
+              fastBalanceRejected,
+              fastWork,
+              fastFailureHealth,
+              fastSurvivorHistory: fastSurvivorHistory.map((entry) => ({ ...entry })),
+              escalated: fastAnyEscalated,
+              escalationWork,
+              escalationFailureHealth,
+              escalationSurvivorHistory: sequence.firstLeg.summary.contextualLegCache?.survivorHistory ?? []
+            };
+          }
+        } else if (targetedNormalRouting) {
+          const indexedStarts = analysisStarts;
+          const targetPoolSize = getLightweightPressurePoolTarget(
+            indexedStarts.length,
+            preferences.playerCount
+          );
+          await reportStage(
+            `Using preflight opening routes — ${indexedStarts.length} starts; choosing ${targetPoolSize} for rich analysis`,
+            evaluationsUsed
+          );
+
+          // Reuse the universal no-traffic opening sketch instead of paying for
+          // a second first-checkpoint search just for targeted Normal staging.
+          const firstLegAnalyses = (coursePreflight?.opening?.starts || []).filter((entry) => (
+            !preflightExcludedIndices.has(entry.index)
+          ));
+          const firstLegRouted = firstLegAnalyses.filter((entry) => (
+            entry.reachable &&
+            entry.selectedRoute &&
+            Number.isFinite(entry.bestScore) &&
+            Number.isFinite(entry.bestActions)
+          ));
+
+          let selectedSet = firstLegRouted.length > targetPoolSize
+            ? selectLightweightPressurePool(firstLegRouted, targetPoolSize)
+            : new Set(firstLegRouted.map((entry) => entry.index));
+
+          // If the bounded first-checkpoint screen did not route enough starts,
+          // fill the shortlist from unresolved starts instead of escalating to a
+          // rich all-start search. Prefer spatially separated reserve starts so
+          // the eight-start pool still samples the whole docking edge.
+          const selectedStartObjects = () => indexedStarts.filter((start) => (
+            selectedSet.has(start.analysisIndex)
+          ));
+          const unresolved = indexedStarts.filter((start) => (
+            !selectedSet.has(start.analysisIndex)
+          ));
+          let unresolvedFillCount = 0;
+
+          while (selectedSet.size < targetPoolSize && unresolved.length) {
+            const selectedStartsNow = selectedStartObjects();
+            let bestIndex = 0;
+            let bestSpread = -Infinity;
+
+            for (let index = 0; index < unresolved.length; index += 1) {
+              const candidate = unresolved[index];
+              const spread = selectedStartsNow.length
+                ? Math.min(...selectedStartsNow.map((selected) => (
+                  Math.abs((candidate.x ?? 0) - (selected.x ?? 0)) +
+                  Math.abs((candidate.y ?? 0) - (selected.y ?? 0))
+                )))
+                : 0;
+              if (spread > bestSpread) {
+                bestSpread = spread;
+                bestIndex = index;
+              }
+            }
+
+            const [chosen] = unresolved.splice(bestIndex, 1);
+            selectedSet.add(chosen.analysisIndex);
+            unresolvedFillCount += 1;
+          }
+
+          const selectedIndices = [...selectedSet].sort((left, right) => left - right);
+          const selectedStarts = indexedStarts.filter((start) => (
+            selectedSet.has(start.analysisIndex)
+          ));
+
+          await reportStage(
+            `Refining targeted Normal starts — ${selectedStarts.length}/${indexedStarts.length} starts with full route choice`,
+            evaluationsUsed
+          );
           sequence = analyzeFlagSequence(
             goalTileMap,
-            activeStarts,
+            selectedStarts,
             playableCheckpoints,
             preferences.playerCount,
             baseAnalysisOptions
           );
+
+          if (sequence?.firstLeg?.summary) {
+            sequence.firstLeg.summary.contextualSearchMode = "targeted-normal-first-leg-staged";
+            sequence.firstLeg.summary.contextualStaging = {
+              active: true,
+              method: "first-checkpoint-shortlist",
+              sourceStartCount: indexedStarts.length,
+              preliminaryRoutedCount: firstLegRouted.length,
+              targetPoolSize,
+              selectedStartCount: selectedIndices.length,
+              selectedIndices,
+              unresolvedFillCount,
+              escalated: false,
+              escalationReason: null
+            };
+          }
+        } else {
+          sequence = analyzeFlagSequence(
+            goalTileMap,
+            analysisStarts,
+            playableCheckpoints,
+            preferences.playerCount,
+            baseAnalysisOptions
+          );
+        }
+
+        if (sequence?.firstLeg?.summary && coursePreflight) {
+          if (preflightExcludedIndices.size) {
+            const mergedFirstLeg = mergeLightweightPrunedStarts(
+              sequence.firstLeg,
+              {
+                analyses: coursePreflight.opening?.starts ?? [],
+                excludedIndices: preflightExcludedIndices,
+                outliers: coursePreflight.intrinsicOutliers ?? [],
+                minimumPool: Math.max(preferences.playerCount, preferences.playerCount + LIGHT_START_SURPLUS)
+              },
+              indexedActiveStarts.length
+            );
+            sequence.firstLeg = mergedFirstLeg;
+            if (sequence.legs?.[0]) {
+              sequence.legs[0] = { ...sequence.legs[0], analysis: mergedFirstLeg };
+            }
+          }
+          sequence.firstLeg.summary.coursePreflight = {
+            active: true,
+            noTraffic: true,
+            sourceStartCount: indexedActiveStarts.length,
+            openingRoutedCount: coursePreflight.openingRoutedCount,
+            requiredOpeningCount: coursePreflight.requiredOpeningCount,
+            coherentRoutedCount: coursePreflight.coherentRoutedCount ?? null,
+            routesReused: Boolean(coursePreflight.reusableContextualRoutes),
+            intrinsicPruned: (coursePreflight.intrinsicOutliers ?? []).map((entry) => entry.index),
+            difficultyRaw: coursePreflight.metrics?.difficultyRaw ?? null,
+            lengthRaw: coursePreflight.metrics?.lengthRaw ?? null,
+            routeSearches: coursePreflight.work?.searches ?? 0,
+            routeExpansions: coursePreflight.work?.expansions ?? 0,
+            cappedRouteSearches: coursePreflight.work?.capped ?? 0
+          };
         }
       } catch (error) {
         if (error?.code === "CONTEXTUAL_START_CAPACITY_LOST") {
@@ -11722,6 +12828,11 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
           const reason = `route capacity lost after leg ${health.legNumber ?? "?"}: ${health.survivingStarts ?? 0}/${health.requiredStarts ?? preferences.playerCount} required starts remain; ${health.cappedContextsThisLeg ?? 0} capped route contexts this leg (${health.zeroRouteCapFailures ?? 0} total across ${health.distinctStarts ?? 0} starts)`;
           console.debug(`Early course retry: ${reason}`);
           await reportStage(`Trying another checkpoint layout — ${reason}`, evaluationsUsed);
+          sequenceFailureCategory = "route-capacity";
+          sequenceFailureReason = reason;
+          sequenceFailureDiagnostics = error.anyAnyDiagnostics
+            ? { anyAny: error.anyAnyDiagnostics }
+            : { contextualFailure: cloneContextualSearchHealth(health) };
           sequence = null;
           break;
         }
@@ -11771,6 +12882,8 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
           const mismatchText = formatGrossCourseMismatch(grossMismatch);
           console.debug(`Early course abort: ${mismatchText}`);
           await reportStage(`Rejecting gross mismatch — ${mismatchText}`, evaluationsUsed);
+          sequenceFailureCategory = "gross-mismatch";
+          sequenceFailureReason = mismatchText;
           sequence = null;
           break;
         }
@@ -11844,6 +12957,12 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       break;
     }
     if (!sequence) {
+      recordRejectionEvent(
+        retryTelemetryBefore,
+        sequenceFailureCategory,
+        sequenceFailureReason,
+        sequenceFailureDiagnostics
+      );
       staleRetries += 1;
       continue;
     }
@@ -11855,6 +12974,11 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         pieceMap
       )
     ) {
+      recordRejectionEvent(
+        retryTelemetryBefore,
+        "sandwiched-layout",
+        "sandwiched dock structure was not preserved after pruning"
+      );
       staleRetries += 1;
       continue;
     }
@@ -11862,6 +12986,11 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       effectiveVariantBundle.payToWin &&
       sequence.firstLeg.summary.payToWin?.availabilityValid === false
     ) {
+      recordRejectionEvent(
+        retryTelemetryBefore,
+        "pay-to-win",
+        "Pay to Win pricing left insufficient affordable starting-space availability"
+      );
       staleRetries += 1;
       continue;
     }
@@ -11875,6 +13004,11 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       : scenarioDockPlacements.length;
     if (effectiveVariantBundle.extraDocks && effectiveStartZoneCount <= 1) {
       if (isVariantForced(preferences, "extraDocks")) {
+        recordRejectionEvent(
+          retryTelemetryBefore,
+          "extra-docks",
+          "Extra Docks was forced but fewer than two dock zones survived"
+        );
         staleRetries += 1;
         continue;
       }
@@ -11991,6 +13125,18 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       staleRetries += 1;
     }
 
+    if (!scenario.metrics.acceptable) {
+      const rejectionReason = describeGenerationRejection(
+        scenario,
+        "final classification"
+      );
+      recordRejectionEvent(
+        retryTelemetryBefore,
+        getGenerationRejectionCategory(scenario, rejectionReason),
+        rejectionReason
+      );
+    }
+
     if (scenario.metrics.acceptable || (retry > 0 && staleRetries >= stallLimit)) {
       break;
     }
@@ -11998,7 +13144,8 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
 
   return {
     scenario: bestScenario,
-    evaluationsUsed: Math.max(1, evaluationsUsed)
+    evaluationsUsed: Math.max(1, evaluationsUsed),
+    rejectionEvents
   };
 }
 
@@ -12301,6 +13448,8 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
     slowestRouteSearch: null,
     contextualProfileTotals: null,
     terminationReason: null,
+    rejectionEvents: [],
+    rejectionSummary: null,
     softExpansionBudget: GENERATION_SOFT_EXPANSION_BUDGET,
     softBudgetMinAttempts: GENERATION_SOFT_BUDGET_MIN_ATTEMPTS
   };
@@ -12322,6 +13471,9 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
     generationDiagnostics.slowestRouteSearch = telemetry.slowestSearch ?? null;
     generationDiagnostics.contextualProfileTotals = telemetry.contextualProfileTotals ?? null;
     generationDiagnostics.terminationReason = terminationReason;
+    generationDiagnostics.rejectionSummary = summarizeGenerationRejectionEvents(
+      generationDiagnostics.rejectionEvents
+    );
     scenario.generationDiagnostics = {
       ...generationDiagnostics,
       attempts: generationDiagnostics.attempts.map((entry) => ({
@@ -12330,7 +13482,14 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
         slowestRouteSearch: entry.slowestRouteSearch
           ? { ...entry.slowestRouteSearch }
           : null
-      }))
+      })),
+      rejectionEvents: generationDiagnostics.rejectionEvents.map((entry) => ({ ...entry })),
+      rejectionSummary: generationDiagnostics.rejectionSummary
+        ? {
+          ...generationDiagnostics.rejectionSummary,
+          categories: generationDiagnostics.rejectionSummary.categories.map((entry) => ({ ...entry }))
+        }
+        : null
     };
     return scenario;
   };
@@ -12430,12 +13589,27 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
         cappedRouteSearches: routeDelta.capped,
         slowestRouteSearch: routeDelta.slowest
       });
+      generationDiagnostics.rejectionEvents.push({
+        evaluation: attemptLabel,
+        category: "crash",
+        reason: error?.message ?? String(error),
+        routeSearches: routeDelta.searches,
+        routeExpansions: routeDelta.expansions,
+        routeSearchMs: routeDelta.durationMs,
+        cappedRouteSearches: routeDelta.capped
+      });
       console.warn(`Attempt ${attemptLabel} failed during generation`, error);
       continue;
     }
 
     const evaluationsUsed = Math.max(1, result.evaluationsUsed ?? 1);
     attempt += evaluationsUsed;
+    if (Array.isArray(result.rejectionEvents) && result.rejectionEvents.length) {
+      generationDiagnostics.rejectionEvents.push(...result.rejectionEvents.map((entry) => ({
+        ...entry,
+        evaluation: attemptLabel + Math.max(0, (entry.evaluation ?? 1) - 1)
+      })));
+    }
     const scenario = result.scenario;
     const lastMeaningfulStage = lastStage;
     recordStageBoundary(scenario ? "Candidate complete" : "Candidate rejected");
