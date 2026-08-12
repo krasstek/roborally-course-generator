@@ -2326,6 +2326,12 @@ function enumerateRoutes(tileMap, start, goal, options = {}) {
             displayPositions: options.dynamicGoal.displayPositions ?? options.dynamicGoal.positions ?? []
           }
           : null,
+        absoluteStartAction: 0,
+        absoluteActions: current.actions,
+        localActionIds: [...current.actionHistory],
+        programHistoryEnd: getProgramHistoryWindow(current.actionHistory),
+        goalReached: true,
+        fullCourseLeg: true,
         ...routeScore
       });
       continue;
@@ -6102,9 +6108,12 @@ function analyzeSeededFullCourseContextual(tileMap, starts, flags, options = {})
     }, flags);
   });
 
-  const requiredSurvivingStarts = options.competitiveMode
-    ? starts.length
-    : Math.max(1, playerCount);
+  const explicitRequiredStarts = Number(options.contextualRequiredStarts);
+  const requiredSurvivingStarts = Number.isFinite(explicitRequiredStarts)
+    ? Math.max(1, Math.min(starts.length, Math.floor(explicitRequiredStarts)))
+    : options.competitiveMode
+      ? starts.length
+      : Math.max(1, playerCount);
   const survivingStarts = startAnalyses.filter((analysis) => analysis.fullCourseRoute).length;
   if (options.contextualEarlyExit && survivingStarts < requiredSurvivingStarts) {
     const error = new Error(
@@ -6237,7 +6246,11 @@ function analyzeSeededFullCourseContextual(tileMap, starts, flags, options = {})
         }],
         survivingStarts,
         requiredSurvivingStarts,
-        capacityPolicy: options.competitiveMode ? "all-starts" : "player-count-floor",
+        capacityPolicy: Number.isFinite(Number(options.contextualRequiredStarts))
+          ? "explicit-floor"
+          : options.competitiveMode
+            ? "all-starts"
+            : "player-count-floor",
         zeroRouteCapsByLeg: flags.map((_, legIndex) => ({
           leg: legIndex + 1,
           contexts: 0,
@@ -6262,6 +6275,43 @@ function analyzeSeededFullCourseContextual(tileMap, starts, flags, options = {})
   };
 }
 
+function normalizeOpeningSeedRoute(route) {
+  if (!route) return null;
+  const localActionIds = Array.isArray(route.localActionIds)
+    ? [...route.localActionIds]
+    : Array.isArray(route.programHistoryEnd)
+      ? [...route.programHistoryEnd]
+      : Array.isArray(route.actionHistory)
+        ? [...route.actionHistory]
+        : [];
+  const absoluteActions = Number.isFinite(route.absoluteActions)
+    ? route.absoluteActions
+    : (route.actions ?? localActionIds.length);
+  return {
+    ...route,
+    path: route.path ? [...route.path] : route.path,
+    transitions: route.transitions ? [...route.transitions] : route.transitions,
+    absoluteStartAction: 0,
+    absoluteActions,
+    localActionIds,
+    programHistoryEnd: getProgramHistoryWindow(
+      route.programHistoryEnd ?? route.actionHistory ?? localActionIds
+    ),
+    goalReached: route.goalReached !== false,
+    fullCourseLeg: true
+  };
+}
+
+function getContextualOpeningSeedMap(options = {}) {
+  const analyses = Array.isArray(options.contextualOpeningSeedAnalyses)
+    ? options.contextualOpeningSeedAnalyses
+    : [];
+  return new Map(analyses.map((analysis, index) => [
+    Number.isInteger(analysis?.index) ? analysis.index : index,
+    analysis
+  ]));
+}
+
 function analyzeFullCourseContextual(
   tileMap,
   starts,
@@ -6283,9 +6333,14 @@ function analyzeFullCourseContextual(
   const zeroRouteFailureStartsByLeg = flags.map(() => new Set());
   const survivorHistory = [];
   const earlyExitEnabled = Boolean(options.contextualEarlyExit);
-  const requiredSurvivingStarts = options.competitiveMode
-    ? starts.length
-    : Math.max(1, playerCount);
+  const openingSeedByIndex = getContextualOpeningSeedMap(options);
+  let seededOpeningStarts = 0;
+  const explicitRequiredStarts = Number(options.contextualRequiredStarts);
+  const requiredSurvivingStarts = Number.isFinite(explicitRequiredStarts)
+    ? Math.max(1, Math.min(starts.length, Math.floor(explicitRequiredStarts)))
+    : options.competitiveMode
+      ? starts.length
+      : Math.max(1, playerCount);
 
   const baseRouteOptions = {
     recoveryRule: options.recoveryRule,
@@ -6455,13 +6510,23 @@ function analyzeFullCourseContextual(
       absoluteActions: 0,
       history: []
     };
-    const openingRoutes = getLegRoutes(
-      context,
-      0,
-      start,
-      sourceIndex,
-      Boolean(options.startupSpinUp)
+    const openingSeed = openingSeedByIndex.get(sourceIndex) ?? null;
+    const seededRoute = normalizeOpeningSeedRoute(
+      openingSeed?.selectedRoute ?? openingSeed?.routes?.[0] ?? null
     );
+    let openingRoutes = null;
+    if (seededRoute) {
+      seededOpeningStarts += 1;
+      openingRoutes = [seededRoute];
+    } else {
+      openingRoutes = getLegRoutes(
+        context,
+        0,
+        start,
+        sourceIndex,
+        Boolean(options.startupSpinUp)
+      );
+    }
     const partials = openingRoutes.map((route) => ({
       legs: [route],
       context: getContextAfterLeg(route),
@@ -6494,7 +6559,8 @@ function analyzeFullCourseContextual(
       cappedContextsThisLeg,
       cappedStartsThisLeg,
       totalCappedContexts: zeroRouteCapFailures,
-      distinctCappedStarts: zeroRouteFailureStarts.size
+      distinctCappedStarts: zeroRouteFailureStarts.size,
+      seededOpeningStarts
     };
     survivorHistory.push(snapshot);
 
@@ -6519,6 +6585,7 @@ function analyzeFullCourseContextual(
       legNumber: legIndex + 1,
       flagCount: flags.length,
       competitiveMode: Boolean(options.competitiveMode),
+      seededOpeningStarts,
       survivorHistory: survivorHistory.map((entry) => ({ ...entry }))
     };
     throw error;
@@ -6692,10 +6759,16 @@ function analyzeFullCourseContextual(
         templateFallbacks,
         zeroRouteCapFailures,
         zeroRouteFailureStarts: zeroRouteFailureStarts.size,
+        seededOpeningRoutes: seededOpeningStarts > 0,
+        seededOpeningStarts,
         survivorHistory: survivorHistory.map((entry) => ({ ...entry })),
         survivingStarts: startPartials.filter((entry) => entry.partials.length).length,
         requiredSurvivingStarts,
-        capacityPolicy: options.competitiveMode ? "all-starts" : "player-count-floor",
+        capacityPolicy: Number.isFinite(Number(options.contextualRequiredStarts))
+          ? "explicit-floor"
+          : options.competitiveMode
+            ? "all-starts"
+            : "player-count-floor",
         zeroRouteCapsByLeg: zeroRouteCapsByLeg.map((count, legIndex) => ({
           leg: legIndex + 1,
           contexts: count,
