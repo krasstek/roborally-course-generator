@@ -2164,6 +2164,321 @@ function scoreRoute(route, goal) {
   };
 }
 
+function percentileNumber(values, fraction = 0.5) {
+  const sorted = values.filter(Number.isFinite).sort((a, b) => a - b);
+  if (!sorted.length) return null;
+  if (sorted.length === 1) return sorted[0];
+  const position = Math.max(0, Math.min(1, fraction)) * (sorted.length - 1);
+  const lower = Math.floor(position);
+  const upper = Math.ceil(position);
+  if (lower === upper) return sorted[lower];
+  const weight = position - lower;
+  return sorted[lower] * (1 - weight) + sorted[upper] * weight;
+}
+
+function scoreImmediateTransitionContribution(transition, actionId, history, absoluteActionCount, goal, options = {}) {
+  if (!transition || transition.crashed || transition.blocked) return null;
+  const action = ACTIONS.find((candidate) => candidate.id === actionId);
+  if (!action) return null;
+  const nextActionCount = absoluteActionCount + 1;
+  const transitionRebootPenalty = transition.rebooted
+    ? getRebootRoutePenalty(nextActionCount)
+    : (transition.rebootPenalty || 0);
+  const reversePenalty = action.id === "BACK" ? 1.4 : 0;
+  const heavyMovePenalty = action.id === "FORWARD_2"
+    ? 0.25
+    : action.id === "FORWARD_3"
+      ? 0.75
+      : 0;
+  const neutralPowerUpBenchmark = Boolean(
+    options.neutralPowerUpBenchmark && action.id === "WAIT"
+  );
+  const scarceReusePenalty = neutralPowerUpBenchmark
+    ? 0
+    : getCardAvailabilityPressure(history, action.id, {
+      ...options,
+      absoluteActionCount
+    });
+  const actionPenalty = neutralPowerUpBenchmark
+    ? REGISTER_TEMPO_COST
+    : getActionPenalty(action, options);
+  return (
+    (transition.hazard || 0) +
+    transitionRebootPenalty +
+    weightedDistance(transition.distance || 0, transition.forcedDistance || 0) +
+    actionPenalty +
+    reversePenalty +
+    heavyMovePenalty +
+    scarceReusePenalty +
+    scoreTransitionConveyorComplexity(transition, goal)
+  );
+}
+
+function measureInsertedNeutralPowerUpCost(tileMap, route, insertionIndex, flags = [], options = {}) {
+  const transitions = Array.isArray(route?.transitions) ? route.transitions : [];
+  const actionHistory = Array.isArray(route?.actionHistory)
+    ? route.actionHistory
+    : transitions.map((transition) => transition?.action).filter(Boolean);
+  const from = transitions[insertionIndex]?.from;
+  if (!from || !Number.isFinite(from.x) || !Number.isFinite(from.y)) return null;
+  const checkpointHits = Array.isArray(route?.checkpointHits) ? route.checkpointHits : [];
+  let checkpointIndex = checkpointHits.filter((hit) => Number(hit?.action) <= insertionIndex).length;
+  let absoluteActions = insertionIndex;
+  let state = cloneState(from);
+  let history = actionHistory.slice(0, insertionIndex);
+  let insertedSuffixCost = 0;
+  let originalSuffixCost = 0;
+
+  // Baseline: score the original suffix in the same immediate-cost currency.
+  for (let index = insertionIndex; index < transitions.length; index += 1) {
+    const actionId = transitions[index]?.action ?? actionHistory[index];
+    if (!actionId) continue;
+    const baselineCheckpointIndex = checkpointHits.filter((hit) => Number(hit?.action) <= index).length;
+    const baselineGoal = flags[Math.min(baselineCheckpointIndex, Math.max(0, flags.length - 1))] ?? flags.at(-1) ?? null;
+    const contribution = scoreImmediateTransitionContribution(
+      transitions[index],
+      actionId,
+      actionHistory.slice(0, index),
+      index,
+      baselineGoal,
+      options
+    );
+    if (!Number.isFinite(contribution)) return null;
+    originalSuffixCost += contribution;
+  }
+
+  const waitAction = ACTIONS.find((action) => action.id === "WAIT");
+  if (!waitAction) return null;
+  let target = checkpointIndex < flags.length
+    ? getFullCourseTarget(flags, checkpointIndex, absoluteActions, options)
+    : flags.at(-1) ?? null;
+  const waitTransition = simulateAction(tileMap, state, waitAction, {
+    ...options,
+    goal: target,
+    registerIndex: absoluteActions % REGISTER_COUNT
+  });
+  // A Power Up that immediately crashes/reboots is not a representative way to
+  // calibrate the value of energy; leave such tactical edge cases out of the
+  // robust course benchmark.
+  if (waitTransition.crashed || waitTransition.blocked || waitTransition.rebooted) return null;
+  const waitContribution = scoreImmediateTransitionContribution(
+    waitTransition,
+    "WAIT",
+    history,
+    absoluteActions,
+    target,
+    { ...options, neutralPowerUpBenchmark: true }
+  );
+  if (!Number.isFinite(waitContribution)) return null;
+  insertedSuffixCost += waitContribution;
+  state = cloneState(waitTransition.to);
+  history = getProgramHistoryWindow([...history, "WAIT"]);
+  absoluteActions += 1;
+  if (checkpointIndex < flags.length && fullCourseRouteReachesNextCheckpoint({
+    finalState: state,
+    checkpointIndex,
+    actions: absoluteActions
+  }, flags, options)) {
+    checkpointIndex += 1;
+  }
+
+  // Replay the originally planned suffix from the new post-Power-Up state. This
+  // captures conveyor/gear/timing benefits or penalties without launching any
+  // additional route search. Stop naturally if the inserted register completes
+  // the course earlier than the original plan.
+  for (let index = insertionIndex; index < actionHistory.length && checkpointIndex < flags.length; index += 1) {
+    const actionId = actionHistory[index];
+    const action = ACTIONS.find((candidate) => candidate.id === actionId);
+    if (!action) return null;
+    target = getFullCourseTarget(flags, checkpointIndex, absoluteActions, options);
+    const transition = simulateAction(tileMap, state, action, {
+      ...options,
+      goal: target,
+      registerIndex: absoluteActions % REGISTER_COUNT
+    });
+    if (transition.crashed || transition.blocked || transition.rebooted) return null;
+    const contribution = scoreImmediateTransitionContribution(
+      transition,
+      actionId,
+      history,
+      absoluteActions,
+      target,
+      options
+    );
+    if (!Number.isFinite(contribution)) return null;
+    insertedSuffixCost += contribution;
+    state = cloneState(transition.to);
+    history = getProgramHistoryWindow([...history, actionId]);
+    absoluteActions += 1;
+    if (fullCourseRouteReachesNextCheckpoint({
+      finalState: state,
+      checkpointIndex,
+      actions: absoluteActions
+    }, flags, options)) {
+      checkpointIndex += 1;
+    }
+  }
+
+  if (checkpointIndex < flags.length) {
+    const recoveryEstimate = estimateFullCourseRoute({
+      checkpointIndex,
+      finalState: state,
+      actions: absoluteActions,
+      baseCost: insertedSuffixCost
+    }, flags, options) - insertedSuffixCost;
+    insertedSuffixCost += Math.max(0, recoveryEstimate);
+  }
+
+  return insertedSuffixCost - originalSuffixCost;
+}
+
+export function summarizePowerUpOpportunityBenchmark(tileMap, startAnalyses = [], flags = [], options = {}) {
+  const productiveRegisterScores = [];
+  const powerUpOpportunityCosts = [];
+  const fullCourseActions = [];
+  const fullCourseScores = [];
+  const waitAction = ACTIONS.find((action) => action.id === "WAIT");
+
+  for (const analysis of startAnalyses || []) {
+    const route = analysis?.fullCourseRoute;
+    if (!route || !Array.isArray(route.transitions) || !route.transitions.length) continue;
+    fullCourseActions.push(route.actions ?? route.transitions.length);
+    if (Number.isFinite(route.score)) fullCourseScores.push(route.score);
+    const actionHistory = Array.isArray(route.actionHistory)
+      ? route.actionHistory
+      : route.transitions.map((transition) => transition?.action).filter(Boolean);
+    const checkpointHits = Array.isArray(route.checkpointHits) ? route.checkpointHits : [];
+    const opportunitySampleLimit = Math.max(1, Math.floor(options.powerUpBenchmarkSamplesPerRoute ?? 5));
+    const opportunitySampleIndices = new Set();
+    const transitionCount = route.transitions.length;
+    const sampleCount = Math.min(opportunitySampleLimit, transitionCount);
+    for (let sampleIndex = 0; sampleIndex < sampleCount; sampleIndex += 1) {
+      opportunitySampleIndices.add(Math.min(
+        transitionCount - 1,
+        Math.floor(((sampleIndex + 0.5) * transitionCount) / sampleCount)
+      ));
+    }
+
+    route.transitions.forEach((transition, index) => {
+      const actionId = transition?.action ?? actionHistory[index];
+      if (!actionId) return;
+      const from = transition?.from;
+      if (!from || !Number.isFinite(from.x) || !Number.isFinite(from.y)) return;
+      const startTile = tileMap.get(tileKey(from.x, from.y));
+      const onBattery = (startTile?.features || []).some((feature) => feature.type === "battery");
+      const checkpointIndex = checkpointHits.filter((hit) => Number(hit?.action) <= index).length;
+      const goal = flags[Math.min(checkpointIndex, Math.max(0, flags.length - 1))] ?? flags.at(-1) ?? null;
+      const priorHistory = actionHistory.slice(0, index);
+      const chosenContribution = scoreImmediateTransitionContribution(
+        transition,
+        actionId,
+        priorHistory,
+        index,
+        goal,
+        options
+      );
+
+      // The course register benchmark should describe useful tempo rather than
+      // already taking the energy reward from a battery or Power Up action.
+      if (!onBattery && actionId !== "WAIT" && Number.isFinite(chosenContribution)) {
+        productiveRegisterScores.push(chosenContribution);
+      }
+
+      if (
+        options.skipPowerUpStrategicSamples ||
+        !waitAction ||
+        !opportunitySampleIndices.has(index) ||
+        onBattery ||
+        actionId === "WAIT" ||
+        !Number.isFinite(chosenContribution)
+      ) return;
+      const opportunityCost = measureInsertedNeutralPowerUpCost(
+        tileMap,
+        route,
+        index,
+        flags,
+        options
+      );
+      if (Number.isFinite(opportunityCost)) {
+        powerUpOpportunityCosts.push(opportunityCost);
+      }
+    });
+  }
+
+  const registerMedian = percentileNumber(productiveRegisterScores, 0.5);
+  const opportunityMedian = percentileNumber(powerUpOpportunityCosts, 0.5);
+  const waitActionPenalty = waitAction ? getActionPenalty(waitAction, options) : null;
+  const powerUpBaseDiscount = Number.isFinite(waitActionPenalty)
+    ? Number((REGISTER_TEMPO_COST - waitActionPenalty).toFixed(2))
+    : null;
+  let batteryFeatureScore = null;
+  try {
+    const value = getTilePenaltyForFeature({ type: "battery" }, {
+      ...options,
+      batteryActive: true
+    });
+    batteryFeatureScore = Number.isFinite(value) ? Number(value.toFixed(2)) : null;
+  } catch {
+    batteryFeatureScore = null;
+  }
+
+  const batteryEnergyRewardScore = Number.isFinite(batteryFeatureScore)
+    ? Number((-batteryFeatureScore).toFixed(2))
+    : null;
+
+  // Keep these as diagnostics for v36 rather than silently replacing route
+  // scoring with the new P2W scarcity curve. The route search does not yet
+  // carry a robot's current energy reserve/cap, so applying the full marginal
+  // energy value here would over-credit Power Ups or batteries even when the
+  // robot could not actually benefit from another cube. A shared reward model
+  // should land together with explicit energy-state tracking.
+  return {
+    method: "productive-register-and-power-up-strategic-delta-shadow",
+    registerTempoCost: REGISTER_TEMPO_COST,
+    powerUpWaitActionPenalty: Number.isFinite(waitActionPenalty) ? Number(waitActionPenalty.toFixed(2)) : null,
+    powerUpBaseDiscount,
+    registerScoreMedian: Number.isFinite(registerMedian) ? Number(registerMedian.toFixed(2)) : null,
+    registerScoreP25: Number.isFinite(percentileNumber(productiveRegisterScores, 0.25))
+      ? Number(percentileNumber(productiveRegisterScores, 0.25).toFixed(2))
+      : null,
+    registerScoreP75: Number.isFinite(percentileNumber(productiveRegisterScores, 0.75))
+      ? Number(percentileNumber(productiveRegisterScores, 0.75).toFixed(2))
+      : null,
+    registerSamples: productiveRegisterScores.length,
+    // Strategic delta is deliberately descriptive, not the energy exchange rate:
+    // negative values mean that inserting a Power Up helped the route through
+    // factory timing/positioning; positive values mean it cost useful tempo.
+    powerUpStrategicDeltaMedian: Number.isFinite(opportunityMedian) ? Number(opportunityMedian.toFixed(2)) : null,
+    powerUpStrategicDeltaP25: Number.isFinite(percentileNumber(powerUpOpportunityCosts, 0.25))
+      ? Number(percentileNumber(powerUpOpportunityCosts, 0.25).toFixed(2))
+      : null,
+    powerUpStrategicDeltaP75: Number.isFinite(percentileNumber(powerUpOpportunityCosts, 0.75))
+      ? Number(percentileNumber(powerUpOpportunityCosts, 0.75).toFixed(2))
+      : null,
+    powerUpStrategicDeltaSamples: powerUpOpportunityCosts.length,
+    // Compatibility aliases for v34 snapshots/diagnostic consumers.
+    powerUpOpportunityMedian: Number.isFinite(opportunityMedian) ? Number(opportunityMedian.toFixed(2)) : null,
+    powerUpOpportunityP25: Number.isFinite(percentileNumber(powerUpOpportunityCosts, 0.25))
+      ? Number(percentileNumber(powerUpOpportunityCosts, 0.25).toFixed(2))
+      : null,
+    powerUpOpportunityP75: Number.isFinite(percentileNumber(powerUpOpportunityCosts, 0.75))
+      ? Number(percentileNumber(powerUpOpportunityCosts, 0.75).toFixed(2))
+      : null,
+    powerUpOpportunitySamples: powerUpOpportunityCosts.length,
+    medianFullCourseActions: Number.isFinite(percentileNumber(fullCourseActions, 0.5))
+      ? Number(percentileNumber(fullCourseActions, 0.5).toFixed(2))
+      : null,
+    medianFullCourseTurns: Number.isFinite(percentileNumber(fullCourseActions, 0.5))
+      ? Number((percentileNumber(fullCourseActions, 0.5) / REGISTER_COUNT).toFixed(2))
+      : null,
+    medianFullCourseScore: Number.isFinite(percentileNumber(fullCourseScores, 0.5))
+      ? Number(percentileNumber(fullCourseScores, 0.5).toFixed(2))
+      : null,
+    batteryFeatureScore,
+    batteryEnergyRewardScore
+  };
+}
+
 function createQueueEntry(route, goal) {
   return {
     ...route,
@@ -4026,7 +4341,28 @@ export function analyzeCourse(tileMap, starts, goal, options = {}) {
   const flags = options.flags ?? [goal];
   const playerCount = options.playerCount ?? starts.length;
   const portalMap = options.portalMap ?? buildPortalMap(tileMap);
-  const startAnalyses = starts.map((start, index) => {
+  const explicitRequiredReachable = Number(options.requiredReachableStarts);
+  const requiredReachableStarts = Number.isFinite(explicitRequiredReachable)
+    ? Math.max(1, Math.min(starts.length, Math.floor(explicitRequiredReachable)))
+    : null;
+  const explicitPreferredReachable = Number(options.preferredReachableStarts);
+  const preferredReachableStarts = Number.isFinite(explicitPreferredReachable)
+    ? Math.max(
+      requiredReachableStarts ?? 1,
+      Math.min(starts.length, Math.floor(explicitPreferredReachable))
+    )
+    : null;
+  const stopWhenPreferredLost = Boolean(
+    options.stopWhenPreferredReachableLost &&
+    requiredReachableStarts &&
+    preferredReachableStarts
+  );
+  const startAnalyses = [];
+  let reachableSoFar = 0;
+  let stoppedForPreferredCapacity = false;
+
+  for (let index = 0; index < starts.length; index += 1) {
+    const start = starts[index];
     const sourceIndex = Number.isInteger(start.analysisIndex) ? start.analysisIndex : index;
     const rebootTokens = options.recoveryRule === "home_reboot"
       ? getHomeRebootTokensForStart(start, options.rebootTokens)
@@ -4056,13 +4392,48 @@ export function analyzeCourse(tileMap, starts, goal, options = {}) {
       portalMap
     })).sort((left, right) => left.score - right.score).slice(0, maxRoutes);
 
-    return {
+    const reachable = routes.length > 0;
+    if (reachable) reachableSoFar += 1;
+    startAnalyses.push({
       index: sourceIndex,
       start,
-      reachable: routes.length > 0,
+      reachable,
       routes
-    };
-  });
+    });
+
+    const remaining = starts.length - index - 1;
+    const maximumPossibleReachable = reachableSoFar + remaining;
+    if (
+      requiredReachableStarts &&
+      maximumPossibleReachable < requiredReachableStarts
+    ) {
+      break;
+    }
+    if (
+      stopWhenPreferredLost &&
+      reachableSoFar >= requiredReachableStarts &&
+      maximumPossibleReachable < preferredReachableStarts
+    ) {
+      stoppedForPreferredCapacity = true;
+      break;
+    }
+  }
+
+  // Preserve source indices for skipped starts without pretending they were
+  // searched. This lets callers distinguish unresolved capacity from a proven
+  // zero-route result while still short-circuiting doomed batches.
+  if (startAnalyses.length < starts.length) {
+    for (let index = startAnalyses.length; index < starts.length; index += 1) {
+      const start = starts[index];
+      startAnalyses.push({
+        index: Number.isInteger(start.analysisIndex) ? start.analysisIndex : index,
+        start,
+        reachable: false,
+        routes: [],
+        capacityUnresolved: true
+      });
+    }
+  }
 
   if (options.skipTraffic) {
     startAnalyses.forEach((analysis) => {
@@ -4095,6 +4466,14 @@ export function analyzeCourse(tileMap, starts, goal, options = {}) {
     new Set(),
     new Map()
   );
+  finalSummary.summary.capacityShortCircuit = {
+    active: Boolean(requiredReachableStarts),
+    requiredReachableStarts,
+    preferredReachableStarts,
+    searchedStarts: startAnalyses.filter((entry) => !entry.capacityUnresolved).length,
+    unresolvedStarts: startAnalyses.filter((entry) => entry.capacityUnresolved).length,
+    stoppedForPreferredCapacity
+  };
 
   return {
     goal,
@@ -6114,6 +6493,17 @@ function analyzeSeededFullCourseContextual(tileMap, starts, flags, options = {})
     : options.competitiveMode
       ? starts.length
       : Math.max(1, playerCount);
+  const explicitPreferredStarts = Number(options.contextualPreferredStarts);
+  const preferredSurvivingStarts = Number.isFinite(explicitPreferredStarts)
+    ? Math.max(
+      requiredSurvivingStarts,
+      Math.min(starts.length, Math.floor(explicitPreferredStarts))
+    )
+    : null;
+  const stopWhenPreferredLost = Boolean(
+    options.contextualStopWhenPreferredLost && preferredSurvivingStarts
+  );
+  let preferredCapacityShortCircuits = 0;
   const survivingStarts = startAnalyses.filter((analysis) => analysis.fullCourseRoute).length;
   if (options.contextualEarlyExit && survivingStarts < requiredSurvivingStarts) {
     const error = new Error(
@@ -6246,6 +6636,8 @@ function analyzeSeededFullCourseContextual(tileMap, starts, flags, options = {})
         }],
         survivingStarts,
         requiredSurvivingStarts,
+        preferredSurvivingStarts,
+        preferredCapacityShortCircuits,
         capacityPolicy: Number.isFinite(Number(options.contextualRequiredStarts))
           ? "explicit-floor"
           : options.competitiveMode
@@ -6341,6 +6733,17 @@ function analyzeFullCourseContextual(
     : options.competitiveMode
       ? starts.length
       : Math.max(1, playerCount);
+  const explicitPreferredStarts = Number(options.contextualPreferredStarts);
+  const preferredSurvivingStarts = Number.isFinite(explicitPreferredStarts)
+    ? Math.max(
+      requiredSurvivingStarts,
+      Math.min(starts.length, Math.floor(explicitPreferredStarts))
+    )
+    : null;
+  const stopWhenPreferredLost = Boolean(
+    options.contextualStopWhenPreferredLost && preferredSurvivingStarts
+  );
+  let preferredCapacityShortCircuits = 0;
 
   const baseRouteOptions = {
     recoveryRule: options.recoveryRule,
@@ -6497,7 +6900,68 @@ function analyzeFullCourseContextual(
     return routes;
   };
 
-  const startPartials = starts.map((start, index) => {
+  const makeSurvivorSnapshot = (legIndex, extra = {}) => {
+    const survivingStarts = Number.isFinite(extra.survivingStarts)
+      ? extra.survivingStarts
+      : startPartials.filter((entry) => entry.partials.length).length;
+    const cappedContextsThisLeg = zeroRouteCapsByLeg[legIndex] ?? 0;
+    const cappedStartsThisLeg = zeroRouteFailureStartsByLeg[legIndex]?.size ?? 0;
+    return {
+      legIndex,
+      legNumber: legIndex + 1,
+      survivingStarts,
+      requiredStarts: requiredSurvivingStarts,
+      preferredStarts: preferredSurvivingStarts,
+      maximumPossibleStarts: Number.isFinite(extra.maximumPossibleStarts)
+        ? extra.maximumPossibleStarts
+        : survivingStarts,
+      sourceStarts: starts.length,
+      lostStarts: Math.max(0, starts.length - survivingStarts),
+      cappedContextsThisLeg,
+      cappedStartsThisLeg,
+      totalCappedContexts: zeroRouteCapFailures,
+      distinctCappedStarts: zeroRouteFailureStarts.size,
+      seededOpeningStarts,
+      processedStartsThisLeg: extra.processedStartsThisLeg ?? null,
+      preferredCapacityShortCircuit: Boolean(extra.preferredCapacityShortCircuit)
+    };
+  };
+
+  const throwCapacityLost = (legIndex, snapshot) => {
+    survivorHistory.push(snapshot);
+    const maximumText = Number.isFinite(snapshot.maximumPossibleStarts)
+      ? `; at most ${snapshot.maximumPossibleStarts} can survive`
+      : "";
+    const error = new Error(
+      `Contextual start capacity lost after leg ${legIndex + 1}: ${snapshot.survivingStarts}/${requiredSurvivingStarts} routed starts so far${maximumText}; ${snapshot.cappedContextsThisLeg} capped route contexts this leg`
+    );
+    error.code = "CONTEXTUAL_START_CAPACITY_LOST";
+    error.contextualSearchHealth = {
+      zeroRouteCapFailures,
+      distinctStarts: zeroRouteFailureStarts.size,
+      cappedContextsThisLeg: snapshot.cappedContextsThisLeg,
+      cappedStartsThisLeg: snapshot.cappedStartsThisLeg,
+      survivingStarts: snapshot.survivingStarts,
+      maximumPossibleStarts: snapshot.maximumPossibleStarts,
+      requiredStarts: requiredSurvivingStarts,
+      preferredStarts: preferredSurvivingStarts,
+      sourceStarts: starts.length,
+      lostStarts: snapshot.lostStarts,
+      legIndex,
+      legNumber: legIndex + 1,
+      flagCount: flags.length,
+      competitiveMode: Boolean(options.competitiveMode),
+      seededOpeningStarts,
+      processedStartsThisLeg: snapshot.processedStartsThisLeg,
+      survivorHistory: survivorHistory.map((entry) => ({ ...entry }))
+    };
+    throw error;
+  };
+
+  const startPartials = [];
+  let openingSurvivors = 0;
+  for (let index = 0; index < starts.length; index += 1) {
+    const start = starts[index];
     const sourceIndex = Number.isInteger(start.analysisIndex)
       ? start.analysisIndex
       : index;
@@ -6532,63 +6996,59 @@ function analyzeFullCourseContextual(
       context: getContextAfterLeg(route),
       score: route.score
     }));
-
-    return {
+    const selectedPartials = selectContextualPartialBeam(
+      partials,
+      flags[0],
+      options.contextualBeamWidth ?? CONTEXTUAL_BEAM_WIDTH
+    );
+    if (selectedPartials.length) openingSurvivors += 1;
+    startPartials.push({
       index: sourceIndex,
       start,
-      partials: selectContextualPartialBeam(
-        partials,
-        flags[0],
-        options.contextualBeamWidth ?? CONTEXTUAL_BEAM_WIDTH
-      )
-    };
-  });
+      partials: selectedPartials
+    });
 
-  const recordSurvivorHealthAndAbortIfLost = (legIndex) => {
-    const survivingStarts = startPartials.filter((entry) => entry.partials.length).length;
-    const cappedContextsThisLeg = zeroRouteCapsByLeg[legIndex] ?? 0;
-    const cappedStartsThisLeg = zeroRouteFailureStartsByLeg[legIndex]?.size ?? 0;
-    const lostStarts = Math.max(0, startPartials.length - survivingStarts);
-    const snapshot = {
-      legIndex,
-      legNumber: legIndex + 1,
-      survivingStarts,
-      requiredStarts: requiredSurvivingStarts,
-      sourceStarts: startPartials.length,
-      lostStarts,
-      cappedContextsThisLeg,
-      cappedStartsThisLeg,
-      totalCappedContexts: zeroRouteCapFailures,
-      distinctCappedStarts: zeroRouteFailureStarts.size,
-      seededOpeningStarts
-    };
-    survivorHistory.push(snapshot);
+    const remainingStarts = starts.length - index - 1;
+    const maximumPossibleStarts = openingSurvivors + remainingStarts;
+    if (
+      earlyExitEnabled &&
+      maximumPossibleStarts < requiredSurvivingStarts
+    ) {
+      throwCapacityLost(0, makeSurvivorSnapshot(0, {
+        survivingStarts: openingSurvivors,
+        maximumPossibleStarts,
+        processedStartsThisLeg: index + 1
+      }));
+    }
+    if (
+      stopWhenPreferredLost &&
+      remainingStarts > 0 &&
+      openingSurvivors >= requiredSurvivingStarts &&
+      maximumPossibleStarts < preferredSurvivingStarts
+    ) {
+      preferredCapacityShortCircuits += 1;
+      break;
+    }
+  }
 
-    if (!earlyExitEnabled || survivingStarts >= requiredSurvivingStarts) {
+  if (startPartials.length < starts.length) {
+    for (let index = startPartials.length; index < starts.length; index += 1) {
+      const start = starts[index];
+      startPartials.push({
+        index: Number.isInteger(start.analysisIndex) ? start.analysisIndex : index,
+        start,
+        partials: []
+      });
+    }
+  }
+
+  const recordSurvivorHealthAndAbortIfLost = (legIndex, extra = {}) => {
+    const snapshot = makeSurvivorSnapshot(legIndex, extra);
+    if (!earlyExitEnabled || snapshot.survivingStarts >= requiredSurvivingStarts) {
+      survivorHistory.push(snapshot);
       return;
     }
-
-    const error = new Error(
-      `Contextual start capacity lost after leg ${legIndex + 1}: ${survivingStarts}/${requiredSurvivingStarts} required starts remain; ${cappedContextsThisLeg} capped route contexts this leg`
-    );
-    error.code = "CONTEXTUAL_START_CAPACITY_LOST";
-    error.contextualSearchHealth = {
-      zeroRouteCapFailures,
-      distinctStarts: zeroRouteFailureStarts.size,
-      cappedContextsThisLeg,
-      cappedStartsThisLeg,
-      survivingStarts,
-      requiredStarts: requiredSurvivingStarts,
-      sourceStarts: startPartials.length,
-      lostStarts,
-      legIndex,
-      legNumber: legIndex + 1,
-      flagCount: flags.length,
-      competitiveMode: Boolean(options.competitiveMode),
-      seededOpeningStarts,
-      survivorHistory: survivorHistory.map((entry) => ({ ...entry }))
-    };
-    throw error;
+    throwCapacityLost(legIndex, snapshot);
   };
 
   // A capped branch is only telemetry. Abort after the whole opening leg has
@@ -6596,7 +7056,9 @@ function analyzeFullCourseContextual(
   recordSurvivorHealthAndAbortIfLost(0);
 
   for (let legIndex = 1; legIndex < flags.length; legIndex += 1) {
-    for (const entry of startPartials) {
+    let preferredStopped = false;
+    for (let entryIndex = 0; entryIndex < startPartials.length; entryIndex += 1) {
+      const entry = startPartials[entryIndex];
       if (!entry.partials.length) {
         continue;
       }
@@ -6625,11 +7087,46 @@ function analyzeFullCourseContextual(
         flags[legIndex],
         options.contextualBeamWidth ?? CONTEXTUAL_BEAM_WIDTH
       );
+
+      const processedSurvivors = startPartials
+        .slice(0, entryIndex + 1)
+        .filter((candidate) => candidate.partials.length).length;
+      const unprocessedPotential = startPartials
+        .slice(entryIndex + 1)
+        .filter((candidate) => candidate.partials.length).length;
+      const maximumPossibleStarts = processedSurvivors + unprocessedPotential;
+
+      if (
+        earlyExitEnabled &&
+        maximumPossibleStarts < requiredSurvivingStarts
+      ) {
+        throwCapacityLost(legIndex, makeSurvivorSnapshot(legIndex, {
+          survivingStarts: processedSurvivors,
+          maximumPossibleStarts,
+          processedStartsThisLeg: entryIndex + 1
+        }));
+      }
+
+      if (
+        stopWhenPreferredLost &&
+        unprocessedPotential > 0 &&
+        processedSurvivors >= requiredSurvivingStarts &&
+        maximumPossibleStarts < preferredSurvivingStarts
+      ) {
+        for (let restIndex = entryIndex + 1; restIndex < startPartials.length; restIndex += 1) {
+          startPartials[restIndex].partials = [];
+        }
+        preferredCapacityShortCircuits += 1;
+        preferredStopped = true;
+        break;
+      }
     }
 
     // Multiple capped contexts may belong to alternate branches of the same
     // start. Judge the course by surviving starts only after the leg is done.
-    recordSurvivorHealthAndAbortIfLost(legIndex);
+    recordSurvivorHealthAndAbortIfLost(legIndex, {
+      preferredCapacityShortCircuit: preferredStopped
+    });
   }
 
   const startAnalyses = startPartials.map((entry) => {
@@ -6764,6 +7261,8 @@ function analyzeFullCourseContextual(
         survivorHistory: survivorHistory.map((entry) => ({ ...entry })),
         survivingStarts: startPartials.filter((entry) => entry.partials.length).length,
         requiredSurvivingStarts,
+        preferredSurvivingStarts,
+        preferredCapacityShortCircuits,
         capacityPolicy: Number.isFinite(Number(options.contextualRequiredStarts))
           ? "explicit-floor"
           : options.competitiveMode

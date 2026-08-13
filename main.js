@@ -4,7 +4,7 @@ const versionedPath = (path) => `${path}${VERSION_SUFFIX}`;
 
 const [
   { render },
-  { analyzeCourse, analyzeFullCourse, analyzeFlagLeg, analyzeGoalApproaches, clearAnalysisCaches, evaluateFullCourseFocusUnderOccupancy, evaluateFullCourseSubsetTraffic, getAnalysisTelemetrySnapshot, recomputeFirstLegPressure, resetAnalysisTelemetry, scoreFlagArea },
+  { analyzeCourse, analyzeFullCourse, analyzeFlagLeg, analyzeGoalApproaches, clearAnalysisCaches, evaluateFullCourseFocusUnderOccupancy, evaluateFullCourseSubsetTraffic, getAnalysisTelemetrySnapshot, recomputeFirstLegPressure, resetAnalysisTelemetry, scoreFlagArea, summarizePowerUpOpportunityBenchmark },
   {
     buildMainFootprintTiles,
     buildResolvedMap,
@@ -140,6 +140,19 @@ const MIN_SHARED_EDGE = 5;
 const DOCK_BRIDGE_GAP = 3;
 const MAX_DOCK_COUNT = 2;
 const DEFAULT_STARTING_ENERGY = 4;
+// Pay to Win prices are expressed in energy, but start advantages are first
+// converted into course-specific register equivalents. These marginal costs
+// are design tuning values, not published rules constants: the first cube is
+// intentionally cheap to give up, while deeper depletion becomes increasingly
+// expensive because it removes upgrade/options reserve and takes several rounds
+// to rebuild. The fifth value is a non-payable spread threshold used only to
+// decide when the current field still needs pruning.
+const PAY_TO_WIN_ENERGY_MARGINAL_REGISTERS = [0, 0.75, 1.15, 1.6, 2.3, 2.6];
+const PAY_TO_WIN_EXTRA_ENERGY_MARGINAL_GROWTH = 0.4;
+const PAY_TO_WIN_HORIZON_MIN_TURNS = 3;
+const PAY_TO_WIN_HORIZON_MAX_TURNS = 10;
+const PAY_TO_WIN_HORIZON_MIN_SCALE = 0.9;
+const PAY_TO_WIN_HORIZON_MAX_SCALE = 1.08;
 // Passive border geometry that may coexist with a No-Docks starting square.
 // Active edge devices (lasers, push panels, flamethrowers) are deliberately
 // excluded even though they are encoded directionally on an edge: a player
@@ -1047,8 +1060,11 @@ function cloneContextualSearchHealth(health = null) {
     cappedContextsThisLeg: health.cappedContextsThisLeg ?? 0,
     cappedStartsThisLeg: health.cappedStartsThisLeg ?? 0,
     survivingStarts: health.survivingStarts ?? 0,
+    maximumPossibleStarts: health.maximumPossibleStarts ?? health.survivingStarts ?? 0,
     requiredStarts: health.requiredStarts ?? 0,
+    preferredStarts: health.preferredStarts ?? null,
     sourceStarts: health.sourceStarts ?? 0,
+    processedStartsThisLeg: health.processedStartsThisLeg ?? null,
     lostStarts: health.lostStarts ?? 0,
     legIndex: health.legIndex ?? null,
     legNumber: health.legNumber ?? null,
@@ -2874,10 +2890,10 @@ function updateRulesNote(scenario) {
         ? " A dash in either position means that starting space is unavailable to that selector group; a fully unavailable space uses the prohibited-start marker instead of a price."
         : "";
       notes.push(
-        `Pay to Win: green starting spaces show starting energy costs, with ${payToWinPricing.startingEnergy ?? DEFAULT_STARTING_ENERGY} energy available at setup. ${latePlayerText} ${singleLatePlayer ? "uses" : "use"} the second value after the slash; earlier players use the first cost.${dashText}`
+        `Pay to Win: green starting spaces show starting energy costs. Pay the shown cost from your starting energy when choosing a starting space. ${latePlayerText} ${singleLatePlayer ? "uses" : "use"} the second value after the slash; earlier players use the first cost.${dashText}`
       );
     } else {
-      notes.push(`Pay to Win: green starting spaces show the starting energy cost for choosing that space. Robots have ${payToWinPricing?.startingEnergy ?? DEFAULT_STARTING_ENERGY} starting energy; a start that costs more is unavailable.`);
+      notes.push(`Pay to Win: green starting spaces show the starting energy cost for choosing that space. Pay that cost from your starting energy when choosing a starting space; a start whose cost exceeds your available starting energy is unavailable.`);
     }
   }
 
@@ -7393,31 +7409,272 @@ function getPayToWinRemovalBias(options = {}) {
   return bias;
 }
 
-function getPayToWinCostEntries(firstLeg, excludedIndices = new Set()) {
+function getPayToWinFullCourseScore(startAnalysis) {
+  if (!startAnalysis?.fullCourseRoute) return null;
+  const routeScore = Number(
+    startAnalysis.courseEstimate?.totalScore ??
+    startAnalysis.fullCourseRoute?.score
+  );
+  const trafficPenalty = Number(
+    startAnalysis.courseEstimate?.fullCourseTrafficPenalty ??
+    startAnalysis.fullCourseTrafficPenalty ??
+    0
+  );
+  if (!Number.isFinite(routeScore) || !Number.isFinite(trafficPenalty)) {
+    return null;
+  }
+  return routeScore + trafficPenalty;
+}
+
+function getPayToWinHorizonScale(horizonTurns) {
+  const turns = Number(horizonTurns);
+  if (!Number.isFinite(turns)) return 1;
+  const position = clamp(
+    (turns - PAY_TO_WIN_HORIZON_MIN_TURNS) /
+      (PAY_TO_WIN_HORIZON_MAX_TURNS - PAY_TO_WIN_HORIZON_MIN_TURNS),
+    0,
+    1
+  );
+
+  // Course horizon has two opposing effects: a longer race makes stored energy
+  // more useful (more upgrade/option opportunities), but also gives a depleted
+  // robot more time to recover it. Keep the adjustment deliberately modest;
+  // scarcity depth, not course length, should dominate the price curve.
+  return (
+    PAY_TO_WIN_HORIZON_MIN_SCALE +
+    position * (PAY_TO_WIN_HORIZON_MAX_SCALE - PAY_TO_WIN_HORIZON_MIN_SCALE)
+  );
+}
+
+function getPayToWinMarginalEnergyRegisterCost(energyNumber) {
+  const index = Math.max(1, Math.floor(energyNumber));
+  if (index < PAY_TO_WIN_ENERGY_MARGINAL_REGISTERS.length) {
+    return PAY_TO_WIN_ENERGY_MARGINAL_REGISTERS[index];
+  }
+
+  const lastIndex = PAY_TO_WIN_ENERGY_MARGINAL_REGISTERS.length - 1;
+  const lastMarginal = PAY_TO_WIN_ENERGY_MARGINAL_REGISTERS[lastIndex];
+  return lastMarginal +
+    (index - lastIndex) * PAY_TO_WIN_EXTRA_ENERGY_MARGINAL_GROWTH;
+}
+
+function buildPayToWinEnergyThresholds(startingEnergy, horizonTurns, registerScore) {
+  const denialCost = Math.max(1, startingEnergy + 1);
+  const horizonScale = getPayToWinHorizonScale(horizonTurns);
+  const thresholds = [];
+  let cumulativeRegisters = 0;
+
+  for (let energy = 1; energy <= denialCost; energy += 1) {
+    cumulativeRegisters += getPayToWinMarginalEnergyRegisterCost(energy) * horizonScale;
+    thresholds.push({
+      energy,
+      cumulativeRegisters: Number(cumulativeRegisters.toFixed(3)),
+      cumulativeScore: Number.isFinite(registerScore)
+        ? Number((cumulativeRegisters * registerScore).toFixed(2))
+        : null
+    });
+  }
+
+  return {
+    denialCost,
+    horizonScale: Number(horizonScale.toFixed(3)),
+    thresholds
+  };
+}
+
+function getPayToWinEnergyCostFromRegisterAdvantage(registerAdvantage, thresholds) {
+  if (!Number.isFinite(registerAdvantage) || registerAdvantage <= 0) {
+    return 0;
+  }
+
+  // Prices are threshold crossings, not a normalized 0..startingEnergy spread.
+  // Therefore a genuinely tight field may quite correctly price every start at
+  // zero; no code should stretch the best start upward just to use the range.
+  let energyCost = 0;
+  for (const threshold of thresholds || []) {
+    if (registerAdvantage + 1e-9 >= threshold.cumulativeRegisters) {
+      energyCost = threshold.energy;
+    } else {
+      break;
+    }
+  }
+  return energyCost;
+}
+
+function getPayToWinPricingBenchmark(tileMap, firstLeg, activeStarts, options = {}) {
+  const benchmark = typeof summarizePowerUpOpportunityBenchmark === "function"
+    ? summarizePowerUpOpportunityBenchmark(
+      tileMap,
+      activeStarts,
+      firstLeg.flags || [],
+      {
+        ...options,
+        payToWin: true,
+        // Iterative pricing can run several passes. We only need the robust
+        // productive-register scale and horizon here; the much more expensive
+        // Power Up counterfactual remains a once-per-course diagnostic.
+        skipPowerUpStrategicSamples: true
+      }
+    )
+    : null;
+  const fallbackRegisterScores = activeStarts.map((item) => {
+    const score = Number(item.fullCourseRoute?.score);
+    const actions = Number(item.fullCourseRoute?.actions);
+    return Number.isFinite(score) && Number.isFinite(actions) && actions > 0
+      ? score / actions
+      : null;
+  }).filter(Number.isFinite);
+  const measuredRegisterScore = Number(benchmark?.registerScoreMedian);
+  const registerTempoCost = Number(benchmark?.registerTempoCost);
+  const registerScore = measuredRegisterScore > 0
+    ? measuredRegisterScore
+    : (medianValue(fallbackRegisterScores) || (registerTempoCost > 0 ? registerTempoCost : 6.4));
+  const measuredTurns = Number(benchmark?.medianFullCourseTurns);
+  const fallbackTurns = medianValue(activeStarts.map((item) => {
+    const actions = Number(item.fullCourseRoute?.actions);
+    return Number.isFinite(actions) ? actions / 5 : null;
+  }));
+
+  return {
+    benchmark,
+    registerScore: Number(registerScore.toFixed(2)),
+    horizonTurns: Number((measuredTurns > 0 ? measuredTurns : fallbackTurns).toFixed(2))
+  };
+}
+
+function buildPayToWinRegisterPricingState(
+  activeStarts,
+  scoreByIndex,
+  pricingBenchmark,
+  options = {}
+) {
+  const scoredStarts = activeStarts.map((item) => {
+    const overrideScore = scoreByIndex?.get(item.index);
+    const fullScore = Number.isFinite(overrideScore)
+      ? overrideScore
+      : getPayToWinFullCourseScore(item);
+    return {
+      startAnalysis: item,
+      index: item.index,
+      adjustedScore: item.adjustedScore,
+      fullScore
+    };
+  }).filter((entry) => Number.isFinite(entry.fullScore));
+
+  if (!scoredStarts.length) {
+    return {
+      entries: [],
+      costUnit: pricingBenchmark?.registerScore ?? 1,
+      minScore: 0,
+      maxScore: 0,
+      pricingModel: null
+    };
+  }
+
+  const worst = [...scoredStarts].sort((left, right) =>
+    right.fullScore - left.fullScore || left.index - right.index
+  )[0];
+  const registerScore = Math.max(0.01, Number(pricingBenchmark?.registerScore) || 6.4);
+  const startingEnergy = getCourseStartingEnergy(options);
+  const curve = buildPayToWinEnergyThresholds(
+    startingEnergy,
+    pricingBenchmark?.horizonTurns,
+    registerScore
+  );
+  const entries = scoredStarts.map((entry) => {
+    const advantage = Math.max(0, worst.fullScore - entry.fullScore);
+    const registerEquivalent = advantage / registerScore;
+    return {
+      ...entry,
+      advantage: Number(advantage.toFixed(2)),
+      registerEquivalent: Number(registerEquivalent.toFixed(2)),
+      energyCost: getPayToWinEnergyCostFromRegisterAdvantage(
+        registerEquivalent,
+        curve.thresholds
+      )
+    };
+  });
+
+  // The zero-price anchor intentionally belongs to the CURRENT surviving field.
+  // Pay to Win is allowed to prune from either end: removing the weakest start
+  // moves this baseline inward and compresses prices, while removing the strongest
+  // usually leaves zero in place and trims the expensive/easy end. Recomputing the
+  // anchor after every pass is therefore a game-design feature, not incidental math.
+  const pricingModel = {
+    method: "moving-baseline-register-equivalent-v1",
+    baselineIndex: worst.index,
+    baselineFullScore: Number(worst.fullScore.toFixed(2)),
+    registerScore,
+    horizonTurns: pricingBenchmark?.horizonTurns ?? null,
+    horizonScale: curve.horizonScale,
+    thresholds: curve.thresholds,
+    startingEnergy,
+    denialCost: curve.denialCost,
+    maxRegisterAdvantage: Number(Math.max(
+      0,
+      ...entries.map((entry) => entry.registerEquivalent)
+    ).toFixed(2))
+  };
+
+  return {
+    entries,
+    // Compatibility field: this used to be the arbitrary score-normalization
+    // unit. In v36 it is the measured score value of one productive register.
+    costUnit: registerScore,
+    minScore: Math.min(...scoredStarts.map((entry) => entry.fullScore)),
+    maxScore: Math.max(...scoredStarts.map((entry) => entry.fullScore)),
+    pricingModel
+  };
+}
+
+function getPayToWinCostEntries(firstLeg, tileMap, excludedIndices = new Set(), options = {}) {
+  const activeStarts = (firstLeg.starts || []).filter((item) => (
+    item.reachable &&
+    item.selectedRoute &&
+    item.fullCourseRoute &&
+    Number.isFinite(item.adjustedScore) &&
+    !excludedIndices.has(item.index)
+  ));
+
+  if (!activeStarts.length) {
+    return { entries: [], costUnit: 1, minScore: 0, maxScore: 0, pricingModel: null };
+  }
+
+  const pricingBenchmark = getPayToWinPricingBenchmark(
+    tileMap,
+    firstLeg,
+    activeStarts,
+    options
+  );
+  return buildPayToWinRegisterPricingState(
+    activeStarts,
+    null,
+    pricingBenchmark,
+    options
+  );
+}
+
+function getLegacyPayToWinCostEntries(firstLeg, excludedIndices = new Set()) {
   const activeStarts = (firstLeg.starts || []).filter((item) => (
     item.reachable &&
     item.selectedRoute &&
     Number.isFinite(item.adjustedScore) &&
     !excludedIndices.has(item.index)
   ));
-
   if (!activeStarts.length) {
     return { entries: [], costUnit: 1, minScore: 0, maxScore: 0 };
   }
-
   const adjustedScores = activeStarts.map((item) => item.adjustedScore);
   const minScore = Math.min(...adjustedScores);
   const maxScore = Math.max(...adjustedScores);
   const costUnit = Math.max(1, minScore / 10);
-  const entries = activeStarts.map((item) => ({
-    startAnalysis: item,
-    index: item.index,
-    adjustedScore: item.adjustedScore,
-    energyCost: Math.max(0, Math.floor((maxScore - item.adjustedScore) / costUnit))
-  }));
-
   return {
-    entries,
+    entries: activeStarts.map((item) => ({
+      startAnalysis: item,
+      index: item.index,
+      adjustedScore: item.adjustedScore,
+      energyCost: Math.max(0, Math.floor((maxScore - item.adjustedScore) / costUnit))
+    })),
     costUnit: Number(costUnit.toFixed(2)),
     minScore,
     maxScore
@@ -7589,6 +7846,7 @@ function getPayToWinLateCostEntries(
       )
     );
     const scenarioScores = [];
+    const scenarioFullScores = [];
 
     for (
       let selector = config.lateSelectorStart;
@@ -7655,6 +7913,9 @@ function getPayToWinLateCostEntries(
 
         if (Number.isFinite(lateAdjustedScore)) {
           scenarioScores.push(lateAdjustedScore);
+          if (Number.isFinite(scenario.fullTotal)) {
+            scenarioFullScores.push(scenario.fullTotal);
+          }
           scenarioSamples += 1;
         }
       }
@@ -7662,9 +7923,14 @@ function getPayToWinLateCostEntries(
 
     scoreByIndex.set(
       item.index,
-      scenarioScores.length
-        ? averageValues(scenarioScores)
-        : item.adjustedScore
+      {
+        adjusted: scenarioScores.length
+          ? averageValues(scenarioScores)
+          : item.adjustedScore,
+        full: scenarioFullScores.length
+          ? averageValues(scenarioFullScores)
+          : baselineFullTotal
+      }
     );
   }
 
@@ -7673,34 +7939,49 @@ function getPayToWinLateCostEntries(
     index: item.index,
     adjustedScore: item.adjustedScore,
     lateAdjustedScore: Number(
-      (scoreByIndex.get(item.index) ?? item.adjustedScore).toFixed(2)
+      (scoreByIndex.get(item.index)?.adjusted ?? item.adjustedScore).toFixed(2)
+    ),
+    lateFullScore: Number(
+      (scoreByIndex.get(item.index)?.full ?? (item.courseEstimate?.totalScore ?? item.fullCourseRoute?.score ?? 0)).toFixed(2)
     )
   }));
-  const lateScores = scoredStarts.map((item) => item.lateAdjustedScore);
-  const minScore = Math.min(...lateScores);
-  const maxScore = Math.max(...lateScores);
-  const costUnit = Math.max(1, minScore / 10);
-  const entries = scoredStarts.map((item) => {
-    const calculatedLateEnergyCost = Math.max(
-      0,
-      Math.floor(
-        (maxScore - item.lateAdjustedScore) / costUnit
-      )
-    );
-
+  const lateFullScoreByIndex = new Map(
+    scoredStarts.map((item) => [item.index, item.lateFullScore])
+  );
+  const pricingBenchmark = getPayToWinPricingBenchmark(
+    tileMap,
+    firstLeg,
+    activeStarts,
+    options
+  );
+  const pricingState = buildPayToWinRegisterPricingState(
+    activeStarts,
+    lateFullScoreByIndex,
+    pricingBenchmark,
+    options
+  );
+  const scoredByIndex = new Map(scoredStarts.map((item) => [item.index, item]));
+  const denialCost = getPayToWinDenialCost(options);
+  const entries = pricingState.entries.map((entry) => {
+    const scored = scoredByIndex.get(entry.index) ?? {};
     return {
-      ...item,
-      calculatedLateEnergyCost,
-      lateEnergyCost: calculatedLateEnergyCost,
-      lateUnavailable: calculatedLateEnergyCost >= getPayToWinDenialCost(options)
+      ...entry,
+      lateAdjustedScore: scored.lateAdjustedScore ?? entry.adjustedScore,
+      lateFullScore: scored.lateFullScore ?? entry.fullScore,
+      lateAdvantage: entry.advantage,
+      lateRegisterEquivalent: entry.registerEquivalent,
+      calculatedLateEnergyCost: entry.energyCost,
+      lateEnergyCost: entry.energyCost,
+      lateUnavailable: entry.energyCost >= denialCost
     };
   });
 
   return {
     entries,
-    costUnit: Number(costUnit.toFixed(2)),
-    minScore,
-    maxScore,
+    costUnit: pricingState.costUnit,
+    minScore: pricingState.minScore,
+    maxScore: pricingState.maxScore,
+    pricingModel: pricingState.pricingModel,
     scenarioSamples,
     ...config
   };
@@ -7740,18 +8021,26 @@ function choosePayToWinPruneEntry(entries, options = {}) {
     return null;
   }
 
+  // Pruning direction is intentionally tied to the requested course character.
+  // Full-course score is used here (rather than opening adjustedScore) because
+  // removing an endpoint is meant to reshape the race players actually play:
+  // high score = weaker/longer/harder start, low score = stronger/shorter/easier.
   const bias = getPayToWinRemovalBias(options);
   if (bias > 0) {
-    return [...entries].sort((left, right) => right.adjustedScore - left.adjustedScore || left.index - right.index)[0];
+    return [...entries].sort((left, right) =>
+      right.fullScore - left.fullScore || left.index - right.index
+    )[0];
   }
   if (bias < 0) {
-    return [...entries].sort((left, right) => left.adjustedScore - right.adjustedScore || left.index - right.index)[0];
+    return [...entries].sort((left, right) =>
+      left.fullScore - right.fullScore || left.index - right.index
+    )[0];
   }
 
-  const meanScore = averageValues(entries.map((entry) => entry.adjustedScore));
+  const meanScore = averageValues(entries.map((entry) => entry.fullScore));
   return [...entries].sort((left, right) => (
-    Math.abs(right.adjustedScore - meanScore) - Math.abs(left.adjustedScore - meanScore) ||
-    left.adjustedScore - right.adjustedScore ||
+    Math.abs(right.fullScore - meanScore) - Math.abs(left.fullScore - meanScore) ||
+    left.fullScore - right.fullScore ||
     left.index - right.index
   ))[0];
 }
@@ -7822,6 +8111,142 @@ function runIterativeStartBalancing(firstLeg, tileMap, playerCount, analysisOpti
   };
 }
 
+function buildPayToWinEnergyShadow(firstLeg, tileMap, playerCount, options = {}, lateCostState = null, eligibleIndices = null, comparisonState = {}) {
+  const eligibleSet = Array.isArray(eligibleIndices) ? new Set(eligibleIndices) : null;
+  const activeStarts = (firstLeg.starts || []).filter((item) => (
+    item.reachable &&
+    item.selectedRoute &&
+    item.fullCourseRoute &&
+    Number.isFinite(item.adjustedScore) &&
+    (!eligibleSet || eligibleSet.has(item.index))
+  ));
+  const benchmark = typeof summarizePowerUpOpportunityBenchmark === "function"
+    ? summarizePowerUpOpportunityBenchmark(
+      tileMap,
+      activeStarts,
+      firstLeg.flags || [],
+      {
+        ...options,
+        playerCount,
+        payToWin: true
+      }
+    )
+    : null;
+  const registerScore = Number(benchmark?.registerScoreMedian);
+  const usableRegisterScore = Number.isFinite(registerScore) && registerScore > 0
+    ? registerScore
+    : null;
+  const fullScores = activeStarts.map((item) => ({
+    index: item.index,
+    fullScore: getPayToWinFullCourseScore(item)
+  })).filter((entry) => Number.isFinite(entry.fullScore));
+  const worstFullScore = fullScores.length
+    ? Math.max(...fullScores.map((entry) => entry.fullScore))
+    : null;
+  const lateByIndex = new Map((lateCostState?.entries ?? []).map((entry) => [entry.index, entry]));
+  const initialCostByIndex = comparisonState.initialCostByIndex instanceof Map
+    ? comparisonState.initialCostByIndex
+    : new Map();
+  const finalCostByIndex = comparisonState.finalCostByIndex instanceof Map
+    ? comparisonState.finalCostByIndex
+    : new Map();
+  const legacyInitialCostByIndex = comparisonState.legacyInitialCostByIndex instanceof Map
+    ? comparisonState.legacyInitialCostByIndex
+    : new Map();
+  const prunedIndices = comparisonState.prunedIndices instanceof Set
+    ? comparisonState.prunedIndices
+    : new Set(comparisonState.prunedIndices ?? []);
+  const fullyUnavailableIndices = comparisonState.fullyUnavailableIndices instanceof Set
+    ? comparisonState.fullyUnavailableIndices
+    : new Set(comparisonState.fullyUnavailableIndices ?? []);
+  const finiteLateFullScores = [...lateByIndex.values()]
+    .map((entry) => entry.lateFullScore)
+    .filter(Number.isFinite);
+  const worstLateFullScore = finiteLateFullScores.length
+    ? Math.max(...finiteLateFullScores)
+    : null;
+
+  return {
+    active: true,
+    method: "all-validated-moving-baseline-register-equivalent-v1",
+    validatedStartCount: activeStarts.length,
+    offeredStartCount: activeStarts.filter((item) => (
+      !prunedIndices.has(item.index) && !fullyUnavailableIndices.has(item.index)
+    )).length,
+    benchmark,
+    initialPricingModel: comparisonState.initialPricingModel ?? null,
+    finalPricingModel: comparisonState.finalPricingModel ?? null,
+    worstFullScore: Number.isFinite(worstFullScore) ? Number(worstFullScore.toFixed(2)) : null,
+    worstLateFullScore: Number.isFinite(worstLateFullScore) ? Number(worstLateFullScore.toFixed(2)) : null,
+    starts: fullScores.map((entry) => {
+      const advantage = Number.isFinite(worstFullScore)
+        ? Math.max(0, worstFullScore - entry.fullScore)
+        : 0;
+      const lateEntry = lateByIndex.get(entry.index);
+      const lateAdvantage = Number.isFinite(worstLateFullScore) && Number.isFinite(lateEntry?.lateFullScore)
+        ? Math.max(0, worstLateFullScore - lateEntry.lateFullScore)
+        : null;
+      return {
+        index: entry.index,
+        fullScore: Number(entry.fullScore.toFixed(2)),
+        advantage: Number(advantage.toFixed(2)),
+        registerEquivalent: usableRegisterScore
+          ? Number((advantage / usableRegisterScore).toFixed(2))
+          : null,
+        lateFullScore: Number.isFinite(lateEntry?.lateFullScore)
+          ? Number(lateEntry.lateFullScore.toFixed(2))
+          : null,
+        lateAdvantage: Number.isFinite(lateAdvantage)
+          ? Number(lateAdvantage.toFixed(2))
+          : null,
+        lateRegisterEquivalent: usableRegisterScore && Number.isFinite(lateAdvantage)
+          ? Number((lateAdvantage / usableRegisterScore).toFixed(2))
+          : null,
+        lateEnergyCost: Number.isFinite(lateEntry?.lateEnergyCost)
+          ? lateEntry.lateEnergyCost
+          : null,
+        lateUnavailable: Boolean(lateEntry?.lateUnavailable),
+        initialEnergyCost: initialCostByIndex.has(entry.index)
+          ? initialCostByIndex.get(entry.index)
+          : null,
+        finalEnergyCost: finalCostByIndex.has(entry.index)
+          ? finalCostByIndex.get(entry.index)
+          : null,
+        legacyInitialCost: legacyInitialCostByIndex.has(entry.index)
+          ? legacyInitialCostByIndex.get(entry.index)
+          : null,
+        pruned: prunedIndices.has(entry.index),
+        fullyUnavailable: fullyUnavailableIndices.has(entry.index),
+        offered: !prunedIndices.has(entry.index) && !fullyUnavailableIndices.has(entry.index)
+      };
+    })
+  };
+}
+
+function buildInactivePayToWinLateCostState(costState, denialCost) {
+  return {
+    active: false,
+    entries: (costState.entries ?? []).map((entry) => ({
+      ...entry,
+      lateAdjustedScore: entry.adjustedScore,
+      lateFullScore: entry.fullScore ?? getPayToWinFullCourseScore(entry.startAnalysis),
+      lateAdvantage: entry.advantage,
+      lateRegisterEquivalent: entry.registerEquivalent,
+      lateEnergyCost: entry.energyCost,
+      lateUnavailable: entry.energyCost >= denialCost
+    })),
+    costUnit: costState.costUnit,
+    minScore: costState.minScore,
+    maxScore: costState.maxScore,
+    pricingModel: costState.pricingModel ?? null,
+    scenarioSamples: 0,
+    lateSelectorStart: null,
+    lateSelectorEnd: null,
+    latePlayerCount: 0,
+    surplusStarts: 0
+  };
+}
+
 function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {}) {
   const analysisOptions = getPayToWinAnalysisOptions({
     ...options,
@@ -7829,13 +8254,29 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
     payToWin: true
   }, playerCount);
   const bias = getPayToWinRemovalBias(options);
+  // Capture the whole coherent field before v36 pruning. This lets diagnostics
+  // show both the initial moving-baseline prices and the final repriced field.
+  // The old v35 formula is retained only as a one-pass comparison number; it no
+  // longer decides which starts players are offered.
+  const shadowInitialCostState = getPayToWinCostEntries(
+    firstLeg,
+    tileMap,
+    new Set(),
+    options
+  );
+  const legacyInitialCostState = getLegacyPayToWinCostEntries(firstLeg, new Set());
+  const shadowDenialCost = getPayToWinDenialCost(options);
   const result = runIterativeStartBalancing(
     firstLeg,
     tileMap,
     playerCount,
     analysisOptions,
     ({ currentFirstLeg, excludedIndices }) => {
-      const costState = getPayToWinCostEntries(currentFirstLeg, excludedIndices);
+      // Recompute both the moving zero and the register/horizon benchmark after
+      // every endpoint removal. Pruning is allowed to change the character of
+      // the offered course, so its energy economy should follow that new field
+      // rather than remain frozen to the original eight-start audition.
+      const costState = getPayToWinCostEntries(currentFirstLeg, tileMap, excludedIndices, options);
       // Never price-prune below the number of robots that must be able to start.
       if (costState.entries.length <= playerCount) {
         return null;
@@ -7862,7 +8303,10 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
       return {
         index: removed.index,
         score: removed.adjustedScore,
+        fullScore: removed.fullScore,
         energyCost: removed.energyCost,
+        registerEquivalent: removed.registerEquivalent,
+        pricingModel: costState.pricingModel,
         reason: bias > 0
           ? "removed weakest start for a short/easier setup"
           : bias < 0
@@ -7876,19 +8320,25 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
   const { currentFirstLeg, excludedIndices, removals: pruned } = result;
   const startingEnergy = getCourseStartingEnergy(options);
   const denialCost = getPayToWinDenialCost(options);
-  const finalCostState = getPayToWinCostEntries(currentFirstLeg, excludedIndices);
+  const finalCostState = getPayToWinCostEntries(currentFirstLeg, tileMap, excludedIndices, options);
   const costByIndex = new Map(finalCostState.entries.map((entry) => [entry.index, entry.energyCost]));
   const earlyUnavailableByIndex = new Map(finalCostState.entries.map((entry) => [
     entry.index,
     entry.energyCost >= denialCost
   ]));
-  const lateCostState = getPayToWinLateCostEntries(
-    currentFirstLeg,
-    tileMap,
-    excludedIndices,
-    playerCount,
-    options
-  );
+  // Surplus choices are the prerequisite for the late-selector information
+  // advantage. If every surviving start must be occupied, later selectors know
+  // more but have no meaningful choice to exploit, so there is no second layer.
+  const latePricingActive = finalCostState.entries.length > playerCount;
+  const lateCostState = latePricingActive
+    ? getPayToWinLateCostEntries(
+      currentFirstLeg,
+      tileMap,
+      excludedIndices,
+      playerCount,
+      options
+    )
+    : buildInactivePayToWinLateCostState(finalCostState, denialCost);
   const lateCostByIndex = new Map(lateCostState.entries.map((entry) => [entry.index, entry.lateEnergyCost]));
   const lateUnavailableByIndex = new Map(lateCostState.entries.map((entry) => [entry.index, entry.lateUnavailable]));
   const lateAdjustedScoreByIndex = new Map(lateCostState.entries.map((entry) => [entry.index, entry.lateAdjustedScore]));
@@ -7911,28 +8361,63 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
     earlyAvailabilityValid &&
     lateAvailabilityValid
   );
-  const hasLatePriceDifference = lateCostState.entries.some((entry) => (
-    costByIndex.has(entry.index) &&
-    (
-      earlyUnavailableByIndex.get(entry.index) ||
-      entry.lateUnavailable ||
-      entry.lateEnergyCost !== costByIndex.get(entry.index)
-    )
-  ));
-  const latePriceHigherCount = lateCostState.entries.filter((entry) => (
+  // The late model may run internally and still collapse to the same integer
+  // prices. Slash notation/rules text is player-facing only when price or
+  // selector-specific availability actually changes.
+  const hasLatePriceDifference = latePricingActive && lateCostState.entries.some((entry) => {
+    if (!costByIndex.has(entry.index)) return false;
+    const earlyUnavailable = earlyUnavailableByIndex.get(entry.index) ?? false;
+    const lateUnavailable = Boolean(entry.lateUnavailable);
+    if (earlyUnavailable !== lateUnavailable) return true;
+    if (earlyUnavailable && lateUnavailable) return false;
+    return entry.lateEnergyCost !== costByIndex.get(entry.index);
+  });
+  const latePriceHigherCount = latePricingActive ? lateCostState.entries.filter((entry) => (
     costByIndex.has(entry.index) &&
     !earlyUnavailableByIndex.get(entry.index) &&
     !entry.lateUnavailable &&
     entry.lateEnergyCost > costByIndex.get(entry.index)
-  )).length;
-  const latePriceLowerCount = lateCostState.entries.filter((entry) => (
+  )).length : 0;
+  const latePriceLowerCount = latePricingActive ? lateCostState.entries.filter((entry) => (
     costByIndex.has(entry.index) &&
     !earlyUnavailableByIndex.get(entry.index) &&
     !entry.lateUnavailable &&
     entry.lateEnergyCost < costByIndex.get(entry.index)
-  )).length;
+  )).length : 0;
   const activeScores = finalCostState.entries.map((entry) => entry.adjustedScore);
   const meanScore = activeScores.length ? averageValues(activeScores) : 0;
+  const shadowLatePricingActive = shadowInitialCostState.entries.length > playerCount;
+  // Reuse the normal late calculation when pruning did not change the field.
+  // Otherwise evaluate the full initial field once so diagnostics can compare
+  // the same late-selector traffic model before and after endpoint pruning.
+  const shadowLateCostState = shadowLatePricingActive
+    ? (pruned.length === 0 && shadowInitialCostState.entries.length === finalCostState.entries.length
+      ? lateCostState
+      : getPayToWinLateCostEntries(
+        firstLeg,
+        tileMap,
+        new Set(),
+        playerCount,
+        options
+      ))
+    : buildInactivePayToWinLateCostState(shadowInitialCostState, shadowDenialCost);
+  const energyShadow = buildPayToWinEnergyShadow(
+    firstLeg,
+    tileMap,
+    playerCount,
+    options,
+    shadowLateCostState,
+    shadowInitialCostState.entries.map((entry) => entry.index),
+    {
+      initialCostByIndex: new Map(shadowInitialCostState.entries.map((entry) => [entry.index, entry.energyCost])),
+      finalCostByIndex: costByIndex,
+      legacyInitialCostByIndex: new Map(legacyInitialCostState.entries.map((entry) => [entry.index, entry.energyCost])),
+      prunedIndices: new Set(pruned.map((entry) => entry.index)),
+      fullyUnavailableIndices,
+      initialPricingModel: shadowInitialCostState.pricingModel,
+      finalPricingModel: finalCostState.pricingModel
+    }
+  );
   const prunedOutliers = pruned.map((item) => ({
     index: item.index,
     score: item.score,
@@ -7983,14 +8468,22 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
         denialCost,
         costUnit: finalCostState.costUnit,
         lateCostUnit: lateCostState.costUnit,
+        pricingModel: finalCostState.pricingModel,
+        initialPricingModel: shadowInitialCostState.pricingModel,
+        latePricingModel: lateCostState.pricingModel ?? null,
+        legacyInitialCostUnit: legacyInitialCostState.costUnit,
         pruned,
         pricedStartCount,
         trafficScaleMultiplier: getPayToWinTrafficScaleMultiplier(playerCount),
         lateSelectorStart: lateCostState.lateSelectorStart,
         lateSelectorEnd: lateCostState.lateSelectorEnd,
         surplusStarts: Math.max(0, pricedStartCount - playerCount),
-        lateTrafficModel: "conditional-draft",
+        latePricingActive,
+        lateTrafficModel: latePricingActive ? "conditional-draft" : "inactive-no-surplus",
         lateScenarioSamples: lateCostState.scenarioSamples,
+        shadowLatePricingActive,
+        shadowLateScenarioSamples: shadowLateCostState.scenarioSamples,
+        energyShadow,
         earlyUnavailableCount,
         maxEarlyUnavailable,
         earlyAvailabilityValid,
@@ -8376,6 +8869,14 @@ function buildCoursePreflightSequence(tileMap, starts, flags, playerCount, optio
     { maxActions: 16 }
   );
   const firstGoal = flags[0];
+  const requiredOpeningCount = getCoursePreflightOpeningMinimum(
+    starts.length,
+    playerCount,
+    options
+  );
+  const openingPoolPolicy = options.payToWin
+    ? getReusableRoutePoolPolicy(starts.length, playerCount, options)
+    : null;
   const opening = analyzeCourse(tileMap, starts, firstGoal, {
     flags: [firstGoal],
     maxRoutes: 1,
@@ -8383,6 +8884,9 @@ function buildCoursePreflightSequence(tileMap, starts, flags, playerCount, optio
     playerCount,
     maxActions: COURSE_PREFLIGHT_OPENING_MAX_ACTIONS,
     maxExpansions: COURSE_PREFLIGHT_OPENING_EXPANSIONS,
+    requiredReachableStarts: requiredOpeningCount,
+    preferredReachableStarts: openingPoolPolicy?.targetCount ?? null,
+    stopWhenPreferredReachableLost: Boolean(options.payToWin),
     recoveryRule: options.recoveryRule,
     ...getRouteAnalysisVariantOptions(options),
     startupSpinUp: options.startupSpinUp,
@@ -8393,11 +8897,6 @@ function buildCoursePreflightSequence(tileMap, starts, flags, playerCount, optio
   const routedOpening = opening.starts.filter((analysis) => (
     analysis.reachable && analysis.selectedRoute
   ));
-  const requiredOpeningCount = getCoursePreflightOpeningMinimum(
-    starts.length,
-    playerCount,
-    options
-  );
 
   const normalOpeningPruning = (
     !options.competitiveMode &&
@@ -8543,7 +9042,10 @@ function getReusableRoutePoolPolicy(availableCount, playerCount, options = {}) {
     return {
       mode,
       requiredCount,
-      targetCount: Math.min(availableCount, requiredCount)
+      // Competitive is the one mode where every physical starting space must
+      // receive a coherent evaluation. The 2P value is the acceptance floor,
+      // not a shortlist target.
+      targetCount: availableCount
     };
   }
   if (mode === "pay-to-win") {
@@ -8639,7 +9141,11 @@ function buildReusableRoutePool(tileMap, starts, flags, playerCount, coursePrefl
     analysis.selectedRoute &&
     !excluded.has(analysis.index)
   ));
-  const policy = getReusableRoutePoolPolicy(routedOpening.length, playerCount, options);
+  const policy = getReusableRoutePoolPolicy(
+    options.competitiveMode ? starts.length : routedOpening.length,
+    playerCount,
+    options
+  );
   if (routedOpening.length < policy.requiredCount) {
     return {
       valid: false,
@@ -8653,11 +9159,15 @@ function buildReusableRoutePool(tileMap, starts, flags, playerCount, coursePrefl
     };
   }
 
-  const selectedSet = selectDiverseModeOpeningPool(
-    routedOpening,
-    policy.targetCount,
-    options
-  );
+  const selectedSet = options.competitiveMode
+    ? new Set(starts.map((start, index) => (
+      Number.isInteger(start.analysisIndex) ? start.analysisIndex : index
+    )))
+    : selectDiverseModeOpeningPool(
+      routedOpening,
+      policy.targetCount,
+      options
+    );
   const candidateOpeningAnalyses = routedOpening.filter((analysis) => selectedSet.has(analysis.index));
   const candidateStarts = starts.filter((start, index) => {
     const sourceIndex = Number.isInteger(start.analysisIndex) ? start.analysisIndex : index;
@@ -8687,6 +9197,8 @@ function buildReusableRoutePool(tileMap, starts, flags, playerCount, coursePrefl
       contextualLegSearch: true,
       contextualEarlyExit: true,
       contextualRequiredStarts: policy.requiredCount,
+      contextualPreferredStarts: policy.mode === "pay-to-win" ? policy.targetCount : null,
+      contextualStopWhenPreferredLost: policy.mode === "pay-to-win",
       contextualOpeningSeedAnalyses: candidateOpeningAnalyses,
       contextualOpeningRoutes: 1,
       contextualLaterRoutes: 1,
@@ -8704,7 +9216,7 @@ function buildReusableRoutePool(tileMap, starts, flags, playerCount, coursePrefl
     const health = error.contextualSearchHealth ?? {};
     return {
       valid: false,
-      reason: `${policy.mode} coherent pool kept ${health.survivingStarts ?? 0}/${policy.requiredCount} required starts through leg ${health.legNumber ?? "?"}`,
+      reason: `${policy.mode} coherent pool kept ${health.survivingStarts ?? 0}/${policy.requiredCount} routed starts through leg ${health.legNumber ?? "?"}${Number.isFinite(health.maximumPossibleStarts) ? ` (at most ${health.maximumPossibleStarts} could still survive)` : ""}`,
       ...policy,
       sourceOpeningCount: routedOpening.length,
       candidateCount: candidateStarts.length,
@@ -9186,6 +9698,8 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
       contextualSeedStartAnalyses: options.contextualSeedStartAnalyses,
       contextualOpeningSeedAnalyses: options.contextualOpeningSeedAnalyses,
       contextualRequiredStarts: options.contextualRequiredStarts,
+      contextualPreferredStarts: options.contextualPreferredStarts,
+      contextualStopWhenPreferredLost: options.contextualStopWhenPreferredLost,
       contextualOpeningExpansions: options.contextualOpeningExpansions,
       contextualLaterExpansions: options.contextualLaterExpansions,
       contextualLegMaxActions: options.contextualLegMaxActions,
@@ -9454,13 +9968,28 @@ function adjustStartOutliersForCourseLength(firstLeg, totalLength, tileMap, play
   };
 }
 
+function isCourseReachableStartAnalysis(startAnalysis) {
+  if (!startAnalysis?.reachable) return false;
+  // Once contextual full-course fields exist, an opening-only route is not
+  // enough to call the start reachable or usable for the generated course.
+  if (Object.prototype.hasOwnProperty.call(startAnalysis, "fullCourseRoute")) {
+    return Boolean(startAnalysis.fullCourseRoute);
+  }
+  return true;
+}
+
+function computeCourseReachableStarts(firstLeg) {
+  return (firstLeg?.starts ?? []).filter(isCourseReachableStartAnalysis);
+}
+
 function computeUsableStarts(firstLeg, preferences = {}) {
+  const courseReachable = computeCourseReachableStarts(firstLeg);
   if (preferences.competitiveMode || preferences.virtualBots) {
-    return firstLeg.starts.filter((startAnalysis) => startAnalysis.reachable);
+    return courseReachable;
   }
 
-  const outlierSet = new Set(firstLeg.summary.outliers.map((item) => item.index));
-  return firstLeg.starts.filter((startAnalysis) => startAnalysis.reachable && !outlierSet.has(startAnalysis.index));
+  const outlierSet = new Set((firstLeg.summary.outliers ?? []).map((item) => item.index));
+  return courseReachable.filter((startAnalysis) => !outlierSet.has(startAnalysis.index));
 }
 
 function hasStartCapacityHardFailure(scenario) {
@@ -10650,6 +11179,7 @@ function getFinalLegAnticlimax(sequence, preferences = {}) {
 }
 
 function classifyCandidate(sequence, preferences, context = {}) {
+  const reachableStarts = computeCourseReachableStarts(sequence.firstLeg);
   const usableStarts = computeUsableStarts(sequence.firstLeg, preferences);
   const boardHarshness = computeBoardHarshness(context.boardPlacements, context.pieceMap);
   const fairnessStdDev = sequence.firstLeg.summary.scoreStdDev;
@@ -10700,7 +11230,7 @@ function classifyCandidate(sequence, preferences, context = {}) {
     hardFailures.push("usable-starts");
   }
 
-  if (sequence.firstLeg.summary.reachableStarts < preferences.playerCount) {
+  if (reachableStarts.length < preferences.playerCount) {
     hardFailures.push("reachable-starts");
   }
 
@@ -10778,6 +11308,7 @@ function classifyCandidate(sequence, preferences, context = {}) {
   );
 
   return {
+    reachableStarts: reachableStarts.length,
     usableStarts,
     difficultyRaw,
     lengthRaw,
@@ -10866,7 +11397,7 @@ function buildScenarioCopySummary(scenario) {
       if (Number.isFinite(detail.difficultyRaw)) profileBits.push(`difficulty ${detail.difficultyRaw}`);
       if (Number.isFinite(detail.lengthRaw)) profileBits.push(`length ${detail.lengthRaw}`);
       lines.push(
-        `Preflight rejection e${event.evaluation ?? "?"}: opening ${detail.openingRoutedCount ?? 0}/${detail.requiredOpeningCount ?? "?"}, intrinsic pruned ${(detail.intrinsicPruned ?? []).length}, ${detail.work?.expansions ?? event.routeExpansions ?? 0} exp/${detail.work?.capped ?? event.cappedRouteSearches ?? 0} capped${profileBits.length ? `, rough ${profileBits.join(", ")}` : ""}`
+        `Preflight rejection e${event.evaluation ?? "?"}: opening ${detail.openingRoutedCount ?? 0}/${detail.requiredOpeningCount ?? "?"}, searched ${detail.openingSearchedCount ?? "?"}${detail.openingUnresolvedCount ? ` (+${detail.openingUnresolvedCount} unresolved)` : ""}, intrinsic pruned ${(detail.intrinsicPruned ?? []).length}, ${detail.work?.expansions ?? event.routeExpansions ?? 0} exp/${detail.work?.capped ?? event.cappedRouteSearches ?? 0} capped${profileBits.length ? `, rough ${profileBits.join(", ")}` : ""}`
       );
     }
 
@@ -10877,7 +11408,17 @@ function buildScenarioCopySummary(scenario) {
       const detail = event.diagnostics.routePool;
       const health = detail.failureHealth ?? {};
       lines.push(
-        `Route-pool rejection e${event.evaluation ?? "?"}: ${detail.mode ?? "course"}, opening ${detail.sourceOpeningCount ?? 0}, candidates ${detail.candidateCount ?? 0}, coherent ${detail.coherentRoutedCount ?? 0}/${detail.requiredCount ?? "?"}, ${detail.work?.expansions ?? event.routeExpansions ?? 0} exp/${detail.work?.capped ?? event.cappedRouteSearches ?? 0} capped${health.legNumber ? `, failed after leg ${health.legNumber}` : ""}`
+        `Route-pool rejection e${event.evaluation ?? "?"}: ${detail.mode ?? "course"}, opening ${detail.sourceOpeningCount ?? 0}, candidates ${detail.candidateCount ?? 0}, coherent ${detail.coherentRoutedCount ?? 0}/${detail.requiredCount ?? "?"}, ${detail.work?.expansions ?? event.routeExpansions ?? 0} exp/${detail.work?.capped ?? event.cappedRouteSearches ?? 0} capped${health.legNumber ? `, failed after leg ${health.legNumber}` : ""}${Number.isFinite(health.maximumPossibleStarts) ? `, max possible ${health.maximumPossibleStarts}` : ""}${Number.isFinite(health.processedStartsThisLeg) ? ` after ${health.processedStartsThisLeg} checked` : ""}`
+      );
+    }
+
+    const targetGateFailureEvents = (diagnostics.rejectionEvents ?? []).filter(
+      (event) => event.diagnostics?.targetGate
+    );
+    for (const event of targetGateFailureEvents.slice(0, 8)) {
+      const detail = event.diagnostics.targetGate;
+      lines.push(
+        `Target-gate rejection e${event.evaluation ?? "?"}: difficulty ${detail.difficultyRaw ?? "?"}, length ${detail.lengthRaw ?? "?"}, fit-length ${detail.lengthFitRaw ?? "?"}, pool ${detail.routePoolSurvivors ?? 0}/${detail.routePoolRequired ?? "?"}, ${detail.work?.expansions ?? event.routeExpansions ?? 0} pool exp/${detail.work?.capped ?? event.cappedRouteSearches ?? 0} capped`
       );
     }
 
@@ -10905,7 +11446,7 @@ function buildScenarioCopySummary(scenario) {
   const acceptedPreflight = summary.coursePreflight ?? null;
   if (acceptedPreflight?.active) {
     lines.push(
-      `Preflight: opening ${acceptedPreflight.openingRoutedCount ?? 0}/${acceptedPreflight.requiredOpeningCount ?? "?"}, intrinsic pruned ${(acceptedPreflight.intrinsicPruned ?? []).length}, rough difficulty ${acceptedPreflight.difficultyRaw ?? "n/a"}, length ${acceptedPreflight.lengthRaw ?? "n/a"}, ${acceptedPreflight.routeExpansions ?? 0} exp/${acceptedPreflight.cappedRouteSearches ?? 0} capped, no traffic`
+      `Preflight: opening ${acceptedPreflight.openingRoutedCount ?? 0}/${acceptedPreflight.requiredOpeningCount ?? "?"}, searched ${acceptedPreflight.openingSearchedCount ?? "?"}${acceptedPreflight.openingUnresolvedCount ? ` (+${acceptedPreflight.openingUnresolvedCount} unresolved)` : ""}, intrinsic pruned ${(acceptedPreflight.intrinsicPruned ?? []).length}, rough difficulty ${acceptedPreflight.difficultyRaw ?? "n/a"}, length ${acceptedPreflight.lengthRaw ?? "n/a"}, ${acceptedPreflight.routeExpansions ?? 0} exp/${acceptedPreflight.cappedRouteSearches ?? 0} capped, no traffic`
     );
     if (acceptedPreflight.routePool) {
       const pool = acceptedPreflight.routePool;
@@ -10934,9 +11475,14 @@ function buildScenarioCopySummary(scenario) {
     `Course: ${scenario.boardCount ?? scenario.mainBoardIds?.length ?? 0} board(s), ${playableCheckpoints.length} flag(s)`,
     `Boards: ${(scenario.mainBoardIds ?? []).map((pieceId, index) => `${pieceId}@${scenario.mainRotations?.[index] ?? 0}`).join(", ") || "none"}`,
     scenario.competitiveMode && summary.competitiveStaging?.active
-      ? `Starts: ${summary.competitiveStaging.routedStartCount ?? "?"} routed -> ${scenario.metrics?.usableStarts?.length ?? "?"} selected / ${summary.competitiveStaging.sourceStartCount ?? "?"} total`
-      : `Starts: ${summary.reachableStarts ?? "?"} reachable -> ${scenario.metrics?.usableStarts?.length ?? "?"} usable / ${summary.coursePreflight?.sourceStartCount ?? summary.contextualStaging?.sourceStartCount ?? scenario.sequence?.starts?.length ?? "?"} total`
+      ? `Starts: ${summary.competitiveStaging.routedStartCount ?? scenario.metrics?.reachableStarts ?? "?"} routed -> ${scenario.metrics?.usableStarts?.length ?? "?"} selected / ${summary.competitiveStaging.sourceStartCount ?? scenario.activeStarts?.length ?? "?"} total`
+      : `Starts: ${scenario.metrics?.reachableStarts ?? summary.reachableStarts ?? "?"} reachable -> ${scenario.metrics?.usableStarts?.length ?? "?"} usable / ${scenario.activeStarts?.length ?? summary.coursePreflight?.sourceStartCount ?? summary.contextualStaging?.sourceStartCount ?? scenario.sequence?.starts?.length ?? "?"} total`
   );
+  if (!scenario.virtualBots) {
+    lines.push(
+      `Start disposition: physical ${scenario.activeStarts?.length ?? 0}, validated ${(scenario.validatedStartIndices ?? []).length}, blocked ${(scenario.blockedStartIndices ?? []).length}${scenario.startDisposition ? `; outside-pool ${scenario.startDisposition.outsidePoolIndices?.length ?? 0}, route-failed ${scenario.startDisposition.routeFailedIndices?.length ?? 0}, normal-pruned ${scenario.startDisposition.normalPrunedIndices?.length ?? 0}, price-pruned ${(scenario.startDisposition.pricePrunedIndices ?? scenario.startDisposition.legacyPricePrunedIndices)?.length ?? 0}, selector-unavailable ${scenario.startDisposition.selectorUnavailableIndices?.length ?? 0}, other ${scenario.startDisposition.otherBlockedIndices?.length ?? 0}` : ""}`
+    );
+  }
 
   if (balance?.active) {
     const pruned = balance.pressurePruned ?? [];
@@ -10959,9 +11505,37 @@ function buildScenarioCopySummary(scenario) {
       `Competitive balance: blocked ${competitive.blockedStartCount ?? 0}, remaining choices ${competitive.remainingStartCount ?? 0}, selected ${competitive.selectedStartCount ?? scenario.metrics?.usableStarts?.length ?? 0}, selectedOutliers ${competitive.remainingOutlierCount ?? "n/a"}, acceptable ${competitive.acceptable ? "yes" : "no"}, method ${competitive.method ?? "n/a"}`
     );
   } else if (scenario.payToWin && payToWin?.active) {
+    const pricingModel = payToWin.pricingModel ?? {};
     lines.push(
-      `Pay to Win: startingEnergy ${payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY}, priced ${payToWin.pricedStartCount ?? "n/a"}, pruned ${(payToWin.pruned ?? []).length}, fullyUnavailable ${payToWin.fullyUnavailableCount ?? 0}, earlyUnavailable ${payToWin.earlyUnavailableCount ?? 0}/${payToWin.maxEarlyUnavailable ?? 0}, lateUnavailable ${payToWin.lateUnavailableCount ?? 0}/${payToWin.maxLateUnavailable ?? 0}, surplusStarts ${payToWin.surplusStarts ?? 0}`
+      `Pay to Win: model ${pricingModel.method ?? "n/a"}, baseline ${Number.isInteger(pricingModel.baselineIndex) ? `#${pricingModel.baselineIndex + 1}` : "n/a"}, startingEnergy ${payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY}, priced ${payToWin.pricedStartCount ?? "n/a"}, pruned ${(payToWin.pruned ?? []).length}, fullyUnavailable ${payToWin.fullyUnavailableCount ?? 0}, earlyUnavailable ${payToWin.earlyUnavailableCount ?? 0}/${payToWin.maxEarlyUnavailable ?? 0}, lateUnavailable ${payToWin.lateUnavailableCount ?? 0}/${payToWin.maxLateUnavailable ?? 0}, surplusStarts ${payToWin.surplusStarts ?? 0}, latePricing ${payToWin.latePricingActive ? "active" : "inactive"}`
     );
+    if (pricingModel.thresholds?.length) {
+      lines.push(
+        `P2W energy curve: register ${pricingModel.registerScore ?? "n/a"} score, horizon ${pricingModel.horizonTurns ?? "n/a"} turns x${pricingModel.horizonScale ?? "n/a"}; ${pricingModel.thresholds.map((threshold) => threshold.energy <= (payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY) ? `${threshold.energy}E@${threshold.cumulativeRegisters}R` : `deny@${threshold.cumulativeRegisters}R`).join(", ")}`
+      );
+    }
+    if ((payToWin.pruned ?? []).length) {
+      lines.push(
+        `P2W pruning passes: ${payToWin.pruned.map((item) => `p${item.pass} base ${Number.isInteger(item.pricingModel?.baselineIndex) ? `#${item.pricingModel.baselineIndex + 1}` : "n/a"} max ${item.pricingModel?.maxRegisterAdvantage ?? "n/a"}R -> #${item.index + 1} (${item.reason})`).join("; ")}; final base ${Number.isInteger(pricingModel.baselineIndex) ? `#${pricingModel.baselineIndex + 1}` : "n/a"}`
+      );
+    }
+    const energyShadow = payToWin.energyShadow;
+    if (energyShadow?.active) {
+      const benchmark = energyShadow.benchmark ?? {};
+      lines.push(
+        `P2W energy shadow: validated ${energyShadow.validatedStartCount ?? "n/a"}, final-offered ${energyShadow.offeredStartCount ?? "n/a"}, tempo-register ${benchmark.registerScoreMedian ?? "n/a"} score (${benchmark.registerSamples ?? 0} samples), Power Up strategic delta ${benchmark.powerUpStrategicDeltaMedian ?? benchmark.powerUpOpportunityMedian ?? "n/a"} score (${benchmark.powerUpStrategicDeltaSamples ?? benchmark.powerUpOpportunitySamples ?? 0} samples), horizon ${benchmark.medianFullCourseActions ?? "n/a"} registers/${benchmark.medianFullCourseTurns ?? "n/a"} turns, current Power Up base discount ${benchmark.powerUpBaseDiscount ?? "n/a"}, battery energy reward ${benchmark.batteryEnergyRewardScore ?? "n/a"}`,
+        `P2W start advantages: ${(energyShadow.starts ?? []).map((entry) => {
+          const status = entry.pruned ? "pruned" : entry.fullyUnavailable ? "unavailable" : "offered";
+          const currentPrice = Number.isFinite(entry.finalEnergyCost) ? `${entry.finalEnergyCost}E` : status;
+          const initialPrice = Number.isFinite(entry.initialEnergyCost) ? `${entry.initialEnergyCost}E` : "n/a";
+          const legacyPrice = Number.isFinite(entry.legacyInitialCost) ? `${entry.legacyInitialCost}E` : "n/a";
+          const lateText = payToWin.shadowLatePricingActive && Number.isFinite(entry.lateAdvantage)
+            ? ` late ${entry.lateAdvantage}/${entry.lateRegisterEquivalent ?? "n/a"}R/${entry.lateUnavailable ? "—" : `${entry.lateEnergyCost ?? "n/a"}E`}`
+            : "";
+          return `#${entry.index + 1} ${entry.advantage} score/${entry.registerEquivalent ?? "n/a"}R ${status} ${currentPrice} (initial ${initialPrice}, legacy ${legacyPrice})${lateText}`;
+        }).join(", ") || "none"}`
+      );
+    }
   }
 
   lines.push(
@@ -10983,9 +11557,17 @@ function buildScenarioCopySummary(scenario) {
     }
     if (summary.contextualStaging?.active) {
       const staging = summary.contextualStaging;
+      const stagedSourceLabel = staging.method === "coherent-preflight-pool+target-fit-gate"
+        ? "coherent"
+        : "first-leg-routed";
       lines.push(
-        `Start staging: ${staging.sourceStartCount ?? "?"} source -> ${staging.preliminaryRoutedCount ?? "?"} first-leg-routed -> ${staging.selectedStartCount ?? "?"} rich, target ${staging.targetPoolSize ?? "?"}, reserve-fill ${staging.unresolvedFillCount ?? 0}, escalated ${staging.escalated ? "yes" : "no"}${staging.escalationReason ? ` (${staging.escalationReason})` : ""}`
+        `Start staging: ${staging.sourceStartCount ?? "?"} source -> ${staging.preliminaryRoutedCount ?? "?"} ${stagedSourceLabel} -> ${staging.selectedStartCount ?? "?"} rich, target ${staging.targetPoolSize ?? "?"}, reserve-fill ${staging.unresolvedFillCount ?? 0}, escalated ${staging.escalated ? "yes" : "no"}${staging.escalationReason ? ` (${staging.escalationReason})` : ""}`
       );
+      if (staging.method === "coherent-preflight-pool+target-fit-gate") {
+        lines.push(
+          `Target gate: difficulty ${staging.targetGateDifficultyRaw ?? "?"}, length ${staging.targetGateLengthRaw ?? "?"}, fit-length ${staging.targetGateLengthFitRaw ?? "?"}, routes reused/no traffic`
+        );
+      }
     }
   }
 
@@ -11168,7 +11750,10 @@ function buildScenarioReport(scenario, selectedLegIndex) {
       : "Docks: none",
     `Showing leg: ${selectedLegIndex === null ? "All legs" : legOptions[selectedLegIndex]}`,
     `Goal flag: ${selectedLegIndex === null ? "all checkpoints" : `(${goal.x}, ${goal.y})`}`,
-    `Usable starts: ${scenario.metrics.usableStarts.length}/${scenario.sequence.firstLeg?.summary?.contextualStaging?.sourceStartCount ?? scenario.sequence.starts.length}`,
+    `Usable starts: ${scenario.metrics.usableStarts.length}/${scenario.activeStarts?.length ?? scenario.sequence.firstLeg?.summary?.contextualStaging?.sourceStartCount ?? scenario.sequence.starts.length}`,
+    scenario.virtualBots
+      ? "Start disposition: virtual entry"
+      : `Start disposition: physical ${scenario.activeStarts?.length ?? 0}, validated ${(scenario.validatedStartIndices ?? []).length}, blocked ${(scenario.blockedStartIndices ?? []).length} [${(scenario.blockedStartIndices ?? []).map((index) => index + 1).join(", ") || "none"}]${scenario.startDisposition ? `; outside-pool [${(scenario.startDisposition.outsidePoolIndices ?? []).map((index) => index + 1).join(", ") || "none"}], route-failed [${(scenario.startDisposition.routeFailedIndices ?? []).map((index) => index + 1).join(", ") || "none"}], normal-pruned [${(scenario.startDisposition.normalPrunedIndices ?? []).map((index) => index + 1).join(", ") || "none"}], price-pruned [${(scenario.startDisposition.pricePrunedIndices ?? scenario.startDisposition.legacyPricePrunedIndices ?? []).map((index) => index + 1).join(", ") || "none"}], selector-unavailable [${(scenario.startDisposition.selectorUnavailableIndices ?? []).map((index) => index + 1).join(", ") || "none"}], other [${(scenario.startDisposition.otherBlockedIndices ?? []).map((index) => index + 1).join(", ") || "none"}]` : ""}`,
     `Difficulty raw: ${scenario.metrics.difficultyRaw}`,
     `Length raw: ${scenario.metrics.lengthRaw}`,
     `Length inputs: flags ${scenario.metrics.lengthMetrics.inputs.flagCount}, players ${scenario.metrics.lengthMetrics.inputs.playerCount}, actionScore ${scenario.metrics.lengthMetrics.inputs.totalActionLoad}, distanceScore ${scenario.metrics.lengthMetrics.inputs.totalRouteDistance}, congestion ${scenario.metrics.lengthMetrics.inputs.totalCongestion}, flagArea ${scenario.metrics.lengthMetrics.inputs.flagAreaScore}, totalDifficulty ${scenario.metrics.lengthMetrics.inputs.totalDifficulty}`,
@@ -11184,8 +11769,14 @@ function buildScenarioReport(scenario, selectedLegIndex) {
       ? `Competitive balance simulation: blocked ${scenario.metrics.competitiveBlockImpact.blockedStartCount} [${scenario.metrics.competitiveBlockImpact.blockedIndices.join(", ")}], remaining ${scenario.metrics.competitiveBlockImpact.remainingStartCount}, selected ${scenario.metrics.competitiveBlockImpact.selectedStartCount ?? "n/a"} [${(scenario.metrics.competitiveBlockImpact.selectedIndices ?? []).join(", ")}], outliers ${scenario.metrics.competitiveBlockImpact.remainingOutlierCount}, scoreRange ${scenario.metrics.competitiveBlockImpact.scoreRange}, actionRange ${scenario.metrics.competitiveBlockImpact.actionRange}, worstZ ${scenario.metrics.competitiveBlockImpact.worstScoreZ}/${scenario.metrics.competitiveBlockImpact.worstActionZ}, acceptable ${scenario.metrics.competitiveBlockImpact.acceptable ? "yes" : "no"}, method ${scenario.metrics.competitiveBlockImpact.method}, trafficSubsets ${scenario.metrics.competitiveBlockImpact.trafficSubsetsTested ?? 0}`
       : "Competitive balance simulation: n/a",
     summary.payToWin?.active
-      ? `Pay to Win costs: startingEnergy ${summary.payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY}, denialCost ${summary.payToWin.denialCost ?? ((summary.payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY) + 1)}, priced ${summary.payToWin.pricedStartCount ?? "n/a"}, unit ${summary.payToWin.costUnit}, lateUnit ${summary.payToWin.lateCostUnit ?? summary.payToWin.costUnit}, trafficScale ${summary.payToWin.trafficScaleMultiplier}, latePlayers ${summary.payToWin.lateSelectorStart ?? "n/a"}-${summary.payToWin.lateSelectorEnd ?? "n/a"}, surplusStarts ${summary.payToWin.surplusStarts ?? 0}, lateModel ${summary.payToWin.lateTrafficModel ?? "n/a"}, lateSamples ${summary.payToWin.lateScenarioSamples ?? 0}, earlyUnavailable ${summary.payToWin.earlyUnavailableCount ?? 0}/${summary.payToWin.maxEarlyUnavailable ?? 0}, lateUnavailable ${summary.payToWin.lateUnavailableCount ?? 0}/${summary.payToWin.maxLateUnavailable ?? 0}, fullyUnavailable ${summary.payToWin.fullyUnavailableCount ?? 0}, availabilityValid ${summary.payToWin.availabilityValid === false ? "no" : "yes"}, lateHigher ${summary.payToWin.latePriceHigherCount ?? 0}, lateLower ${summary.payToWin.latePriceLowerCount ?? 0}, slashPrices ${summary.payToWin.hasLatePriceDifference ? "yes" : "no"}, pruned ${summary.payToWin.pruned.length ? summary.payToWin.pruned.map((item) => `#${item.index + 1}(${item.energyCost}E; pass ${item.pass})`).join(", ") : "none"}`
+      ? `Pay to Win costs: model ${summary.payToWin.pricingModel?.method ?? "n/a"}, baseline ${Number.isInteger(summary.payToWin.pricingModel?.baselineIndex) ? `#${summary.payToWin.pricingModel.baselineIndex + 1}` : "n/a"}, startingEnergy ${summary.payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY}, denialCost ${summary.payToWin.denialCost ?? ((summary.payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY) + 1)}, registerUnit ${summary.payToWin.costUnit}, horizon ${summary.payToWin.pricingModel?.horizonTurns ?? "n/a"}t x${summary.payToWin.pricingModel?.horizonScale ?? "n/a"}, thresholds ${(summary.payToWin.pricingModel?.thresholds ?? []).map((threshold) => `${threshold.energy <= (summary.payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY) ? `${threshold.energy}E` : "deny"}@${threshold.cumulativeRegisters}R`).join("/") || "n/a"}, priced ${summary.payToWin.pricedStartCount ?? "n/a"}, trafficScale ${summary.payToWin.trafficScaleMultiplier}, latePricing ${summary.payToWin.latePricingActive ? "active" : "inactive"}, latePlayers ${summary.payToWin.lateSelectorStart ?? "n/a"}-${summary.payToWin.lateSelectorEnd ?? "n/a"}, surplusStarts ${summary.payToWin.surplusStarts ?? 0}, lateModel ${summary.payToWin.lateTrafficModel ?? "n/a"}, lateSamples ${summary.payToWin.lateScenarioSamples ?? 0}, shadowLate ${summary.payToWin.shadowLatePricingActive ? "active" : "inactive"}/${summary.payToWin.shadowLateScenarioSamples ?? 0} samples, earlyUnavailable ${summary.payToWin.earlyUnavailableCount ?? 0}/${summary.payToWin.maxEarlyUnavailable ?? 0}, lateUnavailable ${summary.payToWin.lateUnavailableCount ?? 0}/${summary.payToWin.maxLateUnavailable ?? 0}, fullyUnavailable ${summary.payToWin.fullyUnavailableCount ?? 0}, availabilityValid ${summary.payToWin.availabilityValid === false ? "no" : "yes"}, lateHigher ${summary.payToWin.latePriceHigherCount ?? 0}, lateLower ${summary.payToWin.latePriceLowerCount ?? 0}, slashPrices ${summary.payToWin.hasLatePriceDifference ? "yes" : "no"}, pruned ${summary.payToWin.pruned.length ? summary.payToWin.pruned.map((item) => `#${item.index + 1}(${item.energyCost}E/${item.registerEquivalent ?? "n/a"}R; base ${Number.isInteger(item.pricingModel?.baselineIndex) ? `#${item.pricingModel.baselineIndex + 1}` : "n/a"}; pass ${item.pass})`).join(", ") : "none"}`
       : "Pay to Win costs: n/a",
+    summary.payToWin?.energyShadow?.active
+      ? `P2W energy shadow: validated ${summary.payToWin.energyShadow.validatedStartCount ?? "n/a"}, final-offered ${summary.payToWin.energyShadow.offeredStartCount ?? "n/a"}; tempo-register median ${summary.payToWin.energyShadow.benchmark?.registerScoreMedian ?? "n/a"} (p25 ${summary.payToWin.energyShadow.benchmark?.registerScoreP25 ?? "n/a"}, p75 ${summary.payToWin.energyShadow.benchmark?.registerScoreP75 ?? "n/a"}, n ${summary.payToWin.energyShadow.benchmark?.registerSamples ?? 0}); Power Up strategic delta median ${summary.payToWin.energyShadow.benchmark?.powerUpStrategicDeltaMedian ?? summary.payToWin.energyShadow.benchmark?.powerUpOpportunityMedian ?? "n/a"} (p25 ${summary.payToWin.energyShadow.benchmark?.powerUpStrategicDeltaP25 ?? summary.payToWin.energyShadow.benchmark?.powerUpOpportunityP25 ?? "n/a"}, p75 ${summary.payToWin.energyShadow.benchmark?.powerUpStrategicDeltaP75 ?? summary.payToWin.energyShadow.benchmark?.powerUpOpportunityP75 ?? "n/a"}, n ${summary.payToWin.energyShadow.benchmark?.powerUpStrategicDeltaSamples ?? summary.payToWin.energyShadow.benchmark?.powerUpOpportunitySamples ?? 0}); horizon ${summary.payToWin.energyShadow.benchmark?.medianFullCourseActions ?? "n/a"} registers / ${summary.payToWin.energyShadow.benchmark?.medianFullCourseTurns ?? "n/a"} turns; current Power Up base ${summary.payToWin.energyShadow.benchmark?.powerUpWaitActionPenalty ?? "n/a"} vs tempo ${summary.payToWin.energyShadow.benchmark?.registerTempoCost ?? "n/a"} (discount ${summary.payToWin.energyShadow.benchmark?.powerUpBaseDiscount ?? "n/a"}); battery reward ${summary.payToWin.energyShadow.benchmark?.batteryEnergyRewardScore ?? "n/a"}`
+      : "P2W energy shadow: n/a",
+    summary.payToWin?.energyShadow?.active
+      ? `P2W register-equivalent starts: ${(summary.payToWin.energyShadow.starts ?? []).map((entry) => `#${entry.index + 1} full ${entry.fullScore}, advantage ${entry.advantage} = ${entry.registerEquivalent ?? "n/a"}R${summary.payToWin.shadowLatePricingActive && Number.isFinite(entry.lateFullScore) ? `; lateFull ${entry.lateFullScore}, lateAdv ${entry.lateAdvantage} = ${entry.lateRegisterEquivalent ?? "n/a"}R, latePrice ${entry.lateUnavailable ? "—" : `${entry.lateEnergyCost ?? "n/a"}E`}` : ""}; ${entry.pruned ? "pruned" : entry.fullyUnavailable ? "unavailable" : "offered"}, initial ${entry.initialEnergyCost ?? "n/a"}E, final ${entry.finalEnergyCost ?? "n/a"}E, legacyInitial ${entry.legacyInitialCost ?? "n/a"}E`).join(" | ") || "none"}`
+      : "P2W register-equivalent starts: n/a",
     summary.normalStartBalance?.active
       ? `Normal start balance: ${summary.normalStartBalance.iterative ? "iterative" : (summary.normalStartBalance.staged ? "staged" : "legacy")}, intrinsicPrePrune ${summary.normalStartBalance.intrinsicPrePruning ? "yes" : "no"}, lightweightPruned ${(summary.normalStartBalance.lightweightPruned ?? []).length ? (summary.normalStartBalance.lightweightPruned ?? []).map((index) => `#${index + 1}`).join(", ") : "none"}, pressurePruned ${(summary.normalStartBalance.pressurePruned ?? []).length ? (summary.normalStartBalance.pressurePruned ?? []).map((item) => `#${item.index + 1}(${item.diagnostics?.balanceDispersionPruned ? "balance; " : ""}scoreZ ${item.diagnostics?.scoreZ ?? "n/a"}; actionZ ${item.diagnostics?.actionZ ?? "n/a"}; pass ${item.pass ?? "n/a"})`).join(", ") : "none"}, stddev ${summary.normalStartBalance.balanceStdDevBefore ?? "n/a"}->${summary.normalStartBalance.balanceStdDevAfter ?? "n/a"}/${summary.normalStartBalance.balanceStdDevLimit ?? NORMAL_START_FAIRNESS_STDDEV_LIMIT}, trafficRecomputations ${summary.normalStartBalance.trafficRecomputations ?? 0}, remainingBad ${(summary.normalStartBalance.remainingBadStarts ?? []).length}, reject ${summary.normalStartBalance.reject ? "yes" : "no"}`
       : "Normal start balance: n/a",
@@ -11891,16 +12482,18 @@ function getScenarioRenderState(scenario) {
   const renderAnalysis = devViewEnabled ? { routes: getSelectedTraceRoutes(scenario, selectedLegIndex) } : null;
   const boardViewMode = getBoardViewMode();
   const iconBoardView = boardViewMode === BOARD_VIEW_MODES.icons;
-  const unusableStartIndices = scenario.sequence.firstLeg.starts
-    .filter((startAnalysis) => !scenario.metrics.usableStarts.some((item) => item.index === startAnalysis.index))
-    .map((startAnalysis) => startAnalysis.index);
-  const startNumberByKey = scenario.competitiveMode
-    ? new Map(scenario.activeStarts.map((start, index) => [
-      `${start.x},${start.y}`, index + 1
-    ]))
-    : new Map(scenario.sequence.firstLeg.starts.map((startAnalysis) => [
-      `${startAnalysis.start.x},${startAnalysis.start.y}`, startAnalysis.index + 1
-    ]));
+  const unusableStartIndices = [...new Set([
+    ...(scenario.blockedStartIndices ?? []),
+    ...scenario.sequence.firstLeg.starts
+      .filter((startAnalysis) => !scenario.metrics.usableStarts.some((item) => item.index === startAnalysis.index))
+      .map((startAnalysis) => startAnalysis.index)
+  ])].sort((left, right) => left - right);
+  // Number the physical start field, not merely the analyzed subset. Accepted
+  // courses resolve every physical start to available or blocked, so Dev View
+  // never needs the old unlabeled "S" fallback.
+  const startNumberByKey = new Map(scenario.activeStarts.map((start, index) => [
+    `${start.x},${start.y}`, index + 1
+  ]));
   const energyCostByKey = new Map(scenario.sequence.firstLeg.starts.map((startAnalysis) => [
     `${startAnalysis.start.x},${startAnalysis.start.y}`, startAnalysis.energyCost
   ]));
@@ -12602,6 +13195,8 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
                 openingRoutedCount: coursePreflight.openingRoutedCount,
                 requiredOpeningCount: coursePreflight.requiredOpeningCount,
                 intrinsicPruned: coursePreflight.intrinsicOutliers?.map((entry) => entry.index) ?? [],
+                openingSearchedCount: coursePreflight.opening?.summary?.capacityShortCircuit?.searchedStarts ?? indexedActiveStarts.length,
+                openingUnresolvedCount: coursePreflight.opening?.summary?.capacityShortCircuit?.unresolvedStarts ?? 0,
                 work: coursePreflight.work
               }
             };
@@ -12644,6 +13239,8 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
                 openingRoutedCount: coursePreflight.openingRoutedCount,
                 requiredOpeningCount: coursePreflight.requiredOpeningCount,
                 intrinsicPruned: coursePreflight.intrinsicOutliers?.map((entry) => entry.index) ?? [],
+                openingSearchedCount: coursePreflight.opening?.summary?.capacityShortCircuit?.searchedStarts ?? indexedActiveStarts.length,
+                openingUnresolvedCount: coursePreflight.opening?.summary?.capacityShortCircuit?.unresolvedStarts ?? 0,
                 difficultyRaw: coursePreflight.metrics?.difficultyRaw ?? null,
                 lengthRaw: coursePreflight.metrics?.lengthRaw ?? null,
                 work: coursePreflight.work
@@ -12663,14 +13260,27 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
           !preflightExcludedIndices.has(entry.index)
         ));
 
-        // Any/Any Normal, Competitive, and Pay to Win need a coherent route
-        // pool, but only after the cheap profile says this layout is worth it.
-        // Build a bounded mode-specific pool and reuse the Flag-1 routes rather
-        // than re-searching the opening.
+        const targetedNormalRouting = (
+          !unconstrainedNormalRouting &&
+          !competitiveMode &&
+          !payToWin &&
+          !virtualBots &&
+          !effectiveNoDocks &&
+          !sandwichedDock &&
+          scenarioDockPlacements.length === 1 &&
+          (
+            generationPreferences.difficulty !== "any" ||
+            generationPreferences.length !== "any"
+          )
+        );
+
+        // Any/Any Normal, targeted Normal, Competitive, and Pay to Win all
+        // benefit from the same cheap coherent route pool. Targeted Normal uses
+        // it as a target-fit gate before any rich multi-route refinement.
         const needsReusableRoutePool = Boolean(
           coursePreflight &&
           !virtualBots &&
-          (unconstrainedNormalRouting || competitiveMode || payToWin)
+          (unconstrainedNormalRouting || targetedNormalRouting || competitiveMode || payToWin)
         );
         if (needsReusableRoutePool) {
           const routePoolTelemetryBefore = getAnalysisTelemetrySnapshotSafe();
@@ -12732,21 +13342,6 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
             contextualSeedStartAnalyses: reusableRoutePool?.seedStartAnalyses ?? null
           }
           : baseAnalysisOptions;
-        const targetedNormalRouting = (
-          !unconstrainedNormalRouting &&
-          !competitiveMode &&
-          !payToWin &&
-          !virtualBots &&
-          !effectiveNoDocks &&
-          !sandwichedDock &&
-          scenarioDockPlacements.length === 1 &&
-          (
-            generationPreferences.difficulty === "hard" ||
-            generationPreferences.difficulty === "brutal" ||
-            generationPreferences.length === "long"
-          )
-        );
-
         if (
           pass === 0 &&
           sandwichedDock &&
@@ -12786,7 +13381,6 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
             `Competitive Mode — validating the offered start pool`,
             evaluationsUsed
           );
-          activeStarts = reusableRoutePool?.survivorStarts ?? activeStarts;
           const requiredCompetitivePool = preferences.playerCount * 2;
           const offeredSequence = reusableRoutePool
             ? analyzeFlagSequence(
@@ -12866,7 +13460,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
             preliminaryCache,
             preliminaryScoreStdDev: preliminaryFirstLeg.summary.scoreStdDev ?? 0,
             routePoolCandidateCount: reusableRoutePool.candidateCount,
-            method: "bounded-validated-pool+perfect-selection"
+            method: "all-physical-validated+perfect-selection"
           };
         } else if (unconstrainedNormalRouting) {
           let fastAnyFailed = false;
@@ -12993,7 +13587,6 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
             };
           }
         } else if (payToWin && !virtualBots) {
-          activeStarts = reusableRoutePool?.survivorStarts ?? activeStarts;
           await reportStage(
             `Pricing Pay to Win starts — ${analysisStarts.length} validated choices`,
             evaluationsUsed
@@ -13021,80 +13614,85 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
             };
           }
         } else if (targetedNormalRouting) {
-          const indexedStarts = analysisStarts;
-          const targetPoolSize = getLightweightPressurePoolTarget(
-            indexedStarts.length,
-            preferences.playerCount
-          );
+          const selectedStarts = reusableRoutePool?.survivorStarts ?? analysisStarts;
+          const selectedSeedAnalyses = reusableRoutePool?.seedStartAnalyses ?? [];
+          const selectedIndices = selectedStarts
+            .map((start, index) => Number.isInteger(start.analysisIndex) ? start.analysisIndex : index)
+            .sort((left, right) => left - right);
+          const targetPoolSize = reusableRoutePool?.targetCount ?? selectedStarts.length;
+
           await reportStage(
-            `Using preflight opening routes — ${indexedStarts.length} starts; choosing ${targetPoolSize} for rich analysis`,
+            `Checking targeted fit — ${selectedStarts.length} cheap coherent starts before rich refinement`,
             evaluationsUsed
           );
 
-          // Reuse the universal no-traffic opening sketch instead of paying for
-          // a second first-checkpoint search just for targeted Normal staging.
-          const firstLegAnalyses = (coursePreflight?.opening?.starts || []).filter((entry) => (
-            !preflightExcludedIndices.has(entry.index)
-          ));
-          const firstLegRouted = firstLegAnalyses.filter((entry) => (
-            entry.reachable &&
-            entry.selectedRoute &&
-            Number.isFinite(entry.bestScore) &&
-            Number.isFinite(entry.bestActions)
-          ));
-
-          let selectedSet = firstLegRouted.length > targetPoolSize
-            ? selectLightweightPressurePool(firstLegRouted, targetPoolSize)
-            : new Set(firstLegRouted.map((entry) => entry.index));
-
-          // If the bounded first-checkpoint screen did not route enough starts,
-          // fill the shortlist from unresolved starts instead of escalating to a
-          // rich all-start search. Prefer spatially separated reserve starts so
-          // the eight-start pool still samples the whole docking edge.
-          const selectedStartObjects = () => indexedStarts.filter((start) => (
-            selectedSet.has(start.analysisIndex)
-          ));
-          const unresolved = indexedStarts.filter((start) => (
-            !selectedSet.has(start.analysisIndex)
-          ));
-          let unresolvedFillCount = 0;
-
-          while (selectedSet.size < targetPoolSize && unresolved.length) {
-            const selectedStartsNow = selectedStartObjects();
-            let bestIndex = 0;
-            let bestSpread = -Infinity;
-
-            for (let index = 0; index < unresolved.length; index += 1) {
-              const candidate = unresolved[index];
-              const spread = selectedStartsNow.length
-                ? Math.min(...selectedStartsNow.map((selected) => (
-                  Math.abs((candidate.x ?? 0) - (selected.x ?? 0)) +
-                  Math.abs((candidate.y ?? 0) - (selected.y ?? 0))
-                )))
-                : 0;
-              if (spread > bestSpread) {
-                bestSpread = spread;
-                bestIndex = index;
-              }
+          // Build a provisional sequence entirely from the reusable one-route
+          // full-course pool. This performs no route rediscovery and gives the
+          // requested difficulty/length bands a much better signal than the
+          // representative leg sketch alone.
+          const targetGateSequence = analyzeFlagSequence(
+            goalTileMap,
+            selectedStarts,
+            playableCheckpoints,
+            preferences.playerCount,
+            {
+              ...baseAnalysisOptions,
+              contextualOpeningRoutes: 1,
+              contextualLaterRoutes: 1,
+              contextualBeamWidth: 1,
+              contextualCompletionPool: 1,
+              contextualSeedStartAnalyses: selectedSeedAnalyses,
+              contextualRequiredStarts: reusableRoutePool?.requiredCount ?? preferences.playerCount,
+              skipFullCourseTraffic: true,
+              skipNormalStartBalancing: true
             }
-
-            const [chosen] = unresolved.splice(bestIndex, 1);
-            selectedSet.add(chosen.analysisIndex);
-            unresolvedFillCount += 1;
+          );
+          const targetGateMetrics = classifyCandidate(targetGateSequence, {
+            ...generationPreferences,
+            ...effectiveVariantBundle,
+            actFast,
+            actFastMode,
+            flagCount,
+            classicSharedDeck,
+            movingTargets
+          }, {
+            boardPlacements: scenarioBoardPlacements,
+            pieceMap,
+            checkpoints: playableCheckpoints,
+            tileMap: scenarioTileMap,
+            goalTileMap,
+            skipCompetitiveBlockImpact: true
+          });
+          const targetGateMismatch = getGrossCourseMismatch(
+            targetGateMetrics,
+            generationPreferences
+          );
+          if (targetGateMismatch.abort) {
+            const mismatchText = formatGrossCourseMismatch(targetGateMismatch);
+            const reason = `targeted route-pool mismatch: ${mismatchText}`;
+            console.debug(`Early course retry: ${reason}`);
+            await reportStage(`Trying another checkpoint layout — ${reason}`, evaluationsUsed);
+            sequenceFailureCategory = "preflight-target";
+            sequenceFailureReason = reason;
+            sequenceFailureDiagnostics = {
+              targetGate: {
+                difficultyRaw: targetGateMetrics?.difficultyRaw ?? null,
+                lengthRaw: targetGateMetrics?.lengthRaw ?? null,
+                lengthFitRaw: targetGateMetrics?.lengthFitRaw ?? null,
+                routePoolCandidates: reusableRoutePool?.candidateCount ?? selectedStarts.length,
+                routePoolSurvivors: reusableRoutePool?.coherentRoutedCount ?? selectedStarts.length,
+                routePoolRequired: reusableRoutePool?.requiredCount ?? preferences.playerCount,
+                work: reusableRoutePool?.work ?? null
+              }
+            };
+            sequence = null;
+            break;
           }
 
-          const selectedIndices = [...selectedSet].sort((left, right) => left - right);
-          const selectedStarts = indexedStarts.filter((start) => (
-            selectedSet.has(start.analysisIndex)
-          ));
-
           await reportStage(
-            `Refining targeted Normal starts — ${selectedStarts.length}/${indexedStarts.length} starts with full route choice`,
+            `Refining targeted Normal starts — ${selectedStarts.length} promising starts with rich route choice`,
             evaluationsUsed
           );
-          const selectedOpeningSeeds = firstLegAnalyses.filter((entry) => (
-            selectedSet.has(entry.index) && entry.reachable && entry.selectedRoute
-          ));
           sequence = analyzeFlagSequence(
             goalTileMap,
             selectedStarts,
@@ -13102,24 +13700,27 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
             preferences.playerCount,
             {
               ...baseAnalysisOptions,
-              contextualOpeningSeedAnalyses: selectedOpeningSeeds,
+              contextualOpeningSeedAnalyses: selectedSeedAnalyses,
               contextualRequiredStarts: preferences.playerCount
             }
           );
 
           if (sequence?.firstLeg?.summary) {
-            sequence.firstLeg.summary.contextualSearchMode = "targeted-normal-first-leg-staged";
+            sequence.firstLeg.summary.contextualSearchMode = "targeted-normal-route-pool-gated";
             sequence.firstLeg.summary.contextualStaging = {
               active: true,
-              method: "first-checkpoint-shortlist",
-              sourceStartCount: indexedStarts.length,
-              preliminaryRoutedCount: firstLegRouted.length,
+              method: "coherent-preflight-pool+target-fit-gate",
+              sourceStartCount: indexedActiveStarts.length,
+              preliminaryRoutedCount: reusableRoutePool?.coherentRoutedCount ?? selectedStarts.length,
               targetPoolSize,
-              selectedStartCount: selectedIndices.length,
+              selectedStartCount: selectedStarts.length,
               selectedIndices,
-              unresolvedFillCount,
-              escalated: false,
-              escalationReason: null
+              unresolvedFillCount: 0,
+              escalated: true,
+              escalationReason: "target-fit-passed",
+              targetGateDifficultyRaw: targetGateMetrics?.difficultyRaw ?? null,
+              targetGateLengthRaw: targetGateMetrics?.lengthRaw ?? null,
+              targetGateLengthFitRaw: targetGateMetrics?.lengthFitRaw ?? null
             };
           }
         } else {
@@ -13162,6 +13763,8 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
             openingRoutedCount: coursePreflight.openingRoutedCount,
             requiredOpeningCount: coursePreflight.requiredOpeningCount,
             intrinsicPruned: (coursePreflight.intrinsicOutliers ?? []).map((entry) => entry.index),
+            openingSearchedCount: coursePreflight.opening?.summary?.capacityShortCircuit?.searchedStarts ?? indexedActiveStarts.length,
+            openingUnresolvedCount: coursePreflight.opening?.summary?.capacityShortCircuit?.unresolvedStarts ?? 0,
             difficultyRaw: coursePreflight.metrics?.difficultyRaw ?? null,
             lengthRaw: coursePreflight.metrics?.lengthRaw ?? null,
             routeSearches: coursePreflight.work?.searches ?? 0,
@@ -13398,6 +14001,68 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       tileMap: scenarioTileMap,
       goalTileMap
     });
+    const analyzedReachableIndices = new Set(
+      computeCourseReachableStarts(sequence.firstLeg).map((entry) => entry.index)
+    );
+    const validatedStartIndices = competitiveMode
+      ? (reusableRoutePool?.seedStartAnalyses ?? [])
+        .filter((entry) => entry.reachable && entry.fullCourseRoute)
+        .map((entry) => entry.index)
+      : [...analyzedReachableIndices];
+    const validatedStartSet = new Set(validatedStartIndices);
+    const usableStartSet = new Set((metrics.usableStarts ?? []).map((entry) => entry.index));
+    const blockedStartIndices = virtualBots
+      ? []
+      : activeStarts
+        .map((_, index) => index)
+        .filter((index) => competitiveMode
+          ? !validatedStartSet.has(index)
+          : !usableStartSet.has(index)
+        );
+    const analysisStartIndices = [...usableStartSet].sort((left, right) => left - right);
+    const allPhysicalStartIndices = activeStarts.map((_, index) => index);
+    const routePoolCandidateIndices = new Set(
+      Array.isArray(reusableRoutePool?.selectedIndices) && reusableRoutePool.selectedIndices.length
+        ? reusableRoutePool.selectedIndices
+        : allPhysicalStartIndices
+    );
+    const outsidePoolIndices = virtualBots
+      ? []
+      : allPhysicalStartIndices.filter((index) => !routePoolCandidateIndices.has(index));
+    const routeFailedIndices = virtualBots
+      ? []
+      : [...routePoolCandidateIndices].filter((index) => !validatedStartSet.has(index));
+    const payToWinPrunedIndices = effectiveVariantBundle.payToWin
+      ? (sequence.firstLeg.summary.payToWin?.pruned ?? []).map((entry) => entry.index)
+      : [];
+    const selectorUnavailableIndices = effectiveVariantBundle.payToWin
+      ? sequence.firstLeg.starts
+        .filter((entry) => entry.payToWinUnavailable)
+        .map((entry) => entry.index)
+      : [];
+    const normalPrunedIndices = (!competitiveMode && !effectiveVariantBundle.payToWin && !virtualBots)
+      ? [...validatedStartSet].filter((index) => !usableStartSet.has(index))
+      : [];
+    const classifiedBlockedIndices = new Set([
+      ...outsidePoolIndices,
+      ...routeFailedIndices,
+      ...payToWinPrunedIndices,
+      ...selectorUnavailableIndices,
+      ...normalPrunedIndices
+    ]);
+    const otherBlockedIndices = blockedStartIndices.filter((index) => !classifiedBlockedIndices.has(index));
+    const startDisposition = {
+      physicalCount: activeStarts.length,
+      validatedCount: validatedStartSet.size,
+      blockedCount: blockedStartIndices.length,
+      outsidePoolIndices: [...outsidePoolIndices].sort((left, right) => left - right),
+      routeFailedIndices: [...routeFailedIndices].sort((left, right) => left - right),
+      normalPrunedIndices: [...normalPrunedIndices].sort((left, right) => left - right),
+      pricePrunedIndices: [...payToWinPrunedIndices].sort((left, right) => left - right),
+      selectorUnavailableIndices: [...selectorUnavailableIndices].sort((left, right) => left - right),
+      otherBlockedIndices: [...otherBlockedIndices].sort((left, right) => left - right)
+    };
+
     scenarioPlacements = [
       ...scenarioBoardPlacements,
       ...scenarioDockPlacements,
@@ -13418,6 +14083,10 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       rebootTokens,
       goalTileMap,
       activeStarts,
+      blockedStartIndices,
+      validatedStartIndices: [...validatedStartSet].sort((left, right) => left - right),
+      analysisStartIndices,
+      startDisposition,
       playerCount: preferences.playerCount,
       actFast,
       actFastMode,
@@ -13547,6 +14216,23 @@ function serializeScenario(scenario) {
     placements: scenario.placements,
     checkpoints: scenario.checkpoints,
     rebootTokens: scenario.rebootTokens,
+    activeStarts: scenario.activeStarts ?? [],
+    blockedStartIndices: scenario.blockedStartIndices ?? [],
+    validatedStartIndices: scenario.validatedStartIndices ?? [],
+    analysisStartIndices: scenario.analysisStartIndices ?? (scenario.metrics?.usableStarts ?? []).map((entry) => entry.index),
+    startDisposition: scenario.startDisposition ?? null,
+    startPricing: scenario.payToWin
+      ? (scenario.sequence?.firstLeg?.starts ?? []).map((entry) => ({
+        index: entry.index,
+        energyCost: entry.energyCost ?? null,
+        earlyUnavailable: Boolean(entry.earlyUnavailable),
+        lateEnergyCost: entry.lateEnergyCost ?? null,
+        lateUnavailable: Boolean(entry.lateUnavailable),
+        payToWinUnavailable: Boolean(entry.payToWinUnavailable),
+        lateAdjustedScore: entry.lateAdjustedScore ?? null
+      }))
+      : null,
+    payToWinPricing: scenario.payToWin ? (scenario.sequence?.firstLeg?.summary?.payToWin ?? null) : null,
     attempts: scenario.attempts ?? 0
   };
 }
@@ -13636,16 +14322,32 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
   } else {
     goalTileMap = applyFlagOverrides(tileMap, checkpoints, { hazardousFlags, movingTargets });
   }
-  const activeStarts = virtualBots
+  const resolvedActiveStarts = virtualBots
     ? buildVirtualRobotStarts(flagZero, snapshot.preferences.playerCount, startupSpinUp)
     : noDocks
       ? filterStartsForGoals(noDockStarts, checkpoints)
       : filterStartsForGoals(starts, checkpoints);
-  const sequence = analyzeFlagSequence(goalTileMap, activeStarts, playableCheckpoints, snapshot.preferences.playerCount, applyVariantAnalysisOptions({
+  const activeStarts = Array.isArray(snapshot.activeStarts) && snapshot.activeStarts.length
+    ? snapshot.activeStarts
+    : resolvedActiveStarts;
+  const savedAnalysisIndices = new Set(
+    Array.isArray(snapshot.analysisStartIndices) && snapshot.analysisStartIndices.length
+      ? snapshot.analysisStartIndices
+      : activeStarts.map((_, index) => index)
+  );
+  const analysisStarts = virtualBots
+    ? activeStarts
+    : activeStarts
+      .map((start, index) => ({ ...start, analysisIndex: index }))
+      .filter((start) => savedAnalysisIndices.has(start.analysisIndex));
+  const sequence = analyzeFlagSequence(goalTileMap, analysisStarts, playableCheckpoints, snapshot.preferences.playerCount, applyVariantAnalysisOptions({
     rebootTokens,
     boardRects,
     difficulty: snapshot.preferences.difficulty,
-    length: snapshot.preferences.length
+    length: snapshot.preferences.length,
+    // A restored course must preserve the accepted start disposition instead
+    // of running a fresh Normal fairness pass and changing which spaces are open.
+    skipNormalStartBalancing: !competitiveMode && !payToWin && !virtualBots && Array.isArray(snapshot.analysisStartIndices)
   }, {
     competitiveMode,
     payToWin,
@@ -13668,6 +14370,19 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     repairStations,
     lessForeshadowing
   }));
+  if (payToWin && Array.isArray(snapshot.startPricing)) {
+    const savedPricingByIndex = new Map(snapshot.startPricing.map((entry) => [entry.index, entry]));
+    sequence.firstLeg.starts = sequence.firstLeg.starts.map((entry) => {
+      const saved = savedPricingByIndex.get(entry.index);
+      return saved ? { ...entry, ...saved } : entry;
+    });
+    if (sequence.legs?.[0]) {
+      sequence.legs[0] = { ...sequence.legs[0], analysis: sequence.firstLeg };
+    }
+    if (snapshot.payToWinPricing) {
+      sequence.firstLeg.summary.payToWin = snapshot.payToWinPricing;
+    }
+  }
   const metrics = classifyCandidate(sequence, {
     ...snapshot.preferences,
     actFast,
@@ -13714,6 +14429,29 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     rebootTokens,
     goalTileMap,
     activeStarts,
+    blockedStartIndices: Array.isArray(snapshot.blockedStartIndices) ? snapshot.blockedStartIndices : [],
+    validatedStartIndices: Array.isArray(snapshot.validatedStartIndices) ? snapshot.validatedStartIndices : [...savedAnalysisIndices],
+    analysisStartIndices: [...savedAnalysisIndices].sort((left, right) => left - right),
+    startDisposition: snapshot.startDisposition
+      ? {
+        ...snapshot.startDisposition,
+        // v34/v35 snapshots called all P2W pruning "legacy" pruning. Accept
+        // that field on hydration, but use the neutral name now that v36's
+        // register-equivalent model owns the same endpoint-pruning mechanism.
+        pricePrunedIndices: snapshot.startDisposition.pricePrunedIndices ??
+          snapshot.startDisposition.legacyPricePrunedIndices ?? []
+      }
+      : {
+        physicalCount: activeStarts.length,
+        validatedCount: Array.isArray(snapshot.validatedStartIndices) ? snapshot.validatedStartIndices.length : savedAnalysisIndices.size,
+        blockedCount: Array.isArray(snapshot.blockedStartIndices) ? snapshot.blockedStartIndices.length : 0,
+        outsidePoolIndices: [],
+        routeFailedIndices: [],
+        normalPrunedIndices: [],
+        pricePrunedIndices: [],
+        selectorUnavailableIndices: [],
+        otherBlockedIndices: Array.isArray(snapshot.blockedStartIndices) ? [...snapshot.blockedStartIndices] : []
+      },
     playerCount: snapshot.preferences.playerCount,
     actFast,
     actFastMode,
