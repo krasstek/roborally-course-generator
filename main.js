@@ -1,3 +1,53 @@
+// Mobile browsers may auto-detect number-like rule text and restyle it as a
+// tappable link even though the app emitted ordinary text. Keep rules/course
+// annotations visually plain; this is presentation-only and does not disable
+// any deliberate controls elsewhere in the UI.
+function installMobilePlainTextGuards() {
+  if (typeof document === "undefined") return;
+
+  let formatMeta = document.querySelector('meta[name="format-detection"]');
+  if (!formatMeta) {
+    formatMeta = document.createElement("meta");
+    formatMeta.setAttribute("name", "format-detection");
+    document.head?.appendChild(formatMeta);
+  }
+  formatMeta.setAttribute(
+    "content",
+    "telephone=no,date=no,address=no,email=no,url=no"
+  );
+
+  if (!document.getElementById("mobile-plain-text-guard")) {
+    const style = document.createElement("style");
+    style.id = "mobile-plain-text-guard";
+    style.textContent = `
+      .rules-note a,
+      .rules-note a:link,
+      .rules-note a:visited,
+      .rules-note a:hover,
+      .rules-note a:active,
+      .rules-note [x-apple-data-detectors],
+      .rules-note [data-detected-address],
+      .rules-note [data-detected-date],
+      .rules-note [data-detected-phone] {
+        color: inherit !important;
+        text-decoration: none !important;
+        font: inherit !important;
+        letter-spacing: inherit !important;
+        cursor: text !important;
+      }
+    `;
+    document.head?.appendChild(style);
+  }
+}
+
+if (typeof document !== "undefined") {
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", installMobilePlainTextGuards, { once: true });
+  } else {
+    installMobilePlainTextGuards();
+  }
+}
+
 const ASSET_VERSION = new URL(import.meta.url).searchParams.get("v") ?? "";
 const VERSION_SUFFIX = ASSET_VERSION ? `?v=${encodeURIComponent(ASSET_VERSION)}` : "";
 const versionedPath = (path) => `${path}${VERSION_SUFFIX}`;
@@ -139,14 +189,34 @@ const MIN_LENGTH_RAW = 28;
 const MIN_SHARED_EDGE = 5;
 const DOCK_BRIDGE_GAP = 3;
 const MAX_DOCK_COUNT = 2;
-const DEFAULT_STARTING_ENERGY = 4;
+const DEFAULT_STARTING_ENERGY = 3;
+const DEFAULT_MAX_ENERGY = 10;
+const DEFAULT_STARTING_UPGRADE_CARDS = 3;
+const DEFAULT_UPGRADE_DRAWS_PER_TURN = 1;
+const DEFAULT_UPGRADE_INSTALLS_PER_TURN = 1;
+const DEFAULT_UPGRADE_DRAW_ENERGY_COST = 1;
+// The local project does not encode the upgrade deck itself, so v39 keeps the
+// unknown-card economics configurable instead of pretending to know an exact
+// deck mix. This neutral 1..5 prior is diagnostic-only and is deliberately
+// reported by name in the course log; callers/variants can supply an exact
+// distribution through options.upgradeCostDistribution later.
+const DEFAULT_UPGRADE_COST_DISTRIBUTION = Object.freeze([
+  { cost: 1, weight: 1 },
+  { cost: 2, weight: 1 },
+  { cost: 3, weight: 1 },
+  { cost: 4, weight: 1 },
+  { cost: 5, weight: 1 }
+]);
+const DEFAULT_UPGRADE_COST_DISTRIBUTION_LABEL = "provisional-uniform-1-5";
 // Pay to Win prices are expressed in energy, but start advantages are first
 // converted into course-specific register equivalents. These marginal costs
 // are design tuning values, not published rules constants: the first cube is
 // intentionally cheap to give up, while deeper depletion becomes increasingly
 // expensive because it removes upgrade/options reserve and takes several rounds
-// to rebuild. The fifth value is a non-payable spread threshold used only to
-// decide when the current field still needs pruning.
+// to rebuild. The threshold immediately above the robot's available starting
+// energy is non-payable and is used only to decide when the field still needs
+// pruning. Keeping this wording dynamic matters because setup variants may alter
+// starting energy.
 const PAY_TO_WIN_ENERGY_MARGINAL_REGISTERS = [0, 0.75, 1.15, 1.6, 2.3, 2.6];
 const PAY_TO_WIN_EXTRA_ENERGY_MARGINAL_GROWTH = 0.4;
 const PAY_TO_WIN_HORIZON_MIN_TURNS = 3;
@@ -2874,9 +2944,8 @@ function updateRulesNote(scenario) {
   if (scenario.payToWin) {
     const payToWinPricing = scenario.sequence.firstLeg.summary.payToWin;
     if (payToWinPricing?.hasLatePriceDifference) {
-      const fallbackLatePlayerCount = Math.ceil(scenario.playerCount / 3);
       const firstLatePlayer = payToWinPricing.lateSelectorStart
-        ?? (scenario.playerCount - fallbackLatePlayerCount + 1);
+        ?? scenario.playerCount;
       const lastLatePlayer = payToWinPricing.lateSelectorEnd ?? scenario.playerCount;
       const singleLatePlayer = firstLatePlayer === lastLatePlayer;
       const latePlayerText = singleLatePlayer
@@ -2890,10 +2959,10 @@ function updateRulesNote(scenario) {
         ? " A dash in either position means that starting space is unavailable to that selector group; a fully unavailable space uses the prohibited-start marker instead of a price."
         : "";
       notes.push(
-        `Pay to Win: green starting spaces show starting energy costs. Pay the shown cost from your starting energy when choosing a starting space. ${latePlayerText} ${singleLatePlayer ? "uses" : "use"} the second value after the slash; earlier players use the first cost.${dashText}`
+        `Pay to Win: green starting spaces show starting energy costs. Pay the shown cost from your starting energy when choosing a starting space. ${latePlayerText} ${singleLatePlayer ? "uses" : "use"} the second value after the slash; earlier players use the first cost.${dashText} Resolve Pay to Win starting-space selection before dealing or revealing any starting upgrade cards.`
       );
     } else {
-      notes.push(`Pay to Win: green starting spaces show the starting energy cost for choosing that space. Pay that cost from your starting energy when choosing a starting space; a start whose cost exceeds your available starting energy is unavailable.`);
+      notes.push(`Pay to Win: green starting spaces show the starting energy cost for choosing that space. Pay that cost from your starting energy when choosing a starting space; a start whose cost exceeds your available starting energy is unavailable. Resolve Pay to Win starting-space selection before dealing or revealing any starting upgrade cards.`);
     }
   }
 
@@ -7388,6 +7457,203 @@ function getCourseStartingEnergy(options = {}) {
   );
 }
 
+function getCourseStartingUpgradeCards(options = {}) {
+  const explicitStartingCards = Number(options.startingUpgradeCards);
+  if (Number.isFinite(explicitStartingCards)) {
+    return Math.max(0, Math.floor(explicitStartingCards));
+  }
+
+  const startingCardDelta = Number(options.startingUpgradeCardDelta);
+  return Math.max(
+    0,
+    DEFAULT_STARTING_UPGRADE_CARDS +
+      (Number.isFinite(startingCardDelta) ? Math.trunc(startingCardDelta) : 0)
+  );
+}
+
+function getCourseMaxEnergy(options = {}) {
+  const explicitMaxEnergy = Number(options.maxEnergy);
+  return Number.isFinite(explicitMaxEnergy)
+    ? Math.max(0, Math.floor(explicitMaxEnergy))
+    : DEFAULT_MAX_ENERGY;
+}
+
+function getUpgradeEconomyRate(options, key, fallback) {
+  const value = Number(options?.[key]);
+  return Number.isFinite(value) ? Math.max(0, value) : fallback;
+}
+
+function normalizeUpgradeCostDistribution(options = {}) {
+  const supplied = options.upgradeCostDistribution;
+  const entries = [];
+  const pushEntry = (costValue, weightValue = 1) => {
+    const cost = Number(costValue);
+    const weight = Number(weightValue);
+    if (!Number.isFinite(cost) || cost < 0 || !Number.isFinite(weight) || weight <= 0) return;
+    entries.push({ cost: Math.floor(cost), weight });
+  };
+
+  if (Array.isArray(supplied)) {
+    supplied.forEach((item) => {
+      if (typeof item === "number") {
+        // A numeric array is treated as an explicit deck/sample list: repeated
+        // costs naturally increase their weight.
+        pushEntry(item, 1);
+      } else if (item && typeof item === "object") {
+        pushEntry(item.cost, item.weight ?? item.count ?? 1);
+      }
+    });
+  } else if (supplied && typeof supplied === "object") {
+    Object.entries(supplied).forEach(([cost, weight]) => pushEntry(cost, weight));
+  }
+
+  const sourceEntries = entries.length
+    ? entries
+    : DEFAULT_UPGRADE_COST_DISTRIBUTION.map((entry) => ({ ...entry }));
+  const merged = new Map();
+  sourceEntries.forEach(({ cost, weight }) => {
+    merged.set(cost, (merged.get(cost) ?? 0) + weight);
+  });
+  const normalizedEntries = [...merged.entries()]
+    .sort((left, right) => left[0] - right[0])
+    .map(([cost, weight]) => ({ cost, weight }));
+  const totalWeight = normalizedEntries.reduce((sum, entry) => sum + entry.weight, 0);
+
+  return {
+    label: entries.length
+      ? (options.upgradeCostDistributionLabel ?? "custom")
+      : DEFAULT_UPGRADE_COST_DISTRIBUTION_LABEL,
+    entries: normalizedEntries.map((entry) => ({
+      ...entry,
+      probability: totalWeight > 0 ? entry.weight / totalWeight : 0
+    })),
+    totalWeight
+  };
+}
+
+function buildStartingUpgradeHandEconomyShadow(options = {}, horizonTurns = null) {
+  const startingEnergy = getCourseStartingEnergy(options);
+  const maxEnergy = getCourseMaxEnergy(options);
+  const startingUpgradeCards = getCourseStartingUpgradeCards(options);
+  const drawsPerTurn = getUpgradeEconomyRate(
+    options,
+    "upgradeDrawsPerTurn",
+    DEFAULT_UPGRADE_DRAWS_PER_TURN
+  );
+  const installsPerTurn = getUpgradeEconomyRate(
+    options,
+    "upgradeInstallsPerTurn",
+    DEFAULT_UPGRADE_INSTALLS_PER_TURN
+  );
+  const drawEnergyCost = getUpgradeEconomyRate(
+    options,
+    "upgradeDrawEnergyCost",
+    DEFAULT_UPGRADE_DRAW_ENERGY_COST
+  );
+  const distribution = normalizeUpgradeCostDistribution(options);
+  const finiteHorizon = Number(horizonTurns);
+  const expectedUpgradePhases = Number.isFinite(finiteHorizon) && finiteHorizon > 0
+    ? Math.max(1, Math.ceil(finiteHorizon))
+    : null;
+  const startingHandInstallSlots = Number.isFinite(expectedUpgradePhases)
+    ? Math.min(
+      startingUpgradeCards,
+      Math.max(0, Math.floor(expectedUpgradePhases * installsPerTurn))
+    )
+    : null;
+  const futureDrawSlots = Number.isFinite(expectedUpgradePhases)
+    ? Math.max(0, Math.floor(expectedUpgradePhases * drawsPerTurn))
+    : null;
+
+  const levels = [];
+  for (let energy = startingEnergy; energy >= 0; energy -= 1) {
+    const affordableProbabilityPerCard = distribution.entries.reduce(
+      (sum, entry) => sum + (entry.cost <= energy ? entry.probability : 0),
+      0
+    );
+    const chanceAnyAffordable = startingUpgradeCards > 0
+      ? 1 - Math.pow(Math.max(0, 1 - affordableProbabilityPerCard), startingUpgradeCards)
+      : 0;
+    const expectedAffordableCards = startingUpgradeCards * affordableProbabilityPerCard;
+    levels.push({
+      energy,
+      affordableProbabilityPerCard: Number(affordableProbabilityPerCard.toFixed(4)),
+      chanceAnyAffordable: Number(chanceAnyAffordable.toFixed(4)),
+      expectedAffordableCards: Number(expectedAffordableCards.toFixed(3))
+    });
+  }
+
+  levels.forEach((level, index) => {
+    const nextLower = levels[index + 1];
+    level.chanceAnyLostBySpendingOne = nextLower
+      ? Number(Math.max(0, level.chanceAnyAffordable - nextLower.chanceAnyAffordable).toFixed(4))
+      : 0;
+    level.expectedAffordableCardsLostBySpendingOne = nextLower
+      ? Number(Math.max(0, level.expectedAffordableCards - nextLower.expectedAffordableCards).toFixed(3))
+      : 0;
+  });
+
+  return {
+    active: true,
+    method: "unknown-starting-hand-affordability-shadow-v1",
+    // Pay to Win intentionally resolves starting-space choice before these cards
+    // are dealt/revealed. The generator therefore models only the distribution
+    // and count, never a player's actual hand.
+    knownAtStartSelection: false,
+    startingEnergy,
+    maxEnergy,
+    startingUpgradeCards,
+    drawsPerTurn,
+    installsPerTurn,
+    drawEnergyCost,
+    expectedUpgradePhases,
+    startingHandInstallSlots,
+    futureDrawSlots,
+    distributionLabel: distribution.label,
+    distribution: distribution.entries.map((entry) => ({
+      cost: entry.cost,
+      weight: Number(entry.weight.toFixed(3)),
+      probability: Number(entry.probability.toFixed(4))
+    })),
+    levels
+  };
+}
+
+function getUpgradeFeaturePenaltyForAudit(featureType, options = {}, upgradeWorld = false) {
+  try {
+    const value = getTilePenaltyForFeature(
+      { type: featureType },
+      {
+        ...options,
+        batteryActive: true,
+        lighterGame: false,
+        upgradeWorld
+      }
+    );
+    return Number.isFinite(value) ? Number(value.toFixed(2)) : null;
+  } catch {
+    return null;
+  }
+}
+
+function buildUpgradeFeatureWeightAudit(options = {}) {
+  const currentUpgradeWorld = Boolean(options.upgradeWorld);
+  return {
+    active: true,
+    currentUpgradeWorld,
+    battery: {
+      base: getUpgradeFeaturePenaltyForAudit("battery", options, false),
+      upgradeWorld: getUpgradeFeaturePenaltyForAudit("battery", options, true),
+      current: getUpgradeFeaturePenaltyForAudit("battery", options, currentUpgradeWorld)
+    },
+    chopShop: {
+      base: getUpgradeFeaturePenaltyForAudit("chopShop", options, false),
+      upgradeWorld: getUpgradeFeaturePenaltyForAudit("chopShop", options, true),
+      current: getUpgradeFeaturePenaltyForAudit("chopShop", options, currentUpgradeWorld)
+    }
+  };
+}
+
 function getPayToWinDenialCost(options = {}) {
   return getCourseStartingEnergy(options) + 1;
 }
@@ -7681,17 +7947,268 @@ function getLegacyPayToWinCostEntries(firstLeg, excludedIndices = new Set()) {
   };
 }
 
-function getPayToWinLatePricingConfig(startCount, playerCount) {
+// These are model-selection guards, not energy-price thresholds. They prevent a
+// mathematically optimal but strategically trivial breakpoint from creating a
+// second printed cost merely because of traffic noise near an integer boundary.
+const PAY_TO_WIN_SELECTOR_SPLIT_MIN_GAIN_R = 0.05;
+const PAY_TO_WIN_SELECTOR_SPLIT_MIN_RELATIVE_GAIN = 0.22;
+const PAY_TO_WIN_SELECTOR_SPLIT_MIN_SEPARATION_R = 0.16;
+
+function getPayToWinSelectorSurplusConfig(startCount, playerCount) {
   const safePlayerCount = Math.max(1, playerCount ?? 1);
-  const latePlayerCount = Math.ceil(safePlayerCount / 3);
-  const lateSelectorStart = safePlayerCount - latePlayerCount + 1;
-  const surplusStarts = Math.max(0, startCount - safePlayerCount);
+  return {
+    playerCount: safePlayerCount,
+    surplusStarts: Math.max(0, startCount - safePlayerCount)
+  };
+}
+
+function getPayToWinProfileDistance(leftState, rightState) {
+  const rightByIndex = new Map((rightState?.entries ?? []).map((entry) => [
+    entry.index,
+    entry.registerEquivalent
+  ]));
+  const deltas = (leftState?.entries ?? []).map((entry) => {
+    const rightValue = rightByIndex.get(entry.index);
+    return Number.isFinite(entry.registerEquivalent) && Number.isFinite(rightValue)
+      ? Math.abs(entry.registerEquivalent - rightValue)
+      : null;
+  }).filter(Number.isFinite);
+
+  if (!deltas.length) return 0;
+  const sorted = deltas.slice().sort((left, right) => left - right);
+  const median = medianValue(sorted);
+  const p75Index = Math.min(
+    sorted.length - 1,
+    Math.floor((sorted.length - 1) * 0.75)
+  );
+  const p75 = sorted[p75Index];
+
+  // One unusual starting space should not decide where the player-tier boundary
+  // falls. Median carries most of the weight, while p75 keeps the fit sensitive
+  // to a change that affects a meaningful minority of the starting field.
+  return Number((median * 0.65 + p75 * 0.35).toFixed(4));
+}
+
+function averagePayToWinSelectorScores(
+  selectorStates,
+  selectors,
+  activeStarts,
+  field,
+  fallbackByIndex
+) {
+  const scoreByIndex = new Map();
+
+  for (const item of activeStarts) {
+    const values = selectors.map((selector) => (
+      selectorStates.get(selector)?.get(item.index)?.[field]
+    )).filter(Number.isFinite);
+    const fallback = fallbackByIndex.get(item.index);
+
+    scoreByIndex.set(
+      item.index,
+      values.length ? averageValues(values) : fallback
+    );
+  }
+
+  return scoreByIndex;
+}
+
+function getPayToWinSelectorFitError(
+  selectorPricingStates,
+  selectors,
+  representativeState
+) {
+  if (!selectors.length) return 0;
+  const distances = selectors.map((selector) => (
+    getPayToWinProfileDistance(
+      selectorPricingStates.get(selector),
+      representativeState
+    )
+  ));
+  return Number(averageValues(distances).toFixed(4));
+}
+
+function getPayToWinAdaptiveSelectorSplit(
+  activeStarts,
+  selectorStates,
+  selectorPricingStates,
+  pricingBenchmark,
+  playerCount,
+  options = {}
+) {
+  const selectors = Array.from(
+    { length: Math.max(1, playerCount) },
+    (_, index) => index + 1
+  );
+  const baselineFullByIndex = new Map(activeStarts.map((item) => [
+    item.index,
+    getPayToWinFullCourseScore(item)
+  ]));
+  const baselineAdjustedByIndex = new Map(activeStarts.map((item) => [
+    item.index,
+    item.adjustedScore
+  ]));
+  const buildRepresentative = (groupSelectors) => {
+    const fullScoreByIndex = averagePayToWinSelectorScores(
+      selectorStates,
+      groupSelectors,
+      activeStarts,
+      "full",
+      baselineFullByIndex
+    );
+    const adjustedScoreByIndex = averagePayToWinSelectorScores(
+      selectorStates,
+      groupSelectors,
+      activeStarts,
+      "adjusted",
+      baselineAdjustedByIndex
+    );
+    return {
+      selectors: groupSelectors,
+      fullScoreByIndex,
+      adjustedScoreByIndex,
+      pricingState: buildPayToWinRegisterPricingState(
+        activeStarts,
+        fullScoreByIndex,
+        pricingBenchmark,
+        options
+      )
+    };
+  };
+
+  // With at most two displayed price columns, the design problem is a
+  // one-change-point approximation: either all selector positions share one
+  // representative traffic/value profile, or one breakpoint divides them into
+  // an early and a late group. We choose the breakpoint from continuous
+  // register-equivalent profiles before integer energy thresholds are applied.
+  const singleGroup = buildRepresentative(selectors);
+  const noSplitError = getPayToWinSelectorFitError(
+    selectorPricingStates,
+    selectors,
+    singleGroup.pricingState
+  );
+  const candidates = [];
+
+  for (let cutoffAfter = 1; cutoffAfter < selectors.length; cutoffAfter += 1) {
+    const earlySelectors = selectors.slice(0, cutoffAfter);
+    const lateSelectors = selectors.slice(cutoffAfter);
+    const early = buildRepresentative(earlySelectors);
+    const late = buildRepresentative(lateSelectors);
+    const earlyError = getPayToWinSelectorFitError(
+      selectorPricingStates,
+      earlySelectors,
+      early.pricingState
+    );
+    const lateError = getPayToWinSelectorFitError(
+      selectorPricingStates,
+      lateSelectors,
+      late.pricingState
+    );
+    const splitError = Number((
+      (
+        earlyError * earlySelectors.length +
+        lateError * lateSelectors.length
+      ) / selectors.length
+    ).toFixed(4));
+    const gain = Number(Math.max(0, noSplitError - splitError).toFixed(4));
+    const relativeGain = noSplitError > 1e-9
+      ? Number((gain / noSplitError).toFixed(4))
+      : 0;
+    const separation = getPayToWinProfileDistance(
+      early.pricingState,
+      late.pricingState
+    );
+
+    candidates.push({
+      cutoffAfter,
+      earlySelectors,
+      lateSelectors,
+      early,
+      late,
+      splitError,
+      gain,
+      relativeGain,
+      separation
+    });
+  }
+
+  const minGain = Number(
+    options.payToWinSelectorSplitMinGainRegisters ??
+    PAY_TO_WIN_SELECTOR_SPLIT_MIN_GAIN_R
+  );
+  const minRelativeGain = Number(
+    options.payToWinSelectorSplitMinRelativeGain ??
+    PAY_TO_WIN_SELECTOR_SPLIT_MIN_RELATIVE_GAIN
+  );
+  const minSeparation = Number(
+    options.payToWinSelectorSplitMinSeparationRegisters ??
+    PAY_TO_WIN_SELECTOR_SPLIT_MIN_SEPARATION_R
+  );
+  const eligible = candidates.filter((candidate) => (
+    candidate.gain >= minGain &&
+    candidate.relativeGain >= minRelativeGain &&
+    candidate.separation >= minSeparation
+  ));
+  const selected = eligible.sort((left, right) => (
+    left.splitError - right.splitError ||
+    right.separation - left.separation ||
+    left.cutoffAfter - right.cutoffAfter
+  ))[0] ?? null;
+
+  if (!selected) {
+    return {
+      active: false,
+      early: singleGroup,
+      late: null,
+      selectorSplit: {
+        method: "robust-one-breakpoint-register-profile-v1",
+        selected: false,
+        cutoffAfter: null,
+        noSplitErrorR: noSplitError,
+        splitErrorR: noSplitError,
+        gainR: 0,
+        relativeGain: 0,
+        separationR: 0,
+        minGainR: minGain,
+        minRelativeGain,
+        minSeparationR: minSeparation,
+        candidates: candidates.map((candidate) => ({
+          cutoffAfter: candidate.cutoffAfter,
+          splitErrorR: candidate.splitError,
+          gainR: candidate.gain,
+          relativeGain: candidate.relativeGain,
+          separationR: candidate.separation
+        }))
+      }
+    };
+  }
 
   return {
-    lateSelectorStart,
-    lateSelectorEnd: safePlayerCount,
-    latePlayerCount,
-    surplusStarts
+    active: true,
+    early: selected.early,
+    late: selected.late,
+    selectorSplit: {
+      method: "robust-one-breakpoint-register-profile-v1",
+      selected: true,
+      cutoffAfter: selected.cutoffAfter,
+      lateSelectorStart: selected.cutoffAfter + 1,
+      lateSelectorEnd: selectors.length,
+      noSplitErrorR: noSplitError,
+      splitErrorR: selected.splitError,
+      gainR: selected.gain,
+      relativeGain: selected.relativeGain,
+      separationR: selected.separation,
+      minGainR: minGain,
+      minRelativeGain,
+      minSeparationR: minSeparation,
+      candidates: candidates.map((candidate) => ({
+        cutoffAfter: candidate.cutoffAfter,
+        splitErrorR: candidate.splitError,
+        gainR: candidate.gain,
+        relativeGain: candidate.relativeGain,
+        separationR: candidate.separation
+      }))
+    }
   };
 }
 
@@ -7800,7 +8317,8 @@ function getPayToWinLateCostEntries(
   tileMap,
   excludedIndices = new Set(),
   playerCount = 4,
-  options = {}
+  options = {},
+  baseCostState = null
 ) {
   const activeStarts = (firstLeg.starts || []).filter((item) => (
     item.reachable &&
@@ -7809,25 +8327,92 @@ function getPayToWinLateCostEntries(
     Number.isFinite(item.adjustedScore) &&
     !excludedIndices.has(item.index)
   ));
-  const config = getPayToWinLatePricingConfig(
+  const config = getPayToWinSelectorSurplusConfig(
     activeStarts.length,
     playerCount
   );
 
   if (!activeStarts.length) {
     return {
+      active: false,
+      evaluated: false,
       entries: [],
+      earlyEntries: [],
       costUnit: 1,
+      earlyCostUnit: 1,
       minScore: 0,
       maxScore: 0,
+      pricingModel: null,
+      earlyPricingModel: null,
       scenarioSamples: 0,
+      scenarioSamplesBySelector: {},
+      lateSelectorStart: null,
+      lateSelectorEnd: null,
+      latePlayerCount: 0,
+      selectorSplit: null,
+      ...config
+    };
+  }
+
+  const baselineFullByIndex = new Map(activeStarts.map((item) => [
+    item.index,
+    getPayToWinFullCourseScore(item)
+  ]));
+  const pricingBenchmark = baseCostState?.pricingModel
+    ? {
+      registerScore: baseCostState.pricingModel.registerScore,
+      horizonTurns: baseCostState.pricingModel.horizonTurns
+    }
+    : getPayToWinPricingBenchmark(
+      tileMap,
+      firstLeg,
+      activeStarts,
+      options
+    );
+  const baselinePricingState = baseCostState ?? buildPayToWinRegisterPricingState(
+    activeStarts,
+    baselineFullByIndex,
+    pricingBenchmark,
+    options
+  );
+
+  if (config.surplusStarts <= 0 || config.playerCount <= 1) {
+    return {
+      ...buildInactivePayToWinLateCostState(
+        baselinePricingState,
+        getPayToWinDenialCost(options)
+      ),
+      evaluated: false,
+      earlyEntries: baselinePricingState.entries,
+      earlyCostUnit: baselinePricingState.costUnit,
+      earlyPricingModel: baselinePricingState.pricingModel,
+      scenarioSamplesBySelector: {},
+      selectorSplit: {
+        method: "robust-one-breakpoint-register-profile-v1",
+        selected: false,
+        reason: "inactive-no-surplus"
+      },
       ...config
     };
   }
 
   let scenarioSamples = 0;
+  const scenarioSamplesBySelector = {};
   const activeIndices = activeStarts.map((item) => item.index);
-  const scoreByIndex = new Map();
+  const selectorStates = new Map();
+  const selectorOne = new Map(activeStarts.map((item) => [
+    item.index,
+    {
+      adjusted: item.adjustedScore,
+      full: baselineFullByIndex.get(item.index)
+    }
+  ]));
+  selectorStates.set(1, selectorOne);
+
+  for (let selector = 2; selector <= config.playerCount; selector += 1) {
+    selectorStates.set(selector, new Map());
+    scenarioSamplesBySelector[selector] = 0;
+  }
 
   for (const item of activeStarts) {
     const otherIndices = activeIndices.filter(
@@ -7837,22 +8422,11 @@ function getPayToWinLateCostEntries(
       (item.bestScore ?? item.selectedRoute?.score ?? 0) +
       (item.trafficPenalty ?? 0)
     );
-    const baselineFullTotal = (
-      (item.courseEstimate?.totalScore ?? item.fullCourseRoute?.score ?? 0) +
-      (
-        item.courseEstimate?.fullCourseTrafficPenalty ??
-        item.fullCourseTrafficPenalty ??
-        0
-      )
-    );
-    const scenarioScores = [];
-    const scenarioFullScores = [];
+    const baselineFullTotal = baselineFullByIndex.get(item.index);
 
-    for (
-      let selector = config.lateSelectorStart;
-      selector <= config.lateSelectorEnd;
-      selector += 1
-    ) {
+    for (let selector = 2; selector <= config.playerCount; selector += 1) {
+      const scenarioScores = [];
+      const scenarioFullScores = [];
       const knownCount = Math.min(
         otherIndices.length,
         selector - 1
@@ -7865,7 +8439,7 @@ function getPayToWinLateCostEntries(
 
       for (const knownIndices of knownSamples) {
         const knownSet = new Set(knownIndices);
-        const futurePlayers = Math.max(0, playerCount - selector);
+        const futurePlayers = Math.max(0, config.playerCount - selector);
         const unresolvedIndices = otherIndices.filter(
           (index) => !knownSet.has(index)
         );
@@ -7891,7 +8465,7 @@ function getPayToWinLateCostEntries(
           occupancyByIndex,
           {
             ...options,
-            playerCount,
+            playerCount: config.playerCount,
             payToWin: true,
             fullCourseTrafficPasses: 1
           }
@@ -7905,84 +8479,107 @@ function getPayToWinLateCostEntries(
           scenario.firstLegTotal - baselineFirstTotal;
         const fullCourseDelta =
           scenario.fullTotal - baselineFullTotal;
-        const lateAdjustedScore = (
+        const adjustedScore = (
           item.adjustedScore +
           firstLegDelta +
           clamp(fullCourseDelta * 0.32, -10, 10)
         );
 
-        if (Number.isFinite(lateAdjustedScore)) {
-          scenarioScores.push(lateAdjustedScore);
-          if (Number.isFinite(scenario.fullTotal)) {
-            scenarioFullScores.push(scenario.fullTotal);
-          }
-          scenarioSamples += 1;
+        if (Number.isFinite(adjustedScore)) {
+          scenarioScores.push(adjustedScore);
         }
+        if (Number.isFinite(scenario.fullTotal)) {
+          scenarioFullScores.push(scenario.fullTotal);
+        }
+        scenarioSamples += 1;
+        scenarioSamplesBySelector[selector] += 1;
       }
-    }
 
-    scoreByIndex.set(
+      selectorStates.get(selector).set(
+        item.index,
+        {
+          adjusted: scenarioScores.length
+            ? averageValues(scenarioScores)
+            : item.adjustedScore,
+          full: scenarioFullScores.length
+            ? averageValues(scenarioFullScores)
+            : baselineFullTotal
+        }
+      );
+    }
+  }
+
+  const selectorPricingStates = new Map();
+  selectorPricingStates.set(1, baselinePricingState);
+  for (let selector = 2; selector <= config.playerCount; selector += 1) {
+    const fullScoreByIndex = new Map(activeStarts.map((item) => [
       item.index,
-      {
-        adjusted: scenarioScores.length
-          ? averageValues(scenarioScores)
-          : item.adjustedScore,
-        full: scenarioFullScores.length
-          ? averageValues(scenarioFullScores)
-          : baselineFullTotal
-      }
+      selectorStates.get(selector)?.get(item.index)?.full
+    ]));
+    selectorPricingStates.set(
+      selector,
+      buildPayToWinRegisterPricingState(
+        activeStarts,
+        fullScoreByIndex,
+        pricingBenchmark,
+        options
+      )
     );
   }
 
-  const scoredStarts = activeStarts.map((item) => ({
-    startAnalysis: item,
-    index: item.index,
-    adjustedScore: item.adjustedScore,
-    lateAdjustedScore: Number(
-      (scoreByIndex.get(item.index)?.adjusted ?? item.adjustedScore).toFixed(2)
-    ),
-    lateFullScore: Number(
-      (scoreByIndex.get(item.index)?.full ?? (item.courseEstimate?.totalScore ?? item.fullCourseRoute?.score ?? 0)).toFixed(2)
-    )
-  }));
-  const lateFullScoreByIndex = new Map(
-    scoredStarts.map((item) => [item.index, item.lateFullScore])
-  );
-  const pricingBenchmark = getPayToWinPricingBenchmark(
-    tileMap,
-    firstLeg,
+  const adaptive = getPayToWinAdaptiveSelectorSplit(
     activeStarts,
-    options
-  );
-  const pricingState = buildPayToWinRegisterPricingState(
-    activeStarts,
-    lateFullScoreByIndex,
+    selectorStates,
+    selectorPricingStates,
     pricingBenchmark,
+    config.playerCount,
     options
   );
-  const scoredByIndex = new Map(scoredStarts.map((item) => [item.index, item]));
+  const earlyState = adaptive.early.pricingState;
+  const lateState = adaptive.active
+    ? adaptive.late.pricingState
+    : earlyState;
+  const earlyAdjustedByIndex = adaptive.early.adjustedScoreByIndex;
+  const lateAdjustedByIndex = adaptive.active
+    ? adaptive.late.adjustedScoreByIndex
+    : earlyAdjustedByIndex;
   const denialCost = getPayToWinDenialCost(options);
-  const entries = pricingState.entries.map((entry) => {
-    const scored = scoredByIndex.get(entry.index) ?? {};
-    return {
-      ...entry,
-      lateAdjustedScore: scored.lateAdjustedScore ?? entry.adjustedScore,
-      lateFullScore: scored.lateFullScore ?? entry.fullScore,
-      lateAdvantage: entry.advantage,
-      lateRegisterEquivalent: entry.registerEquivalent,
-      calculatedLateEnergyCost: entry.energyCost,
-      lateEnergyCost: entry.energyCost,
-      lateUnavailable: entry.energyCost >= denialCost
-    };
-  });
+  const lateEntries = lateState.entries.map((entry) => ({
+    ...entry,
+    lateAdjustedScore: lateAdjustedByIndex.get(entry.index) ?? entry.adjustedScore,
+    lateFullScore: entry.fullScore,
+    lateAdvantage: entry.advantage,
+    lateRegisterEquivalent: entry.registerEquivalent,
+    calculatedLateEnergyCost: entry.energyCost,
+    lateEnergyCost: entry.energyCost,
+    lateUnavailable: entry.energyCost >= denialCost
+  }));
+  const lateSelectorStart = adaptive.active
+    ? adaptive.selectorSplit.lateSelectorStart
+    : null;
+  const lateSelectorEnd = adaptive.active
+    ? adaptive.selectorSplit.lateSelectorEnd
+    : null;
 
   return {
-    entries,
-    costUnit: pricingState.costUnit,
-    minScore: pricingState.minScore,
-    maxScore: pricingState.maxScore,
-    pricingModel: pricingState.pricingModel,
+    active: adaptive.active,
+    evaluated: true,
+    entries: lateEntries,
+    earlyEntries: earlyState.entries,
+    costUnit: lateState.costUnit,
+    earlyCostUnit: earlyState.costUnit,
+    minScore: lateState.minScore,
+    maxScore: lateState.maxScore,
+    pricingModel: lateState.pricingModel,
+    earlyPricingModel: earlyState.pricingModel,
     scenarioSamples,
+    scenarioSamplesBySelector,
+    lateSelectorStart,
+    lateSelectorEnd,
+    latePlayerCount: adaptive.active
+      ? config.playerCount - adaptive.selectorSplit.cutoffAfter
+      : 0,
+    selectorSplit: adaptive.selectorSplit,
     ...config
   };
 }
@@ -8132,6 +8729,11 @@ function buildPayToWinEnergyShadow(firstLeg, tileMap, playerCount, options = {},
       }
     )
     : null;
+  const upgradeEconomy = buildStartingUpgradeHandEconomyShadow(
+    options,
+    benchmark?.medianFullCourseTurns
+  );
+  const upgradeFeatureWeights = buildUpgradeFeatureWeightAudit(options);
   const registerScore = Number(benchmark?.registerScoreMedian);
   const usableRegisterScore = Number.isFinite(registerScore) && registerScore > 0
     ? registerScore
@@ -8152,6 +8754,12 @@ function buildPayToWinEnergyShadow(firstLeg, tileMap, playerCount, options = {},
     : new Map();
   const legacyInitialCostByIndex = comparisonState.legacyInitialCostByIndex instanceof Map
     ? comparisonState.legacyInitialCostByIndex
+    : new Map();
+  const finalEntryByIndex = comparisonState.finalEntryByIndex instanceof Map
+    ? comparisonState.finalEntryByIndex
+    : new Map();
+  const finalLateEntryByIndex = comparisonState.finalLateEntryByIndex instanceof Map
+    ? comparisonState.finalLateEntryByIndex
     : new Map();
   const prunedIndices = comparisonState.prunedIndices instanceof Set
     ? comparisonState.prunedIndices
@@ -8174,6 +8782,8 @@ function buildPayToWinEnergyShadow(firstLeg, tileMap, playerCount, options = {},
       !prunedIndices.has(item.index) && !fullyUnavailableIndices.has(item.index)
     )).length,
     benchmark,
+    upgradeEconomy,
+    upgradeFeatureWeights,
     initialPricingModel: comparisonState.initialPricingModel ?? null,
     finalPricingModel: comparisonState.finalPricingModel ?? null,
     worstFullScore: Number.isFinite(worstFullScore) ? Number(worstFullScore.toFixed(2)) : null,
@@ -8186,9 +8796,14 @@ function buildPayToWinEnergyShadow(firstLeg, tileMap, playerCount, options = {},
       const lateAdvantage = Number.isFinite(worstLateFullScore) && Number.isFinite(lateEntry?.lateFullScore)
         ? Math.max(0, worstLateFullScore - lateEntry.lateFullScore)
         : null;
+      const finalEntry = finalEntryByIndex.get(entry.index);
+      const finalLateEntry = finalLateEntryByIndex.get(entry.index);
       return {
         index: entry.index,
         fullScore: Number(entry.fullScore.toFixed(2)),
+        // Backward-compatible shadow fields remain the INITIAL validated-field
+        // comparison. v37 adds explicit final-field values so a moving zero
+        // baseline cannot be mistaken for a threshold inconsistency in logs.
         advantage: Number(advantage.toFixed(2)),
         registerEquivalent: usableRegisterScore
           ? Number((advantage / usableRegisterScore).toFixed(2))
@@ -8206,12 +8821,39 @@ function buildPayToWinEnergyShadow(firstLeg, tileMap, playerCount, options = {},
           ? lateEntry.lateEnergyCost
           : null,
         lateUnavailable: Boolean(lateEntry?.lateUnavailable),
+        finalFullScore: Number.isFinite(finalEntry?.fullScore)
+          ? Number(finalEntry.fullScore.toFixed(2))
+          : null,
+        finalAdvantage: Number.isFinite(finalEntry?.advantage)
+          ? Number(finalEntry.advantage.toFixed(2))
+          : null,
+        finalRegisterEquivalent: Number.isFinite(finalEntry?.registerEquivalent)
+          ? Number(finalEntry.registerEquivalent.toFixed(2))
+          : null,
+        finalLateFullScore: Number.isFinite(finalLateEntry?.lateFullScore)
+          ? Number(finalLateEntry.lateFullScore.toFixed(2))
+          : null,
+        finalLateAdvantage: Number.isFinite(finalLateEntry?.lateAdvantage)
+          ? Number(finalLateEntry.lateAdvantage.toFixed(2))
+          : null,
+        finalLateRegisterEquivalent: Number.isFinite(finalLateEntry?.lateRegisterEquivalent)
+          ? Number(finalLateEntry.lateRegisterEquivalent.toFixed(2))
+          : null,
+        finalLateEnergyCost: Number.isFinite(finalLateEntry?.lateEnergyCost)
+          ? finalLateEntry.lateEnergyCost
+          : null,
+        finalLateUnavailable: Boolean(finalLateEntry?.lateUnavailable),
         initialEnergyCost: initialCostByIndex.has(entry.index)
           ? initialCostByIndex.get(entry.index)
           : null,
         finalEnergyCost: finalCostByIndex.has(entry.index)
           ? finalCostByIndex.get(entry.index)
           : null,
+        finalEarlyUnavailable: Boolean(
+          Number.isFinite(finalEntry?.energyCost) &&
+          Number.isFinite(comparisonState.finalPricingModel?.denialCost) &&
+          finalEntry.energyCost >= comparisonState.finalPricingModel.denialCost
+        ),
         legacyInitialCost: legacyInitialCostByIndex.has(entry.index)
           ? legacyInitialCostByIndex.get(entry.index)
           : null,
@@ -8226,6 +8868,7 @@ function buildPayToWinEnergyShadow(firstLeg, tileMap, playerCount, options = {},
 function buildInactivePayToWinLateCostState(costState, denialCost) {
   return {
     active: false,
+    evaluated: false,
     entries: (costState.entries ?? []).map((entry) => ({
       ...entry,
       lateAdjustedScore: entry.adjustedScore,
@@ -8235,15 +8878,20 @@ function buildInactivePayToWinLateCostState(costState, denialCost) {
       lateEnergyCost: entry.energyCost,
       lateUnavailable: entry.energyCost >= denialCost
     })),
+    earlyEntries: costState.entries ?? [],
     costUnit: costState.costUnit,
+    earlyCostUnit: costState.costUnit,
     minScore: costState.minScore,
     maxScore: costState.maxScore,
     pricingModel: costState.pricingModel ?? null,
+    earlyPricingModel: costState.pricingModel ?? null,
     scenarioSamples: 0,
+    scenarioSamplesBySelector: {},
     lateSelectorStart: null,
     lateSelectorEnd: null,
     latePlayerCount: 0,
-    surplusStarts: 0
+    surplusStarts: 0,
+    selectorSplit: null
   };
 }
 
@@ -8321,41 +8969,52 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
   const startingEnergy = getCourseStartingEnergy(options);
   const denialCost = getPayToWinDenialCost(options);
   const finalCostState = getPayToWinCostEntries(currentFirstLeg, tileMap, excludedIndices, options);
-  const costByIndex = new Map(finalCostState.entries.map((entry) => [entry.index, entry.energyCost]));
-  const earlyUnavailableByIndex = new Map(finalCostState.entries.map((entry) => [
-    entry.index,
-    entry.energyCost >= denialCost
-  ]));
-  // Surplus choices are the prerequisite for the late-selector information
-  // advantage. If every surviving start must be occupied, later selectors know
-  // more but have no meaningful choice to exploit, so there is no second layer.
-  const latePricingActive = finalCostState.entries.length > playerCount;
-  const lateCostState = latePricingActive
+  // v38 evaluates every selector position when surplus choices exist, then fits
+  // at most one breakpoint. The first displayed price represents the selected
+  // early group, and the optional second price represents the selected late
+  // group. If a two-group fit is not materially better, everybody shares the
+  // single all-selector representative price.
+  const selectorPricingEligible = finalCostState.entries.length > playerCount;
+  const lateCostState = selectorPricingEligible
     ? getPayToWinLateCostEntries(
       currentFirstLeg,
       tileMap,
       excludedIndices,
       playerCount,
-      options
+      options,
+      finalCostState
     )
     : buildInactivePayToWinLateCostState(finalCostState, denialCost);
+  const earlyCostState = {
+    entries: lateCostState.earlyEntries ?? finalCostState.entries,
+    costUnit: lateCostState.earlyCostUnit ?? finalCostState.costUnit,
+    minScore: finalCostState.minScore,
+    maxScore: finalCostState.maxScore,
+    pricingModel: lateCostState.earlyPricingModel ?? finalCostState.pricingModel
+  };
+  const latePricingActive = Boolean(lateCostState.active);
+  const costByIndex = new Map(earlyCostState.entries.map((entry) => [entry.index, entry.energyCost]));
+  const earlyUnavailableByIndex = new Map(earlyCostState.entries.map((entry) => [
+    entry.index,
+    entry.energyCost >= denialCost
+  ]));
   const lateCostByIndex = new Map(lateCostState.entries.map((entry) => [entry.index, entry.lateEnergyCost]));
   const lateUnavailableByIndex = new Map(lateCostState.entries.map((entry) => [entry.index, entry.lateUnavailable]));
   const lateAdjustedScoreByIndex = new Map(lateCostState.entries.map((entry) => [entry.index, entry.lateAdjustedScore]));
-  const earlyUnavailableCount = finalCostState.entries.filter((entry) => earlyUnavailableByIndex.get(entry.index)).length;
+  const earlyUnavailableCount = earlyCostState.entries.filter((entry) => earlyUnavailableByIndex.get(entry.index)).length;
   const lateUnavailableCount = lateCostState.entries.filter((entry) => entry.lateUnavailable).length;
-  const fullyUnavailableEntries = finalCostState.entries.filter((entry) => (
+  const fullyUnavailableEntries = earlyCostState.entries.filter((entry) => (
     earlyUnavailableByIndex.get(entry.index) &&
     lateUnavailableByIndex.get(entry.index)
   ));
   const fullyUnavailableIndices = new Set(fullyUnavailableEntries.map((entry) => entry.index));
   const fullyUnavailableCount = fullyUnavailableEntries.length;
-  const maxUnavailable = Math.max(0, finalCostState.entries.length - playerCount);
+  const maxUnavailable = Math.max(0, earlyCostState.entries.length - playerCount);
   const maxEarlyUnavailable = maxUnavailable;
   const maxLateUnavailable = maxUnavailable;
   const earlyAvailabilityValid = earlyUnavailableCount <= maxEarlyUnavailable;
   const lateAvailabilityValid = lateUnavailableCount <= maxLateUnavailable;
-  const pricedStartCount = Math.max(0, finalCostState.entries.length - fullyUnavailableCount);
+  const pricedStartCount = Math.max(0, earlyCostState.entries.length - fullyUnavailableCount);
   const availabilityValid = (
     pricedStartCount >= playerCount &&
     earlyAvailabilityValid &&
@@ -8384,13 +9043,13 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
     !entry.lateUnavailable &&
     entry.lateEnergyCost < costByIndex.get(entry.index)
   )).length : 0;
-  const activeScores = finalCostState.entries.map((entry) => entry.adjustedScore);
+  const activeScores = earlyCostState.entries.map((entry) => entry.adjustedScore);
   const meanScore = activeScores.length ? averageValues(activeScores) : 0;
-  const shadowLatePricingActive = shadowInitialCostState.entries.length > playerCount;
-  // Reuse the normal late calculation when pruning did not change the field.
-  // Otherwise evaluate the full initial field once so diagnostics can compare
-  // the same late-selector traffic model before and after endpoint pruning.
-  const shadowLateCostState = shadowLatePricingActive
+  const shadowSelectorPricingEligible = shadowInitialCostState.entries.length > playerCount;
+  // Reuse the normal adaptive selector calculation when pruning did not change
+  // the field. Otherwise evaluate the full initial field once so diagnostics
+  // can compare its independently chosen breakpoint with the final field.
+  const shadowLateCostState = shadowSelectorPricingEligible
     ? (pruned.length === 0 && shadowInitialCostState.entries.length === finalCostState.entries.length
       ? lateCostState
       : getPayToWinLateCostEntries(
@@ -8398,9 +9057,11 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
         tileMap,
         new Set(),
         playerCount,
-        options
+        options,
+        shadowInitialCostState
       ))
     : buildInactivePayToWinLateCostState(shadowInitialCostState, shadowDenialCost);
+  const shadowLatePricingActive = Boolean(shadowLateCostState.active);
   const energyShadow = buildPayToWinEnergyShadow(
     firstLeg,
     tileMap,
@@ -8412,10 +9073,12 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
       initialCostByIndex: new Map(shadowInitialCostState.entries.map((entry) => [entry.index, entry.energyCost])),
       finalCostByIndex: costByIndex,
       legacyInitialCostByIndex: new Map(legacyInitialCostState.entries.map((entry) => [entry.index, entry.energyCost])),
+      finalEntryByIndex: new Map(earlyCostState.entries.map((entry) => [entry.index, entry])),
+      finalLateEntryByIndex: new Map(lateCostState.entries.map((entry) => [entry.index, entry])),
       prunedIndices: new Set(pruned.map((entry) => entry.index)),
       fullyUnavailableIndices,
       initialPricingModel: shadowInitialCostState.pricingModel,
-      finalPricingModel: finalCostState.pricingModel
+      finalPricingModel: earlyCostState.pricingModel
     }
   );
   const prunedOutliers = pruned.map((item) => ({
@@ -8465,12 +9128,16 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
       payToWin: {
         active: true,
         startingEnergy,
+        startingUpgradeCards: energyShadow?.upgradeEconomy?.startingUpgradeCards ?? getCourseStartingUpgradeCards(options),
         denialCost,
-        costUnit: finalCostState.costUnit,
+        costUnit: earlyCostState.costUnit,
         lateCostUnit: lateCostState.costUnit,
-        pricingModel: finalCostState.pricingModel,
+        pricingModel: earlyCostState.pricingModel,
         initialPricingModel: shadowInitialCostState.pricingModel,
         latePricingModel: lateCostState.pricingModel ?? null,
+        selectorSplit: lateCostState.selectorSplit ?? null,
+        selectorPricingEvaluated: Boolean(lateCostState.evaluated),
+        selectorScenarioSamplesByPosition: lateCostState.scenarioSamplesBySelector ?? {},
         legacyInitialCostUnit: legacyInitialCostState.costUnit,
         pruned,
         pricedStartCount,
@@ -8479,7 +9146,9 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
         lateSelectorEnd: lateCostState.lateSelectorEnd,
         surplusStarts: Math.max(0, pricedStartCount - playerCount),
         latePricingActive,
-        lateTrafficModel: latePricingActive ? "conditional-draft" : "inactive-no-surplus",
+        lateTrafficModel: latePricingActive
+          ? "adaptive-one-breakpoint"
+          : (selectorPricingEligible ? "adaptive-no-meaningful-split" : "inactive-no-surplus"),
         lateScenarioSamples: lateCostState.scenarioSamples,
         shadowLatePricingActive,
         shadowLateScenarioSamples: shadowLateCostState.scenarioSamples,
@@ -11506,12 +12175,28 @@ function buildScenarioCopySummary(scenario) {
     );
   } else if (scenario.payToWin && payToWin?.active) {
     const pricingModel = payToWin.pricingModel ?? {};
+    const selectorSplit = payToWin.selectorSplit ?? null;
     lines.push(
-      `Pay to Win: model ${pricingModel.method ?? "n/a"}, baseline ${Number.isInteger(pricingModel.baselineIndex) ? `#${pricingModel.baselineIndex + 1}` : "n/a"}, startingEnergy ${payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY}, priced ${payToWin.pricedStartCount ?? "n/a"}, pruned ${(payToWin.pruned ?? []).length}, fullyUnavailable ${payToWin.fullyUnavailableCount ?? 0}, earlyUnavailable ${payToWin.earlyUnavailableCount ?? 0}/${payToWin.maxEarlyUnavailable ?? 0}, lateUnavailable ${payToWin.lateUnavailableCount ?? 0}/${payToWin.maxLateUnavailable ?? 0}, surplusStarts ${payToWin.surplusStarts ?? 0}, latePricing ${payToWin.latePricingActive ? "active" : "inactive"}`
+      `Pay to Win: model ${pricingModel.method ?? "n/a"}, baseline ${Number.isInteger(pricingModel.baselineIndex) ? `#${pricingModel.baselineIndex + 1}` : "n/a"}, startingEnergy ${payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY}, startingUpgradeCards ${payToWin.startingUpgradeCards ?? DEFAULT_STARTING_UPGRADE_CARDS} (unknown at start choice), priced ${payToWin.pricedStartCount ?? "n/a"}, pruned ${(payToWin.pruned ?? []).length}, fullyUnavailable ${payToWin.fullyUnavailableCount ?? 0}, earlyUnavailable ${payToWin.earlyUnavailableCount ?? 0}/${payToWin.maxEarlyUnavailable ?? 0}, lateUnavailable ${payToWin.lateUnavailableCount ?? 0}/${payToWin.maxLateUnavailable ?? 0}, surplusStarts ${payToWin.surplusStarts ?? 0}, latePricing ${payToWin.latePricingActive ? "active" : "inactive"}, slashPrices ${payToWin.hasLatePriceDifference ? "yes" : "no"}`
     );
+    if (payToWin.selectorPricingEvaluated && selectorSplit) {
+      if (selectorSplit.selected) {
+        lines.push(
+          `P2W selector split: after player ${selectorSplit.cutoffAfter} (early 1-${selectorSplit.cutoffAfter}, late ${selectorSplit.lateSelectorStart}-${selectorSplit.lateSelectorEnd}); one-group error ${selectorSplit.noSplitErrorR}R -> ${selectorSplit.splitErrorR}R, gain ${selectorSplit.gainR}R/${Number((selectorSplit.relativeGain * 100).toFixed(1))}%, separation ${selectorSplit.separationR}R`
+        );
+      } else {
+        const bestCandidate = [...(selectorSplit.candidates ?? [])].sort((left, right) => (
+          left.splitErrorR - right.splitErrorR ||
+          right.separationR - left.separationR
+        ))[0];
+        lines.push(
+          `P2W selector split: none; one-group error ${selectorSplit.noSplitErrorR ?? "n/a"}R${bestCandidate ? `, best candidate after player ${bestCandidate.cutoffAfter} gain ${bestCandidate.gainR}R/${Number((bestCandidate.relativeGain * 100).toFixed(1))}% separation ${bestCandidate.separationR}R` : ""}`
+        );
+      }
+    }
     if (pricingModel.thresholds?.length) {
       lines.push(
-        `P2W energy curve: register ${pricingModel.registerScore ?? "n/a"} score, horizon ${pricingModel.horizonTurns ?? "n/a"} turns x${pricingModel.horizonScale ?? "n/a"}; ${pricingModel.thresholds.map((threshold) => threshold.energy <= (payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY) ? `${threshold.energy}E@${threshold.cumulativeRegisters}R` : `deny@${threshold.cumulativeRegisters}R`).join(", ")}`
+        `P2W final-field energy curve: register ${pricingModel.registerScore ?? "n/a"} score, horizon ${pricingModel.horizonTurns ?? "n/a"} turns x${pricingModel.horizonScale ?? "n/a"}; ${pricingModel.thresholds.map((threshold) => threshold.energy <= (payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY) ? `${threshold.energy}E@${threshold.cumulativeRegisters}R` : `deny@${threshold.cumulativeRegisters}R`).join(", ")}`
       );
     }
     if ((payToWin.pruned ?? []).length) {
@@ -11522,17 +12207,50 @@ function buildScenarioCopySummary(scenario) {
     const energyShadow = payToWin.energyShadow;
     if (energyShadow?.active) {
       const benchmark = energyShadow.benchmark ?? {};
+      const upgradeEconomy = energyShadow.upgradeEconomy ?? {};
+      const featureWeights = energyShadow.upgradeFeatureWeights ?? {};
+      const distributionText = (upgradeEconomy.distribution ?? []).map((entry) =>
+        `${entry.cost}E:${Number((entry.probability * 100).toFixed(1))}%`
+      ).join("/") || "n/a";
+      const accessText = (upgradeEconomy.levels ?? []).map((level) =>
+        `${level.energy}E any${Number((level.chanceAnyAffordable * 100).toFixed(1))}%/${level.expectedAffordableCards} cards`
+      ).join(", ") || "n/a";
+      const formatFeatureWeights = (entry) => entry
+        ? `current ${entry.current ?? "n/a"}, base ${entry.base ?? "n/a"}, UpgradeWorld ${entry.upgradeWorld ?? "n/a"}`
+        : "n/a";
+      let priorCumulativeR = 0;
+      const spendDepthText = (pricingModel.thresholds ?? [])
+        .filter((threshold) => threshold.energy <= (payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY))
+        .map((threshold) => {
+          const marginalR = Number((threshold.cumulativeRegisters - priorCumulativeR).toFixed(3));
+          priorCumulativeR = threshold.cumulativeRegisters;
+          const energyBeforeSpend = (payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY) - threshold.energy + 1;
+          const accessLevel = (upgradeEconomy.levels ?? []).find((level) => level.energy === energyBeforeSpend);
+          return `spend${threshold.energy} ${marginalR}R; ${energyBeforeSpend}->${Math.max(0, energyBeforeSpend - 1)}E access -${Number(((accessLevel?.chanceAnyLostBySpendingOne ?? 0) * 100).toFixed(1))}pp/-${accessLevel?.expectedAffordableCardsLostBySpendingOne ?? 0} cards`;
+        }).join(" | ") || "n/a";
       lines.push(
-        `P2W energy shadow: validated ${energyShadow.validatedStartCount ?? "n/a"}, final-offered ${energyShadow.offeredStartCount ?? "n/a"}, tempo-register ${benchmark.registerScoreMedian ?? "n/a"} score (${benchmark.registerSamples ?? 0} samples), Power Up strategic delta ${benchmark.powerUpStrategicDeltaMedian ?? benchmark.powerUpOpportunityMedian ?? "n/a"} score (${benchmark.powerUpStrategicDeltaSamples ?? benchmark.powerUpOpportunitySamples ?? 0} samples), horizon ${benchmark.medianFullCourseActions ?? "n/a"} registers/${benchmark.medianFullCourseTurns ?? "n/a"} turns, current Power Up base discount ${benchmark.powerUpBaseDiscount ?? "n/a"}, battery energy reward ${benchmark.batteryEnergyRewardScore ?? "n/a"}`,
-        `P2W start advantages: ${(energyShadow.starts ?? []).map((entry) => {
-          const status = entry.pruned ? "pruned" : entry.fullyUnavailable ? "unavailable" : "offered";
-          const currentPrice = Number.isFinite(entry.finalEnergyCost) ? `${entry.finalEnergyCost}E` : status;
+        `P2W validated-field shadow: validated ${energyShadow.validatedStartCount ?? "n/a"}, final-offered ${energyShadow.offeredStartCount ?? "n/a"}, tempo-register ${benchmark.registerScoreMedian ?? "n/a"} score (${benchmark.registerSamples ?? 0} samples), Power Up strategic delta ${benchmark.powerUpStrategicDeltaMedian ?? benchmark.powerUpOpportunityMedian ?? "n/a"} score (${benchmark.powerUpStrategicDeltaSamples ?? benchmark.powerUpOpportunitySamples ?? 0} samples), validated-field horizon ${benchmark.medianFullCourseActions ?? "n/a"} registers/${benchmark.medianFullCourseTurns ?? "n/a"} turns, current Power Up base discount ${benchmark.powerUpBaseDiscount ?? "n/a"}, battery energy reward ${benchmark.batteryEnergyRewardScore ?? "n/a"}`,
+        `P2W upgrade economy shadow: ${upgradeEconomy.startingUpgradeCards ?? "n/a"} unseen starting cards, prior ${upgradeEconomy.distributionLabel ?? "n/a"} [${distributionText}], ${upgradeEconomy.expectedUpgradePhases ?? "n/a"} upgrade phases, starting-hand install slots ${upgradeEconomy.startingHandInstallSlots ?? "n/a"}/${upgradeEconomy.startingUpgradeCards ?? "n/a"}, future draw slots ${upgradeEconomy.futureDrawSlots ?? "n/a"} at ${upgradeEconomy.drawEnergyCost ?? "n/a"}E each, install rate ${upgradeEconomy.installsPerTurn ?? "n/a"}/phase, maxEnergy ${upgradeEconomy.maxEnergy ?? "n/a"}`,
+        `P2W starting-hand access by remaining energy: ${accessText}`,
+        `P2W current ladder vs unseen-hand access: ${spendDepthText}`,
+        `Upgrade feature weights (route score, negative = benefit): battery ${formatFeatureWeights(featureWeights.battery)}; chopShop ${formatFeatureWeights(featureWeights.chopShop)}`,
+        `P2W start repricing: ${(energyShadow.starts ?? []).map((entry) => {
           const initialPrice = Number.isFinite(entry.initialEnergyCost) ? `${entry.initialEnergyCost}E` : "n/a";
           const legacyPrice = Number.isFinite(entry.legacyInitialCost) ? `${entry.legacyInitialCost}E` : "n/a";
-          const lateText = payToWin.shadowLatePricingActive && Number.isFinite(entry.lateAdvantage)
-            ? ` late ${entry.lateAdvantage}/${entry.lateRegisterEquivalent ?? "n/a"}R/${entry.lateUnavailable ? "—" : `${entry.lateEnergyCost ?? "n/a"}E`}`
+          const initialState = `${entry.registerEquivalent ?? "n/a"}R/${initialPrice}`;
+          if (entry.pruned) {
+            return `#${entry.index + 1} initial ${initialState} -> pruned (legacy ${legacyPrice})`;
+          }
+          const finalPrice = entry.finalEarlyUnavailable
+            ? "—"
+            : Number.isFinite(entry.finalEnergyCost)
+              ? `${entry.finalEnergyCost}E`
+              : (entry.fullyUnavailable ? "—" : "n/a");
+          const finalState = `${entry.finalRegisterEquivalent ?? "n/a"}R/${finalPrice}`;
+          const lateText = payToWin.latePricingActive && Number.isFinite(entry.finalLateRegisterEquivalent)
+            ? `, late ${entry.finalLateRegisterEquivalent}R/${entry.finalLateUnavailable ? "—" : `${entry.finalLateEnergyCost ?? "n/a"}E`}`
             : "";
-          return `#${entry.index + 1} ${entry.advantage} score/${entry.registerEquivalent ?? "n/a"}R ${status} ${currentPrice} (initial ${initialPrice}, legacy ${legacyPrice})${lateText}`;
+          return `#${entry.index + 1} initial ${initialState} -> final ${finalState}${lateText} (legacy ${legacyPrice})`;
         }).join(", ") || "none"}`
       );
     }
@@ -11769,14 +12487,35 @@ function buildScenarioReport(scenario, selectedLegIndex) {
       ? `Competitive balance simulation: blocked ${scenario.metrics.competitiveBlockImpact.blockedStartCount} [${scenario.metrics.competitiveBlockImpact.blockedIndices.join(", ")}], remaining ${scenario.metrics.competitiveBlockImpact.remainingStartCount}, selected ${scenario.metrics.competitiveBlockImpact.selectedStartCount ?? "n/a"} [${(scenario.metrics.competitiveBlockImpact.selectedIndices ?? []).join(", ")}], outliers ${scenario.metrics.competitiveBlockImpact.remainingOutlierCount}, scoreRange ${scenario.metrics.competitiveBlockImpact.scoreRange}, actionRange ${scenario.metrics.competitiveBlockImpact.actionRange}, worstZ ${scenario.metrics.competitiveBlockImpact.worstScoreZ}/${scenario.metrics.competitiveBlockImpact.worstActionZ}, acceptable ${scenario.metrics.competitiveBlockImpact.acceptable ? "yes" : "no"}, method ${scenario.metrics.competitiveBlockImpact.method}, trafficSubsets ${scenario.metrics.competitiveBlockImpact.trafficSubsetsTested ?? 0}`
       : "Competitive balance simulation: n/a",
     summary.payToWin?.active
-      ? `Pay to Win costs: model ${summary.payToWin.pricingModel?.method ?? "n/a"}, baseline ${Number.isInteger(summary.payToWin.pricingModel?.baselineIndex) ? `#${summary.payToWin.pricingModel.baselineIndex + 1}` : "n/a"}, startingEnergy ${summary.payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY}, denialCost ${summary.payToWin.denialCost ?? ((summary.payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY) + 1)}, registerUnit ${summary.payToWin.costUnit}, horizon ${summary.payToWin.pricingModel?.horizonTurns ?? "n/a"}t x${summary.payToWin.pricingModel?.horizonScale ?? "n/a"}, thresholds ${(summary.payToWin.pricingModel?.thresholds ?? []).map((threshold) => `${threshold.energy <= (summary.payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY) ? `${threshold.energy}E` : "deny"}@${threshold.cumulativeRegisters}R`).join("/") || "n/a"}, priced ${summary.payToWin.pricedStartCount ?? "n/a"}, trafficScale ${summary.payToWin.trafficScaleMultiplier}, latePricing ${summary.payToWin.latePricingActive ? "active" : "inactive"}, latePlayers ${summary.payToWin.lateSelectorStart ?? "n/a"}-${summary.payToWin.lateSelectorEnd ?? "n/a"}, surplusStarts ${summary.payToWin.surplusStarts ?? 0}, lateModel ${summary.payToWin.lateTrafficModel ?? "n/a"}, lateSamples ${summary.payToWin.lateScenarioSamples ?? 0}, shadowLate ${summary.payToWin.shadowLatePricingActive ? "active" : "inactive"}/${summary.payToWin.shadowLateScenarioSamples ?? 0} samples, earlyUnavailable ${summary.payToWin.earlyUnavailableCount ?? 0}/${summary.payToWin.maxEarlyUnavailable ?? 0}, lateUnavailable ${summary.payToWin.lateUnavailableCount ?? 0}/${summary.payToWin.maxLateUnavailable ?? 0}, fullyUnavailable ${summary.payToWin.fullyUnavailableCount ?? 0}, availabilityValid ${summary.payToWin.availabilityValid === false ? "no" : "yes"}, lateHigher ${summary.payToWin.latePriceHigherCount ?? 0}, lateLower ${summary.payToWin.latePriceLowerCount ?? 0}, slashPrices ${summary.payToWin.hasLatePriceDifference ? "yes" : "no"}, pruned ${summary.payToWin.pruned.length ? summary.payToWin.pruned.map((item) => `#${item.index + 1}(${item.energyCost}E/${item.registerEquivalent ?? "n/a"}R; base ${Number.isInteger(item.pricingModel?.baselineIndex) ? `#${item.pricingModel.baselineIndex + 1}` : "n/a"}; pass ${item.pass})`).join(", ") : "none"}`
+      ? `Pay to Win costs: model ${summary.payToWin.pricingModel?.method ?? "n/a"}, baseline ${Number.isInteger(summary.payToWin.pricingModel?.baselineIndex) ? `#${summary.payToWin.pricingModel.baselineIndex + 1}` : "n/a"}, startingEnergy ${summary.payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY}, startingUpgradeCards ${summary.payToWin.startingUpgradeCards ?? DEFAULT_STARTING_UPGRADE_CARDS} unseen-at-selection, denialCost ${summary.payToWin.denialCost ?? ((summary.payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY) + 1)}, registerUnit ${summary.payToWin.costUnit}, horizon ${summary.payToWin.pricingModel?.horizonTurns ?? "n/a"}t x${summary.payToWin.pricingModel?.horizonScale ?? "n/a"}, thresholds ${(summary.payToWin.pricingModel?.thresholds ?? []).map((threshold) => `${threshold.energy <= (summary.payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY) ? `${threshold.energy}E` : "deny"}@${threshold.cumulativeRegisters}R`).join("/") || "n/a"}, priced ${summary.payToWin.pricedStartCount ?? "n/a"}, trafficScale ${summary.payToWin.trafficScaleMultiplier}, latePricing ${summary.payToWin.latePricingActive ? "active" : "inactive"}, latePlayers ${summary.payToWin.lateSelectorStart ?? "n/a"}-${summary.payToWin.lateSelectorEnd ?? "n/a"}, surplusStarts ${summary.payToWin.surplusStarts ?? 0}, lateModel ${summary.payToWin.lateTrafficModel ?? "n/a"}, selectorSplit ${summary.payToWin.selectorSplit?.selected ? `after-p${summary.payToWin.selectorSplit.cutoffAfter}` : "none"} (${summary.payToWin.selectorSplit?.noSplitErrorR ?? "n/a"}R->${summary.payToWin.selectorSplit?.splitErrorR ?? "n/a"}R; gain ${summary.payToWin.selectorSplit?.gainR ?? "n/a"}R; separation ${summary.payToWin.selectorSplit?.separationR ?? "n/a"}R), lateSamples ${summary.payToWin.lateScenarioSamples ?? 0}, shadowLate ${summary.payToWin.shadowLatePricingActive ? "active" : "inactive"}/${summary.payToWin.shadowLateScenarioSamples ?? 0} samples, earlyUnavailable ${summary.payToWin.earlyUnavailableCount ?? 0}/${summary.payToWin.maxEarlyUnavailable ?? 0}, lateUnavailable ${summary.payToWin.lateUnavailableCount ?? 0}/${summary.payToWin.maxLateUnavailable ?? 0}, fullyUnavailable ${summary.payToWin.fullyUnavailableCount ?? 0}, availabilityValid ${summary.payToWin.availabilityValid === false ? "no" : "yes"}, lateHigher ${summary.payToWin.latePriceHigherCount ?? 0}, lateLower ${summary.payToWin.latePriceLowerCount ?? 0}, slashPrices ${summary.payToWin.hasLatePriceDifference ? "yes" : "no"}, pruned ${summary.payToWin.pruned.length ? summary.payToWin.pruned.map((item) => `#${item.index + 1}(${item.energyCost}E/${item.registerEquivalent ?? "n/a"}R; base ${Number.isInteger(item.pricingModel?.baselineIndex) ? `#${item.pricingModel.baselineIndex + 1}` : "n/a"}; pass ${item.pass})`).join(", ") : "none"}`
       : "Pay to Win costs: n/a",
     summary.payToWin?.energyShadow?.active
-      ? `P2W energy shadow: validated ${summary.payToWin.energyShadow.validatedStartCount ?? "n/a"}, final-offered ${summary.payToWin.energyShadow.offeredStartCount ?? "n/a"}; tempo-register median ${summary.payToWin.energyShadow.benchmark?.registerScoreMedian ?? "n/a"} (p25 ${summary.payToWin.energyShadow.benchmark?.registerScoreP25 ?? "n/a"}, p75 ${summary.payToWin.energyShadow.benchmark?.registerScoreP75 ?? "n/a"}, n ${summary.payToWin.energyShadow.benchmark?.registerSamples ?? 0}); Power Up strategic delta median ${summary.payToWin.energyShadow.benchmark?.powerUpStrategicDeltaMedian ?? summary.payToWin.energyShadow.benchmark?.powerUpOpportunityMedian ?? "n/a"} (p25 ${summary.payToWin.energyShadow.benchmark?.powerUpStrategicDeltaP25 ?? summary.payToWin.energyShadow.benchmark?.powerUpOpportunityP25 ?? "n/a"}, p75 ${summary.payToWin.energyShadow.benchmark?.powerUpStrategicDeltaP75 ?? summary.payToWin.energyShadow.benchmark?.powerUpOpportunityP75 ?? "n/a"}, n ${summary.payToWin.energyShadow.benchmark?.powerUpStrategicDeltaSamples ?? summary.payToWin.energyShadow.benchmark?.powerUpOpportunitySamples ?? 0}); horizon ${summary.payToWin.energyShadow.benchmark?.medianFullCourseActions ?? "n/a"} registers / ${summary.payToWin.energyShadow.benchmark?.medianFullCourseTurns ?? "n/a"} turns; current Power Up base ${summary.payToWin.energyShadow.benchmark?.powerUpWaitActionPenalty ?? "n/a"} vs tempo ${summary.payToWin.energyShadow.benchmark?.registerTempoCost ?? "n/a"} (discount ${summary.payToWin.energyShadow.benchmark?.powerUpBaseDiscount ?? "n/a"}); battery reward ${summary.payToWin.energyShadow.benchmark?.batteryEnergyRewardScore ?? "n/a"}`
-      : "P2W energy shadow: n/a",
+      ? `P2W validated-field shadow: validated ${summary.payToWin.energyShadow.validatedStartCount ?? "n/a"}, final-offered ${summary.payToWin.energyShadow.offeredStartCount ?? "n/a"}; tempo-register median ${summary.payToWin.energyShadow.benchmark?.registerScoreMedian ?? "n/a"} (p25 ${summary.payToWin.energyShadow.benchmark?.registerScoreP25 ?? "n/a"}, p75 ${summary.payToWin.energyShadow.benchmark?.registerScoreP75 ?? "n/a"}, n ${summary.payToWin.energyShadow.benchmark?.registerSamples ?? 0}); Power Up strategic delta median ${summary.payToWin.energyShadow.benchmark?.powerUpStrategicDeltaMedian ?? summary.payToWin.energyShadow.benchmark?.powerUpOpportunityMedian ?? "n/a"} (p25 ${summary.payToWin.energyShadow.benchmark?.powerUpStrategicDeltaP25 ?? summary.payToWin.energyShadow.benchmark?.powerUpOpportunityP25 ?? "n/a"}, p75 ${summary.payToWin.energyShadow.benchmark?.powerUpStrategicDeltaP75 ?? summary.payToWin.energyShadow.benchmark?.powerUpOpportunityP75 ?? "n/a"}, n ${summary.payToWin.energyShadow.benchmark?.powerUpStrategicDeltaSamples ?? summary.payToWin.energyShadow.benchmark?.powerUpOpportunitySamples ?? 0}); validated-field horizon ${summary.payToWin.energyShadow.benchmark?.medianFullCourseActions ?? "n/a"} registers / ${summary.payToWin.energyShadow.benchmark?.medianFullCourseTurns ?? "n/a"} turns; final-field pricing horizon ${summary.payToWin.pricingModel?.horizonTurns ?? "n/a"} turns; current Power Up base ${summary.payToWin.energyShadow.benchmark?.powerUpWaitActionPenalty ?? "n/a"} vs tempo ${summary.payToWin.energyShadow.benchmark?.registerTempoCost ?? "n/a"} (discount ${summary.payToWin.energyShadow.benchmark?.powerUpBaseDiscount ?? "n/a"}); battery reward ${summary.payToWin.energyShadow.benchmark?.batteryEnergyRewardScore ?? "n/a"}`
+      : "P2W validated-field shadow: n/a",
+    summary.payToWin?.energyShadow?.upgradeEconomy?.active
+      ? `P2W upgrade economy shadow: method ${summary.payToWin.energyShadow.upgradeEconomy.method}; hand ${summary.payToWin.energyShadow.upgradeEconomy.startingUpgradeCards} unseen cards; prior ${summary.payToWin.energyShadow.upgradeEconomy.distributionLabel} [${(summary.payToWin.energyShadow.upgradeEconomy.distribution ?? []).map((entry) => `${entry.cost}E:${Number((entry.probability * 100).toFixed(1))}%`).join("/")}]; upgradePhases ${summary.payToWin.energyShadow.upgradeEconomy.expectedUpgradePhases ?? "n/a"}; startHandInstallSlots ${summary.payToWin.energyShadow.upgradeEconomy.startingHandInstallSlots ?? "n/a"}; futureDrawSlots ${summary.payToWin.energyShadow.upgradeEconomy.futureDrawSlots ?? "n/a"} at ${summary.payToWin.energyShadow.upgradeEconomy.drawEnergyCost ?? "n/a"}E; access ${(summary.payToWin.energyShadow.upgradeEconomy.levels ?? []).map((level) => `${level.energy}E:any${Number((level.chanceAnyAffordable * 100).toFixed(1))}%/${level.expectedAffordableCards}`).join(" | ")}`
+      : "P2W upgrade economy shadow: n/a",
+    summary.payToWin?.energyShadow?.upgradeFeatureWeights?.active
+      ? `Upgrade feature-weight audit (route score, negative = benefit): battery current/base/UW ${summary.payToWin.energyShadow.upgradeFeatureWeights.battery?.current ?? "n/a"}/${summary.payToWin.energyShadow.upgradeFeatureWeights.battery?.base ?? "n/a"}/${summary.payToWin.energyShadow.upgradeFeatureWeights.battery?.upgradeWorld ?? "n/a"}; chopShop current/base/UW ${summary.payToWin.energyShadow.upgradeFeatureWeights.chopShop?.current ?? "n/a"}/${summary.payToWin.energyShadow.upgradeFeatureWeights.chopShop?.base ?? "n/a"}/${summary.payToWin.energyShadow.upgradeFeatureWeights.chopShop?.upgradeWorld ?? "n/a"}`
+      : "Upgrade feature-weight audit: n/a",
     summary.payToWin?.energyShadow?.active
-      ? `P2W register-equivalent starts: ${(summary.payToWin.energyShadow.starts ?? []).map((entry) => `#${entry.index + 1} full ${entry.fullScore}, advantage ${entry.advantage} = ${entry.registerEquivalent ?? "n/a"}R${summary.payToWin.shadowLatePricingActive && Number.isFinite(entry.lateFullScore) ? `; lateFull ${entry.lateFullScore}, lateAdv ${entry.lateAdvantage} = ${entry.lateRegisterEquivalent ?? "n/a"}R, latePrice ${entry.lateUnavailable ? "—" : `${entry.lateEnergyCost ?? "n/a"}E`}` : ""}; ${entry.pruned ? "pruned" : entry.fullyUnavailable ? "unavailable" : "offered"}, initial ${entry.initialEnergyCost ?? "n/a"}E, final ${entry.finalEnergyCost ?? "n/a"}E, legacyInitial ${entry.legacyInitialCost ?? "n/a"}E`).join(" | ") || "none"}`
-      : "P2W register-equivalent starts: n/a",
+      ? `P2W initial/final start repricing: ${(summary.payToWin.energyShadow.starts ?? []).map((entry) => {
+        const initialPrice = Number.isFinite(entry.initialEnergyCost) ? `${entry.initialEnergyCost}E` : "n/a";
+        const legacyPrice = Number.isFinite(entry.legacyInitialCost) ? `${entry.legacyInitialCost}E` : "n/a";
+        if (entry.pruned) {
+          return `#${entry.index + 1}: initial full ${entry.fullScore}, ${entry.advantage} advantage = ${entry.registerEquivalent ?? "n/a"}R/${initialPrice}; pruned; legacyInitial ${legacyPrice}`;
+        }
+        const finalPrice = entry.finalEarlyUnavailable
+          ? "—"
+          : Number.isFinite(entry.finalEnergyCost)
+            ? `${entry.finalEnergyCost}E`
+            : "n/a";
+        const latePart = summary.payToWin.latePricingActive && Number.isFinite(entry.finalLateRegisterEquivalent)
+          ? `; final late ${entry.finalLateFullScore ?? "n/a"}, ${entry.finalLateAdvantage ?? "n/a"} advantage = ${entry.finalLateRegisterEquivalent}R/${entry.finalLateUnavailable ? "—" : `${entry.finalLateEnergyCost ?? "n/a"}E`}`
+          : "";
+        return `#${entry.index + 1}: initial full ${entry.fullScore}, ${entry.advantage} advantage = ${entry.registerEquivalent ?? "n/a"}R/${initialPrice}; final full ${entry.finalFullScore ?? "n/a"}, ${entry.finalAdvantage ?? "n/a"} advantage = ${entry.finalRegisterEquivalent ?? "n/a"}R/${finalPrice}${latePart}; legacyInitial ${legacyPrice}`;
+      }).join(" | ") || "none"}`
+      : "P2W initial/final start repricing: n/a",
     summary.normalStartBalance?.active
       ? `Normal start balance: ${summary.normalStartBalance.iterative ? "iterative" : (summary.normalStartBalance.staged ? "staged" : "legacy")}, intrinsicPrePrune ${summary.normalStartBalance.intrinsicPrePruning ? "yes" : "no"}, lightweightPruned ${(summary.normalStartBalance.lightweightPruned ?? []).length ? (summary.normalStartBalance.lightweightPruned ?? []).map((index) => `#${index + 1}`).join(", ") : "none"}, pressurePruned ${(summary.normalStartBalance.pressurePruned ?? []).length ? (summary.normalStartBalance.pressurePruned ?? []).map((item) => `#${item.index + 1}(${item.diagnostics?.balanceDispersionPruned ? "balance; " : ""}scoreZ ${item.diagnostics?.scoreZ ?? "n/a"}; actionZ ${item.diagnostics?.actionZ ?? "n/a"}; pass ${item.pass ?? "n/a"})`).join(", ") : "none"}, stddev ${summary.normalStartBalance.balanceStdDevBefore ?? "n/a"}->${summary.normalStartBalance.balanceStdDevAfter ?? "n/a"}/${summary.normalStartBalance.balanceStdDevLimit ?? NORMAL_START_FAIRNESS_STDDEV_LIMIT}, trafficRecomputations ${summary.normalStartBalance.trafficRecomputations ?? 0}, remainingBad ${(summary.normalStartBalance.remainingBadStarts ?? []).length}, reject ${summary.normalStartBalance.reject ? "yes" : "no"}`
       : "Normal start balance: n/a",
@@ -12143,9 +12882,8 @@ function formatRouteDetail(scenario, entry) {
       const formattedCost = formatPayToWinEnergyCost(entry.startAnalysis);
       const payToWinPricing = scenario.sequence.firstLeg.summary.payToWin;
       if (payToWinPricing?.hasLatePriceDifference && formattedCost?.includes("/")) {
-        const fallbackLatePlayerCount = Math.ceil(scenario.playerCount / 3);
         const firstLatePlayer = payToWinPricing.lateSelectorStart
-          ?? (scenario.playerCount - fallbackLatePlayerCount + 1);
+          ?? scenario.playerCount;
         const lastLatePlayer = payToWinPricing.lateSelectorEnd ?? scenario.playerCount;
         const singleLatePlayer = firstLatePlayer === lastLatePlayer;
         const latePlayerText = singleLatePlayer

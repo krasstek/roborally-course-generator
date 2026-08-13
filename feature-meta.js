@@ -31,6 +31,10 @@ export function normalizeFeature(feature) {
     case "homingMissile":
     case "radiation":
     case "radioactiveWaste":
+      // These are marker/tile features with no directional normalization.
+      // Keep their original type instead of accidentally routing them through
+      // the conveyor branch below.
+      return { type: feature.type };
     case "belt": {
       const normalizedBelt = {
         type: "belt",
