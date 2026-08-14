@@ -68,6 +68,280 @@ const PROGRAM_CARD_COUNTS = new Map([
 ]);
 const AGAIN_CARD_COUNT = 1;
 const AGAIN_USE_PENALTY = 11;
+
+// Shared upgrade-economy defaults. v42 moves these helpers into analyze.js so
+// production route scoring and the Dev View shadow use exactly the same model.
+export const ROUTE_ENERGY_ECONOMY_DEFAULTS = Object.freeze({
+  startingEnergy: 3,
+  maxEnergy: 10,
+  startingUpgradeCards: 3,
+  drawsPerTurn: 1,
+  installsPerTurn: 1,
+  drawEnergyCost: 1,
+  // This is useful investment throughput per install opportunity, not a claim
+  // that real upgrade cards cost 2E or have identical effects.
+  usefulEnergyPerInstall: 2,
+  powerRegistersPerEnergy: 1,
+  registersPerTurn: REGISTER_COUNT
+});
+
+export function getCourseStartingEnergy(options = {}) {
+  const explicitStartingEnergy = Number(options.startingEnergy);
+  if (Number.isFinite(explicitStartingEnergy)) {
+    return Math.max(0, Math.floor(explicitStartingEnergy));
+  }
+  const startingEnergyDelta = Number(options.startingEnergyDelta);
+  return Math.max(
+    0,
+    ROUTE_ENERGY_ECONOMY_DEFAULTS.startingEnergy +
+      (Number.isFinite(startingEnergyDelta) ? Math.trunc(startingEnergyDelta) : 0)
+  );
+}
+
+export function getCourseStartingUpgradeCards(options = {}) {
+  const explicitStartingCards = Number(options.startingUpgradeCards);
+  if (Number.isFinite(explicitStartingCards)) {
+    return Math.max(0, Math.floor(explicitStartingCards));
+  }
+  const startingCardDelta = Number(options.startingUpgradeCardDelta);
+  return Math.max(
+    0,
+    ROUTE_ENERGY_ECONOMY_DEFAULTS.startingUpgradeCards +
+      (Number.isFinite(startingCardDelta) ? Math.trunc(startingCardDelta) : 0)
+  );
+}
+
+export function getCourseMaxEnergy(options = {}) {
+  const explicitMaxEnergy = Number(options.maxEnergy);
+  return Number.isFinite(explicitMaxEnergy)
+    ? Math.max(0, Math.floor(explicitMaxEnergy))
+    : ROUTE_ENERGY_ECONOMY_DEFAULTS.maxEnergy;
+}
+
+function getUpgradeEconomyRate(options, key, fallback) {
+  const value = Number(options?.[key]);
+  return Number.isFinite(value) ? Math.max(0, value) : fallback;
+}
+
+export function getRouteEnergyEconomyConfig(options = {}) {
+  return {
+    startingEnergy: getCourseStartingEnergy(options),
+    maxEnergy: getCourseMaxEnergy(options),
+    startingUpgradeCards: getCourseStartingUpgradeCards(options),
+    drawsPerTurn: getUpgradeEconomyRate(
+      options,
+      "upgradeDrawsPerTurn",
+      ROUTE_ENERGY_ECONOMY_DEFAULTS.drawsPerTurn
+    ),
+    installsPerTurn: getUpgradeEconomyRate(
+      options,
+      "upgradeInstallsPerTurn",
+      ROUTE_ENERGY_ECONOMY_DEFAULTS.installsPerTurn
+    ),
+    drawEnergyCost: getUpgradeEconomyRate(
+      options,
+      "upgradeDrawEnergyCost",
+      ROUTE_ENERGY_ECONOMY_DEFAULTS.drawEnergyCost
+    ),
+    usefulEnergyPerInstall: Math.max(1, Math.floor(getUpgradeEconomyRate(
+      options,
+      "upgradeUsefulEnergyPerInstall",
+      ROUTE_ENERGY_ECONOMY_DEFAULTS.usefulEnergyPerInstall
+    ))),
+    powerRegistersPerEnergy: getUpgradeEconomyRate(
+      options,
+      "upgradePowerRegistersPerEnergy",
+      ROUTE_ENERGY_ECONOMY_DEFAULTS.powerRegistersPerEnergy
+    ),
+    registersPerTurn: Math.max(1, getUpgradeEconomyRate(
+      options,
+      "routeRegistersPerTurn",
+      ROUTE_ENERGY_ECONOMY_DEFAULTS.registersPerTurn
+    ))
+  };
+}
+
+function buildRouteUpgradeOpportunities(
+  turnsRemaining,
+  initialUpgradeOpportunities,
+  options = {},
+  fullRouteHorizonTurns = turnsRemaining
+) {
+  const config = getRouteEnergyEconomyConfig(options);
+  const horizon = Math.max(0, Number(turnsRemaining) || 0);
+  const fullHorizon = Math.max(horizon, Number(fullRouteHorizonTurns) || 0);
+  if (!(horizon > 0) || !(fullHorizon > 0) || !(config.installsPerTurn > 0)) return [];
+  const initialCount = Math.max(0, Math.floor(Number(initialUpgradeOpportunities) || 0));
+  const slotCount = Math.min(40, Math.ceil(horizon * config.installsPerTurn));
+  const result = [];
+  for (let slot = 0; slot < slotCount; slot += 1) {
+    const installTime = slot / config.installsPerTurn;
+    if (installTime >= horizon - 1e-9) break;
+    const initial = slot < initialCount;
+    let readyTime = installTime;
+    if (!initial) {
+      if (!(config.drawsPerTurn > 0)) continue;
+      readyTime = Math.max(installTime, (slot - initialCount) / config.drawsPerTurn);
+      if (readyTime >= horizon - 1e-9) continue;
+    }
+    result.push({
+      initial,
+      // Exposure is measured against the whole estimated race horizon so a
+      // late install is worth less even if it is the first remaining slot.
+      exposure: clamp((horizon - readyTime) / fullHorizon, 0, 1),
+      acquisitionCost: initial ? 0 : config.drawEnergyCost
+    });
+  }
+  return result;
+}
+
+export function evaluateRouteUpgradePotential(
+  energy,
+  turnsRemaining,
+  initialUpgradeOpportunities,
+  options = {},
+  fullRouteHorizonTurns = turnsRemaining
+) {
+  const config = getRouteEnergyEconomyConfig(options);
+  const reserve = clamp(Math.floor(Number(energy) || 0), 0, config.maxEnergy);
+  const opportunities = buildRouteUpgradeOpportunities(
+    turnsRemaining,
+    initialUpgradeOpportunities,
+    options,
+    fullRouteHorizonTurns
+  );
+  let dp = Array(reserve + 1).fill(-Infinity);
+  dp[0] = 0;
+  opportunities.forEach((opportunity) => {
+    const next = [...dp];
+    for (let spent = 0; spent <= reserve; spent += 1) {
+      if (!Number.isFinite(dp[spent])) continue;
+      for (let investment = 1; investment <= config.usefulEnergyPerInstall; investment += 1) {
+        const cost = opportunity.acquisitionCost + investment;
+        if (spent + cost > reserve) break;
+        const value = investment * opportunity.exposure * config.powerRegistersPerEnergy;
+        next[spent + cost] = Math.max(next[spent + cost], dp[spent] + value);
+      }
+    }
+    dp = next;
+  });
+  return {
+    potential: Math.max(0, ...dp.filter(Number.isFinite)),
+    installCapacity: opportunities.length,
+    initialInstallCapacity: opportunities.filter((item) => item.initial).length,
+    futureInstallCapacity: opportunities.filter((item) => !item.initial).length
+  };
+}
+
+export function getRouteUpgradePotential(
+  energy,
+  turnsRemaining,
+  initialUpgradeOpportunities,
+  options = {},
+  fullRouteHorizonTurns = turnsRemaining
+) {
+  return evaluateRouteUpgradePotential(
+    energy,
+    turnsRemaining,
+    initialUpgradeOpportunities,
+    options,
+    fullRouteHorizonTurns
+  ).potential;
+}
+
+export function getRouteMarginalEnergyUtility(
+  energy,
+  turnsRemaining,
+  initialUpgradeOpportunities,
+  options = {},
+  fullRouteHorizonTurns = turnsRemaining
+) {
+  const config = getRouteEnergyEconomyConfig(options);
+  const reserve = clamp(Math.floor(Number(energy) || 0), 0, config.maxEnergy);
+  const current = getRouteUpgradePotential(
+    reserve,
+    turnsRemaining,
+    initialUpgradeOpportunities,
+    options,
+    fullRouteHorizonTurns
+  );
+  return {
+    plus: reserve < config.maxEnergy
+      ? Math.max(0, getRouteUpgradePotential(
+        reserve + 1,
+        turnsRemaining,
+        initialUpgradeOpportunities,
+        options,
+        fullRouteHorizonTurns
+      ) - current)
+      : 0,
+    minus: reserve > 0
+      ? Math.max(0, current - getRouteUpgradePotential(
+        reserve - 1,
+        turnsRemaining,
+        initialUpgradeOpportunities,
+        options,
+        fullRouteHorizonTurns
+      ))
+      : 0
+  };
+}
+
+export function getRouteEnergyGainUtility(
+  energy,
+  gain,
+  turnsRemaining,
+  initialUpgradeOpportunities,
+  options = {},
+  fullRouteHorizonTurns = turnsRemaining
+) {
+  const config = getRouteEnergyEconomyConfig(options);
+  const reserve = clamp(Math.floor(Number(energy) || 0), 0, config.maxEnergy);
+  const target = clamp(
+    reserve + Math.max(0, Math.floor(Number(gain) || 0)),
+    0,
+    config.maxEnergy
+  );
+  if (target <= reserve) return 0;
+  return Math.max(0,
+    getRouteUpgradePotential(
+      target,
+      turnsRemaining,
+      initialUpgradeOpportunities,
+      options,
+      fullRouteHorizonTurns
+    ) -
+    getRouteUpgradePotential(
+      reserve,
+      turnsRemaining,
+      initialUpgradeOpportunities,
+      options,
+      fullRouteHorizonTurns
+    )
+  );
+}
+
+export function estimateInitialUpgradeOpportunitiesRemaining(
+  elapsedTurns,
+  horizonTurns,
+  config
+) {
+  if (!(horizonTurns > 0) || !(config.startingUpgradeCards > 0)) return 0;
+  const remainingTurns = Math.max(0, horizonTurns - elapsedTurns);
+  const exposureFraction = clamp(remainingTurns / horizonTurns, 0, 1);
+  const routeScaledHand = Math.round(config.startingUpgradeCards * exposureFraction);
+  const remainingInstallCapacity = Math.max(
+    0,
+    Math.ceil(remainingTurns * config.installsPerTurn)
+  );
+  // This is deliberately a neutral opportunity proxy, not a claim about which
+  // unknown starting cards the player actually installed or saved.
+  return Math.min(
+    config.startingUpgradeCards,
+    routeScaledHand,
+    remainingInstallCapacity
+  );
+}
 const ROUTE_PATH_KEY_CACHE = new WeakMap();
 const ROUTE_TILE_SET_CACHE = new WeakMap();
 const ROUTE_EDGE_SET_CACHE = new WeakMap();
@@ -107,6 +381,7 @@ function getContextualPhysicalOptionSignature(options = {}) {
     options.repulsorOverdrive ? 1 : 0,
     options.repairStations ? 1 : 0,
     options.lighterGame ? 1 : 0,
+    options.routeAwareBatteryScoring ? 1 : 0,
     options.flamingOil ? 1 : 0,
     options.walledIn ? 1 : 0,
     options.hardReboot ? 1 : 0,
@@ -670,6 +945,73 @@ function isBatteryActive(options = {}) {
   return !options.lighterGame;
 }
 
+function isRouteAwareBatteryScoringActive(options = {}) {
+  return Boolean(
+    options.routeAwareBatteryScoring &&
+    !options.lighterGame &&
+    Number(options.routeEnergyHorizonTurns) > 0 &&
+    Number(options.routeEnergyRegisterScore) > 0
+  );
+}
+
+function getRouteAwareBatteryActivationRewardScore(
+  tileMap,
+  destination,
+  actionId,
+  nextAbsoluteActionCount,
+  options = {}
+) {
+  if (!isRouteAwareBatteryScoringActive(options)) return 0;
+  const tile = tileMap.get(tileKey(destination.x, destination.y));
+  if (!(tile?.features || []).some((feature) => feature.type === "battery")) return 0;
+
+  const config = getRouteEnergyEconomyConfig(options);
+  const fullHorizonTurns = Math.max(0, Number(options.routeEnergyHorizonTurns) || 0);
+  const elapsedTurns = Math.max(0, nextAbsoluteActionCount / config.registersPerTurn);
+  const turnsRemaining = Math.max(0, fullHorizonTurns - elapsedTurns);
+  const initialRemaining = estimateInitialUpgradeOpportunitiesRemaining(
+    elapsedTurns,
+    fullHorizonTurns,
+    config
+  );
+  const explicitReferenceReserve = Number(options.routeEnergyReferenceReserve);
+  const referenceReserve = clamp(
+    Math.floor(Number.isFinite(explicitReferenceReserve) ? explicitReferenceReserve : config.startingEnergy),
+    0,
+    config.maxEnergy
+  );
+
+  // A normal Battery activation gives +1E. Power Up (represented by WAIT in
+  // route search) gives its own +1E at the same register boundary, so a WAIT
+  // that ends on a Battery is evaluated as the tested +2E charging chunk.
+  const energyGain = actionId === "WAIT" ? 2 : 1;
+  const utilityR = getRouteEnergyGainUtility(
+    referenceReserve,
+    energyGain,
+    turnsRemaining,
+    initialRemaining,
+    options,
+    fullHorizonTurns
+  );
+  let rewardScore = utilityR * Number(options.routeEnergyRegisterScore);
+
+  if (actionId === "WAIT") {
+    // WAIT already has the old 0.25-score Power Up discount. On a Battery we
+    // replace that tiny static approximation with the shared +2E economy value
+    // rather than counting both. Power Up elsewhere is intentionally unchanged.
+    rewardScore -= Math.max(0, REGISTER_TEMPO_COST - getActionPenalty({ id: "WAIT" }, options));
+  }
+
+  if (options.upgradeWorld) {
+    // v42 replaces only Battery's energy component. Upgrade World's additional
+    // unknown-card draw remains the old +1 route-score bonus until the shared
+    // contextual card-option model is promoted in the later Chop Shop step.
+    rewardScore += 1;
+  }
+
+  return Number(Math.max(0, rewardScore).toFixed(3));
+}
+
 function getTilePenalty(tile, options = {}) {
   let penalty = 0;
 
@@ -677,6 +1019,12 @@ function getTilePenalty(tile, options = {}) {
   // scoring. This intentionally captures many board effects without turning the
   // analyzer into a full combat or timing simulator.
   for (const feature of tile?.features || []) {
+    // v42 removes the old static Battery reward from per-tile movement scoring.
+    // The route-aware reward is applied once, at the post-register landing
+    // boundary, so traversing a Battery does not collect energy.
+    if (feature.type === "battery" && isRouteAwareBatteryScoringActive(options)) {
+      continue;
+    }
     // Randomizers affect the card played only when the robot STARTS a register
     // on the space. Traversing or merely ending the current movement on one
     // does not alter the current register.
@@ -2092,6 +2440,122 @@ function getCardAvailabilityPressure(history, actionId, options = {}) {
   return Number((penalty * lessForeshadowingFactor).toFixed(2));
 }
 
+// Return every literal way the actions in one five-register program can be
+// supplied by natural program cards plus the single Again card. Route search
+// intentionally uses soft scarcity penalties instead of hard hand simulation;
+// this helper is diagnostic-only and answers the narrower physical-supply
+// question needed for Power Up / Again charging opportunities.
+function getLiteralProgramResourceStates(actionIds = []) {
+  const actions = Array.isArray(actionIds) ? actionIds : [];
+  if (actions.length > REGISTER_COUNT) return [];
+
+  let states = [{ naturalUses: new Map(), againUsed: false }];
+
+  actions.forEach((actionId, index) => {
+    const cardCount = PROGRAM_CARD_COUNTS.get(actionId);
+    if (!cardCount) {
+      states = [];
+      return;
+    }
+
+    const previousActionId = index > 0 ? actions[index - 1] : null;
+    const nextStates = [];
+
+    states.forEach((state) => {
+      const naturalUses = state.naturalUses.get(actionId) || 0;
+      if (naturalUses < cardCount) {
+        const nextNaturalUses = new Map(state.naturalUses);
+        nextNaturalUses.set(actionId, naturalUses + 1);
+        nextStates.push({
+          naturalUses: nextNaturalUses,
+          againUsed: state.againUsed
+        });
+      }
+
+      if (
+        index > 0 &&
+        previousActionId === actionId &&
+        !state.againUsed
+      ) {
+        nextStates.push({
+          naturalUses: new Map(state.naturalUses),
+          againUsed: true
+        });
+      }
+    });
+
+    const deduped = new Map();
+    nextStates.forEach((state) => {
+      const naturalSignature = [...PROGRAM_CARD_COUNTS.keys()]
+        .map((id) => state.naturalUses.get(id) || 0)
+        .join(",");
+      const signature = `${state.againUsed ? 1 : 0}:${naturalSignature}`;
+      if (!deduped.has(signature)) deduped.set(signature, state);
+    });
+    states = [...deduped.values()];
+  });
+
+  return states;
+}
+
+// Literal current-program feasibility for the Battery charging sequence. This
+// is deliberately separate from getCardAvailabilityPressure(): feasibility
+// checks the one-copy Power Up and one-copy Again supply inside the current
+// five-register program, while the existing pressure model continues to
+// approximate hand/deck scarcity across the recent nine-card window.
+export function summarizePowerUpProgramFeasibility(history, absoluteActions) {
+  const window = getProgramHistoryWindow(history);
+  const phase = ((Number(absoluteActions) || 0) % REGISTER_COUNT + REGISTER_COUNT) % REGISTER_COUNT;
+  const currentTurnActions = phase > 0 ? window.slice(-phase) : [];
+  const currentStates = getLiteralProgramResourceStates(currentTurnActions);
+  const currentProgramFeasible = currentStates.length > 0;
+  const waitCardCount = PROGRAM_CARD_COUNTS.get("WAIT") || 0;
+  const powerUpStates = currentStates.filter((state) => (
+    (state.naturalUses.get("WAIT") || 0) < waitCardCount
+  ));
+  const powerUpFeasible = currentProgramFeasible && powerUpStates.length > 0;
+  const nextRegister = phase + 1;
+  const againFitsSameProgram = nextRegister < REGISTER_COUNT;
+  const powerUpAgainStates = powerUpStates.filter((state) => !state.againUsed);
+  const powerUpAgainFeasible = Boolean(
+    powerUpFeasible &&
+    againFitsSameProgram &&
+    powerUpAgainStates.length
+  );
+
+  let powerUpReason = null;
+  if (!currentProgramFeasible) {
+    powerUpReason = "current program already exceeds literal card supply";
+  } else if (!powerUpFeasible) {
+    powerUpReason = "Power Up already used in this program";
+  }
+
+  let powerUpAgainReason = null;
+  if (!powerUpFeasible) {
+    powerUpAgainReason = powerUpReason;
+  } else if (!againFitsSameProgram) {
+    powerUpAgainReason = "Again would be register 1 next turn";
+  } else if (!powerUpAgainStates.length) {
+    powerUpAgainReason = "Again already required in this program";
+  }
+
+  return {
+    registerPhase: phase,
+    nextRegister,
+    currentTurnActions: [...currentTurnActions],
+    currentProgramFeasible,
+    currentProgramRequiresAgain: currentProgramFeasible && !currentStates.some((state) => !state.againUsed),
+    powerUp: {
+      feasible: powerUpFeasible,
+      reason: powerUpReason
+    },
+    powerUpAgain: {
+      feasible: powerUpAgainFeasible,
+      reason: powerUpAgainReason
+    }
+  };
+}
+
 function weightedDistance(distance, forcedDistance) {
   const manualDistance = Math.max(0, distance - forcedDistance);
   return Number((manualDistance * 0.75 + forcedDistance * 0.55).toFixed(2));
@@ -2539,8 +3003,11 @@ function routeReachesGoal(route, goal, options = {}) {
 }
 
 function getSearchStateKey(state, actionCount, options = {}) {
+  const economyActionKey = isRouteAwareBatteryScoringActive(options)
+    ? `@a${actionCount}`
+    : "";
   if (!options.dynamicGoal) {
-    return stateKey(state);
+    return `${stateKey(state)}${economyActionKey}`;
   }
 
   const { periodStart = 0, periodLength = 0, positions = [] } = options.dynamicGoal;
@@ -2548,7 +3015,7 @@ function getSearchStateKey(state, actionCount, options = {}) {
     ? `${periodStart}+${(actionCount - periodStart) % periodLength}`
     : String(Math.min(actionCount, Math.max(0, positions.length - 1)));
 
-  return `${stateKey(state)}@${phase}`;
+  return `${stateKey(state)}@${phase}${economyActionKey}`;
 }
 
 function enumerateRoutes(tileMap, start, goal, options = {}) {
@@ -2691,6 +3158,13 @@ function enumerateRoutes(tileMap, start, goal, options = {}) {
         const transitionForDestination = transition.rebootChoices?.length
           ? { ...transition, to: destination }
           : transition;
+        const batteryEconomyRewardScore = getRouteAwareBatteryActivationRewardScore(
+          tileMap,
+          destination,
+          action.id,
+          nextActionCount,
+          options
+        );
         const nextRoute = {
           finalState: destination,
           initialState: current.initialState,
@@ -2702,7 +3176,8 @@ function enumerateRoutes(tileMap, start, goal, options = {}) {
           forcedDistance: current.forcedDistance + transition.forcedDistance,
           hazard: current.hazard + transition.hazard,
           rebootPenalty: current.rebootPenalty + transitionRebootPenalty,
-          baseCost: current.baseCost + transition.hazard + transitionRebootPenalty + weightedDistance(transition.distance, transition.forcedDistance) + actionPenalty + reversePenalty + heavyMovePenalty + scarceReusePenalty + conveyorComplexity,
+          batteryEconomyRewardScore: (current.batteryEconomyRewardScore || 0) + batteryEconomyRewardScore,
+          baseCost: current.baseCost + transition.hazard + transitionRebootPenalty + weightedDistance(transition.distance, transition.forcedDistance) + actionPenalty + reversePenalty + heavyMovePenalty + scarceReusePenalty + conveyorComplexity - batteryEconomyRewardScore,
           actionHistory: nextActionHistory
         };
 
@@ -2747,8 +3222,11 @@ function fullCourseRouteReachesNextCheckpoint(route, flags, options = {}) {
 function getFullCourseSearchStateKey(state, actionCount, checkpointIndex, options = {}) {
   const dynamicGoal = getFullCourseDynamicGoal(options, checkpointIndex);
   const registerPhase = actionCount % REGISTER_COUNT;
+  const economyActionKey = isRouteAwareBatteryScoringActive(options)
+    ? `@a${actionCount}`
+    : "";
   if (!dynamicGoal) {
-    return `${stateKey(state)}@cp${checkpointIndex}@r${registerPhase}`;
+    return `${stateKey(state)}@cp${checkpointIndex}@r${registerPhase}${economyActionKey}`;
   }
 
   const { periodStart = 0, periodLength = 0, positions = [] } = dynamicGoal;
@@ -2756,7 +3234,7 @@ function getFullCourseSearchStateKey(state, actionCount, checkpointIndex, option
     ? `${periodStart}+${(actionCount - periodStart) % periodLength}`
     : String(Math.min(actionCount, Math.max(0, positions.length - 1)));
 
-  return `${stateKey(state)}@cp${checkpointIndex}@r${registerPhase}@${phase}`;
+  return `${stateKey(state)}@cp${checkpointIndex}@r${registerPhase}@${phase}${economyActionKey}`;
 }
 
 function estimateFullCourseRoute(route, flags, options = {}) {
@@ -2913,6 +3391,7 @@ function enumerateFullCourseRoutes(tileMap, start, flags, options = {}) {
         startFacing: current.startFacing,
         checkpointHits: current.checkpointHits,
         actionHistory: current.actionHistory,
+        batteryEconomyRewardScore: Number((current.batteryEconomyRewardScore || 0).toFixed(2)),
         fullCourse: true,
         ...routeScore
       });
@@ -2954,6 +3433,13 @@ function enumerateFullCourseRoutes(tileMap, start, flags, options = {}) {
         const transitionForDestination = transition.rebootChoices?.length
           ? { ...transition, to: destination }
           : transition;
+        const batteryEconomyRewardScore = getRouteAwareBatteryActivationRewardScore(
+          tileMap,
+          destination,
+          action.id,
+          nextActionCount,
+          options
+        );
         let nextRoute = {
           finalState: destination,
           initialState: current.initialState,
@@ -2965,7 +3451,8 @@ function enumerateFullCourseRoutes(tileMap, start, flags, options = {}) {
           forcedDistance: current.forcedDistance + transition.forcedDistance,
           hazard: current.hazard + transition.hazard,
           rebootPenalty: current.rebootPenalty + transitionRebootPenalty,
-          baseCost: current.baseCost + transition.hazard + transitionRebootPenalty + weightedDistance(transition.distance, transition.forcedDistance) + actionPenalty + reversePenalty + heavyMovePenalty + scarceReusePenalty + conveyorComplexity,
+          batteryEconomyRewardScore: (current.batteryEconomyRewardScore || 0) + batteryEconomyRewardScore,
+          baseCost: current.baseCost + transition.hazard + transitionRebootPenalty + weightedDistance(transition.distance, transition.forcedDistance) + actionPenalty + reversePenalty + heavyMovePenalty + scarceReusePenalty + conveyorComplexity - batteryEconomyRewardScore,
           checkpointIndex: current.checkpointIndex,
           checkpointHits: current.checkpointHits,
           actionHistory: nextActionHistory
@@ -4380,6 +4867,19 @@ export function analyzeCourse(tileMap, starts, goal, options = {}) {
       criticalSpam: options.criticalSpam,
       criticalHaywire: options.criticalHaywire,
       permanentShutdown: options.permanentShutdown,
+      routeAwareBatteryScoring: Boolean(options.routeAwareBatteryScoring),
+      routeEnergyHorizonTurns: options.routeEnergyHorizonTurns,
+      routeEnergyRegisterScore: options.routeEnergyRegisterScore,
+      routeEnergyReferenceReserve: options.routeEnergyReferenceReserve,
+      startingEnergy: options.startingEnergy,
+      startingUpgradeCards: options.startingUpgradeCards,
+      maxEnergy: options.maxEnergy,
+      upgradeDrawsPerTurn: options.upgradeDrawsPerTurn,
+      upgradeInstallsPerTurn: options.upgradeInstallsPerTurn,
+      upgradeDrawEnergyCost: options.upgradeDrawEnergyCost,
+      upgradeUsefulEnergyPerInstall: options.upgradeUsefulEnergyPerInstall,
+      upgradePowerRegistersPerEnergy: options.upgradePowerRegistersPerEnergy,
+      routeRegistersPerTurn: options.routeRegistersPerTurn,
       cuttingFloor: options.cuttingFloor,
       flamingOil: options.flamingOil,
       repulsorOverdrive: options.repulsorOverdrive,
@@ -5739,43 +6239,49 @@ function getContextualLegCacheKey(
   context,
   legIndex,
   dynamicGoal,
-  namespace = "shared"
+  namespace = "shared",
+  options = {}
 ) {
   return [
     namespace,
     `leg${legIndex}`,
     stateKey(context.state),
     getProgramCacheSignature(context.history, context.absoluteActions),
+    isRouteAwareBatteryScoringActive(options) ? `a${context.absoluteActions}` : null,
     `g${getDynamicGoalCachePhase(dynamicGoal, context.absoluteActions)}`
-  ].join("|");
+  ].filter(Boolean).join("|");
 }
 
 function getContextualTemplateCacheKey(
   context,
   legIndex,
   dynamicGoal,
-  namespace = "shared"
+  namespace = "shared",
+  options = {}
 ) {
   return [
     namespace,
     `leg${legIndex}`,
     stateKey(context.state),
     `r${context.absoluteActions % REGISTER_COUNT}`,
+    isRouteAwareBatteryScoringActive(options) ? `a${context.absoluteActions}` : null,
     `g${getDynamicGoalCachePhase(dynamicGoal, context.absoluteActions)}`
-  ].join("|");
+  ].filter(Boolean).join("|");
 }
 
 function getContextualSearchStateKey(
   state,
   absoluteActions,
   history,
-  dynamicGoal
+  dynamicGoal,
+  options = {}
 ) {
   return [
     stateKey(state),
     getCompactProgramSearchSignature(history, absoluteActions),
+    isRouteAwareBatteryScoringActive(options) ? `a${absoluteActions}` : null,
     `g${getDynamicGoalCachePhase(dynamicGoal, absoluteActions)}`
-  ].join("|");
+  ].filter(Boolean).join("|");
 }
 
 function routeReachesContextualGoal(route, goal, dynamicGoal) {
@@ -5885,7 +6391,8 @@ function enumerateContextualLegRoutes(
       initialState,
       context.absoluteActions,
       initialHistory,
-      dynamicGoal
+      dynamicGoal,
+      options
     );
     profile.currentKeyMs += profileNow() - blockStartedAt;
 
@@ -5912,7 +6419,8 @@ function enumerateContextualLegRoutes(
       current.finalState,
       current.absoluteActions,
       current.actionHistory,
-      dynamicGoal
+      dynamicGoal,
+      options
     );
     profile.currentKeyMs += profileNow() - blockStartedAt;
 
@@ -5985,6 +6493,7 @@ function enumerateContextualLegRoutes(
           (transition) => transition.rebooted
         ).length,
         score: Number(current.baseCost.toFixed(2)),
+        batteryEconomyRewardScore: Number((current.batteryEconomyRewardScore || 0).toFixed(2)),
         cardAvailabilityPenalty: Number(
           (current.cardAvailabilityPenalty || 0).toFixed(2)
         ),
@@ -6099,6 +6608,13 @@ function enumerateContextualLegRoutes(
         const transitionForDestination = transition.rebootChoices?.length
           ? { ...transition, to: destination }
           : transition;
+        const batteryEconomyRewardScore = getRouteAwareBatteryActivationRewardScore(
+          tileMap,
+          destination,
+          action.id,
+          nextAbsoluteActions,
+          options
+        );
         const nextRoute = {
           finalState: destination,
           initialState: current.initialState,
@@ -6113,6 +6629,8 @@ function enumerateContextualLegRoutes(
           hazard: current.hazard + transition.hazard,
           rebootPenalty:
             current.rebootPenalty + transitionRebootPenalty,
+          batteryEconomyRewardScore:
+            (current.batteryEconomyRewardScore || 0) + batteryEconomyRewardScore,
           baseCost:
             current.baseCost +
             transition.hazard +
@@ -6125,7 +6643,8 @@ function enumerateContextualLegRoutes(
             reversePenalty +
             heavyMovePenalty +
             scarceReusePenalty +
-            conveyorComplexity,
+            conveyorComplexity -
+            batteryEconomyRewardScore,
           cardAvailabilityPenalty:
             (current.cardAvailabilityPenalty || 0) +
             scarceReusePenalty,
@@ -6139,7 +6658,8 @@ function enumerateContextualLegRoutes(
           destination,
           nextAbsoluteActions,
           nextHistory,
-          dynamicGoal
+          dynamicGoal,
+          options
         );
         profile.nextKeyMs += profileNow() - blockStartedAt;
 
@@ -6252,6 +6772,26 @@ function scoreContextualCardSequence(
     penalty: Number(penalty.toFixed(2)),
     history: workingHistory,
     absoluteActions: workingAbsoluteActions
+  };
+}
+
+
+// Public diagnostic wrapper around the same soft programming-deck scarcity
+// model used by route search. This does not simulate a shuffled hand; it reports
+// how much pressure a hypothetical action sequence adds given the recent 9-card
+// history and current register phase.
+export function summarizeProgramSequencePressure(
+  history,
+  absoluteActions,
+  actionIds,
+  options = {}
+) {
+  const result = scoreContextualCardSequence(history, absoluteActions, actionIds, options);
+  return {
+    penalty: result.penalty,
+    absoluteActions: result.absoluteActions,
+    registerPhase: absoluteActions % REGISTER_COUNT,
+    endingRegisterPhase: result.absoluteActions % REGISTER_COUNT
   };
 }
 
@@ -6377,6 +6917,7 @@ function stitchContextualLegs(legs, flags) {
   let cumulativeHazard = 0;
   let cumulativeRebootPenalty = 0;
   let cumulativeBaseCost = 0;
+  let cumulativeBatteryEconomyRewardScore = 0;
   const checkpointHits = [];
 
   legs.forEach((leg, legIndex) => {
@@ -6386,6 +6927,7 @@ function stitchContextualLegs(legs, flags) {
     cumulativeHazard += leg.hazard ?? 0;
     cumulativeRebootPenalty += leg.rebootPenalty ?? 0;
     cumulativeBaseCost += leg.score ?? 0;
+    cumulativeBatteryEconomyRewardScore += leg.batteryEconomyRewardScore ?? 0;
     const flag = flags[legIndex];
 
     checkpointHits.push({
@@ -6431,6 +6973,7 @@ function stitchContextualLegs(legs, flags) {
       0
     ),
     score: Number(cumulativeBaseCost.toFixed(2)),
+    batteryEconomyRewardScore: Number(cumulativeBatteryEconomyRewardScore.toFixed(2)),
     goalReached: true,
     fullCourse: true,
     legRoutes: legs
@@ -6755,6 +7298,21 @@ function analyzeFullCourseContextual(
     criticalSpam: options.criticalSpam,
     criticalHaywire: options.criticalHaywire,
     permanentShutdown: options.permanentShutdown,
+    routeAwareBatteryScoring: Boolean(options.routeAwareBatteryScoring),
+    routeEnergyHorizonTurns: options.routeEnergyHorizonTurns,
+    routeEnergyRegisterScore: options.routeEnergyRegisterScore,
+    routeEnergyReferenceReserve: options.routeEnergyReferenceReserve,
+    startingEnergy: options.startingEnergy,
+    startingEnergyDelta: options.startingEnergyDelta,
+    startingUpgradeCards: options.startingUpgradeCards,
+    startingUpgradeCardDelta: options.startingUpgradeCardDelta,
+    maxEnergy: options.maxEnergy,
+    upgradeDrawsPerTurn: options.upgradeDrawsPerTurn,
+    upgradeInstallsPerTurn: options.upgradeInstallsPerTurn,
+    upgradeDrawEnergyCost: options.upgradeDrawEnergyCost,
+    upgradeUsefulEnergyPerInstall: options.upgradeUsefulEnergyPerInstall,
+    upgradePowerRegistersPerEnergy: options.upgradePowerRegistersPerEnergy,
+    routeRegistersPerTurn: options.routeRegistersPerTurn,
     cuttingFloor: options.cuttingFloor,
     flamingOil: options.flamingOil,
     repulsorOverdrive: options.repulsorOverdrive,
@@ -6781,13 +7339,15 @@ function analyzeFullCourseContextual(
       context,
       legIndex,
       dynamicGoal,
-      namespace
+      namespace,
+      baseRouteOptions
     );
     const templateKey = getContextualTemplateCacheKey(
       context,
       legIndex,
       dynamicGoal,
-      namespace
+      namespace,
+      baseRouteOptions
     );
 
     if (legCache.has(cacheKey)) {
@@ -7327,6 +7887,21 @@ export function analyzeFullCourse(tileMap, starts, flags, options = {}) {
     criticalSpam: options.criticalSpam,
     criticalHaywire: options.criticalHaywire,
     permanentShutdown: options.permanentShutdown,
+    routeAwareBatteryScoring: Boolean(options.routeAwareBatteryScoring),
+    routeEnergyHorizonTurns: options.routeEnergyHorizonTurns,
+    routeEnergyRegisterScore: options.routeEnergyRegisterScore,
+    routeEnergyReferenceReserve: options.routeEnergyReferenceReserve,
+    startingEnergy: options.startingEnergy,
+    startingEnergyDelta: options.startingEnergyDelta,
+    startingUpgradeCards: options.startingUpgradeCards,
+    startingUpgradeCardDelta: options.startingUpgradeCardDelta,
+    maxEnergy: options.maxEnergy,
+    upgradeDrawsPerTurn: options.upgradeDrawsPerTurn,
+    upgradeInstallsPerTurn: options.upgradeInstallsPerTurn,
+    upgradeDrawEnergyCost: options.upgradeDrawEnergyCost,
+    upgradeUsefulEnergyPerInstall: options.upgradeUsefulEnergyPerInstall,
+    upgradePowerRegistersPerEnergy: options.upgradePowerRegistersPerEnergy,
+    routeRegistersPerTurn: options.routeRegistersPerTurn,
     cuttingFloor: options.cuttingFloor,
     flamingOil: options.flamingOil,
     repulsorOverdrive: options.repulsorOverdrive,

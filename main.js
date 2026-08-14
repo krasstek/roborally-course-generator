@@ -54,7 +54,7 @@ const versionedPath = (path) => `${path}${VERSION_SUFFIX}`;
 
 const [
   { render },
-  { analyzeCourse, analyzeFullCourse, analyzeFlagLeg, analyzeGoalApproaches, clearAnalysisCaches, evaluateFullCourseFocusUnderOccupancy, evaluateFullCourseSubsetTraffic, getAnalysisTelemetrySnapshot, recomputeFirstLegPressure, resetAnalysisTelemetry, scoreFlagArea, summarizePowerUpOpportunityBenchmark },
+  { analyzeCourse, analyzeFullCourse, analyzeFlagLeg, analyzeGoalApproaches, clearAnalysisCaches, evaluateFullCourseFocusUnderOccupancy, evaluateFullCourseSubsetTraffic, evaluateRouteUpgradePotential, estimateInitialUpgradeOpportunitiesRemaining, getAnalysisTelemetrySnapshot, getCourseMaxEnergy, getCourseStartingEnergy, getCourseStartingUpgradeCards, getRouteEnergyEconomyConfig, getRouteEnergyGainUtility, getRouteMarginalEnergyUtility, getRouteUpgradePotential, recomputeFirstLegPressure, resetAnalysisTelemetry, ROUTE_ENERGY_ECONOMY_DEFAULTS, scoreFlagArea, summarizePowerUpOpportunityBenchmark, summarizeProgramSequencePressure, summarizePowerUpProgramFeasibility },
   {
     buildMainFootprintTiles,
     buildResolvedMap,
@@ -189,25 +189,9 @@ const MIN_LENGTH_RAW = 28;
 const MIN_SHARED_EDGE = 5;
 const DOCK_BRIDGE_GAP = 3;
 const MAX_DOCK_COUNT = 2;
-const DEFAULT_STARTING_ENERGY = 3;
-const DEFAULT_MAX_ENERGY = 10;
-const DEFAULT_STARTING_UPGRADE_CARDS = 3;
-const DEFAULT_UPGRADE_DRAWS_PER_TURN = 1;
-const DEFAULT_UPGRADE_INSTALLS_PER_TURN = 1;
-const DEFAULT_UPGRADE_DRAW_ENERGY_COST = 1;
-// The local project does not encode the upgrade deck itself, so v39 keeps the
-// unknown-card economics configurable instead of pretending to know an exact
-// deck mix. This neutral 1..5 prior is diagnostic-only and is deliberately
-// reported by name in the course log; callers/variants can supply an exact
-// distribution through options.upgradeCostDistribution later.
-const DEFAULT_UPGRADE_COST_DISTRIBUTION = Object.freeze([
-  { cost: 1, weight: 1 },
-  { cost: 2, weight: 1 },
-  { cost: 3, weight: 1 },
-  { cost: 4, weight: 1 },
-  { cost: 5, weight: 1 }
-]);
-const DEFAULT_UPGRADE_COST_DISTRIBUTION_LABEL = "provisional-uniform-1-5";
+const DEFAULT_STARTING_ENERGY = ROUTE_ENERGY_ECONOMY_DEFAULTS.startingEnergy;
+const DEFAULT_STARTING_UPGRADE_CARDS = ROUTE_ENERGY_ECONOMY_DEFAULTS.startingUpgradeCards;
+
 // Pay to Win prices are expressed in energy, but start advantages are first
 // converted into course-specific register equivalents. These marginal costs
 // are design tuning values, not published rules constants: the first cube is
@@ -7425,6 +7409,21 @@ function getRouteAnalysisVariantOptions(options = {}) {
     criticalSpam: options.criticalSpam,
     criticalHaywire: options.criticalHaywire,
     permanentShutdown: options.permanentShutdown,
+    routeAwareBatteryScoring: options.routeAwareBatteryScoring,
+    routeEnergyHorizonTurns: options.routeEnergyHorizonTurns,
+    routeEnergyRegisterScore: options.routeEnergyRegisterScore,
+    routeEnergyReferenceReserve: options.routeEnergyReferenceReserve,
+    startingEnergy: options.startingEnergy,
+    startingEnergyDelta: options.startingEnergyDelta,
+    startingUpgradeCards: options.startingUpgradeCards,
+    startingUpgradeCardDelta: options.startingUpgradeCardDelta,
+    maxEnergy: options.maxEnergy,
+    upgradeDrawsPerTurn: options.upgradeDrawsPerTurn,
+    upgradeInstallsPerTurn: options.upgradeInstallsPerTurn,
+    upgradeDrawEnergyCost: options.upgradeDrawEnergyCost,
+    upgradeUsefulEnergyPerInstall: options.upgradeUsefulEnergyPerInstall,
+    upgradePowerRegistersPerEnergy: options.upgradePowerRegistersPerEnergy,
+    routeRegistersPerTurn: options.routeRegistersPerTurn,
     cuttingFloor: options.cuttingFloor,
     flamingOil: options.flamingOil,
     repulsorOverdrive: options.repulsorOverdrive
@@ -7444,178 +7443,450 @@ function getPayToWinAnalysisOptions(options = {}, playerCount = 4) {
     : options;
 }
 
-function getCourseStartingEnergy(options = {}) {
-  const explicitStartingEnergy = Number(options.startingEnergy);
-  if (Number.isFinite(explicitStartingEnergy)) {
-    return Math.max(0, Math.floor(explicitStartingEnergy));
-  }
-
-  const startingEnergyDelta = Number(options.startingEnergyDelta);
-  return Math.max(
-    0,
-    DEFAULT_STARTING_ENERGY + (Number.isFinite(startingEnergyDelta) ? Math.trunc(startingEnergyDelta) : 0)
-  );
+function getRouteEconomyReserveSamples(config) {
+  if (!(config.maxEnergy > 0)) return [];
+  const candidates = [1, config.startingEnergy, 6]
+    .map((energy) => clamp(Math.floor(Number(energy) || 0), 0, Math.max(0, config.maxEnergy - 1)));
+  return [...new Set(candidates)].sort((a, b) => a - b);
 }
 
-function getCourseStartingUpgradeCards(options = {}) {
-  const explicitStartingCards = Number(options.startingUpgradeCards);
-  if (Number.isFinite(explicitStartingCards)) {
-    return Math.max(0, Math.floor(explicitStartingCards));
-  }
-
-  const startingCardDelta = Number(options.startingUpgradeCardDelta);
-  return Math.max(
-    0,
-    DEFAULT_STARTING_UPGRADE_CARDS +
-      (Number.isFinite(startingCardDelta) ? Math.trunc(startingCardDelta) : 0)
-  );
-}
-
-function getCourseMaxEnergy(options = {}) {
-  const explicitMaxEnergy = Number(options.maxEnergy);
-  return Number.isFinite(explicitMaxEnergy)
-    ? Math.max(0, Math.floor(explicitMaxEnergy))
-    : DEFAULT_MAX_ENERGY;
-}
-
-function getUpgradeEconomyRate(options, key, fallback) {
-  const value = Number(options?.[key]);
-  return Number.isFinite(value) ? Math.max(0, value) : fallback;
-}
-
-function normalizeUpgradeCostDistribution(options = {}) {
-  const supplied = options.upgradeCostDistribution;
-  const entries = [];
-  const pushEntry = (costValue, weightValue = 1) => {
-    const cost = Number(costValue);
-    const weight = Number(weightValue);
-    if (!Number.isFinite(cost) || cost < 0 || !Number.isFinite(weight) || weight <= 0) return;
-    entries.push({ cost: Math.floor(cost), weight });
-  };
-
-  if (Array.isArray(supplied)) {
-    supplied.forEach((item) => {
-      if (typeof item === "number") {
-        // A numeric array is treated as an explicit deck/sample list: repeated
-        // costs naturally increase their weight.
-        pushEntry(item, 1);
-      } else if (item && typeof item === "object") {
-        pushEntry(item.cost, item.weight ?? item.count ?? 1);
-      }
-    });
-  } else if (supplied && typeof supplied === "object") {
-    Object.entries(supplied).forEach(([cost, weight]) => pushEntry(cost, weight));
-  }
-
-  const sourceEntries = entries.length
-    ? entries
-    : DEFAULT_UPGRADE_COST_DISTRIBUTION.map((entry) => ({ ...entry }));
-  const merged = new Map();
-  sourceEntries.forEach(({ cost, weight }) => {
-    merged.set(cost, (merged.get(cost) ?? 0) + weight);
-  });
-  const normalizedEntries = [...merged.entries()]
-    .sort((left, right) => left[0] - right[0])
-    .map(([cost, weight]) => ({ cost, weight }));
-  const totalWeight = normalizedEntries.reduce((sum, entry) => sum + entry.weight, 0);
-
-  return {
-    label: entries.length
-      ? (options.upgradeCostDistributionLabel ?? "custom")
-      : DEFAULT_UPGRADE_COST_DISTRIBUTION_LABEL,
-    entries: normalizedEntries.map((entry) => ({
-      ...entry,
-      probability: totalWeight > 0 ? entry.weight / totalWeight : 0
-    })),
-    totalWeight
-  };
-}
-
-function buildStartingUpgradeHandEconomyShadow(options = {}, horizonTurns = null) {
-  const startingEnergy = getCourseStartingEnergy(options);
-  const maxEnergy = getCourseMaxEnergy(options);
-  const startingUpgradeCards = getCourseStartingUpgradeCards(options);
-  const drawsPerTurn = getUpgradeEconomyRate(
-    options,
-    "upgradeDrawsPerTurn",
-    DEFAULT_UPGRADE_DRAWS_PER_TURN
-  );
-  const installsPerTurn = getUpgradeEconomyRate(
-    options,
-    "upgradeInstallsPerTurn",
-    DEFAULT_UPGRADE_INSTALLS_PER_TURN
-  );
-  const drawEnergyCost = getUpgradeEconomyRate(
-    options,
-    "upgradeDrawEnergyCost",
-    DEFAULT_UPGRADE_DRAW_ENERGY_COST
-  );
-  const distribution = normalizeUpgradeCostDistribution(options);
-  const finiteHorizon = Number(horizonTurns);
-  const expectedUpgradePhases = Number.isFinite(finiteHorizon) && finiteHorizon > 0
-    ? Math.max(1, Math.ceil(finiteHorizon))
+function buildRouteEnergyEconomyShadow(tileMap, startAnalyses = [], options = {}, benchmark = null) {
+  const config = getRouteEnergyEconomyConfig(options);
+  const routes = (startAnalyses || [])
+    .map((analysis) => ({ index: analysis?.index, route: analysis?.fullCourseRoute }))
+    .filter((entry) => entry.route && Array.isArray(entry.route.transitions) && entry.route.transitions.length);
+  const medianActions = medianValue(routes.map((entry) => entry.route.actions ?? entry.route.transitions.length));
+  const representative = routes.length
+    ? [...routes].sort((a, b) => Math.abs((a.route.actions ?? a.route.transitions.length) - medianActions) - Math.abs((b.route.actions ?? b.route.transitions.length) - medianActions))[0]
     : null;
-  const startingHandInstallSlots = Number.isFinite(expectedUpgradePhases)
-    ? Math.min(
-      startingUpgradeCards,
-      Math.max(0, Math.floor(expectedUpgradePhases * installsPerTurn))
+  const route = representative?.route ?? null;
+  const horizonTurns = Number(benchmark?.medianFullCourseTurns) > 0
+    ? Number(benchmark.medianFullCourseTurns)
+    : (route ? route.transitions.length / config.registersPerTurn : 0);
+  const registerScore = Number(benchmark?.registerScoreMedian) > 0 ? Number(benchmark.registerScoreMedian) : null;
+  const curve = buildPayToWinEnergyThresholds(config.startingEnergy, horizonTurns, registerScore);
+  const p2wMarginals = [];
+  let derivedCumulativeR = 0;
+  for (let fromEnergy = config.startingEnergy; fromEnergy >= 1; fromEnergy -= 1) {
+    const spendDepth = config.startingEnergy - fromEnergy + 1;
+    const current = curve.thresholds[spendDepth - 1];
+    const previous = curve.thresholds[spendDepth - 2];
+    const currentMarginalR = current ? current.cumulativeRegisters - (previous?.cumulativeRegisters ?? 0) : null;
+    const derivedMarginalR = getRouteUpgradePotential(
+      fromEnergy,
+      horizonTurns,
+      config.startingUpgradeCards,
+      options,
+      horizonTurns
+    ) - getRouteUpgradePotential(
+      fromEnergy - 1,
+      horizonTurns,
+      config.startingUpgradeCards,
+      options,
+      horizonTurns
+    );
+    derivedCumulativeR += derivedMarginalR;
+    p2wMarginals.push({
+      fromEnergy,
+      toEnergy: fromEnergy - 1,
+      currentMarginalR: Number.isFinite(currentMarginalR) ? Number(currentMarginalR.toFixed(3)) : null,
+      derivedMarginalR: Number(derivedMarginalR.toFixed(3)),
+      currentCumulativeR: current ? Number(current.cumulativeRegisters.toFixed(3)) : null,
+      derivedCumulativeR: Number(derivedCumulativeR.toFixed(3))
+    });
+  }
+  const timeZeroLevels = Array.from({ length: config.maxEnergy + 1 }, (_, energy) => ({
+    energy,
+    utilityR: Number(getRouteUpgradePotential(
+      energy,
+      horizonTurns,
+      config.startingUpgradeCards,
+      options,
+      horizonTurns
+    ).toFixed(3))
+  }));
+  const reserveSamples = getRouteEconomyReserveSamples(config);
+  const waitRegisterTurns = 1 / config.registersPerTurn;
+  const waitTempoCostR = registerScore
+    ? Number((Number(benchmark?.registerTempoCost ?? registerScore) / registerScore).toFixed(3))
+    : null;
+  const battery = [];
+  const chopShop = [];
+  const powerUp = [];
+  const buildEnergySensitivity = (remainingTurns, initialRemaining) => reserveSamples.map((energy) => ({
+    energy,
+    valueR: Number(getRouteMarginalEnergyUtility(
+      energy,
+      remainingTurns,
+      initialRemaining,
+      options,
+      horizonTurns
+    ).plus.toFixed(3))
+  }));
+  if (route) {
+    const seenBattery = new Set();
+    const seenChopShop = new Set();
+    const visitPoints = (transition) => {
+      const points = [];
+      const add = (point) => {
+        if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return;
+        const key = `${point.x},${point.y}`;
+        if (!points.some((item) => item.key === key)) points.push({ key, x: point.x, y: point.y });
+      };
+      add(transition?.from);
+      (transition?.traversed || []).forEach((step) => { add(step?.from); add(step?.to); });
+      add(transition?.to);
+      return points;
+    };
+    const actionHistory = Array.isArray(route.actionHistory)
+      ? route.actionHistory
+      : route.transitions.map((item) => item?.action).filter(Boolean);
+    route.transitions.forEach((transition, index) => {
+      // Preserve the existing route-point treatment for Chop Shops.
+      const elapsedTurns = index / config.registersPerTurn;
+      const remainingTurns = Math.max(0, horizonTurns - elapsedTurns);
+      const initialRemaining = estimateInitialUpgradeOpportunitiesRemaining(elapsedTurns, horizonTurns, config);
+      visitPoints(transition).forEach((point) => {
+        const features = tileMap?.get?.(point.key)?.features || [];
+        if (features.some((feature) => feature.type === "chopShop") && !seenChopShop.has(point.key)) {
+          seenChopShop.add(point.key);
+          const reserveSensitivity = reserveSamples.map((energy) => {
+            const energyOptionR = getRouteMarginalEnergyUtility(
+              energy,
+              remainingTurns,
+              initialRemaining,
+              options,
+              horizonTurns
+            ).plus;
+            const cardOptionR = Math.max(0,
+              getRouteUpgradePotential(energy, remainingTurns, initialRemaining + 1, options, horizonTurns) -
+              getRouteUpgradePotential(energy, remainingTurns, initialRemaining, options, horizonTurns)
+            );
+            return {
+              energy,
+              energyOptionR: Number(energyOptionR.toFixed(3)),
+              cardOptionR: Number(cardOptionR.toFixed(3)),
+              shadowR: Number(Math.max(energyOptionR, cardOptionR).toFixed(3)),
+              choice: cardOptionR > energyOptionR + 1e-9 ? "card" : "energy"
+            };
+          });
+          chopShop.push({
+            turn: Number(elapsedTurns.toFixed(2)),
+            remainingTurns: Number(remainingTurns.toFixed(2)),
+            initialUpgradeOpportunities: initialRemaining,
+            reserveSensitivity,
+            staticRouteWeight: getUpgradeFeaturePenaltyForAudit("chopShop", options, Boolean(options.upgradeWorld))
+          });
+        }
+      });
+
+      // Battery energy is collected at the post-register landing boundary. Merely
+      // crossing a Battery during a movement transition does not create a charging
+      // opportunity for the following Power Up register.
+      const landing = transition?.to;
+      if (!landing || !Number.isFinite(landing.x) || !Number.isFinite(landing.y)) return;
+      const landingKey = `${landing.x},${landing.y}`;
+      const landingFeatures = tileMap?.get?.(landingKey)?.features || [];
+      if (!landingFeatures.some((feature) => feature.type === "battery")) return;
+
+      const batteryElapsedTurns = (index + 1) / config.registersPerTurn;
+      const batteryRemainingTurns = Math.max(0, horizonTurns - batteryElapsedTurns);
+      const batteryInitialRemaining = estimateInitialUpgradeOpportunitiesRemaining(
+        batteryElapsedTurns,
+        horizonTurns,
+        config
+      );
+      const encounterKey = `${landingKey}:${index}`;
+      if (seenBattery.has(encounterKey)) return;
+      seenBattery.add(encounterKey);
+
+      const boundaryAbsoluteActions = index + 1;
+      const priorHistory = actionHistory.slice(0, boundaryAbsoluteActions);
+      const programFeasibility = typeof summarizePowerUpProgramFeasibility === "function"
+        ? summarizePowerUpProgramFeasibility(priorHistory, boundaryAbsoluteActions)
+        : null;
+      const powerUpLegal = programFeasibility
+        ? Boolean(programFeasibility.powerUp?.feasible)
+        : true;
+      const powerUpAgainLegal = programFeasibility
+        ? Boolean(programFeasibility.powerUpAgain?.feasible)
+        : ((boundaryAbsoluteActions + 1) % config.registersPerTurn) !== 0;
+      const powerUpReason = programFeasibility?.powerUp?.reason ?? null;
+      const powerUpAgainReason = programFeasibility?.powerUpAgain?.reason ?? null;
+      const powerUpPressure = powerUpLegal && typeof summarizeProgramSequencePressure === "function"
+        ? summarizeProgramSequencePressure(priorHistory, boundaryAbsoluteActions, ["WAIT"], options)
+        : null;
+      const powerUpAgainPressure = powerUpAgainLegal && typeof summarizeProgramSequencePressure === "function"
+        ? summarizeProgramSequencePressure(priorHistory, boundaryAbsoluteActions, ["WAIT", "WAIT"], options)
+        : null;
+      const powerUpCardPressureR = registerScore && Number.isFinite(powerUpPressure?.penalty)
+        ? Number((powerUpPressure.penalty / registerScore).toFixed(3))
+        : null;
+      const powerUpAgainCardPressureR = registerScore && Number.isFinite(powerUpAgainPressure?.penalty)
+        ? Number((powerUpAgainPressure.penalty / registerScore).toFixed(3))
+        : null;
+      const reserveSensitivity = reserveSamples.map((energy) => {
+        const arrivalValueR = getRouteEnergyGainUtility(
+          energy,
+          1,
+          batteryRemainingTurns,
+          batteryInitialRemaining,
+          options,
+          horizonTurns
+        );
+        // The reserve sample is the pre-arrival reserve. The Battery's +1E happens
+        // first; Power Up/Again values below are additional charging opportunities
+        // from the resulting reserve.
+        const energyAfterArrival = clamp(energy + 1, 0, config.maxEnergy);
+        const powerUpElapsed = batteryElapsedTurns + waitRegisterTurns;
+        const powerUpRemaining = Math.max(0, horizonTurns - powerUpElapsed);
+        const powerUpInitialRemaining = estimateInitialUpgradeOpportunitiesRemaining(
+          powerUpElapsed,
+          horizonTurns,
+          config
+        );
+        const powerUpEnergyR = powerUpLegal
+          ? getRouteEnergyGainUtility(
+            energyAfterArrival,
+            2,
+            powerUpRemaining,
+            powerUpInitialRemaining,
+            options,
+            horizonTurns
+          )
+          : null;
+        const energyAfterPowerUp = clamp(energyAfterArrival + 2, 0, config.maxEnergy);
+        const againElapsed = powerUpElapsed + waitRegisterTurns;
+        const againRemaining = Math.max(0, horizonTurns - againElapsed);
+        const againInitialRemaining = estimateInitialUpgradeOpportunitiesRemaining(
+          againElapsed,
+          horizonTurns,
+          config
+        );
+        const againAdditionalEnergyR = powerUpAgainLegal
+          ? getRouteEnergyGainUtility(
+            energyAfterPowerUp,
+            2,
+            againRemaining,
+            againInitialRemaining,
+            options,
+            horizonTurns
+          )
+          : null;
+        const powerUpAgainEnergyR = powerUpAgainLegal && Number.isFinite(powerUpEnergyR) && Number.isFinite(againAdditionalEnergyR)
+          ? powerUpEnergyR + againAdditionalEnergyR
+          : null;
+        const oneTempoR = Number.isFinite(waitTempoCostR) ? waitTempoCostR : null;
+        const twoTempoR = Number.isFinite(waitTempoCostR) ? waitTempoCostR * 2 : null;
+        const powerUpNetR = powerUpLegal && Number.isFinite(powerUpEnergyR) && Number.isFinite(oneTempoR) && Number.isFinite(powerUpCardPressureR)
+          ? powerUpEnergyR - oneTempoR - powerUpCardPressureR
+          : null;
+        const powerUpAgainNetR = powerUpAgainLegal && Number.isFinite(twoTempoR) && Number.isFinite(powerUpAgainCardPressureR)
+          ? powerUpAgainEnergyR - twoTempoR - powerUpAgainCardPressureR
+          : null;
+        return {
+          energy,
+          arrivalValueR: Number(arrivalValueR.toFixed(3)),
+          powerUpLegal,
+          powerUpReason,
+          powerUpEnergyR: Number.isFinite(powerUpEnergyR) ? Number(powerUpEnergyR.toFixed(3)) : null,
+          powerUpCardPressureR,
+          powerUpNetBeforePositionR: Number.isFinite(powerUpNetR)
+            ? Number(powerUpNetR.toFixed(3))
+            : null,
+          powerUpAgainLegal,
+          powerUpAgainReason,
+          powerUpAgainEnergyR: Number.isFinite(powerUpAgainEnergyR) ? Number(powerUpAgainEnergyR.toFixed(3)) : null,
+          powerUpAgainAdditionalEnergyR: Number.isFinite(againAdditionalEnergyR) ? Number(againAdditionalEnergyR.toFixed(3)) : null,
+          powerUpAgainCardPressureR,
+          powerUpAgainNetBeforePositionR: Number.isFinite(powerUpAgainNetR)
+            ? Number(powerUpAgainNetR.toFixed(3))
+            : null
+        };
+      });
+      battery.push({
+        turn: Number(batteryElapsedTurns.toFixed(2)),
+        remainingTurns: Number(batteryRemainingTurns.toFixed(2)),
+        initialUpgradeOpportunities: batteryInitialRemaining,
+        nextRegister: programFeasibility?.nextRegister ?? ((boundaryAbsoluteActions % config.registersPerTurn) + 1),
+        waitRegisterTurns: Number(waitRegisterTurns.toFixed(3)),
+        waitTempoCostR,
+        currentProgramFeasible: programFeasibility?.currentProgramFeasible ?? null,
+        currentProgramRequiresAgain: programFeasibility?.currentProgramRequiresAgain ?? null,
+        powerUpLegal,
+        powerUpReason,
+        powerUpCardPressureR,
+        powerUpAgainCardPressureR,
+        powerUpAgainLegal,
+        powerUpAgainReason,
+        reserveSensitivity,
+        staticRouteWeight: getUpgradeFeaturePenaltyForAudit("battery", options, Boolean(options.upgradeWorld))
+      });
+    });
+    const sampleCount = Math.min(5, route.transitions.length);
+    for (let sample = 0; sample < sampleCount; sample += 1) {
+      const index = Math.min(route.transitions.length - 1, Math.floor(((sample + 0.5) * route.transitions.length) / sampleCount));
+      const elapsedTurns = index / config.registersPerTurn;
+      const remainingTurns = Math.max(0, horizonTurns - elapsedTurns);
+      const initialRemaining = estimateInitialUpgradeOpportunitiesRemaining(elapsedTurns, horizonTurns, config);
+      const strategicScore = Number(benchmark?.powerUpStrategicDeltaMedian);
+      powerUp.push({
+        turn: Number(elapsedTurns.toFixed(2)),
+        remainingTurns: Number(remainingTurns.toFixed(2)),
+        initialUpgradeOpportunities: initialRemaining,
+        reserveSensitivity: buildEnergySensitivity(remainingTurns, initialRemaining),
+        waitTempoCostR,
+        strategicDeltaR: registerScore && Number.isFinite(strategicScore) ? Number((strategicScore / registerScore).toFixed(3)) : null
+      });
+    }
+  }
+  const selectedPoints = [0, 0.5, 0.9].map((fraction) => {
+    const elapsed = horizonTurns * fraction;
+    const remainingTurns = Math.max(0, horizonTurns - elapsed);
+    const initialOps = estimateInitialUpgradeOpportunitiesRemaining(elapsed, horizonTurns, config);
+    const detail = evaluateRouteUpgradePotential(
+      config.startingEnergy,
+      remainingTurns,
+      initialOps,
+      options,
+      horizonTurns
+    );
+    return {
+      turn: Number(elapsed.toFixed(2)),
+      remainingTurns: Number(remainingTurns.toFixed(2)),
+      initialUpgradeOpportunities: initialOps,
+      installCapacity: detail.installCapacity,
+      initialInstallCapacity: detail.initialInstallCapacity,
+      futureInstallCapacity: detail.futureInstallCapacity,
+      levels: Array.from({ length: config.maxEnergy + 1 }, (_, energy) => Number(getRouteUpgradePotential(
+        energy,
+        remainingTurns,
+        initialOps,
+        options,
+        horizonTurns
+      ).toFixed(3)))
+    };
+  });
+  return {
+    active: true,
+    method: "route-energy-conversion-shadow-v1.2",
+    representativeStartIndex: representative?.index ?? null,
+    config,
+    horizonTurns: Number(horizonTurns.toFixed(2)),
+    registerScore,
+    reserveSamples,
+    p2wMarginals,
+    timeZeroLevels,
+    selectedPoints,
+    battery,
+    powerUp,
+    chopShop
+  };
+}
+
+
+
+function buildCourseEnergyEconomyDiagnostics(scenario) {
+  if (!scenario?.goalTileMap || scenario.lighterGame) return null;
+  const firstLeg = scenario.sequence?.firstLeg;
+  const routeStarts = (firstLeg?.starts || []).filter((item) => (
+    item?.reachable && item?.fullCourseRoute && Array.isArray(item.fullCourseRoute.transitions) && item.fullCourseRoute.transitions.length
+  ));
+  if (!routeStarts.length) return null;
+
+  const options = {
+    ...(scenario.preferences || {}),
+    playerCount: scenario.playerCount ?? scenario.preferences?.playerCount,
+    upgradeWorld: Boolean(scenario.upgradeWorld ?? scenario.preferences?.upgradeWorld),
+    payToWin: Boolean(scenario.payToWin)
+  };
+  const benchmark = typeof summarizePowerUpOpportunityBenchmark === "function"
+    ? summarizePowerUpOpportunityBenchmark(
+      scenario.goalTileMap,
+      routeStarts,
+      firstLeg?.flags || scenario.checkpoints || [],
+      options
     )
     : null;
-  const futureDrawSlots = Number.isFinite(expectedUpgradePhases)
-    ? Math.max(0, Math.floor(expectedUpgradePhases * drawsPerTurn))
-    : null;
+  const config = getRouteEnergyEconomyConfig(options);
+  const encounters = [];
 
-  const levels = [];
-  for (let energy = startingEnergy; energy >= 0; energy -= 1) {
-    const affordableProbabilityPerCard = distribution.entries.reduce(
-      (sum, entry) => sum + (entry.cost <= energy ? entry.probability : 0),
-      0
+  routeStarts.forEach((startAnalysis) => {
+    const route = startAnalysis.fullCourseRoute;
+    const routeTurns = (route.actions ?? route.transitions.length) / config.registersPerTurn;
+    const routeBenchmark = benchmark
+      ? { ...benchmark, medianFullCourseActions: route.actions ?? route.transitions.length, medianFullCourseTurns: routeTurns }
+      : null;
+    const routeShadow = buildRouteEnergyEconomyShadow(
+      scenario.goalTileMap,
+      [startAnalysis],
+      options,
+      routeBenchmark
     );
-    const chanceAnyAffordable = startingUpgradeCards > 0
-      ? 1 - Math.pow(Math.max(0, 1 - affordableProbabilityPerCard), startingUpgradeCards)
-      : 0;
-    const expectedAffordableCards = startingUpgradeCards * affordableProbabilityPerCard;
-    levels.push({
-      energy,
-      affordableProbabilityPerCard: Number(affordableProbabilityPerCard.toFixed(4)),
-      chanceAnyAffordable: Number(chanceAnyAffordable.toFixed(4)),
-      expectedAffordableCards: Number(expectedAffordableCards.toFixed(3))
+    (routeShadow.battery || []).forEach((battery) => {
+      const progress = routeShadow.horizonTurns > 0 ? battery.turn / routeShadow.horizonTurns : 0;
+      encounters.push({
+        ...battery,
+        startIndex: startAnalysis.index,
+        horizonTurns: routeShadow.horizonTurns,
+        progress: Number(clamp(progress, 0, 1).toFixed(3))
+      });
     });
-  }
-
-  levels.forEach((level, index) => {
-    const nextLower = levels[index + 1];
-    level.chanceAnyLostBySpendingOne = nextLower
-      ? Number(Math.max(0, level.chanceAnyAffordable - nextLower.chanceAnyAffordable).toFixed(4))
-      : 0;
-    level.expectedAffordableCardsLostBySpendingOne = nextLower
-      ? Number(Math.max(0, level.expectedAffordableCards - nextLower.expectedAffordableCards).toFixed(3))
-      : 0;
   });
+
+  const sorted = [...encounters].sort((a, b) => a.progress - b.progress || a.turn - b.turn || a.startIndex - b.startIndex);
+  const representative = [];
+  const addUnique = (entry) => {
+    if (!entry) return;
+    const key = `${entry.startIndex}:${entry.turn}:${entry.remainingTurns}`;
+    if (!representative.some((item) => `${item.startIndex}:${item.turn}:${item.remainingTurns}` === key)) {
+      representative.push(entry);
+    }
+  };
+  if (sorted.length) {
+    addUnique(sorted[0]);
+    addUnique([...sorted].sort((a, b) => Math.abs(a.progress - 0.5) - Math.abs(b.progress - 0.5))[0]);
+    addUnique(sorted[sorted.length - 1]);
+  }
+  representative.sort((a, b) => a.progress - b.progress || a.turn - b.turn);
+
+  const medianActions = medianValue(routeStarts.map((entry) => entry.fullCourseRoute.actions ?? entry.fullCourseRoute.transitions.length));
+  const medianTurns = medianActions / config.registersPerTurn;
+  const productionMetadata = scenario.sequence?.firstLeg?.summary?.coursePreflight?.routeAwareBatteryScoring ?? null;
+  const productionRewardScores = routeStarts
+    .map((entry) => Number(entry.fullCourseRoute?.batteryEconomyRewardScore))
+    .filter(Number.isFinite);
+  const overallShadow = buildRouteEnergyEconomyShadow(
+    scenario.goalTileMap,
+    routeStarts,
+    options,
+    benchmark ? { ...benchmark, medianFullCourseActions: medianActions, medianFullCourseTurns: medianTurns } : null
+  );
 
   return {
     active: true,
-    method: "unknown-starting-hand-affordability-shadow-v1",
-    // Pay to Win intentionally resolves starting-space choice before these cards
-    // are dealt/revealed. The generator therefore models only the distribution
-    // and count, never a player's actual hand.
-    knownAtStartSelection: false,
-    startingEnergy,
-    maxEnergy,
-    startingUpgradeCards,
-    drawsPerTurn,
-    installsPerTurn,
-    drawEnergyCost,
-    expectedUpgradePhases,
-    startingHandInstallSlots,
-    futureDrawSlots,
-    distributionLabel: distribution.label,
-    distribution: distribution.entries.map((entry) => ({
-      cost: entry.cost,
-      weight: Number(entry.weight.toFixed(3)),
-      probability: Number(entry.probability.toFixed(4))
-    })),
-    levels
+    method: "course-route-energy-diagnostics-v42",
+    routeCount: routeStarts.length,
+    productionBatteryScoring: productionMetadata
+      ? {
+        ...productionMetadata,
+        selectedRouteRewardMedian: productionRewardScores.length
+          ? Number(medianValue(productionRewardScores).toFixed(2))
+          : 0,
+        selectedRouteRewardMax: productionRewardScores.length
+          ? Number(Math.max(...productionRewardScores).toFixed(2))
+          : 0
+      }
+      : null,
+    batteryEncounterCount: encounters.length,
+    batteryRouteCount: new Set(encounters.map((entry) => entry.startIndex)).size,
+    config,
+    horizonTurns: overallShadow.horizonTurns,
+    reserveSamples: overallShadow.reserveSamples,
+    representativeBatteryEncounters: representative,
+    selectedPoints: overallShadow.selectedPoints,
+    benchmark,
+    featureWeights: buildUpgradeFeatureWeightAudit(options)
   };
 }
 
@@ -8729,10 +9000,8 @@ function buildPayToWinEnergyShadow(firstLeg, tileMap, playerCount, options = {},
       }
     )
     : null;
-  const upgradeEconomy = buildStartingUpgradeHandEconomyShadow(
-    options,
-    benchmark?.medianFullCourseTurns
-  );
+  const routeEconomy = buildRouteEnergyEconomyShadow(tileMap, activeStarts, options, benchmark);
+  const upgradeEconomy = { active: true, method: routeEconomy.method, ...routeEconomy.config, horizonTurns: routeEconomy.horizonTurns };
   const upgradeFeatureWeights = buildUpgradeFeatureWeightAudit(options);
   const registerScore = Number(benchmark?.registerScoreMedian);
   const usableRegisterScore = Number.isFinite(registerScore) && registerScore > 0
@@ -8783,6 +9052,7 @@ function buildPayToWinEnergyShadow(firstLeg, tileMap, playerCount, options = {},
     )).length,
     benchmark,
     upgradeEconomy,
+    routeEconomy,
     upgradeFeatureWeights,
     initialPricingModel: comparisonState.initialPricingModel ?? null,
     finalPricingModel: comparisonState.finalPricingModel ?? null,
@@ -9697,6 +9967,59 @@ function buildCoursePreflightSequence(tileMap, starts, flags, playerCount, optio
   };
 }
 
+function buildRouteAwareBatteryScoringOptions(coursePreflight, options = {}) {
+  if (!coursePreflight?.valid || options.lighterGame) {
+    return { routeAwareBatteryScoring: false };
+  }
+
+  const config = getRouteEnergyEconomyConfig(options);
+  const horizonActions = Number(coursePreflight.sequence?.summary?.totalActions);
+  const horizonTurns = Number.isFinite(horizonActions) && horizonActions > 0
+    ? horizonActions / config.registersPerTurn
+    : 0;
+  const registerSamples = [];
+  const addRoute = (route) => {
+    const actions = Number(route?.actions);
+    const score = Number(route?.score);
+    if (Number.isFinite(actions) && actions > 0 && Number.isFinite(score) && score > 0) {
+      registerSamples.push(score / actions);
+    }
+  };
+
+  (coursePreflight.opening?.starts || []).forEach((analysis) => {
+    if (analysis?.reachable) addRoute(analysis.selectedRoute);
+  });
+  (coursePreflight.laterLegs || []).forEach((leg) => {
+    (leg?.distinctRoutes || []).forEach(addRoute);
+  });
+
+  const registerScore = medianValue(registerSamples);
+  if (!(horizonTurns > 0) || !(registerScore > 0)) {
+    return { routeAwareBatteryScoring: false };
+  }
+
+  return {
+    routeAwareBatteryScoring: true,
+    routeEnergyHorizonTurns: Number(horizonTurns.toFixed(3)),
+    routeEnergyRegisterScore: Number(registerScore.toFixed(3)),
+    // Carry resolved economy parameters with the production scorer so later
+    // setup variants can change them without hidden 3E/3-card assumptions.
+    startingEnergy: config.startingEnergy,
+    startingUpgradeCards: config.startingUpgradeCards,
+    maxEnergy: config.maxEnergy,
+    upgradeDrawsPerTurn: config.drawsPerTurn,
+    upgradeInstallsPerTurn: config.installsPerTurn,
+    upgradeDrawEnergyCost: config.drawEnergyCost,
+    upgradeUsefulEnergyPerInstall: config.usefulEnergyPerInstall,
+    upgradePowerRegistersPerEnergy: config.powerRegistersPerEnergy,
+    routeRegistersPerTurn: config.registersPerTurn,
+    // Production scoring cannot know a real player's reserve. v42 uses the
+    // normal starting reserve as a neutral reference point; Dev View retains
+    // E1/E3/E6 sensitivity so we can detect where this assumption is fragile.
+    routeEnergyReferenceReserve: config.startingEnergy
+  };
+}
+
 function getRoutePoolMode(options = {}) {
   if (options.competitiveMode) return "competitive";
   if (options.payToWin) return "pay-to-win";
@@ -9868,7 +10191,10 @@ function buildReusableRoutePool(tileMap, starts, flags, playerCount, coursePrefl
       contextualRequiredStarts: policy.requiredCount,
       contextualPreferredStarts: policy.mode === "pay-to-win" ? policy.targetCount : null,
       contextualStopWhenPreferredLost: policy.mode === "pay-to-win",
-      contextualOpeningSeedAnalyses: candidateOpeningAnalyses,
+      // Preflight opening routes still use the legacy static Battery score.
+      // Once v42 production scoring is active, re-search Flag 1 so the coherent
+      // pool is built entirely in the new route-aware Battery currency.
+      contextualOpeningSeedAnalyses: options.routeAwareBatteryScoring ? null : candidateOpeningAnalyses,
       contextualOpeningRoutes: 1,
       contextualLaterRoutes: 1,
       contextualBeamWidth: 1,
@@ -9915,6 +10241,7 @@ function buildReusableRoutePool(tileMap, starts, flags, playerCount, coursePrefl
     sourceOpeningCount: routedOpening.length,
     candidateCount: candidateStarts.length,
     coherentRoutedCount,
+    openingReused: !options.routeAwareBatteryScoring,
     selectedIndices: [...selectedSet].sort((left, right) => left - right),
     survivorStarts,
     seedStartAnalyses,
@@ -12012,6 +12339,9 @@ function buildScenarioCopySummary(scenario) {
   const competitive = scenario.metrics?.competitiveBlockImpact ?? null;
   const payToWin = summary.payToWin ?? null;
   const contextualCache = summary.contextualLegCache ?? null;
+  const courseEnergyEconomy = !payToWin?.energyShadow?.active
+    ? buildCourseEnergyEconomyDiagnostics(scenario)
+    : null;
   const profile = diagnostics?.contextualProfileTotals ?? null;
   const playableCheckpoints = getPlayableCheckpoints(
     scenario.checkpoints ?? [],
@@ -12209,31 +12539,35 @@ function buildScenarioCopySummary(scenario) {
       const benchmark = energyShadow.benchmark ?? {};
       const upgradeEconomy = energyShadow.upgradeEconomy ?? {};
       const featureWeights = energyShadow.upgradeFeatureWeights ?? {};
-      const distributionText = (upgradeEconomy.distribution ?? []).map((entry) =>
-        `${entry.cost}E:${Number((entry.probability * 100).toFixed(1))}%`
-      ).join("/") || "n/a";
-      const accessText = (upgradeEconomy.levels ?? []).map((level) =>
-        `${level.energy}E any${Number((level.chanceAnyAffordable * 100).toFixed(1))}%/${level.expectedAffordableCards} cards`
-      ).join(", ") || "n/a";
+      const routeEconomy = energyShadow.routeEconomy ?? {};
       const formatFeatureWeights = (entry) => entry
         ? `current ${entry.current ?? "n/a"}, base ${entry.base ?? "n/a"}, UpgradeWorld ${entry.upgradeWorld ?? "n/a"}`
         : "n/a";
-      let priorCumulativeR = 0;
-      const spendDepthText = (pricingModel.thresholds ?? [])
-        .filter((threshold) => threshold.energy <= (payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY))
-        .map((threshold) => {
-          const marginalR = Number((threshold.cumulativeRegisters - priorCumulativeR).toFixed(3));
-          priorCumulativeR = threshold.cumulativeRegisters;
-          const energyBeforeSpend = (payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY) - threshold.energy + 1;
-          const accessLevel = (upgradeEconomy.levels ?? []).find((level) => level.energy === energyBeforeSpend);
-          return `spend${threshold.energy} ${marginalR}R; ${energyBeforeSpend}->${Math.max(0, energyBeforeSpend - 1)}E access -${Number(((accessLevel?.chanceAnyLostBySpendingOne ?? 0) * 100).toFixed(1))}pp/-${accessLevel?.expectedAffordableCardsLostBySpendingOne ?? 0} cards`;
-        }).join(" | ") || "n/a";
+      const p2wEconomyText = (routeEconomy.p2wMarginals ?? []).map((item) =>
+        `${item.fromEnergy}->${item.toEnergy}E current ${item.currentMarginalR ?? "n/a"}R / route ${item.derivedMarginalR}R (cum ${item.currentCumulativeR ?? "n/a"}/${item.derivedCumulativeR}R)`
+      ).join(" | ") || "n/a";
+      const formatEnergySensitivity = (samples) => (samples ?? [])
+        .map((sample) => `E${sample.energy}:${sample.valueR}R`)
+        .join("/") || "n/a";
+      const batteryText = (routeEconomy.battery ?? []).map((item) => {
+        const programText = `PU ${item.powerUpLegal ? `legal, pressure ${item.powerUpCardPressureR ?? "n/a"}R` : `unavailable (${item.powerUpReason ?? "literal program supply"})`}; PU+Again ${item.powerUpAgainLegal ? `legal, pressure ${item.powerUpAgainCardPressureR ?? "n/a"}R` : `unavailable (${item.powerUpAgainReason ?? "literal program supply"})`}`;
+        const sensitivity = (item.reserveSensitivity ?? []).map((sample) => `E${sample.energy} arrive+1 ${sample.arrivalValueR}R / PU ${sample.powerUpLegal ? `+2 ${sample.powerUpEnergyR}R net ${sample.powerUpNetBeforePositionR ?? "n/a"}R` : "—"} / PU+Again ${sample.powerUpAgainLegal ? `+4 ${sample.powerUpAgainEnergyR}R net ${sample.powerUpAgainNetBeforePositionR ?? "n/a"}R` : "—"}`).join(" ; ") || "n/a";
+        return `@${item.turn}t, ${item.remainingTurns}t left, H${item.initialUpgradeOpportunities}, next R${item.nextRegister ?? "?"}, ${programText}: ${sensitivity}, tempo ${item.waitTempoCostR ?? "n/a"}R/register, static ${item.staticRouteWeight}`;
+      }).join(" | ") || "none on representative route";
+      const powerUpText = (routeEconomy.powerUp ?? []).map((item) =>
+        `@${item.turn}t, ${item.remainingTurns}t left, H${item.initialUpgradeOpportunities}: +1E ${formatEnergySensitivity(item.reserveSensitivity)}, WAIT ${item.waitTempoCostR ?? "n/a"}R, strategic ${item.strategicDeltaR ?? "n/a"}R`
+      ).join(" | ") || "n/a";
+      const chopShopText = (routeEconomy.chopShop ?? []).map((item) =>
+        `@${item.turn}t, ${item.remainingTurns}t left, H${item.initialUpgradeOpportunities}: ${(item.reserveSensitivity ?? []).map((sample) => `E${sample.energy} energy ${sample.energyOptionR}R/card ${sample.cardOptionR}R->${sample.choice}`).join(" / ") || "n/a"}, static ${item.staticRouteWeight}`
+      ).join(" | ") || "none on representative route";
       lines.push(
-        `P2W validated-field shadow: validated ${energyShadow.validatedStartCount ?? "n/a"}, final-offered ${energyShadow.offeredStartCount ?? "n/a"}, tempo-register ${benchmark.registerScoreMedian ?? "n/a"} score (${benchmark.registerSamples ?? 0} samples), Power Up strategic delta ${benchmark.powerUpStrategicDeltaMedian ?? benchmark.powerUpOpportunityMedian ?? "n/a"} score (${benchmark.powerUpStrategicDeltaSamples ?? benchmark.powerUpOpportunitySamples ?? 0} samples), validated-field horizon ${benchmark.medianFullCourseActions ?? "n/a"} registers/${benchmark.medianFullCourseTurns ?? "n/a"} turns, current Power Up base discount ${benchmark.powerUpBaseDiscount ?? "n/a"}, battery energy reward ${benchmark.batteryEnergyRewardScore ?? "n/a"}`,
-        `P2W upgrade economy shadow: ${upgradeEconomy.startingUpgradeCards ?? "n/a"} unseen starting cards, prior ${upgradeEconomy.distributionLabel ?? "n/a"} [${distributionText}], ${upgradeEconomy.expectedUpgradePhases ?? "n/a"} upgrade phases, starting-hand install slots ${upgradeEconomy.startingHandInstallSlots ?? "n/a"}/${upgradeEconomy.startingUpgradeCards ?? "n/a"}, future draw slots ${upgradeEconomy.futureDrawSlots ?? "n/a"} at ${upgradeEconomy.drawEnergyCost ?? "n/a"}E each, install rate ${upgradeEconomy.installsPerTurn ?? "n/a"}/phase, maxEnergy ${upgradeEconomy.maxEnergy ?? "n/a"}`,
-        `P2W starting-hand access by remaining energy: ${accessText}`,
-        `P2W current ladder vs unseen-hand access: ${spendDepthText}`,
-        `Upgrade feature weights (route score, negative = benefit): battery ${formatFeatureWeights(featureWeights.battery)}; chopShop ${formatFeatureWeights(featureWeights.chopShop)}`,
+        `P2W validated-field shadow: validated ${energyShadow.validatedStartCount ?? "n/a"}, final-offered ${energyShadow.offeredStartCount ?? "n/a"}, tempo-register ${benchmark.registerScoreMedian ?? "n/a"} score (${benchmark.registerSamples ?? 0} samples), Power Up strategic delta ${benchmark.powerUpStrategicDeltaMedian ?? benchmark.powerUpOpportunityMedian ?? "n/a"} score (${benchmark.powerUpStrategicDeltaSamples ?? benchmark.powerUpOpportunitySamples ?? 0} samples), validated-field horizon ${benchmark.medianFullCourseActions ?? "n/a"} registers/${benchmark.medianFullCourseTurns ?? "n/a"} turns`,
+        `Energy economy: start ${upgradeEconomy.startingEnergy ?? "n/a"}E, max ${upgradeEconomy.maxEnergy ?? "n/a"}E, starting hand ${upgradeEconomy.startingUpgradeCards ?? "n/a"}, horizon ${routeEconomy.horizonTurns ?? "n/a"}t, draw/install ${upgradeEconomy.drawsPerTurn ?? "n/a"}/${upgradeEconomy.installsPerTurn ?? "n/a"} per turn, ${upgradeEconomy.registersPerTurn ?? "n/a"} registers/turn, draw cost ${upgradeEconomy.drawEnergyCost ?? "n/a"}E, useful deployment ${upgradeEconomy.usefulEnergyPerInstall ?? "n/a"}E/install`,
+        `P2W economic shadow: ${p2wEconomyText}`,
+        `Battery shadow: ${batteryText}`,
+        `Power Up shadow: ${powerUpText}`,
+        `Chop Shop shadow: ${chopShopText}`,
+        `Upgrade feature weights (diagnostic reference; legacy Battery / current Chop Shop, route score negative = benefit): battery ${formatFeatureWeights(featureWeights.battery)}; chopShop ${formatFeatureWeights(featureWeights.chopShop)}`,
         `P2W start repricing: ${(energyShadow.starts ?? []).map((entry) => {
           const initialPrice = Number.isFinite(entry.initialEnergyCost) ? `${entry.initialEnergyCost}E` : "n/a";
           const legacyPrice = Number.isFinite(entry.legacyInitialCost) ? `${entry.legacyInitialCost}E` : "n/a";
@@ -12254,6 +12588,30 @@ function buildScenarioCopySummary(scenario) {
         }).join(", ") || "none"}`
       );
     }
+  }
+
+  if (courseEnergyEconomy?.active) {
+    const economy = courseEnergyEconomy;
+    const formatBatteryEncounter = (item) => {
+      const programText = `PU ${item.powerUpLegal ? `legal, pressure ${item.powerUpCardPressureR ?? "n/a"}R` : `unavailable (${item.powerUpReason ?? "literal program supply"})`}; PU+Again ${item.powerUpAgainLegal ? `legal, pressure ${item.powerUpAgainCardPressureR ?? "n/a"}R` : `unavailable (${item.powerUpAgainReason ?? "literal program supply"})`}`;
+      const sensitivity = (item.reserveSensitivity ?? []).map((sample) => (
+        `E${sample.energy} arrive+1 ${sample.arrivalValueR}R / PU ${sample.powerUpLegal ? `+2 ${sample.powerUpEnergyR}R net ${sample.powerUpNetBeforePositionR ?? "n/a"}R` : "—"} / PU+Again ${sample.powerUpAgainLegal ? `+4 ${sample.powerUpAgainEnergyR}R net ${sample.powerUpAgainNetBeforePositionR ?? "n/a"}R` : "—"}`
+      )).join(" ; ") || "n/a";
+      return `#${Number.isInteger(item.startIndex) ? item.startIndex + 1 : "?"} @${item.turn}t/${item.horizonTurns}t (${Math.round((item.progress ?? 0) * 100)}%), ${item.remainingTurns}t left, H${item.initialUpgradeOpportunities}, next R${item.nextRegister ?? "?"}, ${programText}: ${sensitivity}`;
+    };
+    const featureWeights = economy.featureWeights ?? {};
+    const formatFeatureWeights = (entry) => entry
+      ? `current ${entry.current ?? "n/a"}, base ${entry.base ?? "n/a"}, UpgradeWorld ${entry.upgradeWorld ?? "n/a"}`
+      : "n/a";
+    const production = economy.productionBatteryScoring ?? null;
+    lines.push(
+      `Energy economy shadow: start ${economy.config?.startingEnergy ?? "n/a"}E, max ${economy.config?.maxEnergy ?? "n/a"}E, starting hand ${economy.config?.startingUpgradeCards ?? "n/a"}, median horizon ${economy.horizonTurns ?? "n/a"}t, reserve samples ${(economy.reserveSamples ?? []).map((energy) => `E${energy}`).join("/") || "n/a"}, routes ${economy.routeCount ?? 0}`,
+      production?.active
+        ? `Battery production v42: route-aware, reference E${production.referenceReserve ?? "?"}, preflight horizon ${production.horizonTurns ?? "n/a"}t, register ${production.registerScore ?? "n/a"} score, selected-route Battery reward median/max ${production.selectedRouteRewardMedian ?? 0}/${production.selectedRouteRewardMax ?? 0} score${production.upgradeWorldCardFallbackScore ? `, Upgrade World card fallback +${production.upgradeWorldCardFallbackScore} score/activation` : ""}`
+        : "Battery production v42: inactive",
+      `Battery shadow across routes: ${economy.batteryEncounterCount ?? 0} encounter(s) on ${economy.batteryRouteCount ?? 0}/${economy.routeCount ?? 0} routes; representatives ${(economy.representativeBatteryEncounters ?? []).map(formatBatteryEncounter).join(" | ") || "none"}`,
+      `Upgrade feature weights (diagnostic reference; legacy Battery / current Chop Shop, route score negative = benefit): battery ${formatFeatureWeights(featureWeights.battery)}; chopShop ${formatFeatureWeights(featureWeights.chopShop)}`
+    );
   }
 
   lines.push(
@@ -12492,12 +12850,15 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     summary.payToWin?.energyShadow?.active
       ? `P2W validated-field shadow: validated ${summary.payToWin.energyShadow.validatedStartCount ?? "n/a"}, final-offered ${summary.payToWin.energyShadow.offeredStartCount ?? "n/a"}; tempo-register median ${summary.payToWin.energyShadow.benchmark?.registerScoreMedian ?? "n/a"} (p25 ${summary.payToWin.energyShadow.benchmark?.registerScoreP25 ?? "n/a"}, p75 ${summary.payToWin.energyShadow.benchmark?.registerScoreP75 ?? "n/a"}, n ${summary.payToWin.energyShadow.benchmark?.registerSamples ?? 0}); Power Up strategic delta median ${summary.payToWin.energyShadow.benchmark?.powerUpStrategicDeltaMedian ?? summary.payToWin.energyShadow.benchmark?.powerUpOpportunityMedian ?? "n/a"} (p25 ${summary.payToWin.energyShadow.benchmark?.powerUpStrategicDeltaP25 ?? summary.payToWin.energyShadow.benchmark?.powerUpOpportunityP25 ?? "n/a"}, p75 ${summary.payToWin.energyShadow.benchmark?.powerUpStrategicDeltaP75 ?? summary.payToWin.energyShadow.benchmark?.powerUpOpportunityP75 ?? "n/a"}, n ${summary.payToWin.energyShadow.benchmark?.powerUpStrategicDeltaSamples ?? summary.payToWin.energyShadow.benchmark?.powerUpOpportunitySamples ?? 0}); validated-field horizon ${summary.payToWin.energyShadow.benchmark?.medianFullCourseActions ?? "n/a"} registers / ${summary.payToWin.energyShadow.benchmark?.medianFullCourseTurns ?? "n/a"} turns; final-field pricing horizon ${summary.payToWin.pricingModel?.horizonTurns ?? "n/a"} turns; current Power Up base ${summary.payToWin.energyShadow.benchmark?.powerUpWaitActionPenalty ?? "n/a"} vs tempo ${summary.payToWin.energyShadow.benchmark?.registerTempoCost ?? "n/a"} (discount ${summary.payToWin.energyShadow.benchmark?.powerUpBaseDiscount ?? "n/a"}); battery reward ${summary.payToWin.energyShadow.benchmark?.batteryEnergyRewardScore ?? "n/a"}`
       : "P2W validated-field shadow: n/a",
-    summary.payToWin?.energyShadow?.upgradeEconomy?.active
-      ? `P2W upgrade economy shadow: method ${summary.payToWin.energyShadow.upgradeEconomy.method}; hand ${summary.payToWin.energyShadow.upgradeEconomy.startingUpgradeCards} unseen cards; prior ${summary.payToWin.energyShadow.upgradeEconomy.distributionLabel} [${(summary.payToWin.energyShadow.upgradeEconomy.distribution ?? []).map((entry) => `${entry.cost}E:${Number((entry.probability * 100).toFixed(1))}%`).join("/")}]; upgradePhases ${summary.payToWin.energyShadow.upgradeEconomy.expectedUpgradePhases ?? "n/a"}; startHandInstallSlots ${summary.payToWin.energyShadow.upgradeEconomy.startingHandInstallSlots ?? "n/a"}; futureDrawSlots ${summary.payToWin.energyShadow.upgradeEconomy.futureDrawSlots ?? "n/a"} at ${summary.payToWin.energyShadow.upgradeEconomy.drawEnergyCost ?? "n/a"}E; access ${(summary.payToWin.energyShadow.upgradeEconomy.levels ?? []).map((level) => `${level.energy}E:any${Number((level.chanceAnyAffordable * 100).toFixed(1))}%/${level.expectedAffordableCards}`).join(" | ")}`
-      : "P2W upgrade economy shadow: n/a",
+    summary.payToWin?.energyShadow?.routeEconomy?.active
+      ? `Energy economy shadow: start ${summary.payToWin.energyShadow.routeEconomy.config?.startingEnergy ?? "n/a"}E/max ${summary.payToWin.energyShadow.routeEconomy.config?.maxEnergy ?? "n/a"}E, hand ${summary.payToWin.energyShadow.routeEconomy.config?.startingUpgradeCards ?? "n/a"}, horizon ${summary.payToWin.energyShadow.routeEconomy.horizonTurns ?? "n/a"}t, reserve samples ${(summary.payToWin.energyShadow.routeEconomy.reserveSamples ?? []).map((energy) => `E${energy}`).join("/") || "n/a"}; P2W ${(summary.payToWin.energyShadow.routeEconomy.p2wMarginals ?? []).map((item) => `${item.fromEnergy}->${item.toEnergy} ${item.currentMarginalR ?? "n/a"}/${item.derivedMarginalR}R`).join(" | ")}; batteries ${(summary.payToWin.energyShadow.routeEconomy.battery ?? []).map((item) => `@${item.turn}t ${(item.reserveSensitivity ?? []).map((sample) => `E${sample.energy}:arr${sample.arrivalValueR}R/PU${sample.powerUpEnergyR}R(${sample.powerUpNetBeforePositionR ?? "n/a"}net)/Again${sample.powerUpAgainLegal ? `${sample.powerUpAgainEnergyR}R(${sample.powerUpAgainNetBeforePositionR ?? "n/a"}net)` : "—"}`).join(" ; ")}`).join(" | ") || "none"}; Power Up ${(summary.payToWin.energyShadow.routeEconomy.powerUp ?? []).map((item) => `@${item.turn}t ${(item.reserveSensitivity ?? []).map((sample) => `E${sample.energy}:${sample.valueR}R`).join("/")} WAIT${item.waitTempoCostR ?? "n/a"}R strat${item.strategicDeltaR ?? "n/a"}R`).join(" | ") || "none"}; Chop Shop ${(summary.payToWin.energyShadow.routeEconomy.chopShop ?? []).map((item) => `@${item.turn}t ${(item.reserveSensitivity ?? []).map((sample) => `E${sample.energy}:${sample.energyOptionR}/${sample.cardOptionR}R->${sample.choice}`).join("/")}`).join(" | ") || "none"}`
+      : "Energy economy shadow: n/a",
     summary.payToWin?.energyShadow?.upgradeFeatureWeights?.active
-      ? `Upgrade feature-weight audit (route score, negative = benefit): battery current/base/UW ${summary.payToWin.energyShadow.upgradeFeatureWeights.battery?.current ?? "n/a"}/${summary.payToWin.energyShadow.upgradeFeatureWeights.battery?.base ?? "n/a"}/${summary.payToWin.energyShadow.upgradeFeatureWeights.battery?.upgradeWorld ?? "n/a"}; chopShop current/base/UW ${summary.payToWin.energyShadow.upgradeFeatureWeights.chopShop?.current ?? "n/a"}/${summary.payToWin.energyShadow.upgradeFeatureWeights.chopShop?.base ?? "n/a"}/${summary.payToWin.energyShadow.upgradeFeatureWeights.chopShop?.upgradeWorld ?? "n/a"}`
+      ? `Upgrade feature-weight audit (legacy Battery reference / current Chop Shop; route score negative = benefit): battery current/base/UW ${summary.payToWin.energyShadow.upgradeFeatureWeights.battery?.current ?? "n/a"}/${summary.payToWin.energyShadow.upgradeFeatureWeights.battery?.base ?? "n/a"}/${summary.payToWin.energyShadow.upgradeFeatureWeights.battery?.upgradeWorld ?? "n/a"}; chopShop current/base/UW ${summary.payToWin.energyShadow.upgradeFeatureWeights.chopShop?.current ?? "n/a"}/${summary.payToWin.energyShadow.upgradeFeatureWeights.chopShop?.base ?? "n/a"}/${summary.payToWin.energyShadow.upgradeFeatureWeights.chopShop?.upgradeWorld ?? "n/a"}`
       : "Upgrade feature-weight audit: n/a",
+    summary.payToWin?.energyShadow?.routeEconomy?.selectedPoints?.length
+      ? `Energy U(E) detail: ${(summary.payToWin.energyShadow.routeEconomy.selectedPoints ?? []).map((point) => `@${point.turn}t rem${point.remainingTurns} H${point.initialUpgradeOpportunities} slots${point.installCapacity}(${point.initialInstallCapacity}+${point.futureInstallCapacity}) U[0..10]=${point.levels.join("/")}`).join(" | ")}`
+      : "Energy U(E) detail: n/a",
     summary.payToWin?.energyShadow?.active
       ? `P2W initial/final start repricing: ${(summary.payToWin.energyShadow.starts ?? []).map((entry) => {
         const initialPrice = Number.isFinite(entry.initialEnergyCost) ? `${entry.initialEnergyCost}E` : "n/a";
@@ -13997,6 +14358,14 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
           entry.selectedRoute &&
           !preflightExcludedIndices.has(entry.index)
         ));
+        const routeAwareBatteryScoringOptions = buildRouteAwareBatteryScoringOptions(
+          coursePreflight,
+          { ...baseAnalysisOptions, ...effectiveVariantBundle }
+        );
+        const productionAnalysisOptions = {
+          ...baseAnalysisOptions,
+          ...routeAwareBatteryScoringOptions
+        };
 
         const targetedNormalRouting = (
           !unconstrainedNormalRouting &&
@@ -14029,7 +14398,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
             preferences.playerCount,
             coursePreflight,
             {
-              ...baseAnalysisOptions,
+              ...productionAnalysisOptions,
               ...effectiveVariantBundle,
               competitiveMode,
               payToWin,
@@ -14071,7 +14440,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
           ));
         const fastAnyAnalysisOptions = unconstrainedNormalRouting
           ? {
-            ...baseAnalysisOptions,
+            ...productionAnalysisOptions,
             contextualOpeningRoutes: 1,
             contextualLaterRoutes: 1,
             contextualBeamWidth: 1,
@@ -14079,7 +14448,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
             contextualRequiredStarts: reusableRoutePool?.requiredCount ?? preferences.playerCount,
             contextualSeedStartAnalyses: reusableRoutePool?.seedStartAnalyses ?? null
           }
-          : baseAnalysisOptions;
+          : productionAnalysisOptions;
         if (
           pass === 0 &&
           sandwichedDock &&
@@ -14100,7 +14469,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
             pieceMap,
             preferences.playerCount,
             {
-              ...baseAnalysisOptions,
+              ...productionAnalysisOptions,
               movingTargets
             }
           );
@@ -14127,7 +14496,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
               playableCheckpoints,
               preferences.playerCount,
               {
-                ...baseAnalysisOptions,
+                ...productionAnalysisOptions,
                 contextualSeedStartAnalyses: reusableRoutePool.seedStartAnalyses,
                 contextualRequiredStarts: requiredCompetitivePool
               }
@@ -14179,7 +14548,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
             playableCheckpoints,
             preferences.playerCount,
             {
-              ...baseAnalysisOptions,
+              ...productionAnalysisOptions,
               contextualSeedStartAnalyses: selectedSeedAnalyses,
               contextualRequiredStarts: preferences.playerCount
             }
@@ -14272,7 +14641,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
                 playableCheckpoints,
                 preferences.playerCount,
                 {
-                  ...baseAnalysisOptions,
+                  ...productionAnalysisOptions,
                   contextualOpeningSeedAnalyses: openingSeedAnalyses,
                   contextualRequiredStarts: preferences.playerCount
                 }
@@ -14335,7 +14704,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
             playableCheckpoints,
             preferences.playerCount,
             {
-              ...baseAnalysisOptions,
+              ...productionAnalysisOptions,
               contextualSeedStartAnalyses: reusableRoutePool?.seedStartAnalyses ?? null,
               contextualRequiredStarts: preferences.playerCount
             }
@@ -14374,7 +14743,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
             playableCheckpoints,
             preferences.playerCount,
             {
-              ...baseAnalysisOptions,
+              ...productionAnalysisOptions,
               contextualOpeningRoutes: 1,
               contextualLaterRoutes: 1,
               contextualBeamWidth: 1,
@@ -14437,7 +14806,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
             playableCheckpoints,
             preferences.playerCount,
             {
-              ...baseAnalysisOptions,
+              ...productionAnalysisOptions,
               contextualOpeningSeedAnalyses: selectedSeedAnalyses,
               contextualRequiredStarts: preferences.playerCount
             }
@@ -14468,9 +14837,9 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
             playableCheckpoints,
             preferences.playerCount,
             virtualBots
-              ? baseAnalysisOptions
+              ? productionAnalysisOptions
               : {
-                ...baseAnalysisOptions,
+                ...productionAnalysisOptions,
                 contextualOpeningSeedAnalyses: openingSeedAnalyses,
                 contextualRequiredStarts: preferences.playerCount
               }
@@ -14508,6 +14877,14 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
             routeSearches: coursePreflight.work?.searches ?? 0,
             routeExpansions: coursePreflight.work?.expansions ?? 0,
             cappedRouteSearches: coursePreflight.work?.capped ?? 0,
+            routeAwareBatteryScoring: {
+              active: Boolean(productionAnalysisOptions.routeAwareBatteryScoring),
+              method: "route-aware-battery-production-v42",
+              horizonTurns: productionAnalysisOptions.routeEnergyHorizonTurns ?? null,
+              registerScore: productionAnalysisOptions.routeEnergyRegisterScore ?? null,
+              referenceReserve: productionAnalysisOptions.routeEnergyReferenceReserve ?? null,
+              upgradeWorldCardFallbackScore: effectiveVariantBundle.upgradeWorld ? 1 : 0
+            },
             routePool: reusableRoutePool
               ? {
                 mode: reusableRoutePool.mode,
@@ -14518,7 +14895,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
                 routeSearches: reusableRoutePool.work?.searches ?? 0,
                 routeExpansions: reusableRoutePool.work?.expansions ?? 0,
                 cappedRouteSearches: reusableRoutePool.work?.capped ?? 0,
-                openingReused: true
+                openingReused: reusableRoutePool.openingReused !== false
               }
               : null
           };
