@@ -7854,7 +7854,26 @@ function buildCourseEnergyEconomyDiagnostics(scenario) {
   const medianTurns = medianActions / config.registersPerTurn;
   const productionMetadata = scenario.sequence?.firstLeg?.summary?.coursePreflight?.routeAwareBatteryScoring ?? null;
   const productionRewardScores = routeStarts
+    .map((entry) => Number(
+      entry.fullCourseRoute?.routeEnergyEconomyRewardScore ??
+      entry.fullCourseRoute?.batteryEconomyRewardScore
+    ))
+    .filter(Number.isFinite);
+  const productionBatteryRewardScores = routeStarts
     .map((entry) => Number(entry.fullCourseRoute?.batteryEconomyRewardScore))
+    .filter(Number.isFinite);
+  const productionPowerUpRewardScores = routeStarts
+    .map((entry) => Number(entry.fullCourseRoute?.powerUpEconomyRewardScore))
+    .filter(Number.isFinite);
+  const productionPowerUpUses = routeStarts
+    .map((entry) => (entry.fullCourseRoute?.transitions ?? []).filter(
+      (transition) => transition?.action === "WAIT"
+    ).length)
+    .filter(Number.isFinite);
+  const productionEndingReserves = routeStarts
+    .map((entry) => entry.fullCourseRoute?.routeEnergyShadowReserveEnd)
+    .filter((value) => value !== null && value !== undefined)
+    .map(Number)
     .filter(Number.isFinite);
   const overallShadow = buildRouteEnergyEconomyShadow(
     scenario.goalTileMap,
@@ -7865,9 +7884,9 @@ function buildCourseEnergyEconomyDiagnostics(scenario) {
 
   return {
     active: true,
-    method: "course-route-energy-diagnostics-v42",
+    method: "course-route-energy-diagnostics-v44",
     routeCount: routeStarts.length,
-    productionBatteryScoring: productionMetadata
+    productionEnergyScoring: productionMetadata
       ? {
         ...productionMetadata,
         selectedRouteRewardMedian: productionRewardScores.length
@@ -7875,7 +7894,31 @@ function buildCourseEnergyEconomyDiagnostics(scenario) {
           : 0,
         selectedRouteRewardMax: productionRewardScores.length
           ? Number(Math.max(...productionRewardScores).toFixed(2))
-          : 0
+          : 0,
+        selectedRouteBatteryRewardMedian: productionBatteryRewardScores.length
+          ? Number(medianValue(productionBatteryRewardScores).toFixed(2))
+          : 0,
+        selectedRouteBatteryRewardMax: productionBatteryRewardScores.length
+          ? Number(Math.max(...productionBatteryRewardScores).toFixed(2))
+          : 0,
+        selectedRoutePowerUpRewardMedian: productionPowerUpRewardScores.length
+          ? Number(medianValue(productionPowerUpRewardScores).toFixed(2))
+          : 0,
+        selectedRoutePowerUpRewardMax: productionPowerUpRewardScores.length
+          ? Number(Math.max(...productionPowerUpRewardScores).toFixed(2))
+          : 0,
+        selectedRoutePowerUpUsesMedian: productionPowerUpUses.length
+          ? Number(medianValue(productionPowerUpUses).toFixed(2))
+          : 0,
+        selectedRoutePowerUpUsesMax: productionPowerUpUses.length
+          ? Math.max(...productionPowerUpUses)
+          : 0,
+        selectedRouteEndingReserveMedian: productionEndingReserves.length
+          ? Number(medianValue(productionEndingReserves).toFixed(2))
+          : config.startingEnergy,
+        selectedRouteEndingReserveMax: productionEndingReserves.length
+          ? Number(Math.max(...productionEndingReserves).toFixed(2))
+          : config.startingEnergy
       }
       : null,
     batteryEncounterCount: encounters.length,
@@ -10013,9 +10056,10 @@ function buildRouteAwareBatteryScoringOptions(coursePreflight, options = {}) {
     upgradeUsefulEnergyPerInstall: config.usefulEnergyPerInstall,
     upgradePowerRegistersPerEnergy: config.powerRegistersPerEnergy,
     routeRegistersPerTurn: config.registersPerTurn,
-    // Production scoring cannot know a real player's reserve. v42 uses the
-    // normal starting reserve as a neutral reference point; Dev View retains
-    // E1/E3/E6 sensitivity so we can detect where this assumption is fragile.
+    // v44 carries one conservative route-local energy reserve from this
+    // starting value. Battery and Power Up both advance it; we still never
+    // guess at upgrade spending, so it remains a valuation state rather than
+    // a literal reconstruction of the player's bank.
     routeEnergyReferenceReserve: config.startingEnergy
   };
 }
@@ -10196,9 +10240,11 @@ function buildReusableRoutePool(tileMap, starts, flags, playerCount, coursePrefl
       // pool is built entirely in the new route-aware Battery currency.
       contextualOpeningSeedAnalyses: options.routeAwareBatteryScoring ? null : candidateOpeningAnalyses,
       contextualOpeningRoutes: 1,
-      contextualLaterRoutes: 1,
-      contextualBeamWidth: 1,
-      contextualCompletionPool: 1,
+      contextualLaterRoutes: options.preserveTrafficAlternatives ? 2 : 1,
+      contextualBeamWidth: options.preserveTrafficAlternatives ? 2 : 1,
+      contextualCompletionPool: options.preserveTrafficAlternatives ? 3 : 1,
+      contextualWholePartialDiversity: Boolean(options.preserveTrafficAlternatives),
+      contextualTrafficAlternativeRetention: Boolean(options.preserveTrafficAlternatives),
       contextualOpeningExpansions: COURSE_PREFLIGHT_OPENING_EXPANSIONS,
       contextualLaterExpansions: COURSE_PREFLIGHT_LATER_EXPANSIONS,
       contextualLegMaxActions: COURSE_PREFLIGHT_LATER_MAX_ACTIONS,
@@ -10245,6 +10291,14 @@ function buildReusableRoutePool(tileMap, starts, flags, playerCount, coursePrefl
     selectedIndices: [...selectedSet].sort((left, right) => left - right),
     survivorStarts,
     seedStartAnalyses,
+    routeStrategy: {
+      openingRoutesPerStart: 1,
+      laterRoutesPerContext: options.preserveTrafficAlternatives ? 2 : 1,
+      stitchedBeamWidth: options.preserveTrafficAlternatives ? 2 : 1,
+      completionPool: options.preserveTrafficAlternatives ? 3 : 1,
+      wholePartialDiversity: Boolean(options.preserveTrafficAlternatives),
+      trafficAlternativeRetention: Boolean(options.preserveTrafficAlternatives)
+    },
     analysis
   };
 }
@@ -12603,12 +12657,12 @@ function buildScenarioCopySummary(scenario) {
     const formatFeatureWeights = (entry) => entry
       ? `current ${entry.current ?? "n/a"}, base ${entry.base ?? "n/a"}, UpgradeWorld ${entry.upgradeWorld ?? "n/a"}`
       : "n/a";
-    const production = economy.productionBatteryScoring ?? null;
+    const production = economy.productionEnergyScoring ?? null;
     lines.push(
       `Energy economy shadow: start ${economy.config?.startingEnergy ?? "n/a"}E, max ${economy.config?.maxEnergy ?? "n/a"}E, starting hand ${economy.config?.startingUpgradeCards ?? "n/a"}, median horizon ${economy.horizonTurns ?? "n/a"}t, reserve samples ${(economy.reserveSamples ?? []).map((energy) => `E${energy}`).join("/") || "n/a"}, routes ${economy.routeCount ?? 0}`,
       production?.active
-        ? `Battery production v42: route-aware, reference E${production.referenceReserve ?? "?"}, preflight horizon ${production.horizonTurns ?? "n/a"}t, register ${production.registerScore ?? "n/a"} score, selected-route Battery reward median/max ${production.selectedRouteRewardMedian ?? 0}/${production.selectedRouteRewardMax ?? 0} score${production.upgradeWorldCardFallbackScore ? `, Upgrade World card fallback +${production.upgradeWorldCardFallbackScore} score/activation` : ""}`
-        : "Battery production v42: inactive",
+        ? `Route energy production v44: shared stateful reserve, start E${production.startingReserve ?? production.referenceReserve ?? "?"}, preflight horizon ${production.horizonTurns ?? "n/a"}t, register ${production.registerScore ?? "n/a"} score, selected-route total reward median/max ${production.selectedRouteRewardMedian ?? 0}/${production.selectedRouteRewardMax ?? 0} score (Battery ${production.selectedRouteBatteryRewardMedian ?? 0}/${production.selectedRouteBatteryRewardMax ?? 0}, Power Up ${production.selectedRoutePowerUpRewardMedian ?? 0}/${production.selectedRoutePowerUpRewardMax ?? 0}), Power Up uses median/max ${production.selectedRoutePowerUpUsesMedian ?? 0}/${production.selectedRoutePowerUpUsesMax ?? 0}, end reserve median/max E${production.selectedRouteEndingReserveMedian ?? "?"}/E${production.selectedRouteEndingReserveMax ?? "?"}${production.upgradeWorldCardFallbackScore ? `, Upgrade World card fallback +${production.upgradeWorldCardFallbackScore} score/Battery activation` : ""}`
+        : "Route energy production v44: inactive",
       `Battery shadow across routes: ${economy.batteryEncounterCount ?? 0} encounter(s) on ${economy.batteryRouteCount ?? 0}/${economy.routeCount ?? 0} routes; representatives ${(economy.representativeBatteryEncounters ?? []).map(formatBatteryEncounter).join(" | ") || "none"}`,
       `Upgrade feature weights (diagnostic reference; legacy Battery / current Chop Shop, route score negative = benefit): battery ${formatFeatureWeights(featureWeights.battery)}; chopShop ${formatFeatureWeights(featureWeights.chopShop)}`
     );
@@ -12630,6 +12684,72 @@ function buildScenarioCopySummary(scenario) {
       lines.push(
         `Contextual strategy: ${summary.contextualSearchMode ?? "standard"}, opening ${routeStrategy?.openingRoutesPerStart ?? "?"}, later ${routeStrategy?.laterRoutesPerContext ?? "?"}, beam ${routeStrategy?.stitchedBeamWidth ?? "?"}, completion ${routeStrategy?.completionPool ?? "?"}`
       );
+    }
+    if (summary.programmingScarcity) {
+      const scarcity = summary.programmingScarcity;
+      lines.push(
+        `Programming scarcity v43: selected ${scarcity.selectedRoutes ?? 0} routes, Again used on ${scarcity.routesUsingAgain ?? 0} route(s)/${scarcity.totalAgainTurns ?? 0} turn(s), consecutive-turn Again reuse ${scarcity.consecutiveTurnAgainReuse ?? 0} across ${scarcity.routesWithConsecutiveAgain ?? 0} route(s), literal program violations ${scarcity.literalProgramViolations ?? 0}; penalties use ${scarcity.againUsePenalty ?? "?"}, recycle ${scarcity.consecutiveTurnPenalty ?? "?"}, same-program overuse ${scarcity.sameProgramOverusePenalty ?? "?"}`
+      );
+    }
+    if (routeStrategy) {
+      const candidateDiagnostics = (routeStrategy.candidateDiagnostics ?? [])
+        .filter((entry) => Number.isInteger(entry?.startIndex));
+      const candidateCounts = candidateDiagnostics
+        .map((entry) => Number(entry.candidateCount))
+        .filter(Number.isFinite);
+      const wholeSimilarities = candidateDiagnostics
+        .map((entry) => entry.wholeMostDifferentSimilarity)
+        .filter((value) => value !== null && value !== undefined)
+        .map(Number)
+        .filter(Number.isFinite);
+      const laterSimilarities = candidateDiagnostics
+        .map((entry) => entry.laterMostDifferentSimilarity)
+        .filter((value) => value !== null && value !== undefined)
+        .map(Number)
+        .filter(Number.isFinite);
+      const finalAltCount = candidateDiagnostics.filter((entry) => entry.trafficSwitched).length;
+      const switchedDiagnostics = candidateDiagnostics.filter((entry) => (
+        entry.trafficSwitched &&
+        Number.isFinite(Number(entry.intrinsicCostSelectedVsBest)) &&
+        Number.isFinite(Number(entry.trafficAdvantageSelectedVsBest)) &&
+        Number.isFinite(Number(entry.combinedGainSelectedVsBest))
+      ));
+      const switchedIntrinsicCosts = switchedDiagnostics.map((entry) => Number(entry.intrinsicCostSelectedVsBest));
+      const switchedTrafficAdvantages = switchedDiagnostics.map((entry) => Number(entry.trafficAdvantageSelectedVsBest));
+      const switchedCombinedGains = switchedDiagnostics.map((entry) => Number(entry.combinedGainSelectedVsBest));
+      const candidateMedian = candidateCounts.length
+        ? Number(medianValue(candidateCounts).toFixed(2))
+        : 0;
+      const candidateRange = candidateCounts.length
+        ? `${Math.min(...candidateCounts)}-${Math.max(...candidateCounts)}`
+        : "0-0";
+      const wholeMedian = wholeSimilarities.length
+        ? Number(medianValue(wholeSimilarities).toFixed(3))
+        : null;
+      const laterMedian = laterSimilarities.length
+        ? Number(medianValue(laterSimilarities).toFixed(3))
+        : null;
+      lines.push(
+        `Traffic candidates: ${candidateDiagnostics.length} starts, candidates median/range ${candidateMedian}/${candidateRange}, final alternate selections ${finalAltCount}, pass route-switches ${routeStrategy.routeSwitches ?? 0}, penalty avg/max ${routeStrategy.averagePenalty ?? 0}/${routeStrategy.maxPenalty ?? 0}, opening/later avg ${routeStrategy.averageOpeningPenalty ?? 0}/${routeStrategy.averageLaterPenalty ?? 0}; most-different similarity median whole/later ${wholeMedian ?? "n/a"}/${laterMedian ?? "n/a"} (0=different, 1=same)`
+      );
+      if (switchedDiagnostics.length) {
+        const medianOrZero = (values) => values.length
+          ? Number(medianValue(values).toFixed(2))
+          : 0;
+        const maxOrZero = (values) => values.length
+          ? Number(Math.max(...values).toFixed(2))
+          : 0;
+        lines.push(
+          `Traffic choice deltas: ${switchedDiagnostics.length} switched start(s), intrinsic cost median/max ${medianOrZero(switchedIntrinsicCosts)}/${maxOrZero(switchedIntrinsicCosts)}, traffic advantage median/max ${medianOrZero(switchedTrafficAdvantages)}/${maxOrZero(switchedTrafficAdvantages)}, final combined gain median/max ${medianOrZero(switchedCombinedGains)}/${maxOrZero(switchedCombinedGains)} (positive advantage/gain favors selected alternate)`
+        );
+      }
+      if (candidateDiagnostics.length) {
+        lines.push(
+          `Traffic diversity by start: ${candidateDiagnostics.map((entry) => (
+            `#${entry.startIndex + 1} ${entry.candidateCount ?? 0}c whole ${entry.wholeMostDifferentSimilarity ?? "n/a"} later ${entry.laterMostDifferentSimilarity ?? "n/a"} selected ${Number.isInteger(entry.selectedRouteIndex) ? entry.selectedRouteIndex + 1 : "?"}${entry.trafficSwitched ? "*" : ""} spread ${entry.scoreSpread ?? 0}${Number.isFinite(Number(entry.intrinsicCostSelectedVsBest)) && Number.isFinite(Number(entry.trafficAdvantageSelectedVsBest)) && Number.isFinite(Number(entry.combinedGainSelectedVsBest)) ? ` Δintr ${entry.intrinsicCostSelectedVsBest} Δtraffic ${entry.trafficAdvantageSelectedVsBest} gain ${entry.combinedGainSelectedVsBest}` : ""}`
+          )).join(" | ")}`
+        );
+      }
     }
     if (summary.contextualStaging?.active) {
       const staging = summary.contextualStaging;
@@ -14403,7 +14523,12 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
               competitiveMode,
               payToWin,
               virtualBots: false,
-              movingTargets
+              movingTargets,
+              // v43: Any/Any Normal keeps one coherent alternate route when the
+              // existing bounded contextual search can find one, and uses a
+              // relaxed retention threshold without increasing expansion caps.
+              // Do not widen Pay to Win or targeted/competitive pipelines yet.
+              preserveTrafficAlternatives: unconstrainedNormalRouting
             }
           );
           reusableRoutePool.work = compactRouteWork(summarizeRouteSearchDelta(
@@ -14446,7 +14571,8 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
             contextualBeamWidth: 1,
             contextualCompletionPool: 1,
             contextualRequiredStarts: reusableRoutePool?.requiredCount ?? preferences.playerCount,
-            contextualSeedStartAnalyses: reusableRoutePool?.seedStartAnalyses ?? null
+            contextualSeedStartAnalyses: reusableRoutePool?.seedStartAnalyses ?? null,
+            contextualSeedRouteStrategy: reusableRoutePool?.routeStrategy ?? null
           }
           : productionAnalysisOptions;
         if (
@@ -14879,9 +15005,10 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
             cappedRouteSearches: coursePreflight.work?.capped ?? 0,
             routeAwareBatteryScoring: {
               active: Boolean(productionAnalysisOptions.routeAwareBatteryScoring),
-              method: "route-aware-battery-production-v42",
+              method: "route-energy-production-v44-shared-reserve",
               horizonTurns: productionAnalysisOptions.routeEnergyHorizonTurns ?? null,
               registerScore: productionAnalysisOptions.routeEnergyRegisterScore ?? null,
+              startingReserve: productionAnalysisOptions.startingEnergy ?? null,
               referenceReserve: productionAnalysisOptions.routeEnergyReferenceReserve ?? null,
               upgradeWorldCardFallbackScore: effectiveVariantBundle.upgradeWorld ? 1 : 0
             },
