@@ -86,6 +86,10 @@ export const ROUTE_ENERGY_ECONOMY_DEFAULTS = Object.freeze({
   drawsPerTurn: 1,
   installsPerTurn: 1,
   drawEnergyCost: 1,
+  // v45 keeps card supply separate from Energy. Three unknown cards are treated
+  // as roughly two useful-card equivalents, so a normal draw contributes 2/3
+  // of one useful install opportunity in the shadow economy.
+  usefulUpgradeCardRate: 2 / 3,
   // This is useful investment throughput per install opportunity, not a claim
   // that real upgrade cards cost 2E or have identical effects.
   usefulEnergyPerInstall: 2,
@@ -151,6 +155,15 @@ export function getRouteEnergyEconomyConfig(options = {}) {
       "upgradeDrawEnergyCost",
       ROUTE_ENERGY_ECONOMY_DEFAULTS.drawEnergyCost
     ),
+    usefulUpgradeCardRate: clamp(
+      getUpgradeEconomyRate(
+        options,
+        "upgradeUsefulCardRate",
+        ROUTE_ENERGY_ECONOMY_DEFAULTS.usefulUpgradeCardRate
+      ),
+      0,
+      1
+    ),
     usefulEnergyPerInstall: Math.max(1, Math.floor(getUpgradeEconomyRate(
       options,
       "upgradeUsefulEnergyPerInstall",
@@ -167,6 +180,346 @@ export function getRouteEnergyEconomyConfig(options = {}) {
       ROUTE_ENERGY_ECONOMY_DEFAULTS.registersPerTurn
     ))
   };
+}
+
+// v45 production economy ----------------------------------------------------
+//
+// Energy and upgrade cards are tracked as separate, coupled resources. The
+// route state stores useful-card units in thirds: one useful install needs 3
+// units, while one unknown card contributes 2 units under the default 2/3
+// usefulness assumption. This makes the coarse recurring tranche explicit:
+// three normal 1E draws create about two useful cards, and two useful installs
+// consume about 4E of spending capacity. The 10E cap remains only an
+// instantaneous storage limit because the shadow spends Energy during future
+// Upgrade Phases.
+const ROUTE_USEFUL_CARD_UNIT_DENOMINATOR = 3;
+const ROUTE_ECONOMY_PHASE_CACHE = new Map();
+const ROUTE_ECONOMY_PHASE_CACHE_LIMIT = 75000;
+
+function getRouteUsefulCardUnitsPerDraw(config) {
+  return Math.max(
+    0,
+    Math.round(config.usefulUpgradeCardRate * ROUTE_USEFUL_CARD_UNIT_DENOMINATOR)
+  );
+}
+
+function getRouteUsefulCardUnitsPerInstall() {
+  return ROUTE_USEFUL_CARD_UNIT_DENOMINATOR;
+}
+
+function getInitialRouteUsefulCardUnits(options = {}) {
+  const config = getRouteEnergyEconomyConfig(options);
+  return Math.max(0, config.startingUpgradeCards * getRouteUsefulCardUnitsPerDraw(config));
+}
+
+function getRouteEconomyFullHorizonActions(options = {}) {
+  const config = getRouteEnergyEconomyConfig(options);
+  const turns = Math.max(0, Number(options.routeEnergyHorizonTurns) || 0);
+  return Math.max(0, Math.round(turns * config.registersPerTurn));
+}
+
+function getRouteEconomyInstallExposure(boundaryAction, fullHorizonActions) {
+  if (!(fullHorizonActions > 0)) return 0;
+  return clamp((fullHorizonActions - boundaryAction) / fullHorizonActions, 0, 1);
+}
+
+function getRouteEconomyInstallValueR(boundaryAction, fullHorizonActions, config) {
+  return (
+    config.usefulEnergyPerInstall *
+    config.powerRegistersPerEnergy *
+    getRouteEconomyInstallExposure(boundaryAction, fullHorizonActions)
+  );
+}
+
+function getRouteEconomyRemainingPhaseCount(boundaryAction, fullHorizonActions, config) {
+  if (!(fullHorizonActions > boundaryAction) || !(config.registersPerTurn > 0)) return 0;
+  return Math.max(0, Math.ceil((fullHorizonActions - boundaryAction) / config.registersPerTurn));
+}
+
+function clampRouteEconomyCardUnits(cardUnits, boundaryAction, fullHorizonActions, config) {
+  const remainingInstalls = getRouteEconomyRemainingPhaseCount(
+    boundaryAction,
+    fullHorizonActions,
+    config
+  );
+  const usefulCap = remainingInstalls * getRouteUsefulCardUnitsPerInstall();
+  return Math.max(0, Math.min(Math.round(Number(cardUnits) || 0), usefulCap));
+}
+
+function getRouteEconomyPhaseChoices(energy, cardUnits, boundaryAction, fullHorizonActions, config) {
+  const choices = [];
+  const maxDraws = config.drawsPerTurn >= 1 ? 1 : 0;
+  const maxInstalls = config.installsPerTurn >= 1 ? 1 : 0;
+  const drawCardUnits = getRouteUsefulCardUnitsPerDraw(config);
+  const installCardUnits = getRouteUsefulCardUnitsPerInstall();
+  const installCost = config.usefulEnergyPerInstall;
+  const installValueR = getRouteEconomyInstallValueR(
+    boundaryAction,
+    fullHorizonActions,
+    config
+  );
+
+  for (let draw = 0; draw <= maxDraws; draw += 1) {
+    const drawCost = draw * config.drawEnergyCost;
+    if (drawCost > energy + 1e-9) continue;
+    const energyAfterDraw = energy - drawCost;
+    const cardsAfterDraw = cardUnits + draw * drawCardUnits;
+
+    for (let install = 0; install <= maxInstalls; install += 1) {
+      if (install && installValueR <= 1e-9) continue;
+      const installEnergy = install * installCost;
+      const installCards = install * installCardUnits;
+      if (installEnergy > energyAfterDraw + 1e-9) continue;
+      if (installCards > cardsAfterDraw) continue;
+      choices.push({
+        draw,
+        install,
+        energyAfter: Math.max(0, energyAfterDraw - installEnergy),
+        cardUnitsAfter: Math.max(0, cardsAfterDraw - installCards),
+        immediateValueR: install * installValueR,
+        energySpent: drawCost + installEnergy
+      });
+    }
+  }
+
+  return choices;
+}
+
+function getRouteEconomyPhaseCacheKey(
+  energy,
+  cardUnits,
+  boundaryAction,
+  fullHorizonActions,
+  config
+) {
+  return [
+    fullHorizonActions,
+    boundaryAction,
+    energy,
+    cardUnits,
+    config.drawEnergyCost,
+    config.usefulEnergyPerInstall,
+    getRouteUsefulCardUnitsPerDraw(config),
+    config.powerRegistersPerEnergy
+  ].join(":");
+}
+
+function evaluateRouteEconomyPhasePotential(
+  energy,
+  cardUnits,
+  boundaryAction,
+  fullHorizonActions,
+  config
+) {
+  if (!(fullHorizonActions > boundaryAction)) return 0;
+  const safeEnergy = clamp(Math.floor(Number(energy) || 0), 0, config.maxEnergy);
+  const safeCards = clampRouteEconomyCardUnits(
+    cardUnits,
+    boundaryAction,
+    fullHorizonActions,
+    config
+  );
+  const cacheKey = getRouteEconomyPhaseCacheKey(
+    safeEnergy,
+    safeCards,
+    boundaryAction,
+    fullHorizonActions,
+    config
+  );
+  const cached = ROUTE_ECONOMY_PHASE_CACHE.get(cacheKey);
+  if (cached !== undefined) return cached;
+
+  const nextBoundary = boundaryAction + config.registersPerTurn;
+  let best = 0;
+  for (const choice of getRouteEconomyPhaseChoices(
+    safeEnergy,
+    safeCards,
+    boundaryAction,
+    fullHorizonActions,
+    config
+  )) {
+    const future = evaluateRouteEconomyPhasePotential(
+      choice.energyAfter,
+      choice.cardUnitsAfter,
+      nextBoundary,
+      fullHorizonActions,
+      config
+    );
+    best = Math.max(best, choice.immediateValueR + future);
+  }
+
+  if (ROUTE_ECONOMY_PHASE_CACHE.size >= ROUTE_ECONOMY_PHASE_CACHE_LIMIT) {
+    ROUTE_ECONOMY_PHASE_CACHE.clear();
+  }
+  const result = Number(best.toFixed(6));
+  ROUTE_ECONOMY_PHASE_CACHE.set(cacheKey, result);
+  return result;
+}
+
+function getRouteEconomyNextBoundaryAction(absoluteActionCount, config) {
+  const count = Math.max(0, Math.floor(Number(absoluteActionCount) || 0));
+  const phase = count % config.registersPerTurn;
+  return phase === 0 ? count : count + (config.registersPerTurn - phase);
+}
+
+export function evaluateRouteUpgradeEconomyState(
+  energy,
+  usefulCardUnits,
+  absoluteActionCount,
+  options = {}
+) {
+  const config = getRouteEnergyEconomyConfig(options);
+  const fullHorizonActions = getRouteEconomyFullHorizonActions(options);
+  if (!(fullHorizonActions > 0)) {
+    return {
+      potential: 0,
+      energy: clamp(Math.floor(Number(energy) || 0), 0, config.maxEnergy),
+      usefulCardUnits: Math.max(0, Math.round(Number(usefulCardUnits) || 0)),
+      nextBoundaryAction: null
+    };
+  }
+  const nextBoundaryAction = getRouteEconomyNextBoundaryAction(
+    absoluteActionCount,
+    config
+  );
+  const safeEnergy = clamp(Math.floor(Number(energy) || 0), 0, config.maxEnergy);
+  const safeCards = clampRouteEconomyCardUnits(
+    usefulCardUnits,
+    nextBoundaryAction,
+    fullHorizonActions,
+    config
+  );
+  return {
+    potential: nextBoundaryAction < fullHorizonActions
+      ? evaluateRouteEconomyPhasePotential(
+        safeEnergy,
+        safeCards,
+        nextBoundaryAction,
+        fullHorizonActions,
+        config
+      )
+      : 0,
+    energy: safeEnergy,
+    usefulCardUnits: safeCards,
+    nextBoundaryAction
+  };
+}
+
+function chooseRouteEconomyPhaseTransition(
+  energy,
+  cardUnits,
+  boundaryAction,
+  options = {}
+) {
+  const config = getRouteEnergyEconomyConfig(options);
+  const fullHorizonActions = getRouteEconomyFullHorizonActions(options);
+  const safeEnergy = clamp(Math.floor(Number(energy) || 0), 0, config.maxEnergy);
+  const safeCards = clampRouteEconomyCardUnits(
+    cardUnits,
+    boundaryAction,
+    fullHorizonActions,
+    config
+  );
+  if (!(fullHorizonActions > boundaryAction)) {
+    return {
+      energy: safeEnergy,
+      usefulCardUnits: safeCards,
+      normalDraws: 0,
+      installs: 0,
+      energySpent: 0
+    };
+  }
+
+  let best = null;
+  for (const choice of getRouteEconomyPhaseChoices(
+    safeEnergy,
+    safeCards,
+    boundaryAction,
+    fullHorizonActions,
+    config
+  )) {
+    const future = evaluateRouteEconomyPhasePotential(
+      choice.energyAfter,
+      choice.cardUnitsAfter,
+      boundaryAction + config.registersPerTurn,
+      fullHorizonActions,
+      config
+    );
+    const total = choice.immediateValueR + future;
+    if (
+      !best ||
+      total > best.total + 1e-9 ||
+      (Math.abs(total - best.total) <= 1e-9 && choice.energySpent < best.choice.energySpent - 1e-9) ||
+      (Math.abs(total - best.total) <= 1e-9 && Math.abs(choice.energySpent - best.choice.energySpent) <= 1e-9 && choice.install < best.choice.install)
+    ) {
+      best = { choice, total };
+    }
+  }
+
+  const choice = best?.choice ?? {
+    draw: 0,
+    install: 0,
+    energyAfter: safeEnergy,
+    cardUnitsAfter: safeCards,
+    energySpent: 0
+  };
+  return {
+    energy: choice.energyAfter,
+    usefulCardUnits: choice.cardUnitsAfter,
+    normalDraws: choice.draw,
+    installs: choice.install,
+    energySpent: choice.energySpent
+  };
+}
+
+function getInitialRouteEconomyShadowState(options = {}) {
+  const config = getRouteEnergyEconomyConfig(options);
+  const prePhase = {
+    energy: clamp(config.startingEnergy, 0, config.maxEnergy),
+    usefulCardUnits: getInitialRouteUsefulCardUnits(options)
+  };
+  if (!isRouteAwareBatteryScoringActive(options)) {
+    return {
+      ...prePhase,
+      normalDraws: 0,
+      installs: 0,
+      energySpent: 0
+    };
+  }
+  const opening = chooseRouteEconomyPhaseTransition(
+    prePhase.energy,
+    prePhase.usefulCardUnits,
+    0,
+    options
+  );
+  return opening;
+}
+
+function advanceRouteEconomyPhaseIfDue(
+  energy,
+  usefulCardUnits,
+  absoluteActionCount,
+  options = {}
+) {
+  const config = getRouteEnergyEconomyConfig(options);
+  if (
+    absoluteActionCount <= 0 ||
+    absoluteActionCount % config.registersPerTurn !== 0
+  ) {
+    return {
+      energy,
+      usefulCardUnits,
+      normalDraws: 0,
+      installs: 0,
+      energySpent: 0
+    };
+  }
+  return chooseRouteEconomyPhaseTransition(
+    energy,
+    usefulCardUnits,
+    absoluteActionCount,
+    options
+  );
 }
 
 function buildRouteUpgradeOpportunities(
@@ -691,6 +1044,7 @@ export function clearAnalysisCaches() {
   OVERLAP_PENALTY_CACHE.clear();
   LATERAL_THREAT_CACHE.clear();
   REAR_THREAT_CACHE.clear();
+  ROUTE_ECONOMY_PHASE_CACHE.clear();
 }
 
 function tileKey(x, y) {
@@ -963,8 +1317,70 @@ function isRouteAwareBatteryScoringActive(options = {}) {
 }
 
 function getInitialRouteEnergyShadowReserve(options = {}) {
+  return getInitialRouteEconomyShadowState(options).energy;
+}
+
+function getInitialRouteUpgradeCardShadowUnits(options = {}) {
+  return getInitialRouteEconomyShadowState(options).usefulCardUnits;
+}
+
+function getRouteUpgradeCardShadowKey(cardUnits, options = {}) {
+  if (!isRouteAwareBatteryScoringActive(options)) return "";
+  const safeUnits = Math.max(
+    0,
+    Math.round(Number.isFinite(Number(cardUnits))
+      ? Number(cardUnits)
+      : getInitialRouteUpgradeCardShadowUnits(options))
+  );
+  return `@c${safeUnits}`;
+}
+
+function getRouteEconomyPotentialR(energy, usefulCardUnits, absoluteActionCount, options = {}) {
+  return evaluateRouteUpgradeEconomyState(
+    energy,
+    usefulCardUnits,
+    absoluteActionCount,
+    options
+  ).potential;
+}
+
+function applyRouteEconomyResourcePackage(
+  energy,
+  usefulCardUnits,
+  energyGain,
+  rawCardGain,
+  absoluteActionCount,
+  options = {}
+) {
   const config = getRouteEnergyEconomyConfig(options);
-  return clamp(config.startingEnergy, 0, config.maxEnergy);
+  const cardUnitsPerDraw = getRouteUsefulCardUnitsPerDraw(config);
+  const reserveBefore = clamp(Math.floor(Number(energy) || 0), 0, config.maxEnergy);
+  const cardsBefore = Math.max(0, Math.round(Number(usefulCardUnits) || 0));
+  const potentialBefore = getRouteEconomyPotentialR(
+    reserveBefore,
+    cardsBefore,
+    absoluteActionCount,
+    options
+  );
+  const reserveAfter = clamp(
+    reserveBefore + Math.max(0, Math.floor(Number(energyGain) || 0)),
+    0,
+    config.maxEnergy
+  );
+  const cardsAfter = cardsBefore + Math.max(0, Math.floor(Number(rawCardGain) || 0)) * cardUnitsPerDraw;
+  const potentialAfter = getRouteEconomyPotentialR(
+    reserveAfter,
+    cardsAfter,
+    absoluteActionCount,
+    options
+  );
+  return {
+    energy: reserveAfter,
+    usefulCardUnits: cardsAfter,
+    rewardR: Math.max(0, potentialAfter - potentialBefore),
+    realizedEnergyGain: Math.max(0, reserveAfter - reserveBefore),
+    rawCardGain: Math.max(0, Math.floor(Number(rawCardGain) || 0))
+  };
 }
 
 function getRouteEnergyShadowStep(
@@ -973,15 +1389,23 @@ function getRouteEnergyShadowStep(
   actionId,
   nextAbsoluteActionCount,
   currentReserve,
+  currentUsefulCardUnits,
   options = {}
 ) {
   const config = getRouteEnergyEconomyConfig(options);
+  const initialState = getInitialRouteEconomyShadowState(options);
   const reserveBefore = clamp(
     Math.floor(Number.isFinite(Number(currentReserve))
       ? Number(currentReserve)
-      : getInitialRouteEnergyShadowReserve(options)),
+      : initialState.energy),
     0,
     config.maxEnergy
+  );
+  const usefulCardUnitsBefore = Math.max(
+    0,
+    Math.round(Number.isFinite(Number(currentUsefulCardUnits))
+      ? Number(currentUsefulCardUnits)
+      : initialState.usefulCardUnits)
   );
   const powerUp = actionId === "WAIT";
 
@@ -990,87 +1414,253 @@ function getRouteEnergyShadowStep(
       rewardScore: 0,
       batteryRewardScore: 0,
       powerUpRewardScore: 0,
+      chopShopRewardScore: 0,
       reserveBefore,
       reserveAfter: reserveBefore,
+      usefulCardUnitsBefore,
+      usefulCardUnitsAfter: usefulCardUnitsBefore,
       energyGain: 0,
       batteryEnergyGain: 0,
       powerUpEnergyGain: 0,
+      extraCardDraws: 0,
       battery: false,
-      powerUp
+      powerUp,
+      chopShop: false,
+      chopShopChoice: null,
+      normalDraws: 0,
+      installs: 0,
+      energySpent: 0
     };
   }
 
   const tile = tileMap.get(tileKey(destination.x, destination.y));
-  const onBattery = (tile?.features || []).some((feature) => feature.type === "battery");
-
-  // v44 promotes Power Up into the same carried route-energy state as Battery.
-  // A normal Battery landing yields +1E; Power Up yields +1E wherever WAIT ends;
-  // WAIT on a Battery therefore yields +2E total. This is still a conservative
-  // valuation reserve, not a literal bank: we do not guess at upgrade spending.
-  const nominalBatteryGain = onBattery ? 1 : 0;
-  const nominalPowerUpGain = powerUp ? 1 : 0;
-  const nominalEnergyGain = nominalBatteryGain + nominalPowerUpGain;
-  const reserveAfter = clamp(
-    reserveBefore + nominalEnergyGain,
-    0,
-    config.maxEnergy
-  );
-  const realizedEnergyGain = Math.max(0, reserveAfter - reserveBefore);
-
-  const realizedBatteryGain = onBattery
-    ? Math.min(realizedEnergyGain, nominalBatteryGain)
-    : 0;
-  const realizedPowerUpGain = Math.max(0, realizedEnergyGain - realizedBatteryGain);
-  const fullHorizonTurns = Math.max(0, Number(options.routeEnergyHorizonTurns) || 0);
-  const elapsedTurns = Math.max(0, nextAbsoluteActionCount / config.registersPerTurn);
-  const turnsRemaining = Math.max(0, fullHorizonTurns - elapsedTurns);
-  const initialRemaining = estimateInitialUpgradeOpportunitiesRemaining(
-    elapsedTurns,
-    fullHorizonTurns,
-    config
-  );
-  const totalUtilityR = realizedEnergyGain > 0
-    ? getRouteEnergyGainUtility(
-      reserveBefore,
-      realizedEnergyGain,
-      turnsRemaining,
-      initialRemaining,
-      options,
-      fullHorizonTurns
-    )
-    : 0;
-  const batteryUtilityR = realizedBatteryGain > 0
-    ? getRouteEnergyGainUtility(
-      reserveBefore,
-      realizedBatteryGain,
-      turnsRemaining,
-      initialRemaining,
-      options,
-      fullHorizonTurns
-    )
-    : 0;
+  const features = tile?.features || [];
+  const onBattery = features.some((feature) => feature.type === "battery");
+  const onChopShop = features.some((feature) => feature.type === "chopShop");
   const registerScore = Number(options.routeEnergyRegisterScore);
-  let batteryRewardScore = batteryUtilityR * registerScore;
-  const powerUpRewardScore = Math.max(0, totalUtilityR - batteryUtilityR) * registerScore;
 
-  if (onBattery && options.upgradeWorld) {
-    // Upgrade World's additional unknown-card draw remains the old +1 route-score
-    // Battery fallback until Chop Shop/card-option valuation is promoted later.
-    batteryRewardScore += 1;
+  let energy = reserveBefore;
+  let usefulCardUnits = usefulCardUnitsBefore;
+  let batteryRewardR = 0;
+  let powerUpRewardR = 0;
+  let chopShopRewardR = 0;
+  let batteryEnergyGain = 0;
+  let powerUpEnergyGain = 0;
+  let extraCardDraws = 0;
+  let chopShopChoice = null;
+
+  // Battery activation remains +1E. Upgrade World adds one unknown upgrade card
+  // to that activation; unlike the old +1 score fallback, v45 values that card
+  // through the same card/energy/install-throughput economy.
+  if (onBattery) {
+    const batteryPackage = applyRouteEconomyResourcePackage(
+      energy,
+      usefulCardUnits,
+      1,
+      options.upgradeWorld ? 1 : 0,
+      nextAbsoluteActionCount,
+      options
+    );
+    batteryRewardR += batteryPackage.rewardR;
+    batteryEnergyGain += batteryPackage.realizedEnergyGain;
+    extraCardDraws += batteryPackage.rawCardGain;
+    energy = batteryPackage.energy;
+    usefulCardUnits = batteryPackage.usefulCardUnits;
   }
 
-  const rewardScore = batteryRewardScore + powerUpRewardScore;
+  // Power Up is still a real WAIT action whose board consequences are simulated
+  // normally. Economically it contributes +1E, independent of whether the WAIT
+  // also ends on a Battery.
+  if (powerUp) {
+    const powerPackage = applyRouteEconomyResourcePackage(
+      energy,
+      usefulCardUnits,
+      1,
+      0,
+      nextAbsoluteActionCount,
+      options
+    );
+    powerUpRewardR += powerPackage.rewardR;
+    powerUpEnergyGain += powerPackage.realizedEnergyGain;
+    energy = powerPackage.energy;
+    usefulCardUnits = powerPackage.usefulCardUnits;
+  }
+
+  // A Chop Shop is promoted from its static route weight into the same economy.
+  // It chooses between +1E and one extra unknown upgrade card. The card is not a
+  // normal 1E draw, so it does not consume that turn's one-draw Upgrade Phase
+  // allowance. Upgrade World adds one additional card to either usual choice.
+  if (onChopShop) {
+    const upgradeWorldCards = options.upgradeWorld ? 1 : 0;
+    const energyOption = applyRouteEconomyResourcePackage(
+      energy,
+      usefulCardUnits,
+      1,
+      upgradeWorldCards,
+      nextAbsoluteActionCount,
+      options
+    );
+    const cardOption = applyRouteEconomyResourcePackage(
+      energy,
+      usefulCardUnits,
+      0,
+      1 + upgradeWorldCards,
+      nextAbsoluteActionCount,
+      options
+    );
+    const chooseCard = cardOption.rewardR > energyOption.rewardR + 1e-9;
+    const chosen = chooseCard ? cardOption : energyOption;
+    chopShopChoice = chooseCard ? "card" : "energy";
+    chopShopRewardR += chosen.rewardR;
+    extraCardDraws += chosen.rawCardGain;
+    energy = chosen.energy;
+    usefulCardUnits = chosen.usefulCardUnits;
+  }
+
+  const realizedEnergyGain = Math.max(0, energy - reserveBefore);
+  const phase = advanceRouteEconomyPhaseIfDue(
+    energy,
+    usefulCardUnits,
+    nextAbsoluteActionCount,
+    options
+  );
+  const reserveAfter = phase.energy;
+  const usefulCardUnitsAfter = phase.usefulCardUnits;
+  const batteryRewardScore = batteryRewardR * registerScore;
+  const powerUpRewardScore = powerUpRewardR * registerScore;
+  const chopShopRewardScore = chopShopRewardR * registerScore;
+  const rewardScore = batteryRewardScore + powerUpRewardScore + chopShopRewardScore;
+
   return {
     rewardScore: Number(Math.max(0, rewardScore).toFixed(3)),
     batteryRewardScore: Number(Math.max(0, batteryRewardScore).toFixed(3)),
     powerUpRewardScore: Number(Math.max(0, powerUpRewardScore).toFixed(3)),
+    chopShopRewardScore: Number(Math.max(0, chopShopRewardScore).toFixed(3)),
     reserveBefore,
     reserveAfter,
+    usefulCardUnitsBefore,
+    usefulCardUnitsAfter,
     energyGain: realizedEnergyGain,
-    batteryEnergyGain: realizedBatteryGain,
-    powerUpEnergyGain: realizedPowerUpGain,
+    batteryEnergyGain,
+    powerUpEnergyGain,
+    extraCardDraws,
     battery: onBattery,
-    powerUp
+    powerUp,
+    chopShop: onChopShop,
+    chopShopChoice,
+    normalDraws: phase.normalDraws,
+    installs: phase.installs,
+    energySpent: phase.energySpent
+  };
+}
+
+
+// Re-evaluate only the shared v45 upgrade economy on an already discovered
+// physical/programming route. This is intentionally much cheaper than another
+// route search and is used by Pay to Win to ask what the SAME coherent route
+// is worth after 0E/1E/2E/3E has been paid before the opening Upgrade Phase.
+// Non-economy route cost (movement, hazards, card scarcity, timing, etc.) is
+// preserved exactly; Battery/Power Up/Chop Shop value and the carried Energy /
+// useful-card shadow are replayed from the requested starting economy state.
+export function rescoreFixedRouteUpgradeEconomy(tileMap, route, options = {}) {
+  if (!route || !Array.isArray(route.transitions)) return null;
+  const originalScore = Number(route.score);
+  if (!Number.isFinite(originalScore)) return null;
+
+  const config = getRouteEnergyEconomyConfig(options);
+  const currentStartingEnergy = config.startingEnergy;
+  const referenceStartingEnergy = Number.isFinite(Number(options.routeEconomyReferenceStartingEnergy))
+    ? Math.max(0, Math.floor(Number(options.routeEconomyReferenceStartingEnergy)))
+    : currentStartingEnergy;
+  const registerScore = Math.max(0, Number(options.routeEnergyRegisterScore) || 0);
+  const initialUsefulCardUnits = getInitialRouteUsefulCardUnits(options);
+  const currentStartingPotentialR = evaluateRouteUpgradeEconomyState(
+    currentStartingEnergy,
+    initialUsefulCardUnits,
+    0,
+    options
+  ).potential;
+  const referenceStartingPotentialR = referenceStartingEnergy === currentStartingEnergy
+    ? currentStartingPotentialR
+    : evaluateRouteUpgradeEconomyState(
+      referenceStartingEnergy,
+      initialUsefulCardUnits,
+      0,
+      { ...options, startingEnergy: referenceStartingEnergy }
+    ).potential;
+  const startingEconomyPenaltyScore = Math.max(
+    0,
+    referenceStartingPotentialR - currentStartingPotentialR
+  ) * registerScore;
+
+  const originalEconomyReward = Number(route.routeEnergyEconomyRewardScore) || 0;
+  const initial = getInitialRouteEconomyShadowState(options);
+  let energy = initial.energy;
+  let usefulCardUnits = initial.usefulCardUnits;
+  let totalReward = 0;
+  let batteryReward = 0;
+  let powerUpReward = 0;
+  let chopShopReward = 0;
+  let normalDraws = initial.normalDraws || 0;
+  let installs = initial.installs || 0;
+  let energySpent = initial.energySpent || 0;
+  let extraCardDraws = 0;
+
+  route.transitions.forEach((transition, index) => {
+    const destination = transition?.to;
+    const actionId = transition?.action;
+    if (!destination || !actionId) return;
+    const step = getRouteEnergyShadowStep(
+      tileMap,
+      destination,
+      actionId,
+      index + 1,
+      energy,
+      usefulCardUnits,
+      options
+    );
+    totalReward += step.rewardScore || 0;
+    batteryReward += step.batteryRewardScore || 0;
+    powerUpReward += step.powerUpRewardScore || 0;
+    chopShopReward += step.chopShopRewardScore || 0;
+    normalDraws += step.normalDraws || 0;
+    installs += step.installs || 0;
+    energySpent += step.energySpent || 0;
+    extraCardDraws += step.extraCardDraws || 0;
+    energy = step.reserveAfter;
+    usefulCardUnits = step.usefulCardUnitsAfter;
+  });
+
+  // The route's stored score already contains its reference-start economy
+  // reward but intentionally omits the common value of the players' starting
+  // resources. P2W breaks that common baseline. Reprice by (a) losing opening
+  // upgrade capacity when Energy is paid and (b) changing the later marginal
+  // value of route Energy/card gains. At the reference starting Energy this is
+  // exactly the original route score.
+  const routeRewardDelta = currentStartingEnergy === referenceStartingEnergy
+    ? 0
+    : originalEconomyReward - totalReward;
+  const rescored = originalScore + startingEconomyPenaltyScore + routeRewardDelta;
+
+  return {
+    score: Number(rescored.toFixed(2)),
+    originalScore: Number(originalScore.toFixed(2)),
+    startingEconomyPenaltyScore: Number(startingEconomyPenaltyScore.toFixed(2)),
+    startingEconomyPotentialR: Number(currentStartingPotentialR.toFixed(3)),
+    referenceStartingEconomyPotentialR: Number(referenceStartingPotentialR.toFixed(3)),
+    routeEnergyEconomyRewardScore: Number(totalReward.toFixed(2)),
+    originalRouteEnergyEconomyRewardScore: Number(originalEconomyReward.toFixed(2)),
+    batteryEconomyRewardScore: Number(batteryReward.toFixed(2)),
+    powerUpEconomyRewardScore: Number(powerUpReward.toFixed(2)),
+    chopShopEconomyRewardScore: Number(chopShopReward.toFixed(2)),
+    routeEnergyShadowReserveStart: initial.energy,
+    routeEnergyShadowReserveEnd: energy,
+    routeUpgradeCardShadowUnitsStart: initial.usefulCardUnits,
+    routeUpgradeCardShadowUnitsEnd: usefulCardUnits,
+    routeEconomyNormalDraws: normalDraws,
+    routeEconomyInstalls: installs,
+    routeEconomyExtraCardDraws: extraCardDraws,
+    routeEconomyEnergySpent: energySpent
   };
 }
 
@@ -1081,7 +1671,7 @@ function getRouteAwareActionPenalty(action, options = {}) {
   }
 
   // The old WAIT penalty was 0.25 score cheaper as a static Power Up proxy.
-  // v44 replaces that proxy with contextual +1E valuation, while all physical
+  // v45 keeps that proxy removed because Power Up is valued through the shared economy, while all physical
   // benefits of actually waiting (conveyors, gears, pushers, timing) remain in
   // the simulated transition itself.
   return actionPenalty + Math.max(0, REGISTER_TEMPO_COST - actionPenalty);
@@ -1097,7 +1687,10 @@ function getTilePenalty(tile, options = {}) {
     // v42 removes the old static Battery reward from per-tile movement scoring.
     // The route-aware reward is applied once, at the post-register landing
     // boundary, so traversing a Battery does not collect energy.
-    if (feature.type === "battery" && isRouteAwareBatteryScoringActive(options)) {
+    if (
+      (feature.type === "battery" || feature.type === "chopShop") &&
+      isRouteAwareBatteryScoringActive(options)
+    ) {
       continue;
     }
     // Randomizers affect the card played only when the robot STARTS a register
@@ -3182,9 +3775,9 @@ function getRouteEnergyShadowReserveKey(reserve, options = {}) {
   return `@e${safeReserve}`;
 }
 
-function getSearchStateKey(state, actionCount, options = {}, energyReserve = null) {
+function getSearchStateKey(state, actionCount, options = {}, energyReserve = null, cardUnits = null) {
   const economyActionKey = isRouteAwareBatteryScoringActive(options)
-    ? `@a${actionCount}${getRouteEnergyShadowReserveKey(energyReserve, options)}`
+    ? `@a${actionCount}${getRouteEnergyShadowReserveKey(energyReserve, options)}${getRouteUpgradeCardShadowKey(cardUnits, options)}`
     : "";
   if (!options.dynamicGoal) {
     return `${stateKey(state)}${economyActionKey}`;
@@ -3227,12 +3820,15 @@ function enumerateRoutes(tileMap, start, goal, options = {}) {
       y: start.y,
       facing
     };
-    const initialEnergyReserve = getInitialRouteEnergyShadowReserve(options);
+    const initialEconomyState = getInitialRouteEconomyShadowState(options);
+    const initialEnergyReserve = initialEconomyState.energy;
+    const initialUpgradeCardUnits = initialEconomyState.usefulCardUnits;
     const initialStateKey = getSearchStateKey(
       initialState,
       0,
       options,
-      initialEnergyReserve
+      initialEnergyReserve,
+      initialUpgradeCardUnits
     );
     bestCostByState.set(initialStateKey, 0);
     queue.push(createQueueEntry({
@@ -3249,8 +3845,17 @@ function enumerateRoutes(tileMap, start, goal, options = {}) {
       routeEnergyEconomyRewardScore: 0,
       batteryEconomyRewardScore: 0,
       powerUpEconomyRewardScore: 0,
+      chopShopEconomyRewardScore: 0,
       routeEnergyShadowReserve: initialEnergyReserve,
       routeEnergyShadowReserveStart: initialEnergyReserve,
+      routeUpgradeCardShadowUnits: initialUpgradeCardUnits,
+      routeUpgradeCardShadowUnitsStart: initialUpgradeCardUnits,
+      routeEconomyNormalDraws: initialEconomyState.normalDraws || 0,
+      routeEconomyInstalls: initialEconomyState.installs || 0,
+      routeEconomyExtraCardDraws: 0,
+      routeEconomyEnergySpent: initialEconomyState.energySpent || 0,
+      chopShopCardChoices: 0,
+      chopShopEnergyChoices: 0,
       baseCost: 0,
       actionHistory: []
     }, goal));
@@ -3265,7 +3870,8 @@ function enumerateRoutes(tileMap, start, goal, options = {}) {
       current.finalState,
       current.actions,
       options,
-      current.routeEnergyShadowReserve
+      current.routeEnergyShadowReserve,
+      current.routeUpgradeCardShadowUnits
     );
     const knownBest = bestCostByState.get(currentStateId);
 
@@ -3311,8 +3917,17 @@ function enumerateRoutes(tileMap, start, goal, options = {}) {
         routeEnergyEconomyRewardScore: Number((current.routeEnergyEconomyRewardScore || 0).toFixed(2)),
         batteryEconomyRewardScore: Number((current.batteryEconomyRewardScore || 0).toFixed(2)),
         powerUpEconomyRewardScore: Number((current.powerUpEconomyRewardScore || 0).toFixed(2)),
+        chopShopEconomyRewardScore: Number((current.chopShopEconomyRewardScore || 0).toFixed(2)),
         routeEnergyShadowReserveStart: current.routeEnergyShadowReserveStart ?? getInitialRouteEnergyShadowReserve(options),
         routeEnergyShadowReserveEnd: current.routeEnergyShadowReserve ?? getInitialRouteEnergyShadowReserve(options),
+        routeUpgradeCardShadowUnitsStart: current.routeUpgradeCardShadowUnitsStart ?? getInitialRouteUpgradeCardShadowUnits(options),
+        routeUpgradeCardShadowUnitsEnd: current.routeUpgradeCardShadowUnits ?? getInitialRouteUpgradeCardShadowUnits(options),
+        routeEconomyNormalDraws: current.routeEconomyNormalDraws || 0,
+        routeEconomyInstalls: current.routeEconomyInstalls || 0,
+        routeEconomyExtraCardDraws: current.routeEconomyExtraCardDraws || 0,
+        routeEconomyEnergySpent: current.routeEconomyEnergySpent || 0,
+        chopShopCardChoices: current.chopShopCardChoices || 0,
+        chopShopEnergyChoices: current.chopShopEnergyChoices || 0,
         goalReached: true,
         fullCourseLeg: true,
         ...routeScore
@@ -3364,16 +3979,19 @@ function enumerateRoutes(tileMap, start, goal, options = {}) {
           action.id,
           nextActionCount,
           current.routeEnergyShadowReserve,
+          current.routeUpgradeCardShadowUnits,
           options
         );
         const energyEconomyRewardScore = energyStep.rewardScore;
         const batteryEconomyRewardScore = energyStep.batteryRewardScore;
         const powerUpEconomyRewardScore = energyStep.powerUpRewardScore;
+        const chopShopEconomyRewardScore = energyStep.chopShopRewardScore;
         const nextStateKey = getSearchStateKey(
           destination,
           nextActionCount,
           options,
-          energyStep.reserveAfter
+          energyStep.reserveAfter,
+          energyStep.usefulCardUnitsAfter
         );
         const nextRoute = {
           finalState: destination,
@@ -3389,7 +4007,17 @@ function enumerateRoutes(tileMap, start, goal, options = {}) {
           routeEnergyEconomyRewardScore: (current.routeEnergyEconomyRewardScore || 0) + energyEconomyRewardScore,
           batteryEconomyRewardScore: (current.batteryEconomyRewardScore || 0) + batteryEconomyRewardScore,
           powerUpEconomyRewardScore: (current.powerUpEconomyRewardScore || 0) + powerUpEconomyRewardScore,
+          chopShopEconomyRewardScore: (current.chopShopEconomyRewardScore || 0) + chopShopEconomyRewardScore,
           routeEnergyShadowReserve: energyStep.reserveAfter,
+          routeEnergyShadowReserveStart: current.routeEnergyShadowReserveStart ?? getInitialRouteEnergyShadowReserve(options),
+          routeUpgradeCardShadowUnits: energyStep.usefulCardUnitsAfter,
+          routeUpgradeCardShadowUnitsStart: current.routeUpgradeCardShadowUnitsStart ?? getInitialRouteUpgradeCardShadowUnits(options),
+          routeEconomyNormalDraws: (current.routeEconomyNormalDraws || 0) + (energyStep.normalDraws || 0),
+          routeEconomyInstalls: (current.routeEconomyInstalls || 0) + (energyStep.installs || 0),
+          routeEconomyExtraCardDraws: (current.routeEconomyExtraCardDraws || 0) + (energyStep.extraCardDraws || 0),
+          routeEconomyEnergySpent: (current.routeEconomyEnergySpent || 0) + (energyStep.energySpent || 0),
+          chopShopCardChoices: (current.chopShopCardChoices || 0) + (energyStep.chopShopChoice === "card" ? 1 : 0),
+          chopShopEnergyChoices: (current.chopShopEnergyChoices || 0) + (energyStep.chopShopChoice === "energy" ? 1 : 0),
           routeEnergyShadowReserveStart: current.routeEnergyShadowReserveStart ?? getInitialRouteEnergyShadowReserve(options),
           baseCost: current.baseCost + transition.hazard + transitionRebootPenalty + weightedDistance(transition.distance, transition.forcedDistance) + actionPenalty + reversePenalty + heavyMovePenalty + scarceReusePenalty + conveyorComplexity - energyEconomyRewardScore,
           actionHistory: nextActionHistory
@@ -3438,12 +4066,13 @@ function getFullCourseSearchStateKey(
   actionCount,
   checkpointIndex,
   options = {},
-  energyReserve = null
+  energyReserve = null,
+  cardUnits = null
 ) {
   const dynamicGoal = getFullCourseDynamicGoal(options, checkpointIndex);
   const registerPhase = actionCount % REGISTER_COUNT;
   const economyActionKey = isRouteAwareBatteryScoringActive(options)
-    ? `@a${actionCount}${getRouteEnergyShadowReserveKey(energyReserve, options)}`
+    ? `@a${actionCount}${getRouteEnergyShadowReserveKey(energyReserve, options)}${getRouteUpgradeCardShadowKey(cardUnits, options)}`
     : "";
   if (!dynamicGoal) {
     return `${stateKey(state)}@cp${checkpointIndex}@r${registerPhase}${economyActionKey}`;
@@ -3506,7 +4135,9 @@ function makeCheckpointHit(route, flags, options = {}) {
     routeEnergyEconomyRewardScore: route.routeEnergyEconomyRewardScore ?? 0,
     batteryEconomyRewardScore: route.batteryEconomyRewardScore ?? 0,
     powerUpEconomyRewardScore: route.powerUpEconomyRewardScore ?? 0,
-    routeEnergyShadowReserve: route.routeEnergyShadowReserve ?? null
+    chopShopEconomyRewardScore: route.chopShopEconomyRewardScore ?? 0,
+    routeEnergyShadowReserve: route.routeEnergyShadowReserve ?? null,
+    routeUpgradeCardShadowUnits: route.routeUpgradeCardShadowUnits ?? null
   };
 }
 
@@ -3559,7 +4190,9 @@ function enumerateFullCourseRoutes(tileMap, start, flags, options = {}) {
 
   for (const facing of initialFacings) {
     const initialState = { x: start.x, y: start.y, facing };
-    const initialEnergyReserve = getInitialRouteEnergyShadowReserve(options);
+    const initialEconomyState = getInitialRouteEconomyShadowState(options);
+    const initialEnergyReserve = initialEconomyState.energy;
+    const initialUpgradeCardUnits = initialEconomyState.usefulCardUnits;
     const initialRoute = {
       finalState: initialState,
       initialState,
@@ -3574,8 +4207,17 @@ function enumerateFullCourseRoutes(tileMap, start, flags, options = {}) {
       routeEnergyEconomyRewardScore: 0,
       batteryEconomyRewardScore: 0,
       powerUpEconomyRewardScore: 0,
+      chopShopEconomyRewardScore: 0,
       routeEnergyShadowReserve: initialEnergyReserve,
       routeEnergyShadowReserveStart: initialEnergyReserve,
+      routeUpgradeCardShadowUnits: initialUpgradeCardUnits,
+      routeUpgradeCardShadowUnitsStart: initialUpgradeCardUnits,
+      routeEconomyNormalDraws: initialEconomyState.normalDraws || 0,
+      routeEconomyInstalls: initialEconomyState.installs || 0,
+      routeEconomyExtraCardDraws: 0,
+      routeEconomyEnergySpent: initialEconomyState.energySpent || 0,
+      chopShopCardChoices: 0,
+      chopShopEnergyChoices: 0,
       baseCost: 0,
       checkpointIndex: 0,
       checkpointHits: [],
@@ -3586,7 +4228,8 @@ function enumerateFullCourseRoutes(tileMap, start, flags, options = {}) {
       0,
       0,
       options,
-      initialEnergyReserve
+      initialEnergyReserve,
+      initialUpgradeCardUnits
     );
     acceptStateLabel(initialStateKey, 0, 1);
     queue.push(createFullCourseQueueEntry(initialRoute, flags, options));
@@ -3602,7 +4245,8 @@ function enumerateFullCourseRoutes(tileMap, start, flags, options = {}) {
       current.actions,
       current.checkpointIndex,
       options,
-      current.routeEnergyShadowReserve
+      current.routeEnergyShadowReserve,
+      current.routeUpgradeCardShadowUnits
     );
     if (!stateLabelStillActive(currentStateId, current.baseCost)) continue;
 
@@ -3631,8 +4275,17 @@ function enumerateFullCourseRoutes(tileMap, start, flags, options = {}) {
         routeEnergyEconomyRewardScore: Number((current.routeEnergyEconomyRewardScore || 0).toFixed(2)),
         batteryEconomyRewardScore: Number((current.batteryEconomyRewardScore || 0).toFixed(2)),
         powerUpEconomyRewardScore: Number((current.powerUpEconomyRewardScore || 0).toFixed(2)),
+        chopShopEconomyRewardScore: Number((current.chopShopEconomyRewardScore || 0).toFixed(2)),
         routeEnergyShadowReserveStart: current.routeEnergyShadowReserveStart ?? getInitialRouteEnergyShadowReserve(options),
         routeEnergyShadowReserveEnd: current.routeEnergyShadowReserve ?? getInitialRouteEnergyShadowReserve(options),
+        routeUpgradeCardShadowUnitsStart: current.routeUpgradeCardShadowUnitsStart ?? getInitialRouteUpgradeCardShadowUnits(options),
+        routeUpgradeCardShadowUnitsEnd: current.routeUpgradeCardShadowUnits ?? getInitialRouteUpgradeCardShadowUnits(options),
+        routeEconomyNormalDraws: current.routeEconomyNormalDraws || 0,
+        routeEconomyInstalls: current.routeEconomyInstalls || 0,
+        routeEconomyExtraCardDraws: current.routeEconomyExtraCardDraws || 0,
+        routeEconomyEnergySpent: current.routeEconomyEnergySpent || 0,
+        chopShopCardChoices: current.chopShopCardChoices || 0,
+        chopShopEnergyChoices: current.chopShopEnergyChoices || 0,
         fullCourse: true,
         ...routeScore
       });
@@ -3680,11 +4333,13 @@ function enumerateFullCourseRoutes(tileMap, start, flags, options = {}) {
           action.id,
           nextActionCount,
           current.routeEnergyShadowReserve,
+          current.routeUpgradeCardShadowUnits,
           options
         );
         const energyEconomyRewardScore = energyStep.rewardScore;
         const batteryEconomyRewardScore = energyStep.batteryRewardScore;
         const powerUpEconomyRewardScore = energyStep.powerUpRewardScore;
+        const chopShopEconomyRewardScore = energyStep.chopShopRewardScore;
         let nextRoute = {
           finalState: destination,
           initialState: current.initialState,
@@ -3699,8 +4354,17 @@ function enumerateFullCourseRoutes(tileMap, start, flags, options = {}) {
           routeEnergyEconomyRewardScore: (current.routeEnergyEconomyRewardScore || 0) + energyEconomyRewardScore,
           batteryEconomyRewardScore: (current.batteryEconomyRewardScore || 0) + batteryEconomyRewardScore,
           powerUpEconomyRewardScore: (current.powerUpEconomyRewardScore || 0) + powerUpEconomyRewardScore,
+          chopShopEconomyRewardScore: (current.chopShopEconomyRewardScore || 0) + chopShopEconomyRewardScore,
           routeEnergyShadowReserve: energyStep.reserveAfter,
           routeEnergyShadowReserveStart: current.routeEnergyShadowReserveStart ?? getInitialRouteEnergyShadowReserve(options),
+          routeUpgradeCardShadowUnits: energyStep.usefulCardUnitsAfter,
+          routeUpgradeCardShadowUnitsStart: current.routeUpgradeCardShadowUnitsStart ?? getInitialRouteUpgradeCardShadowUnits(options),
+          routeEconomyNormalDraws: (current.routeEconomyNormalDraws || 0) + (energyStep.normalDraws || 0),
+          routeEconomyInstalls: (current.routeEconomyInstalls || 0) + (energyStep.installs || 0),
+          routeEconomyExtraCardDraws: (current.routeEconomyExtraCardDraws || 0) + (energyStep.extraCardDraws || 0),
+          routeEconomyEnergySpent: (current.routeEconomyEnergySpent || 0) + (energyStep.energySpent || 0),
+          chopShopCardChoices: (current.chopShopCardChoices || 0) + (energyStep.chopShopChoice === "card" ? 1 : 0),
+          chopShopEnergyChoices: (current.chopShopEnergyChoices || 0) + (energyStep.chopShopChoice === "energy" ? 1 : 0),
           baseCost: current.baseCost + transition.hazard + transitionRebootPenalty + weightedDistance(transition.distance, transition.forcedDistance) + actionPenalty + reversePenalty + heavyMovePenalty + scarceReusePenalty + conveyorComplexity - energyEconomyRewardScore,
           checkpointIndex: current.checkpointIndex,
           checkpointHits: current.checkpointHits,
@@ -3721,7 +4385,8 @@ function enumerateFullCourseRoutes(tileMap, start, flags, options = {}) {
           nextActionCount,
           nextRoute.checkpointIndex,
           options,
-          nextRoute.routeEnergyShadowReserve
+          nextRoute.routeEnergyShadowReserve,
+          nextRoute.routeUpgradeCardShadowUnits
         );
         const stateLabelLimit = (
           options.diverseStateLabelsAfterFirstCheckpoint &&
@@ -3772,7 +4437,9 @@ function sliceFullCourseRoute(fullRoute, legIndex, flags) {
     routeEnergyEconomyRewardScore: 0,
     batteryEconomyRewardScore: 0,
     powerUpEconomyRewardScore: 0,
-    routeEnergyShadowReserve: fullRoute.routeEnergyShadowReserveStart ?? null
+    chopShopEconomyRewardScore: 0,
+    routeEnergyShadowReserve: fullRoute.routeEnergyShadowReserveStart ?? null,
+    routeUpgradeCardShadowUnits: fullRoute.routeUpgradeCardShadowUnitsStart ?? null
   };
   const distance = getMetricDelta(hit, metricStart, "distance");
   const forcedDistance = getMetricDelta(hit, metricStart, "forcedDistance");
@@ -3793,6 +4460,11 @@ function sliceFullCourseRoute(fullRoute, legIndex, flags) {
     hit,
     metricStart,
     "powerUpEconomyRewardScore"
+  );
+  const chopShopEconomyRewardScore = getMetricDelta(
+    hit,
+    metricStart,
+    "chopShopEconomyRewardScore"
   );
   const goal = flags[legIndex];
 
@@ -3817,8 +4489,11 @@ function sliceFullCourseRoute(fullRoute, legIndex, flags) {
     routeEnergyEconomyRewardScore,
     batteryEconomyRewardScore,
     powerUpEconomyRewardScore,
+    chopShopEconomyRewardScore,
     routeEnergyShadowReserveStart: metricStart.routeEnergyShadowReserve ?? fullRoute.routeEnergyShadowReserveStart ?? null,
     routeEnergyShadowReserveEnd: hit.routeEnergyShadowReserve ?? fullRoute.routeEnergyShadowReserveEnd ?? null,
+    routeUpgradeCardShadowUnitsStart: metricStart.routeUpgradeCardShadowUnits ?? fullRoute.routeUpgradeCardShadowUnitsStart ?? null,
+    routeUpgradeCardShadowUnitsEnd: hit.routeUpgradeCardShadowUnits ?? fullRoute.routeUpgradeCardShadowUnitsEnd ?? null,
     goalReached: true,
     fullCourseLeg: true
   };
@@ -5194,6 +5869,7 @@ export function analyzeCourse(tileMap, starts, goal, options = {}) {
       upgradeDrawsPerTurn: options.upgradeDrawsPerTurn,
       upgradeInstallsPerTurn: options.upgradeInstallsPerTurn,
       upgradeDrawEnergyCost: options.upgradeDrawEnergyCost,
+      upgradeUsefulCardRate: options.upgradeUsefulCardRate,
       upgradeUsefulEnergyPerInstall: options.upgradeUsefulEnergyPerInstall,
       upgradePowerRegistersPerEnergy: options.upgradePowerRegistersPerEnergy,
       routeRegistersPerTurn: options.routeRegistersPerTurn,
@@ -6722,6 +7398,7 @@ function getContextualLegCacheKey(
     getProgramCacheSignature(context.history, context.absoluteActions),
     isRouteAwareBatteryScoringActive(options) ? `a${context.absoluteActions}` : null,
     getRouteEnergyShadowReserveKey(context.energyReserve, options) || null,
+    getRouteUpgradeCardShadowKey(context.upgradeCardUnits, options) || null,
     `g${getDynamicGoalCachePhase(dynamicGoal, context.absoluteActions)}`
   ].filter(Boolean).join("|");
 }
@@ -6740,6 +7417,7 @@ function getContextualTemplateCacheKey(
     `r${context.absoluteActions % REGISTER_COUNT}`,
     isRouteAwareBatteryScoringActive(options) ? `a${context.absoluteActions}` : null,
     getRouteEnergyShadowReserveKey(context.energyReserve, options) || null,
+    getRouteUpgradeCardShadowKey(context.upgradeCardUnits, options) || null,
     `g${getDynamicGoalCachePhase(dynamicGoal, context.absoluteActions)}`
   ].filter(Boolean).join("|");
 }
@@ -6750,13 +7428,15 @@ function getContextualSearchStateKey(
   history,
   dynamicGoal,
   options = {},
-  energyReserve = null
+  energyReserve = null,
+  cardUnits = null
 ) {
   return [
     stateKey(state),
     getCompactProgramSearchSignature(history, absoluteActions),
     isRouteAwareBatteryScoringActive(options) ? `a${absoluteActions}` : null,
     getRouteEnergyShadowReserveKey(energyReserve, options) || null,
+    getRouteUpgradeCardShadowKey(cardUnits, options) || null,
     `g${getDynamicGoalCachePhase(dynamicGoal, absoluteActions)}`
   ].filter(Boolean).join("|");
 }
@@ -6845,9 +7525,13 @@ function enumerateContextualLegRoutes(
       facing
     };
     const initialHistory = getProgramHistoryWindow(context.history);
+    const fallbackEconomyState = getInitialRouteEconomyShadowState(options);
     const initialEnergyReserve = Number.isFinite(Number(context.energyReserve))
       ? Number(context.energyReserve)
-      : getInitialRouteEnergyShadowReserve(options);
+      : fallbackEconomyState.energy;
+    const initialUpgradeCardUnits = Number.isFinite(Number(context.upgradeCardUnits))
+      ? Number(context.upgradeCardUnits)
+      : fallbackEconomyState.usefulCardUnits;
     const root = {
       finalState: initialState,
       initialState,
@@ -6863,8 +7547,17 @@ function enumerateContextualLegRoutes(
       routeEnergyEconomyRewardScore: 0,
       batteryEconomyRewardScore: 0,
       powerUpEconomyRewardScore: 0,
+      chopShopEconomyRewardScore: 0,
       routeEnergyShadowReserve: initialEnergyReserve,
       routeEnergyShadowReserveStart: initialEnergyReserve,
+      routeUpgradeCardShadowUnits: initialUpgradeCardUnits,
+      routeUpgradeCardShadowUnitsStart: initialUpgradeCardUnits,
+      routeEconomyNormalDraws: 0,
+      routeEconomyInstalls: 0,
+      routeEconomyExtraCardDraws: 0,
+      routeEconomyEnergySpent: 0,
+      chopShopCardChoices: 0,
+      chopShopEnergyChoices: 0,
       baseCost: 0,
       cardAvailabilityPenalty: 0,
       actionHistory: initialHistory,
@@ -6878,7 +7571,8 @@ function enumerateContextualLegRoutes(
       initialHistory,
       dynamicGoal,
       options,
-      initialEnergyReserve
+      initialEnergyReserve,
+      initialUpgradeCardUnits
     );
     profile.currentKeyMs += profileNow() - blockStartedAt;
 
@@ -6907,7 +7601,8 @@ function enumerateContextualLegRoutes(
       current.actionHistory,
       dynamicGoal,
       options,
-      current.routeEnergyShadowReserve
+      current.routeEnergyShadowReserve,
+      current.routeUpgradeCardShadowUnits
     );
     profile.currentKeyMs += profileNow() - blockStartedAt;
 
@@ -6983,8 +7678,17 @@ function enumerateContextualLegRoutes(
         routeEnergyEconomyRewardScore: Number((current.routeEnergyEconomyRewardScore || 0).toFixed(2)),
         batteryEconomyRewardScore: Number((current.batteryEconomyRewardScore || 0).toFixed(2)),
         powerUpEconomyRewardScore: Number((current.powerUpEconomyRewardScore || 0).toFixed(2)),
+        chopShopEconomyRewardScore: Number((current.chopShopEconomyRewardScore || 0).toFixed(2)),
         routeEnergyShadowReserveStart: current.routeEnergyShadowReserveStart ?? initialEnergyReserve,
         routeEnergyShadowReserveEnd: current.routeEnergyShadowReserve ?? initialEnergyReserve,
+        routeUpgradeCardShadowUnitsStart: current.routeUpgradeCardShadowUnitsStart ?? initialUpgradeCardUnits,
+        routeUpgradeCardShadowUnitsEnd: current.routeUpgradeCardShadowUnits ?? initialUpgradeCardUnits,
+        routeEconomyNormalDraws: current.routeEconomyNormalDraws || 0,
+        routeEconomyInstalls: current.routeEconomyInstalls || 0,
+        routeEconomyExtraCardDraws: current.routeEconomyExtraCardDraws || 0,
+        routeEconomyEnergySpent: current.routeEconomyEnergySpent || 0,
+        chopShopCardChoices: current.chopShopCardChoices || 0,
+        chopShopEnergyChoices: current.chopShopEnergyChoices || 0,
         cardAvailabilityPenalty: Number(
           (current.cardAvailabilityPenalty || 0).toFixed(2)
         ),
@@ -7105,11 +7809,13 @@ function enumerateContextualLegRoutes(
           action.id,
           nextAbsoluteActions,
           current.routeEnergyShadowReserve,
+          current.routeUpgradeCardShadowUnits,
           options
         );
         const energyEconomyRewardScore = energyStep.rewardScore;
         const batteryEconomyRewardScore = energyStep.batteryRewardScore;
         const powerUpEconomyRewardScore = energyStep.powerUpRewardScore;
+        const chopShopEconomyRewardScore = energyStep.chopShopRewardScore;
         const nextRoute = {
           finalState: destination,
           initialState: current.initialState,
@@ -7130,8 +7836,18 @@ function enumerateContextualLegRoutes(
             (current.batteryEconomyRewardScore || 0) + batteryEconomyRewardScore,
           powerUpEconomyRewardScore:
             (current.powerUpEconomyRewardScore || 0) + powerUpEconomyRewardScore,
+          chopShopEconomyRewardScore:
+            (current.chopShopEconomyRewardScore || 0) + chopShopEconomyRewardScore,
           routeEnergyShadowReserve: energyStep.reserveAfter,
           routeEnergyShadowReserveStart: current.routeEnergyShadowReserveStart ?? initialEnergyReserve,
+          routeUpgradeCardShadowUnits: energyStep.usefulCardUnitsAfter,
+          routeUpgradeCardShadowUnitsStart: current.routeUpgradeCardShadowUnitsStart ?? initialUpgradeCardUnits,
+          routeEconomyNormalDraws: (current.routeEconomyNormalDraws || 0) + (energyStep.normalDraws || 0),
+          routeEconomyInstalls: (current.routeEconomyInstalls || 0) + (energyStep.installs || 0),
+          routeEconomyExtraCardDraws: (current.routeEconomyExtraCardDraws || 0) + (energyStep.extraCardDraws || 0),
+          routeEconomyEnergySpent: (current.routeEconomyEnergySpent || 0) + (energyStep.energySpent || 0),
+          chopShopCardChoices: (current.chopShopCardChoices || 0) + (energyStep.chopShopChoice === "card" ? 1 : 0),
+          chopShopEnergyChoices: (current.chopShopEnergyChoices || 0) + (energyStep.chopShopChoice === "energy" ? 1 : 0),
           baseCost:
             current.baseCost +
             transition.hazard +
@@ -7161,7 +7877,8 @@ function enumerateContextualLegRoutes(
           nextHistory,
           dynamicGoal,
           options,
-          nextRoute.routeEnergyShadowReserve
+          nextRoute.routeEnergyShadowReserve,
+          nextRoute.routeUpgradeCardShadowUnits
         );
         profile.nextKeyMs += profileNow() - blockStartedAt;
 
@@ -7345,6 +8062,9 @@ function getContextAfterLeg(route) {
     history: getProgramHistoryWindow(route.programHistoryEnd),
     energyReserve: Number.isFinite(Number(route.routeEnergyShadowReserveEnd))
       ? Number(route.routeEnergyShadowReserveEnd)
+      : null,
+    upgradeCardUnits: Number.isFinite(Number(route.routeUpgradeCardShadowUnitsEnd))
+      ? Number(route.routeUpgradeCardShadowUnitsEnd)
       : null
   };
 }
@@ -7442,6 +8162,7 @@ function stitchContextualLegs(legs, flags) {
   let cumulativeRouteEnergyEconomyRewardScore = 0;
   let cumulativeBatteryEconomyRewardScore = 0;
   let cumulativePowerUpEconomyRewardScore = 0;
+  let cumulativeChopShopEconomyRewardScore = 0;
   const checkpointHits = [];
 
   legs.forEach((leg, legIndex) => {
@@ -7454,6 +8175,7 @@ function stitchContextualLegs(legs, flags) {
     cumulativeRouteEnergyEconomyRewardScore += leg.routeEnergyEconomyRewardScore ?? 0;
     cumulativeBatteryEconomyRewardScore += leg.batteryEconomyRewardScore ?? 0;
     cumulativePowerUpEconomyRewardScore += leg.powerUpEconomyRewardScore ?? 0;
+    cumulativeChopShopEconomyRewardScore += leg.chopShopEconomyRewardScore ?? 0;
     const flag = flags[legIndex];
 
     checkpointHits.push({
@@ -7471,7 +8193,9 @@ function stitchContextualLegs(legs, flags) {
       routeEnergyEconomyRewardScore: cumulativeRouteEnergyEconomyRewardScore,
       batteryEconomyRewardScore: cumulativeBatteryEconomyRewardScore,
       powerUpEconomyRewardScore: cumulativePowerUpEconomyRewardScore,
-      routeEnergyShadowReserve: leg.routeEnergyShadowReserveEnd ?? null
+      chopShopEconomyRewardScore: cumulativeChopShopEconomyRewardScore,
+      routeEnergyShadowReserve: leg.routeEnergyShadowReserveEnd ?? null,
+      routeUpgradeCardShadowUnits: leg.routeUpgradeCardShadowUnitsEnd ?? null
     });
   });
 
@@ -7506,8 +8230,11 @@ function stitchContextualLegs(legs, flags) {
     routeEnergyEconomyRewardScore: Number(cumulativeRouteEnergyEconomyRewardScore.toFixed(2)),
     batteryEconomyRewardScore: Number(cumulativeBatteryEconomyRewardScore.toFixed(2)),
     powerUpEconomyRewardScore: Number(cumulativePowerUpEconomyRewardScore.toFixed(2)),
+    chopShopEconomyRewardScore: Number(cumulativeChopShopEconomyRewardScore.toFixed(2)),
     routeEnergyShadowReserveStart: legs[0].routeEnergyShadowReserveStart ?? null,
     routeEnergyShadowReserveEnd: legs.at(-1)?.routeEnergyShadowReserveEnd ?? null,
+    routeUpgradeCardShadowUnitsStart: legs[0].routeUpgradeCardShadowUnitsStart ?? null,
+    routeUpgradeCardShadowUnitsEnd: legs.at(-1)?.routeUpgradeCardShadowUnitsEnd ?? null,
     goalReached: true,
     fullCourse: true,
     legRoutes: legs
@@ -7924,6 +8651,7 @@ function analyzeFullCourseContextual(
     upgradeDrawsPerTurn: options.upgradeDrawsPerTurn,
     upgradeInstallsPerTurn: options.upgradeInstallsPerTurn,
     upgradeDrawEnergyCost: options.upgradeDrawEnergyCost,
+    upgradeUsefulCardRate: options.upgradeUsefulCardRate,
     upgradeUsefulEnergyPerInstall: options.upgradeUsefulEnergyPerInstall,
     upgradePowerRegistersPerEnergy: options.upgradePowerRegistersPerEnergy,
     routeRegistersPerTurn: options.routeRegistersPerTurn,
@@ -8156,7 +8884,8 @@ function analyzeFullCourseContextual(
       },
       absoluteActions: 0,
       history: [],
-      energyReserve: getInitialRouteEnergyShadowReserve(baseRouteOptions)
+      energyReserve: getInitialRouteEnergyShadowReserve(baseRouteOptions),
+      upgradeCardUnits: getInitialRouteUpgradeCardShadowUnits(baseRouteOptions)
     };
     const openingSeed = openingSeedByIndex.get(sourceIndex) ?? null;
     const seededRoute = normalizeOpeningSeedRoute(
@@ -8549,6 +9278,7 @@ export function analyzeFullCourse(tileMap, starts, flags, options = {}) {
     upgradeDrawsPerTurn: options.upgradeDrawsPerTurn,
     upgradeInstallsPerTurn: options.upgradeInstallsPerTurn,
     upgradeDrawEnergyCost: options.upgradeDrawEnergyCost,
+    upgradeUsefulCardRate: options.upgradeUsefulCardRate,
     upgradeUsefulEnergyPerInstall: options.upgradeUsefulEnergyPerInstall,
     upgradePowerRegistersPerEnergy: options.upgradePowerRegistersPerEnergy,
     routeRegistersPerTurn: options.routeRegistersPerTurn,
@@ -8809,6 +9539,164 @@ export function evaluateFullCourseFocusUnderOccupancy(
     firstLegTraffic: firstTraffic.total,
     firstLegTrafficBreakdown: firstTraffic,
     firstLegTotal: (firstLegRoute?.score ?? Infinity) + firstTraffic.total
+  };
+}
+
+
+// Price-sensitive full-course evaluation for Pay to Win. Traffic is computed
+// once per already-discovered route candidate because paying starting Energy
+// does not alter the board geometry. The v45 economy is then replayed for each
+// payable cost and the focus robot may choose a different existing coherent
+// candidate at that price. This gives adaptive post-payment routing without
+// multiplying the expensive route-search budget.
+export function evaluateFullCourseFocusPaymentCurveUnderOccupancy(
+  tileMap,
+  firstLeg,
+  flags,
+  focusIndex,
+  occupancyByIndex,
+  options = {}
+) {
+  const analyses = (firstLeg?.starts || []).filter((analysis) => (
+    analysis.reachable &&
+    analysis.fullCourseRoutes?.length
+  ));
+  const focus = analyses.find((analysis) => analysis.index === focusIndex);
+  if (!focus) return null;
+
+  const baseStartingEnergy = getCourseStartingEnergy(options);
+  const maxPayment = Math.max(
+    0,
+    Math.min(
+      baseStartingEnergy,
+      Number.isFinite(Number(options.payToWinMaxPayment))
+        ? Math.floor(Number(options.payToWinMaxPayment))
+        : baseStartingEnergy
+    )
+  );
+  const payments = Array.from({ length: maxPayment + 1 }, (_, payment) => payment);
+  const selectedOtherRoutes = analyses
+    .filter((analysis) => analysis.index !== focusIndex)
+    .map((analysis) => ({
+      route: analysis.fullCourseRoute ?? analysis.fullCourseRoutes[0],
+      occupancyWeight: getExplicitOccupancyWeight(
+        occupancyByIndex,
+        analysis.index
+      )
+    }))
+    .filter((entry) => entry.route && entry.occupancyWeight > 0);
+
+  const otherFirstLegRoutes = analyses
+    .filter((analysis) => analysis.index !== focusIndex)
+    .map((analysis) => ({
+      route: (
+        analysis.fullCourseRoute ??
+        analysis.fullCourseRoutes[0]
+      )?.legRoutes?.[0],
+      occupancyWeight: getExplicitOccupancyWeight(
+        occupancyByIndex,
+        analysis.index
+      )
+    }))
+    .filter((entry) => entry.route && entry.occupancyWeight > 0);
+
+  const candidates = focus.fullCourseRoutes.map((candidate, routeIndex) => {
+    const traffic = getExpectedTrafficBreakdown(
+      tileMap,
+      candidate,
+      selectedOtherRoutes,
+      flags,
+      {
+        ...options,
+        occupancyByIndex
+      }
+    );
+    const firstLegRoute = candidate?.legRoutes?.[0] ?? null;
+    const firstTraffic = firstLegRoute
+      ? getExpectedTrafficBreakdown(
+        tileMap,
+        firstLegRoute,
+        otherFirstLegRoutes,
+        [flags[0]],
+        {
+          ...options,
+          occupancyByIndex,
+          singleLegTraffic: true
+        }
+      )
+      : { ranged: 0, nearby: 0, competition: 0, total: 0 };
+    const scores = payments.map((payment) => {
+      const rescored = rescoreFixedRouteUpgradeEconomy(
+        tileMap,
+        candidate,
+        {
+          ...options,
+          startingEnergy: Math.max(0, baseStartingEnergy - payment),
+          routeEconomyReferenceStartingEnergy: baseStartingEnergy
+        }
+      );
+      return Number.isFinite(rescored?.score)
+        ? rescored.score
+        : Number(candidate?.score);
+    });
+    return {
+      routeIndex,
+      route: candidate,
+      traffic,
+      firstLegRoute,
+      firstTraffic,
+      scores
+    };
+  });
+
+  if (!candidates.length) return null;
+
+  const entries = payments.map((payment, paymentIndex) => {
+    const baselineIntrinsic = Number(candidates[0]?.scores?.[paymentIndex]);
+    let best = null;
+    candidates.forEach((candidate) => {
+      const intrinsic = Number(candidate.scores[paymentIndex]);
+      if (!Number.isFinite(intrinsic)) return;
+      const rawGap = Number.isFinite(baselineIntrinsic)
+        ? Math.max(0, intrinsic - baselineIntrinsic)
+        : 0;
+      const selectionValue = intrinsic + candidate.traffic.total + rawGap * 0.04;
+      if (
+        !best ||
+        selectionValue < best.selectionValue - 0.001 ||
+        (
+          Math.abs(selectionValue - best.selectionValue) <= 0.001 &&
+          candidate.routeIndex < best.routeIndex
+        )
+      ) {
+        best = {
+          ...candidate,
+          intrinsic,
+          selectionValue
+        };
+      }
+    });
+    if (!best) return null;
+    return {
+      payment,
+      startingEnergyAfterPayment: Math.max(0, baseStartingEnergy - payment),
+      fullCourseRouteIndex: best.routeIndex,
+      fullCourseIntrinsic: Number(best.intrinsic.toFixed(2)),
+      fullCourseTraffic: Number(best.traffic.total.toFixed(2)),
+      fullTotal: Number((best.intrinsic + best.traffic.total).toFixed(2)),
+      firstLegIntrinsic: Number(best.firstLegRoute?.score ?? Infinity),
+      firstLegTraffic: Number(best.firstTraffic.total.toFixed(2)),
+      firstLegTotal: Number.isFinite(Number(best.firstLegRoute?.score))
+        ? Number((Number(best.firstLegRoute.score) + best.firstTraffic.total).toFixed(2))
+        : Infinity
+    };
+  }).filter(Boolean);
+
+  return {
+    index: focusIndex,
+    baseStartingEnergy,
+    maxPayment,
+    entries
   };
 }
 

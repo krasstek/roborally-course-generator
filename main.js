@@ -54,7 +54,7 @@ const versionedPath = (path) => `${path}${VERSION_SUFFIX}`;
 
 const [
   { render },
-  { analyzeCourse, analyzeFullCourse, analyzeFlagLeg, analyzeGoalApproaches, clearAnalysisCaches, evaluateFullCourseFocusUnderOccupancy, evaluateFullCourseSubsetTraffic, evaluateRouteUpgradePotential, estimateInitialUpgradeOpportunitiesRemaining, getAnalysisTelemetrySnapshot, getCourseMaxEnergy, getCourseStartingEnergy, getCourseStartingUpgradeCards, getRouteEnergyEconomyConfig, getRouteEnergyGainUtility, getRouteMarginalEnergyUtility, getRouteUpgradePotential, recomputeFirstLegPressure, resetAnalysisTelemetry, ROUTE_ENERGY_ECONOMY_DEFAULTS, scoreFlagArea, summarizePowerUpOpportunityBenchmark, summarizeProgramSequencePressure, summarizePowerUpProgramFeasibility },
+  { analyzeCourse, analyzeFullCourse, analyzeFlagLeg, analyzeGoalApproaches, clearAnalysisCaches, evaluateFullCourseFocusPaymentCurveUnderOccupancy, evaluateFullCourseSubsetTraffic, evaluateRouteUpgradePotential, estimateInitialUpgradeOpportunitiesRemaining, getAnalysisTelemetrySnapshot, getCourseMaxEnergy, getCourseStartingEnergy, getCourseStartingUpgradeCards, getRouteEnergyEconomyConfig, getRouteEnergyGainUtility, getRouteMarginalEnergyUtility, getRouteUpgradePotential, recomputeFirstLegPressure, resetAnalysisTelemetry, ROUTE_ENERGY_ECONOMY_DEFAULTS, scoreFlagArea, summarizePowerUpOpportunityBenchmark, summarizeProgramSequencePressure, summarizePowerUpProgramFeasibility },
   {
     buildMainFootprintTiles,
     buildResolvedMap,
@@ -192,21 +192,12 @@ const MAX_DOCK_COUNT = 2;
 const DEFAULT_STARTING_ENERGY = ROUTE_ENERGY_ECONOMY_DEFAULTS.startingEnergy;
 const DEFAULT_STARTING_UPGRADE_CARDS = ROUTE_ENERGY_ECONOMY_DEFAULTS.startingUpgradeCards;
 
-// Pay to Win prices are expressed in energy, but start advantages are first
-// converted into course-specific register equivalents. These marginal costs
-// are design tuning values, not published rules constants: the first cube is
-// intentionally cheap to give up, while deeper depletion becomes increasingly
-// expensive because it removes upgrade/options reserve and takes several rounds
-// to rebuild. The threshold immediately above the robot's available starting
-// energy is non-payable and is used only to decide when the field still needs
-// pruning. Keeping this wording dynamic matters because setup variants may alter
-// starting energy.
-const PAY_TO_WIN_ENERGY_MARGINAL_REGISTERS = [0, 0.75, 1.15, 1.6, 2.3, 2.6];
-const PAY_TO_WIN_EXTRA_ENERGY_MARGINAL_GROWTH = 0.4;
-const PAY_TO_WIN_HORIZON_MIN_TURNS = 3;
-const PAY_TO_WIN_HORIZON_MAX_TURNS = 10;
-const PAY_TO_WIN_HORIZON_MIN_SCALE = 0.9;
-const PAY_TO_WIN_HORIZON_MAX_SCALE = 1.08;
+// Pay to Win v46 prices are evaluated directly through the shared v45
+// cards+Energy route economy. A displayed pE price means the route is replayed
+// from startingEnergy-p before the opening Upgrade Phase; 0..startingEnergy are
+// payable, while startingEnergy+1 remains the non-payable denial/pruning signal.
+// The moving zero baseline, bidirectional endpoint pruning, selector breakpoint
+// fit, and availability/player-floor safeguards remain unchanged.
 // Passive border geometry that may coexist with a No-Docks starting square.
 // Active edge devices (lasers, push panels, flamethrowers) are deliberately
 // excluded even though they are encoded directionally on an edge: a player
@@ -218,7 +209,16 @@ const NO_DOCK_START_EDGE_FEATURE_TYPES = new Set([
   "repulsor",
   "ledge"
 ]);
-const START_CAPACITY_HARD_FAILURES = new Set(["usable-starts", "reachable-starts", "normal-start-balance"]);
+// Closest-match fallback is intentionally broader than exact acceptance. These
+// failures describe courses that are still structurally playable but materially
+// worse fallback choices. Unknown/new hard-failure labels remain ineligible by
+// default so a future structural rule cannot silently leak into closest-match.
+const FALLBACK_SOFT_FAILURE_PENALTIES = new Map([
+  ["normal-start-balance", 45],
+  ["competitive-start-balance", 60],
+  ["unused-board", 50],
+  ["too-short", 80]
+]);
 const OVERLAY_UPDATE_INTERVAL = 4;
 const LIGHT_START_MIN_POOL = 8;
 const LIGHT_START_SURPLUS = 2;
@@ -7464,37 +7464,9 @@ function buildRouteEnergyEconomyShadow(tileMap, startAnalyses = [], options = {}
     ? Number(benchmark.medianFullCourseTurns)
     : (route ? route.transitions.length / config.registersPerTurn : 0);
   const registerScore = Number(benchmark?.registerScoreMedian) > 0 ? Number(benchmark.registerScoreMedian) : null;
-  const curve = buildPayToWinEnergyThresholds(config.startingEnergy, horizonTurns, registerScore);
+  // P2W no longer uses a generic marginal-energy curve. Final pricing replays
+  // each coherent route under the actual v45 cards+Energy state after payment.
   const p2wMarginals = [];
-  let derivedCumulativeR = 0;
-  for (let fromEnergy = config.startingEnergy; fromEnergy >= 1; fromEnergy -= 1) {
-    const spendDepth = config.startingEnergy - fromEnergy + 1;
-    const current = curve.thresholds[spendDepth - 1];
-    const previous = curve.thresholds[spendDepth - 2];
-    const currentMarginalR = current ? current.cumulativeRegisters - (previous?.cumulativeRegisters ?? 0) : null;
-    const derivedMarginalR = getRouteUpgradePotential(
-      fromEnergy,
-      horizonTurns,
-      config.startingUpgradeCards,
-      options,
-      horizonTurns
-    ) - getRouteUpgradePotential(
-      fromEnergy - 1,
-      horizonTurns,
-      config.startingUpgradeCards,
-      options,
-      horizonTurns
-    );
-    derivedCumulativeR += derivedMarginalR;
-    p2wMarginals.push({
-      fromEnergy,
-      toEnergy: fromEnergy - 1,
-      currentMarginalR: Number.isFinite(currentMarginalR) ? Number(currentMarginalR.toFixed(3)) : null,
-      derivedMarginalR: Number(derivedMarginalR.toFixed(3)),
-      currentCumulativeR: current ? Number(current.cumulativeRegisters.toFixed(3)) : null,
-      derivedCumulativeR: Number(derivedCumulativeR.toFixed(3))
-    });
-  }
   const timeZeroLevels = Array.from({ length: config.maxEnergy + 1 }, (_, energy) => ({
     energy,
     utilityR: Number(getRouteUpgradePotential(
@@ -7865,16 +7837,21 @@ function buildCourseEnergyEconomyDiagnostics(scenario) {
   const productionPowerUpRewardScores = routeStarts
     .map((entry) => Number(entry.fullCourseRoute?.powerUpEconomyRewardScore))
     .filter(Number.isFinite);
+  const productionChopShopRewardScores = routeStarts
+    .map((entry) => Number(entry.fullCourseRoute?.chopShopEconomyRewardScore))
+    .filter(Number.isFinite);
   const productionPowerUpUses = routeStarts
     .map((entry) => (entry.fullCourseRoute?.transitions ?? []).filter(
       (transition) => transition?.action === "WAIT"
     ).length)
     .filter(Number.isFinite);
+  const productionOpeningReserves = routeStarts.map((entry) => Number(entry.fullCourseRoute?.routeEnergyShadowReserveStart)).filter(Number.isFinite);
   const productionEndingReserves = routeStarts
     .map((entry) => entry.fullCourseRoute?.routeEnergyShadowReserveEnd)
     .filter((value) => value !== null && value !== undefined)
     .map(Number)
     .filter(Number.isFinite);
+  const productionEndingUsefulCards = routeStarts.map((entry) => Number(entry.fullCourseRoute?.routeUpgradeCardShadowUnitsEnd) / 3).filter(Number.isFinite);
   const overallShadow = buildRouteEnergyEconomyShadow(
     scenario.goalTileMap,
     routeStarts,
@@ -7884,7 +7861,7 @@ function buildCourseEnergyEconomyDiagnostics(scenario) {
 
   return {
     active: true,
-    method: "course-route-energy-diagnostics-v44",
+    method: "course-route-upgrade-economy-diagnostics-v45",
     routeCount: routeStarts.length,
     productionEnergyScoring: productionMetadata
       ? {
@@ -7907,6 +7884,11 @@ function buildCourseEnergyEconomyDiagnostics(scenario) {
         selectedRoutePowerUpRewardMax: productionPowerUpRewardScores.length
           ? Number(Math.max(...productionPowerUpRewardScores).toFixed(2))
           : 0,
+        selectedRouteChopShopRewardMedian: productionChopShopRewardScores.length ? Number(medianValue(productionChopShopRewardScores).toFixed(2)) : 0,
+        selectedRouteChopShopRewardMax: productionChopShopRewardScores.length ? Number(Math.max(...productionChopShopRewardScores).toFixed(2)) : 0,
+        selectedRouteOpeningReserveMedian: productionOpeningReserves.length ? Number(medianValue(productionOpeningReserves).toFixed(2)) : null,
+        selectedRouteEndingUsefulCardsMedian: productionEndingUsefulCards.length ? Number(medianValue(productionEndingUsefulCards).toFixed(2)) : null,
+        selectedRouteEndingUsefulCardsMax: productionEndingUsefulCards.length ? Number(Math.max(...productionEndingUsefulCards).toFixed(2)) : null,
         selectedRoutePowerUpUsesMedian: productionPowerUpUses.length
           ? Number(medianValue(productionPowerUpUses).toFixed(2))
           : 0,
@@ -8006,81 +7988,6 @@ function getPayToWinFullCourseScore(startAnalysis) {
   return routeScore + trafficPenalty;
 }
 
-function getPayToWinHorizonScale(horizonTurns) {
-  const turns = Number(horizonTurns);
-  if (!Number.isFinite(turns)) return 1;
-  const position = clamp(
-    (turns - PAY_TO_WIN_HORIZON_MIN_TURNS) /
-      (PAY_TO_WIN_HORIZON_MAX_TURNS - PAY_TO_WIN_HORIZON_MIN_TURNS),
-    0,
-    1
-  );
-
-  // Course horizon has two opposing effects: a longer race makes stored energy
-  // more useful (more upgrade/option opportunities), but also gives a depleted
-  // robot more time to recover it. Keep the adjustment deliberately modest;
-  // scarcity depth, not course length, should dominate the price curve.
-  return (
-    PAY_TO_WIN_HORIZON_MIN_SCALE +
-    position * (PAY_TO_WIN_HORIZON_MAX_SCALE - PAY_TO_WIN_HORIZON_MIN_SCALE)
-  );
-}
-
-function getPayToWinMarginalEnergyRegisterCost(energyNumber) {
-  const index = Math.max(1, Math.floor(energyNumber));
-  if (index < PAY_TO_WIN_ENERGY_MARGINAL_REGISTERS.length) {
-    return PAY_TO_WIN_ENERGY_MARGINAL_REGISTERS[index];
-  }
-
-  const lastIndex = PAY_TO_WIN_ENERGY_MARGINAL_REGISTERS.length - 1;
-  const lastMarginal = PAY_TO_WIN_ENERGY_MARGINAL_REGISTERS[lastIndex];
-  return lastMarginal +
-    (index - lastIndex) * PAY_TO_WIN_EXTRA_ENERGY_MARGINAL_GROWTH;
-}
-
-function buildPayToWinEnergyThresholds(startingEnergy, horizonTurns, registerScore) {
-  const denialCost = Math.max(1, startingEnergy + 1);
-  const horizonScale = getPayToWinHorizonScale(horizonTurns);
-  const thresholds = [];
-  let cumulativeRegisters = 0;
-
-  for (let energy = 1; energy <= denialCost; energy += 1) {
-    cumulativeRegisters += getPayToWinMarginalEnergyRegisterCost(energy) * horizonScale;
-    thresholds.push({
-      energy,
-      cumulativeRegisters: Number(cumulativeRegisters.toFixed(3)),
-      cumulativeScore: Number.isFinite(registerScore)
-        ? Number((cumulativeRegisters * registerScore).toFixed(2))
-        : null
-    });
-  }
-
-  return {
-    denialCost,
-    horizonScale: Number(horizonScale.toFixed(3)),
-    thresholds
-  };
-}
-
-function getPayToWinEnergyCostFromRegisterAdvantage(registerAdvantage, thresholds) {
-  if (!Number.isFinite(registerAdvantage) || registerAdvantage <= 0) {
-    return 0;
-  }
-
-  // Prices are threshold crossings, not a normalized 0..startingEnergy spread.
-  // Therefore a genuinely tight field may quite correctly price every start at
-  // zero; no code should stretch the best start upward just to use the range.
-  let energyCost = 0;
-  for (const threshold of thresholds || []) {
-    if (registerAdvantage + 1e-9 >= threshold.cumulativeRegisters) {
-      energyCost = threshold.energy;
-    } else {
-      break;
-    }
-  }
-  return energyCost;
-}
-
 function getPayToWinPricingBenchmark(tileMap, firstLeg, activeStarts, options = {}) {
   const benchmark = typeof summarizePowerUpOpportunityBenchmark === "function"
     ? summarizePowerUpOpportunityBenchmark(
@@ -8122,22 +8029,129 @@ function getPayToWinPricingBenchmark(tileMap, firstLeg, activeStarts, options = 
   };
 }
 
+function getPayToWinRouteEconomyPricingOptions(firstLeg, options = {}) {
+  const config = getRouteEnergyEconomyConfig(options);
+  const production = firstLeg?.summary?.coursePreflight?.routeAwareBatteryScoring ?? null;
+  const retainedRoutes = (firstLeg?.starts ?? [])
+    .map((item) => item?.fullCourseRoute)
+    .filter((route) => route && Number(route.actions) > 0 && Number.isFinite(Number(route.score)));
+  const fallbackHorizonTurns = retainedRoutes.length
+    ? medianValue(retainedRoutes.map((route) => Number(route.actions) / config.registersPerTurn))
+    : 0;
+  const fallbackRegisterScore = retainedRoutes.length
+    ? medianValue(retainedRoutes.map((route) => Number(route.score) / Number(route.actions)))
+    : 0;
+  const horizonTurns = Number(production?.horizonTurns ?? options.routeEnergyHorizonTurns ?? fallbackHorizonTurns);
+  const registerScore = Number(production?.registerScore ?? options.routeEnergyRegisterScore ?? fallbackRegisterScore);
+  const routeAwareBatteryScoring = Boolean(
+    !options.lighterGame && horizonTurns > 0 && registerScore > 0
+  );
+  return {
+    ...options,
+    payToWin: true,
+    routeAwareBatteryScoring,
+    routeEnergyHorizonTurns: horizonTurns,
+    routeEnergyRegisterScore: registerScore,
+    routeEnergyReferenceReserve: config.startingEnergy,
+    startingEnergy: config.startingEnergy,
+    startingUpgradeCards: config.startingUpgradeCards,
+    maxEnergy: config.maxEnergy,
+    upgradeDrawsPerTurn: config.drawsPerTurn,
+    upgradeInstallsPerTurn: config.installsPerTurn,
+    upgradeDrawEnergyCost: config.drawEnergyCost,
+    upgradeUsefulCardRate: config.usefulUpgradeCardRate,
+    upgradeUsefulEnergyPerInstall: config.usefulEnergyPerInstall,
+    upgradePowerRegistersPerEnergy: config.powerRegistersPerEnergy,
+    routeRegistersPerTurn: config.registersPerTurn,
+    payToWinMaxPayment: config.startingEnergy
+  };
+}
+
+function buildPayToWinUniformOccupancy(activeStarts, focusIndex, playerCount) {
+  const others = activeStarts.filter((item) => item.index !== focusIndex);
+  const targetCount = Math.min(
+    Math.max(0, (playerCount ?? 1) - 1),
+    others.length
+  );
+  const occupancy = new Map(activeStarts.map((item) => [item.index, 0]));
+  occupancy.set(focusIndex, 1);
+  if (!others.length || targetCount <= 0) return occupancy;
+  const uniform = targetCount / others.length;
+  others.forEach((item) => occupancy.set(item.index, uniform));
+  return occupancy;
+}
+
+function buildPayToWinPaymentScoreCurves(
+  firstLeg,
+  tileMap,
+  activeStarts,
+  options = {}
+) {
+  const pricingOptions = getPayToWinRouteEconomyPricingOptions(firstLeg, options);
+  const playerCount = Math.max(1, options.playerCount ?? 4);
+  const scoreCurves = new Map();
+
+  activeStarts.forEach((item) => {
+    const occupancyByIndex = buildPayToWinUniformOccupancy(
+      activeStarts,
+      item.index,
+      playerCount
+    );
+    const evaluation = evaluateFullCourseFocusPaymentCurveUnderOccupancy(
+      tileMap,
+      firstLeg,
+      firstLeg.flags || [],
+      item.index,
+      occupancyByIndex,
+      pricingOptions
+    );
+    const scores = (evaluation?.entries ?? [])
+      .sort((left, right) => left.payment - right.payment)
+      .map((entry) => entry.fullTotal);
+    if (scores.length) {
+      scoreCurves.set(item.index, scores);
+    } else {
+      scoreCurves.set(item.index, [getPayToWinFullCourseScore(item)]);
+    }
+  });
+
+  return scoreCurves;
+}
+
 function buildPayToWinRegisterPricingState(
   activeStarts,
   scoreByIndex,
   pricingBenchmark,
-  options = {}
+  options = {},
+  paymentScoreByIndex = null
 ) {
+  const startingEnergy = getCourseStartingEnergy(options);
+  const denialCost = getPayToWinDenialCost(options);
   const scoredStarts = activeStarts.map((item) => {
+    const rawCurve = paymentScoreByIndex?.get(item.index);
     const overrideScore = scoreByIndex?.get(item.index);
+    const curveZero = Array.isArray(rawCurve) ? Number(rawCurve[0]) : null;
     const fullScore = Number.isFinite(overrideScore)
       ? overrideScore
-      : getPayToWinFullCourseScore(item);
+      : Number.isFinite(curveZero)
+        ? curveZero
+        : getPayToWinFullCourseScore(item);
+    const paymentScores = Array.from(
+      { length: startingEnergy + 1 },
+      (_, payment) => {
+        const value = Array.isArray(rawCurve) ? Number(rawCurve[payment]) : null;
+        return Number.isFinite(value)
+          ? value
+          : (payment === 0 && Number.isFinite(fullScore) ? fullScore : null);
+      }
+    );
+    if (Number.isFinite(fullScore)) paymentScores[0] = fullScore;
     return {
       startAnalysis: item,
       index: item.index,
       adjustedScore: item.adjustedScore,
-      fullScore
+      fullScore,
+      paymentScores
     };
   }).filter((entry) => Number.isFinite(entry.fullScore));
 
@@ -8154,42 +8168,92 @@ function buildPayToWinRegisterPricingState(
   const worst = [...scoredStarts].sort((left, right) =>
     right.fullScore - left.fullScore || left.index - right.index
   )[0];
-  const registerScore = Math.max(0.01, Number(pricingBenchmark?.registerScore) || 6.4);
-  const startingEnergy = getCourseStartingEnergy(options);
-  const curve = buildPayToWinEnergyThresholds(
-    startingEnergy,
-    pricingBenchmark?.horizonTurns,
-    registerScore
+  const registerScore = Math.max(
+    0.01,
+    Number(pricingBenchmark?.registerScore) || 6.4
   );
   const entries = scoredStarts.map((entry) => {
     const advantage = Math.max(0, worst.fullScore - entry.fullScore);
     const registerEquivalent = advantage / registerScore;
+    let energyCost = 0;
+
+    if (advantage > 1e-9) {
+      energyCost = denialCost;
+      for (let payment = 1; payment <= startingEnergy; payment += 1) {
+        const postPaymentScore = Number(entry.paymentScores[payment]);
+        if (
+          Number.isFinite(postPaymentScore) &&
+          postPaymentScore + 1e-9 >= worst.fullScore
+        ) {
+          energyCost = payment;
+          break;
+        }
+      }
+    }
+
+    const payable = energyCost <= startingEnergy;
+    const evaluatedPayment = payable ? energyCost : startingEnergy;
+    const postPaymentFullScore = Number(entry.paymentScores[evaluatedPayment]);
+    const paymentPenalty = Number.isFinite(postPaymentFullScore)
+      ? Math.max(0, postPaymentFullScore - entry.fullScore)
+      : null;
+    const remainingAdvantage = Number.isFinite(postPaymentFullScore)
+      ? Math.max(0, worst.fullScore - postPaymentFullScore)
+      : advantage;
+
     return {
       ...entry,
       advantage: Number(advantage.toFixed(2)),
       registerEquivalent: Number(registerEquivalent.toFixed(2)),
-      energyCost: getPayToWinEnergyCostFromRegisterAdvantage(
-        registerEquivalent,
-        curve.thresholds
-      )
+      energyCost,
+      postPaymentFullScore: Number.isFinite(postPaymentFullScore)
+        ? Number(postPaymentFullScore.toFixed(2))
+        : null,
+      paymentPenalty: Number.isFinite(paymentPenalty)
+        ? Number(paymentPenalty.toFixed(2))
+        : null,
+      remainingAdvantage: Number(remainingAdvantage.toFixed(2)),
+      remainingRegisterEquivalent: Number((remainingAdvantage / registerScore).toFixed(2)),
+      paymentScores: entry.paymentScores.map((value) => (
+        Number.isFinite(Number(value)) ? Number(Number(value).toFixed(2)) : null
+      ))
     };
   });
 
-  // The zero-price anchor intentionally belongs to the CURRENT surviving field.
-  // Pay to Win is allowed to prune from either end: removing the weakest start
-  // moves this baseline inward and compresses prices, while removing the strongest
-  // usually leaves zero in place and trims the expensive/easy end. Recomputing the
-  // anchor after every pass is therefore a game-design feature, not incidental math.
+  const paymentPenalties = [];
+  for (let payment = 1; payment <= startingEnergy; payment += 1) {
+    const penalties = scoredStarts.map((entry) => {
+      const after = Number(entry.paymentScores[payment]);
+      return Number.isFinite(after)
+        ? Math.max(0, after - entry.fullScore)
+        : null;
+    }).filter(Number.isFinite);
+    paymentPenalties.push({
+      payment,
+      medianScore: penalties.length
+        ? Number(medianValue(penalties).toFixed(2))
+        : null,
+      maxScore: penalties.length
+        ? Number(Math.max(...penalties).toFixed(2))
+        : null,
+      medianRegisters: penalties.length
+        ? Number((medianValue(penalties) / registerScore).toFixed(3))
+        : null,
+      maxRegisters: penalties.length
+        ? Number((Math.max(...penalties) / registerScore).toFixed(3))
+        : null
+    });
+  }
+
   const pricingModel = {
-    method: "moving-baseline-register-equivalent-v1",
+    method: "moving-baseline-post-payment-route-economy-v46",
     baselineIndex: worst.index,
     baselineFullScore: Number(worst.fullScore.toFixed(2)),
     registerScore,
     horizonTurns: pricingBenchmark?.horizonTurns ?? null,
-    horizonScale: curve.horizonScale,
-    thresholds: curve.thresholds,
     startingEnergy,
-    denialCost: curve.denialCost,
+    denialCost,
+    paymentPenalties,
     maxRegisterAdvantage: Number(Math.max(
       0,
       ...entries.map((entry) => entry.registerEquivalent)
@@ -8198,8 +8262,6 @@ function buildPayToWinRegisterPricingState(
 
   return {
     entries,
-    // Compatibility field: this used to be the arbitrary score-normalization
-    // unit. In v36 it is the measured score value of one productive register.
     costUnit: registerScore,
     minScore: Math.min(...scoredStarts.map((entry) => entry.fullScore)),
     maxScore: Math.max(...scoredStarts.map((entry) => entry.fullScore)),
@@ -8226,11 +8288,18 @@ function getPayToWinCostEntries(firstLeg, tileMap, excludedIndices = new Set(), 
     activeStarts,
     options
   );
+  const paymentScoreByIndex = buildPayToWinPaymentScoreCurves(
+    firstLeg,
+    tileMap,
+    activeStarts,
+    options
+  );
   return buildPayToWinRegisterPricingState(
     activeStarts,
     null,
     pricingBenchmark,
-    options
+    options,
+    paymentScoreByIndex
   );
 }
 
@@ -8327,6 +8396,36 @@ function averagePayToWinSelectorScores(
   return scoreByIndex;
 }
 
+
+function averagePayToWinSelectorPaymentScores(
+  selectorStates,
+  selectors,
+  activeStarts,
+  fallbackByIndex
+) {
+  const result = new Map();
+  for (const item of activeStarts) {
+    const fallback = fallbackByIndex.get(item.index) ?? [];
+    const paymentCount = Math.max(
+      fallback.length,
+      ...selectors.map((selector) => (
+        selectorStates.get(selector)?.get(item.index)?.paymentScores?.length ?? 0
+      ))
+    );
+    const averaged = Array.from({ length: paymentCount }, (_, payment) => {
+      const values = selectors.map((selector) => (
+        selectorStates.get(selector)?.get(item.index)?.paymentScores?.[payment]
+      )).filter(Number.isFinite);
+      const fallbackValue = Number(fallback[payment]);
+      return values.length
+        ? averageValues(values)
+        : (Number.isFinite(fallbackValue) ? fallbackValue : null);
+    });
+    result.set(item.index, averaged);
+  }
+  return result;
+}
+
 function getPayToWinSelectorFitError(
   selectorPricingStates,
   selectors,
@@ -8356,11 +8455,15 @@ function getPayToWinAdaptiveSelectorSplit(
   );
   const baselineFullByIndex = new Map(activeStarts.map((item) => [
     item.index,
-    getPayToWinFullCourseScore(item)
+    selectorStates.get(1)?.get(item.index)?.full ?? getPayToWinFullCourseScore(item)
   ]));
   const baselineAdjustedByIndex = new Map(activeStarts.map((item) => [
     item.index,
-    item.adjustedScore
+    selectorStates.get(1)?.get(item.index)?.adjusted ?? item.adjustedScore
+  ]));
+  const baselinePaymentByIndex = new Map(activeStarts.map((item) => [
+    item.index,
+    selectorStates.get(1)?.get(item.index)?.paymentScores ?? [baselineFullByIndex.get(item.index)]
   ]));
   const buildRepresentative = (groupSelectors) => {
     const fullScoreByIndex = averagePayToWinSelectorScores(
@@ -8377,24 +8480,31 @@ function getPayToWinAdaptiveSelectorSplit(
       "adjusted",
       baselineAdjustedByIndex
     );
+    const paymentScoreByIndex = averagePayToWinSelectorPaymentScores(
+      selectorStates,
+      groupSelectors,
+      activeStarts,
+      baselinePaymentByIndex
+    );
     return {
       selectors: groupSelectors,
       fullScoreByIndex,
       adjustedScoreByIndex,
+      paymentScoreByIndex,
       pricingState: buildPayToWinRegisterPricingState(
         activeStarts,
         fullScoreByIndex,
         pricingBenchmark,
-        options
+        options,
+        paymentScoreByIndex
       )
     };
   };
 
-  // With at most two displayed price columns, the design problem is a
-  // one-change-point approximation: either all selector positions share one
-  // representative traffic/value profile, or one breakpoint divides them into
-  // an early and a late group. We choose the breakpoint from continuous
-  // register-equivalent profiles before integer energy thresholds are applied.
+  // With at most two displayed price columns, the design problem remains a
+  // one-change-point approximation. The breakpoint is chosen from continuous
+  // register-equivalent route profiles; each representative group then prices
+  // starts with its own averaged post-payment v45 economy curves.
   const singleGroup = buildRepresentative(selectors);
   const noSplitError = getPayToWinSelectorFitError(
     selectorPricingStates,
@@ -8668,10 +8778,6 @@ function getPayToWinLateCostEntries(
     };
   }
 
-  const baselineFullByIndex = new Map(activeStarts.map((item) => [
-    item.index,
-    getPayToWinFullCourseScore(item)
-  ]));
   const pricingBenchmark = baseCostState?.pricingModel
     ? {
       registerScore: baseCostState.pricingModel.registerScore,
@@ -8683,12 +8789,34 @@ function getPayToWinLateCostEntries(
       activeStarts,
       options
     );
+  const fallbackPaymentCurves = baseCostState
+    ? new Map(baseCostState.entries.map((entry) => [entry.index, entry.paymentScores]))
+    : buildPayToWinPaymentScoreCurves(firstLeg, tileMap, activeStarts, {
+      ...options,
+      playerCount: config.playerCount
+    });
+  const fallbackFullScores = new Map(activeStarts.map((item) => [
+    item.index,
+    Number(fallbackPaymentCurves.get(item.index)?.[0])
+  ]));
   const baselinePricingState = baseCostState ?? buildPayToWinRegisterPricingState(
     activeStarts,
-    baselineFullByIndex,
+    fallbackFullScores,
     pricingBenchmark,
-    options
+    options,
+    fallbackPaymentCurves
   );
+  const baselineEntryByIndex = new Map(
+    baselinePricingState.entries.map((entry) => [entry.index, entry])
+  );
+  const baselineFullByIndex = new Map(activeStarts.map((item) => [
+    item.index,
+    baselineEntryByIndex.get(item.index)?.fullScore ?? getPayToWinFullCourseScore(item)
+  ]));
+  const baselinePaymentByIndex = new Map(activeStarts.map((item) => [
+    item.index,
+    baselineEntryByIndex.get(item.index)?.paymentScores ?? [baselineFullByIndex.get(item.index)]
+  ]));
 
   if (config.surplusStarts <= 0 || config.playerCount <= 1) {
     return {
@@ -8718,7 +8846,8 @@ function getPayToWinLateCostEntries(
     item.index,
     {
       adjusted: item.adjustedScore,
-      full: baselineFullByIndex.get(item.index)
+      full: baselineFullByIndex.get(item.index),
+      paymentScores: baselinePaymentByIndex.get(item.index)
     }
   ]));
   selectorStates.set(1, selectorOne);
@@ -8727,6 +8856,11 @@ function getPayToWinLateCostEntries(
     selectorStates.set(selector, new Map());
     scenarioSamplesBySelector[selector] = 0;
   }
+
+  const pricingOptions = getPayToWinRouteEconomyPricingOptions(firstLeg, {
+    ...options,
+    playerCount: config.playerCount
+  });
 
   for (const item of activeStarts) {
     const otherIndices = activeIndices.filter(
@@ -8737,10 +8871,11 @@ function getPayToWinLateCostEntries(
       (item.trafficPenalty ?? 0)
     );
     const baselineFullTotal = baselineFullByIndex.get(item.index);
+    const fallbackCurve = baselinePaymentByIndex.get(item.index) ?? [baselineFullTotal];
 
     for (let selector = 2; selector <= config.playerCount; selector += 1) {
       const scenarioScores = [];
-      const scenarioFullScores = [];
+      const scenarioPaymentCurves = [];
       const knownCount = Math.min(
         otherIndices.length,
         selector - 1
@@ -8771,53 +8906,60 @@ function getPayToWinLateCostEntries(
           occupancyByIndex.set(index, futureOccupancy)
         ));
 
-        const scenario = evaluateFullCourseFocusUnderOccupancy(
+        const scenario = evaluateFullCourseFocusPaymentCurveUnderOccupancy(
           tileMap,
           firstLeg,
           firstLeg.flags,
           item.index,
           occupancyByIndex,
           {
-            ...options,
+            ...pricingOptions,
             playerCount: config.playerCount,
-            payToWin: true,
             fullCourseTrafficPasses: 1
           }
         );
+        const paymentEntries = scenario?.entries ?? [];
+        const zero = paymentEntries.find((entry) => entry.payment === 0);
+        if (!zero) continue;
 
-        if (!scenario) {
-          continue;
-        }
-
-        const firstLegDelta =
-          scenario.firstLegTotal - baselineFirstTotal;
-        const fullCourseDelta =
-          scenario.fullTotal - baselineFullTotal;
+        const firstLegDelta = zero.firstLegTotal - baselineFirstTotal;
+        const fullCourseDelta = zero.fullTotal - baselineFullTotal;
         const adjustedScore = (
           item.adjustedScore +
           firstLegDelta +
           clamp(fullCourseDelta * 0.32, -10, 10)
         );
-
         if (Number.isFinite(adjustedScore)) {
           scenarioScores.push(adjustedScore);
         }
-        if (Number.isFinite(scenario.fullTotal)) {
-          scenarioFullScores.push(scenario.fullTotal);
-        }
+        const curve = paymentEntries
+          .sort((left, right) => left.payment - right.payment)
+          .map((entry) => entry.fullTotal);
+        if (curve.length) scenarioPaymentCurves.push(curve);
         scenarioSamples += 1;
         scenarioSamplesBySelector[selector] += 1;
       }
 
+      const paymentCount = fallbackCurve.length;
+      const averagedCurve = Array.from({ length: paymentCount }, (_, payment) => {
+        const values = scenarioPaymentCurves
+          .map((curve) => curve[payment])
+          .filter(Number.isFinite);
+        const fallback = Number(fallbackCurve[payment]);
+        return values.length
+          ? averageValues(values)
+          : (Number.isFinite(fallback) ? fallback : null);
+      });
       selectorStates.get(selector).set(
         item.index,
         {
           adjusted: scenarioScores.length
             ? averageValues(scenarioScores)
             : item.adjustedScore,
-          full: scenarioFullScores.length
-            ? averageValues(scenarioFullScores)
-            : baselineFullTotal
+          full: Number.isFinite(averagedCurve[0])
+            ? averagedCurve[0]
+            : baselineFullTotal,
+          paymentScores: averagedCurve
         }
       );
     }
@@ -8830,13 +8972,18 @@ function getPayToWinLateCostEntries(
       item.index,
       selectorStates.get(selector)?.get(item.index)?.full
     ]));
+    const paymentScoreByIndex = new Map(activeStarts.map((item) => [
+      item.index,
+      selectorStates.get(selector)?.get(item.index)?.paymentScores ?? baselinePaymentByIndex.get(item.index)
+    ]));
     selectorPricingStates.set(
       selector,
       buildPayToWinRegisterPricingState(
         activeStarts,
         fullScoreByIndex,
         pricingBenchmark,
-        options
+        options,
+        paymentScoreByIndex
       )
     );
   }
@@ -9050,9 +9197,16 @@ function buildPayToWinEnergyShadow(firstLeg, tileMap, playerCount, options = {},
   const usableRegisterScore = Number.isFinite(registerScore) && registerScore > 0
     ? registerScore
     : null;
+  // v46.1: comparison entries must be initialized before they are used to
+  // reconstruct the validated-field 0E route scores for diagnostics.
+  const initialEntryByIndex = comparisonState.initialEntryByIndex instanceof Map
+    ? comparisonState.initialEntryByIndex
+    : new Map();
   const fullScores = activeStarts.map((item) => ({
     index: item.index,
-    fullScore: getPayToWinFullCourseScore(item)
+    fullScore: Number.isFinite(initialEntryByIndex.get(item.index)?.fullScore)
+      ? initialEntryByIndex.get(item.index).fullScore
+      : getPayToWinFullCourseScore(item)
   })).filter((entry) => Number.isFinite(entry.fullScore));
   const worstFullScore = fullScores.length
     ? Math.max(...fullScores.map((entry) => entry.fullScore))
@@ -9088,7 +9242,7 @@ function buildPayToWinEnergyShadow(firstLeg, tileMap, playerCount, options = {},
 
   return {
     active: true,
-    method: "all-validated-moving-baseline-register-equivalent-v1",
+    method: "all-validated-post-payment-route-economy-v46",
     validatedStartCount: activeStarts.length,
     offeredStartCount: activeStarts.filter((item) => (
       !prunedIndices.has(item.index) && !fullyUnavailableIndices.has(item.index)
@@ -9162,6 +9316,18 @@ function buildPayToWinEnergyShadow(firstLeg, tileMap, playerCount, options = {},
         finalEnergyCost: finalCostByIndex.has(entry.index)
           ? finalCostByIndex.get(entry.index)
           : null,
+        finalPaymentScores: Array.isArray(finalEntry?.paymentScores)
+          ? finalEntry.paymentScores
+          : null,
+        finalPostPaymentFullScore: Number.isFinite(finalEntry?.postPaymentFullScore)
+          ? Number(finalEntry.postPaymentFullScore.toFixed(2))
+          : null,
+        finalPaymentPenalty: Number.isFinite(finalEntry?.paymentPenalty)
+          ? Number(finalEntry.paymentPenalty.toFixed(2))
+          : null,
+        finalLatePaymentScores: Array.isArray(finalLateEntry?.paymentScores)
+          ? finalLateEntry.paymentScores
+          : null,
         finalEarlyUnavailable: Boolean(
           Number.isFinite(finalEntry?.energyCost) &&
           Number.isFinite(comparisonState.finalPricingModel?.denialCost) &&
@@ -9214,6 +9380,7 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
     ...getRouteAnalysisVariantOptions(options),
     payToWin: true
   }, playerCount);
+  const pricingOptions = { ...options, playerCount };
   const bias = getPayToWinRemovalBias(options);
   // Capture the whole coherent field before v36 pruning. This lets diagnostics
   // show both the initial moving-baseline prices and the final repriced field.
@@ -9223,7 +9390,7 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
     firstLeg,
     tileMap,
     new Set(),
-    options
+    pricingOptions
   );
   const legacyInitialCostState = getLegacyPayToWinCostEntries(firstLeg, new Set());
   const shadowDenialCost = getPayToWinDenialCost(options);
@@ -9237,7 +9404,7 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
       // every endpoint removal. Pruning is allowed to change the character of
       // the offered course, so its energy economy should follow that new field
       // rather than remain frozen to the original eight-start audition.
-      const costState = getPayToWinCostEntries(currentFirstLeg, tileMap, excludedIndices, options);
+      const costState = getPayToWinCostEntries(currentFirstLeg, tileMap, excludedIndices, pricingOptions);
       // Never price-prune below the number of robots that must be able to start.
       if (costState.entries.length <= playerCount) {
         return null;
@@ -9281,7 +9448,7 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
   const { currentFirstLeg, excludedIndices, removals: pruned } = result;
   const startingEnergy = getCourseStartingEnergy(options);
   const denialCost = getPayToWinDenialCost(options);
-  const finalCostState = getPayToWinCostEntries(currentFirstLeg, tileMap, excludedIndices, options);
+  const finalCostState = getPayToWinCostEntries(currentFirstLeg, tileMap, excludedIndices, pricingOptions);
   // v38 evaluates every selector position when surplus choices exist, then fits
   // at most one breakpoint. The first displayed price represents the selected
   // early group, and the optional second price represents the selected late
@@ -9294,7 +9461,7 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
       tileMap,
       excludedIndices,
       playerCount,
-      options,
+      pricingOptions,
       finalCostState
     )
     : buildInactivePayToWinLateCostState(finalCostState, denialCost);
@@ -9370,7 +9537,7 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
         tileMap,
         new Set(),
         playerCount,
-        options,
+        pricingOptions,
         shadowInitialCostState
       ))
     : buildInactivePayToWinLateCostState(shadowInitialCostState, shadowDenialCost);
@@ -9379,13 +9546,14 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
     firstLeg,
     tileMap,
     playerCount,
-    options,
+    pricingOptions,
     shadowLateCostState,
     shadowInitialCostState.entries.map((entry) => entry.index),
     {
       initialCostByIndex: new Map(shadowInitialCostState.entries.map((entry) => [entry.index, entry.energyCost])),
       finalCostByIndex: costByIndex,
       legacyInitialCostByIndex: new Map(legacyInitialCostState.entries.map((entry) => [entry.index, entry.energyCost])),
+      initialEntryByIndex: new Map(shadowInitialCostState.entries.map((entry) => [entry.index, entry])),
       finalEntryByIndex: new Map(earlyCostState.entries.map((entry) => [entry.index, entry])),
       finalLateEntryByIndex: new Map(lateCostState.entries.map((entry) => [entry.index, entry])),
       prunedIndices: new Set(pruned.map((entry) => entry.index)),
@@ -10053,13 +10221,12 @@ function buildRouteAwareBatteryScoringOptions(coursePreflight, options = {}) {
     upgradeDrawsPerTurn: config.drawsPerTurn,
     upgradeInstallsPerTurn: config.installsPerTurn,
     upgradeDrawEnergyCost: config.drawEnergyCost,
+    upgradeUsefulCardRate: config.usefulUpgradeCardRate,
     upgradeUsefulEnergyPerInstall: config.usefulEnergyPerInstall,
     upgradePowerRegistersPerEnergy: config.powerRegistersPerEnergy,
     routeRegistersPerTurn: config.registersPerTurn,
-    // v44 carries one conservative route-local energy reserve from this
-    // starting value. Battery and Power Up both advance it; we still never
-    // guess at upgrade spending, so it remains a valuation state rather than
-    // a literal reconstruction of the player's bank.
+    // v45 carries coupled Energy/card state and spends it through one normal
+    // draw and one install per Upgrade Phase, so 10E remains a storage cap.
     routeEnergyReferenceReserve: config.startingEnergy
   };
 }
@@ -10172,6 +10339,14 @@ function selectDiverseModeOpeningPool(entries, targetCount, options = {}) {
 
 function buildReusableRoutePool(tileMap, starts, flags, playerCount, coursePreflight, options = {}) {
   const excluded = coursePreflight?.excludedIndices ?? new Set();
+  // v46.2: plausible coherent route alternatives belong to the shared route
+  // layer, not to Normal mode. Competitive and Pay to Win can therefore
+  // select/reprice from the same small already-found route set without
+  // increasing the contextual expansion caps. Keep the legacy option alias so
+  // older callers remain harmless.
+  const preservePlausibleAlternatives = Boolean(
+    options.preservePlausibleAlternatives ?? options.preserveTrafficAlternatives
+  );
   const routedOpening = (coursePreflight?.opening?.starts ?? []).filter((analysis) => (
     analysis.reachable &&
     analysis.selectedRoute &&
@@ -10240,11 +10415,11 @@ function buildReusableRoutePool(tileMap, starts, flags, playerCount, coursePrefl
       // pool is built entirely in the new route-aware Battery currency.
       contextualOpeningSeedAnalyses: options.routeAwareBatteryScoring ? null : candidateOpeningAnalyses,
       contextualOpeningRoutes: 1,
-      contextualLaterRoutes: options.preserveTrafficAlternatives ? 2 : 1,
-      contextualBeamWidth: options.preserveTrafficAlternatives ? 2 : 1,
-      contextualCompletionPool: options.preserveTrafficAlternatives ? 3 : 1,
-      contextualWholePartialDiversity: Boolean(options.preserveTrafficAlternatives),
-      contextualTrafficAlternativeRetention: Boolean(options.preserveTrafficAlternatives),
+      contextualLaterRoutes: preservePlausibleAlternatives ? 2 : 1,
+      contextualBeamWidth: preservePlausibleAlternatives ? 2 : 1,
+      contextualCompletionPool: preservePlausibleAlternatives ? 3 : 1,
+      contextualWholePartialDiversity: preservePlausibleAlternatives,
+      contextualTrafficAlternativeRetention: preservePlausibleAlternatives,
       contextualOpeningExpansions: COURSE_PREFLIGHT_OPENING_EXPANSIONS,
       contextualLaterExpansions: COURSE_PREFLIGHT_LATER_EXPANSIONS,
       contextualLegMaxActions: COURSE_PREFLIGHT_LATER_MAX_ACTIONS,
@@ -10293,11 +10468,11 @@ function buildReusableRoutePool(tileMap, starts, flags, playerCount, coursePrefl
     seedStartAnalyses,
     routeStrategy: {
       openingRoutesPerStart: 1,
-      laterRoutesPerContext: options.preserveTrafficAlternatives ? 2 : 1,
-      stitchedBeamWidth: options.preserveTrafficAlternatives ? 2 : 1,
-      completionPool: options.preserveTrafficAlternatives ? 3 : 1,
-      wholePartialDiversity: Boolean(options.preserveTrafficAlternatives),
-      trafficAlternativeRetention: Boolean(options.preserveTrafficAlternatives)
+      laterRoutesPerContext: preservePlausibleAlternatives ? 2 : 1,
+      stitchedBeamWidth: preservePlausibleAlternatives ? 2 : 1,
+      completionPool: preservePlausibleAlternatives ? 3 : 1,
+      wholePartialDiversity: preservePlausibleAlternatives,
+      trafficAlternativeRetention: preservePlausibleAlternatives
     },
     analysis
   };
@@ -10746,6 +10921,7 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
       contextualBeamWidth: options.contextualBeamWidth,
       contextualCompletionPool: options.contextualCompletionPool,
       contextualSeedStartAnalyses: options.contextualSeedStartAnalyses,
+      contextualSeedRouteStrategy: options.contextualSeedRouteStrategy,
       contextualOpeningSeedAnalyses: options.contextualOpeningSeedAnalyses,
       contextualRequiredStarts: options.contextualRequiredStarts,
       contextualPreferredStarts: options.contextualPreferredStarts,
@@ -11042,15 +11218,34 @@ function computeUsableStarts(firstLeg, preferences = {}) {
   return courseReachable.filter((startAnalysis) => !outlierSet.has(startAnalysis.index));
 }
 
-function hasStartCapacityHardFailure(scenario) {
-  return (scenario?.metrics?.hardFailures || []).some((failure) => START_CAPACITY_HARD_FAILURES.has(failure));
+function getFallbackHardFailurePenalty(scenario) {
+  if (!scenario?.metrics) return Infinity;
+
+  let penalty = 0;
+  for (const failure of scenario.metrics.hardFailures || []) {
+    const failureId = String(failure || "");
+    if (failureId === "usable-starts" || failureId === "reachable-starts" || failureId.startsWith("leg-")) {
+      return Infinity;
+    }
+
+    const softPenalty = FALLBACK_SOFT_FAILURE_PENALTIES.get(failureId);
+    if (!Number.isFinite(softPenalty)) {
+      return Infinity;
+    }
+    penalty += softPenalty;
+  }
+  return penalty;
 }
 
 function isViableFallbackScenario(scenario) {
-  return Boolean(
-    scenario?.metrics &&
-    (scenario.metrics.hardFailures || []).length === 0
-  );
+  return Number.isFinite(getFallbackHardFailurePenalty(scenario));
+}
+
+function getFallbackScenarioScore(scenario) {
+  if (!isViableFallbackScenario(scenario)) return Infinity;
+  const fitScore = Number(scenario?.metrics?.fitScore);
+  if (!Number.isFinite(fitScore)) return Infinity;
+  return fitScore + getFallbackHardFailurePenalty(scenario);
 }
 
 function getCompetitiveBalanceProfile(entries = []) {
@@ -12578,9 +12773,9 @@ function buildScenarioCopySummary(scenario) {
         );
       }
     }
-    if (pricingModel.thresholds?.length) {
+    if (pricingModel.paymentPenalties?.length) {
       lines.push(
-        `P2W final-field energy curve: register ${pricingModel.registerScore ?? "n/a"} score, horizon ${pricingModel.horizonTurns ?? "n/a"} turns x${pricingModel.horizonScale ?? "n/a"}; ${pricingModel.thresholds.map((threshold) => threshold.energy <= (payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY) ? `${threshold.energy}E@${threshold.cumulativeRegisters}R` : `deny@${threshold.cumulativeRegisters}R`).join(", ")}`
+        `P2W final-field payment impact: register ${pricingModel.registerScore ?? "n/a"} score, horizon ${pricingModel.horizonTurns ?? "n/a"} turns; ${pricingModel.paymentPenalties.map((entry) => `${entry.payment}E median/max +${entry.medianScore ?? "n/a"}/+${entry.maxScore ?? "n/a"} score (${entry.medianRegisters ?? "n/a"}/${entry.maxRegisters ?? "n/a"}R)`).join(", ")}; ${pricingModel.denialCost ?? getPayToWinDenialCost({ startingEnergy: payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY })}E = deny/prune`
       );
     }
     if ((payToWin.pruned ?? []).length) {
@@ -12597,8 +12792,8 @@ function buildScenarioCopySummary(scenario) {
       const formatFeatureWeights = (entry) => entry
         ? `current ${entry.current ?? "n/a"}, base ${entry.base ?? "n/a"}, UpgradeWorld ${entry.upgradeWorld ?? "n/a"}`
         : "n/a";
-      const p2wEconomyText = (routeEconomy.p2wMarginals ?? []).map((item) =>
-        `${item.fromEnergy}->${item.toEnergy}E current ${item.currentMarginalR ?? "n/a"}R / route ${item.derivedMarginalR}R (cum ${item.currentCumulativeR ?? "n/a"}/${item.derivedCumulativeR}R)`
+      const p2wEconomyText = (pricingModel.paymentPenalties ?? []).map((item) =>
+        `${item.payment}E costs median ${item.medianScore ?? "n/a"} score/${item.medianRegisters ?? "n/a"}R, max ${item.maxScore ?? "n/a"}/${item.maxRegisters ?? "n/a"}R`
       ).join(" | ") || "n/a";
       const formatEnergySensitivity = (samples) => (samples ?? [])
         .map((sample) => `E${sample.energy}:${sample.valueR}R`)
@@ -12621,7 +12816,7 @@ function buildScenarioCopySummary(scenario) {
         `Battery shadow: ${batteryText}`,
         `Power Up shadow: ${powerUpText}`,
         `Chop Shop shadow: ${chopShopText}`,
-        `Upgrade feature weights (diagnostic reference; legacy Battery / current Chop Shop, route score negative = benefit): battery ${formatFeatureWeights(featureWeights.battery)}; chopShop ${formatFeatureWeights(featureWeights.chopShop)}`,
+        `Upgrade feature weights (legacy static audit only; production v45 bypasses Battery/Chop Shop weights): battery ${formatFeatureWeights(featureWeights.battery)}; chopShop ${formatFeatureWeights(featureWeights.chopShop)}`,
         `P2W start repricing: ${(energyShadow.starts ?? []).map((entry) => {
           const initialPrice = Number.isFinite(entry.initialEnergyCost) ? `${entry.initialEnergyCost}E` : "n/a";
           const legacyPrice = Number.isFinite(entry.legacyInitialCost) ? `${entry.legacyInitialCost}E` : "n/a";
@@ -12635,10 +12830,13 @@ function buildScenarioCopySummary(scenario) {
               ? `${entry.finalEnergyCost}E`
               : (entry.fullyUnavailable ? "—" : "n/a");
           const finalState = `${entry.finalRegisterEquivalent ?? "n/a"}R/${finalPrice}`;
+          const curveText = Array.isArray(entry.finalPaymentScores)
+            ? ` curve ${entry.finalPaymentScores.map((score, payment) => `${payment}E:${score ?? "—"}`).join("/")}`
+            : "";
           const lateText = payToWin.latePricingActive && Number.isFinite(entry.finalLateRegisterEquivalent)
             ? `, late ${entry.finalLateRegisterEquivalent}R/${entry.finalLateUnavailable ? "—" : `${entry.finalLateEnergyCost ?? "n/a"}E`}`
             : "";
-          return `#${entry.index + 1} initial ${initialState} -> final ${finalState}${lateText} (legacy ${legacyPrice})`;
+          return `#${entry.index + 1} initial ${initialState} -> final ${finalState}${curveText}${lateText} (legacy ${legacyPrice})`;
         }).join(", ") || "none"}`
       );
     }
@@ -12659,11 +12857,11 @@ function buildScenarioCopySummary(scenario) {
       : "n/a";
     const production = economy.productionEnergyScoring ?? null;
     lines.push(
-      `Energy economy shadow: start ${economy.config?.startingEnergy ?? "n/a"}E, max ${economy.config?.maxEnergy ?? "n/a"}E, starting hand ${economy.config?.startingUpgradeCards ?? "n/a"}, median horizon ${economy.horizonTurns ?? "n/a"}t, reserve samples ${(economy.reserveSamples ?? []).map((energy) => `E${energy}`).join("/") || "n/a"}, routes ${economy.routeCount ?? 0}`,
+      `Legacy reserve shadow (diagnostic only; production uses v45 cards+energy): start ${economy.config?.startingEnergy ?? "n/a"}E, max ${economy.config?.maxEnergy ?? "n/a"}E, starting hand ${economy.config?.startingUpgradeCards ?? "n/a"}, median horizon ${economy.horizonTurns ?? "n/a"}t, reserve samples ${(economy.reserveSamples ?? []).map((energy) => `E${energy}`).join("/") || "n/a"}, routes ${economy.routeCount ?? 0}`,
       production?.active
-        ? `Route energy production v44: shared stateful reserve, start E${production.startingReserve ?? production.referenceReserve ?? "?"}, preflight horizon ${production.horizonTurns ?? "n/a"}t, register ${production.registerScore ?? "n/a"} score, selected-route total reward median/max ${production.selectedRouteRewardMedian ?? 0}/${production.selectedRouteRewardMax ?? 0} score (Battery ${production.selectedRouteBatteryRewardMedian ?? 0}/${production.selectedRouteBatteryRewardMax ?? 0}, Power Up ${production.selectedRoutePowerUpRewardMedian ?? 0}/${production.selectedRoutePowerUpRewardMax ?? 0}), Power Up uses median/max ${production.selectedRoutePowerUpUsesMedian ?? 0}/${production.selectedRoutePowerUpUsesMax ?? 0}, end reserve median/max E${production.selectedRouteEndingReserveMedian ?? "?"}/E${production.selectedRouteEndingReserveMax ?? "?"}${production.upgradeWorldCardFallbackScore ? `, Upgrade World card fallback +${production.upgradeWorldCardFallbackScore} score/Battery activation` : ""}`
-        : "Route energy production v44: inactive",
-      `Battery shadow across routes: ${economy.batteryEncounterCount ?? 0} encounter(s) on ${economy.batteryRouteCount ?? 0}/${economy.routeCount ?? 0} routes; representatives ${(economy.representativeBatteryEncounters ?? []).map(formatBatteryEncounter).join(" | ") || "none"}`,
+        ? `Route upgrade economy v45: start E${production.startingReserve ?? production.referenceReserve ?? "?"} + ${economy.config?.startingUpgradeCards ?? "?"} cards, useful-card rate ${production.usefulUpgradeCardRate ?? economy.config?.usefulUpgradeCardRate ?? "n/a"}, draw/install ${economy.config?.drawsPerTurn ?? "n/a"}/${economy.config?.installsPerTurn ?? "n/a"} per turn, draw ${production.drawEnergyCost ?? economy.config?.drawEnergyCost ?? "n/a"}E, useful install budget ${production.usefulEnergyPerInstall ?? economy.config?.usefulEnergyPerInstall ?? "n/a"}E; post-opening reserve median E${production.selectedRouteOpeningReserveMedian ?? "?"}, selected-route reward median/max ${production.selectedRouteRewardMedian ?? 0}/${production.selectedRouteRewardMax ?? 0} score (Battery ${production.selectedRouteBatteryRewardMedian ?? 0}/${production.selectedRouteBatteryRewardMax ?? 0}, Power Up ${production.selectedRoutePowerUpRewardMedian ?? 0}/${production.selectedRoutePowerUpRewardMax ?? 0}, Chop Shop ${production.selectedRouteChopShopRewardMedian ?? 0}/${production.selectedRouteChopShopRewardMax ?? 0}), Power Up uses median/max ${production.selectedRoutePowerUpUsesMedian ?? 0}/${production.selectedRoutePowerUpUsesMax ?? 0}, end reserve median/max E${production.selectedRouteEndingReserveMedian ?? "?"}/E${production.selectedRouteEndingReserveMax ?? "?"}, end useful-card shadow median/max ${production.selectedRouteEndingUsefulCardsMedian ?? "?"}/${production.selectedRouteEndingUsefulCardsMax ?? "?"}`
+        : "Route upgrade economy v45: inactive",
+      `Legacy Battery sensitivity (diagnostic only): ${economy.batteryEncounterCount ?? 0} encounter(s) on ${economy.batteryRouteCount ?? 0}/${economy.routeCount ?? 0} routes; representatives ${(economy.representativeBatteryEncounters ?? []).map(formatBatteryEncounter).join(" | ") || "none"}`,
       `Upgrade feature weights (diagnostic reference; legacy Battery / current Chop Shop, route score negative = benefit): battery ${formatFeatureWeights(featureWeights.battery)}; chopShop ${formatFeatureWeights(featureWeights.chopShop)}`
     );
   }
@@ -12971,7 +13169,7 @@ function buildScenarioReport(scenario, selectedLegIndex) {
       ? `P2W validated-field shadow: validated ${summary.payToWin.energyShadow.validatedStartCount ?? "n/a"}, final-offered ${summary.payToWin.energyShadow.offeredStartCount ?? "n/a"}; tempo-register median ${summary.payToWin.energyShadow.benchmark?.registerScoreMedian ?? "n/a"} (p25 ${summary.payToWin.energyShadow.benchmark?.registerScoreP25 ?? "n/a"}, p75 ${summary.payToWin.energyShadow.benchmark?.registerScoreP75 ?? "n/a"}, n ${summary.payToWin.energyShadow.benchmark?.registerSamples ?? 0}); Power Up strategic delta median ${summary.payToWin.energyShadow.benchmark?.powerUpStrategicDeltaMedian ?? summary.payToWin.energyShadow.benchmark?.powerUpOpportunityMedian ?? "n/a"} (p25 ${summary.payToWin.energyShadow.benchmark?.powerUpStrategicDeltaP25 ?? summary.payToWin.energyShadow.benchmark?.powerUpOpportunityP25 ?? "n/a"}, p75 ${summary.payToWin.energyShadow.benchmark?.powerUpStrategicDeltaP75 ?? summary.payToWin.energyShadow.benchmark?.powerUpOpportunityP75 ?? "n/a"}, n ${summary.payToWin.energyShadow.benchmark?.powerUpStrategicDeltaSamples ?? summary.payToWin.energyShadow.benchmark?.powerUpOpportunitySamples ?? 0}); validated-field horizon ${summary.payToWin.energyShadow.benchmark?.medianFullCourseActions ?? "n/a"} registers / ${summary.payToWin.energyShadow.benchmark?.medianFullCourseTurns ?? "n/a"} turns; final-field pricing horizon ${summary.payToWin.pricingModel?.horizonTurns ?? "n/a"} turns; current Power Up base ${summary.payToWin.energyShadow.benchmark?.powerUpWaitActionPenalty ?? "n/a"} vs tempo ${summary.payToWin.energyShadow.benchmark?.registerTempoCost ?? "n/a"} (discount ${summary.payToWin.energyShadow.benchmark?.powerUpBaseDiscount ?? "n/a"}); battery reward ${summary.payToWin.energyShadow.benchmark?.batteryEnergyRewardScore ?? "n/a"}`
       : "P2W validated-field shadow: n/a",
     summary.payToWin?.energyShadow?.routeEconomy?.active
-      ? `Energy economy shadow: start ${summary.payToWin.energyShadow.routeEconomy.config?.startingEnergy ?? "n/a"}E/max ${summary.payToWin.energyShadow.routeEconomy.config?.maxEnergy ?? "n/a"}E, hand ${summary.payToWin.energyShadow.routeEconomy.config?.startingUpgradeCards ?? "n/a"}, horizon ${summary.payToWin.energyShadow.routeEconomy.horizonTurns ?? "n/a"}t, reserve samples ${(summary.payToWin.energyShadow.routeEconomy.reserveSamples ?? []).map((energy) => `E${energy}`).join("/") || "n/a"}; P2W ${(summary.payToWin.energyShadow.routeEconomy.p2wMarginals ?? []).map((item) => `${item.fromEnergy}->${item.toEnergy} ${item.currentMarginalR ?? "n/a"}/${item.derivedMarginalR}R`).join(" | ")}; batteries ${(summary.payToWin.energyShadow.routeEconomy.battery ?? []).map((item) => `@${item.turn}t ${(item.reserveSensitivity ?? []).map((sample) => `E${sample.energy}:arr${sample.arrivalValueR}R/PU${sample.powerUpEnergyR}R(${sample.powerUpNetBeforePositionR ?? "n/a"}net)/Again${sample.powerUpAgainLegal ? `${sample.powerUpAgainEnergyR}R(${sample.powerUpAgainNetBeforePositionR ?? "n/a"}net)` : "—"}`).join(" ; ")}`).join(" | ") || "none"}; Power Up ${(summary.payToWin.energyShadow.routeEconomy.powerUp ?? []).map((item) => `@${item.turn}t ${(item.reserveSensitivity ?? []).map((sample) => `E${sample.energy}:${sample.valueR}R`).join("/")} WAIT${item.waitTempoCostR ?? "n/a"}R strat${item.strategicDeltaR ?? "n/a"}R`).join(" | ") || "none"}; Chop Shop ${(summary.payToWin.energyShadow.routeEconomy.chopShop ?? []).map((item) => `@${item.turn}t ${(item.reserveSensitivity ?? []).map((sample) => `E${sample.energy}:${sample.energyOptionR}/${sample.cardOptionR}R->${sample.choice}`).join("/")}`).join(" | ") || "none"}`
+      ? `Energy economy shadow: start ${summary.payToWin.energyShadow.routeEconomy.config?.startingEnergy ?? "n/a"}E/max ${summary.payToWin.energyShadow.routeEconomy.config?.maxEnergy ?? "n/a"}E, hand ${summary.payToWin.energyShadow.routeEconomy.config?.startingUpgradeCards ?? "n/a"}, horizon ${summary.payToWin.energyShadow.routeEconomy.horizonTurns ?? "n/a"}t, reserve samples ${(summary.payToWin.energyShadow.routeEconomy.reserveSamples ?? []).map((energy) => `E${energy}`).join("/") || "n/a"}; P2W ${(summary.payToWin.pricingModel?.paymentPenalties ?? []).map((item) => `${item.payment}E +${item.medianScore ?? "n/a"} score/${item.medianRegisters ?? "n/a"}R`).join(" | ")}; batteries ${(summary.payToWin.energyShadow.routeEconomy.battery ?? []).map((item) => `@${item.turn}t ${(item.reserveSensitivity ?? []).map((sample) => `E${sample.energy}:arr${sample.arrivalValueR}R/PU${sample.powerUpEnergyR}R(${sample.powerUpNetBeforePositionR ?? "n/a"}net)/Again${sample.powerUpAgainLegal ? `${sample.powerUpAgainEnergyR}R(${sample.powerUpAgainNetBeforePositionR ?? "n/a"}net)` : "—"}`).join(" ; ")}`).join(" | ") || "none"}; Power Up ${(summary.payToWin.energyShadow.routeEconomy.powerUp ?? []).map((item) => `@${item.turn}t ${(item.reserveSensitivity ?? []).map((sample) => `E${sample.energy}:${sample.valueR}R`).join("/")} WAIT${item.waitTempoCostR ?? "n/a"}R strat${item.strategicDeltaR ?? "n/a"}R`).join(" | ") || "none"}; Chop Shop ${(summary.payToWin.energyShadow.routeEconomy.chopShop ?? []).map((item) => `@${item.turn}t ${(item.reserveSensitivity ?? []).map((sample) => `E${sample.energy}:${sample.energyOptionR}/${sample.cardOptionR}R->${sample.choice}`).join("/")}`).join(" | ") || "none"}`
       : "Energy economy shadow: n/a",
     summary.payToWin?.energyShadow?.upgradeFeatureWeights?.active
       ? `Upgrade feature-weight audit (legacy Battery reference / current Chop Shop; route score negative = benefit): battery current/base/UW ${summary.payToWin.energyShadow.upgradeFeatureWeights.battery?.current ?? "n/a"}/${summary.payToWin.energyShadow.upgradeFeatureWeights.battery?.base ?? "n/a"}/${summary.payToWin.energyShadow.upgradeFeatureWeights.battery?.upgradeWorld ?? "n/a"}; chopShop current/base/UW ${summary.payToWin.energyShadow.upgradeFeatureWeights.chopShop?.current ?? "n/a"}/${summary.payToWin.energyShadow.upgradeFeatureWeights.chopShop?.base ?? "n/a"}/${summary.payToWin.energyShadow.upgradeFeatureWeights.chopShop?.upgradeWorld ?? "n/a"}`
@@ -14524,11 +14722,14 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
               payToWin,
               virtualBots: false,
               movingTargets,
-              // v43: Any/Any Normal keeps one coherent alternate route when the
-              // existing bounded contextual search can find one, and uses a
-              // relaxed retention threshold without increasing expansion caps.
-              // Do not widen Pay to Win or targeted/competitive pipelines yet.
-              preserveTrafficAlternatives: unconstrainedNormalRouting
+              // v46.2: retain the same cheap plausible alternate capability for
+              // Normal, Competitive, and Pay to Win. This only keeps an
+              // alternate already found inside the existing bounded search; it
+              // does not raise route-search expansion caps. Targeted Normal
+              // already gets its richer refinement after the target-fit gate.
+              preservePlausibleAlternatives: Boolean(
+                unconstrainedNormalRouting || competitiveMode || payToWin
+              )
             }
           );
           reusableRoutePool.work = compactRouteWork(summarizeRouteSearchDelta(
@@ -14624,6 +14825,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
               {
                 ...productionAnalysisOptions,
                 contextualSeedStartAnalyses: reusableRoutePool.seedStartAnalyses,
+                contextualSeedRouteStrategy: reusableRoutePool.routeStrategy,
                 contextualRequiredStarts: requiredCompetitivePool
               }
             )
@@ -14676,11 +14878,12 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
             {
               ...productionAnalysisOptions,
               contextualSeedStartAnalyses: selectedSeedAnalyses,
+              contextualSeedRouteStrategy: reusableRoutePool.routeStrategy,
               contextualRequiredStarts: preferences.playerCount
             }
           );
           const preliminaryCache = preliminaryFirstLeg.summary.contextualLegCache ?? {};
-          sequence.firstLeg.summary.contextualSearchMode = "competitive-preflight-reused";
+          sequence.firstLeg.summary.contextualSearchMode = "competitive-shared-route-pool";
           sequence.firstLeg.summary.competitiveStaging = {
             active: true,
             sourceStartCount: indexedActiveStarts.length,
@@ -14832,11 +15035,12 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
             {
               ...productionAnalysisOptions,
               contextualSeedStartAnalyses: reusableRoutePool?.seedStartAnalyses ?? null,
+              contextualSeedRouteStrategy: reusableRoutePool?.routeStrategy ?? null,
               contextualRequiredStarts: preferences.playerCount
             }
           );
           if (sequence?.firstLeg?.summary) {
-            sequence.firstLeg.summary.contextualSearchMode = "pay-to-win-preflight-reused";
+            sequence.firstLeg.summary.contextualSearchMode = "pay-to-win-shared-route-pool";
             sequence.firstLeg.summary.payToWinStaging = {
               active: true,
               sourceStartCount: indexedActiveStarts.length,
@@ -15005,12 +15209,14 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
             cappedRouteSearches: coursePreflight.work?.capped ?? 0,
             routeAwareBatteryScoring: {
               active: Boolean(productionAnalysisOptions.routeAwareBatteryScoring),
-              method: "route-energy-production-v44-shared-reserve",
+              method: "route-upgrade-economy-production-v45-cards-energy",
               horizonTurns: productionAnalysisOptions.routeEnergyHorizonTurns ?? null,
               registerScore: productionAnalysisOptions.routeEnergyRegisterScore ?? null,
               startingReserve: productionAnalysisOptions.startingEnergy ?? null,
               referenceReserve: productionAnalysisOptions.routeEnergyReferenceReserve ?? null,
-              upgradeWorldCardFallbackScore: effectiveVariantBundle.upgradeWorld ? 1 : 0
+              usefulUpgradeCardRate: productionAnalysisOptions.upgradeUsefulCardRate ?? null,
+              drawEnergyCost: productionAnalysisOptions.upgradeDrawEnergyCost ?? null,
+              usefulEnergyPerInstall: productionAnalysisOptions.upgradeUsefulEnergyPerInstall ?? null
             },
             routePool: reusableRoutePool
               ? {
@@ -15389,7 +15595,9 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       }
     }, effectiveVariantBundle);
 
-    if (!hasStartCapacityHardFailure(scenario) && (!bestScenario || scenario.metrics.fitScore < bestScenario.metrics.fitScore)) {
+    const scenarioFallbackScore = getFallbackScenarioScore(scenario);
+    const bestFallbackScore = getFallbackScenarioScore(bestScenario);
+    if (Number.isFinite(scenarioFallbackScore) && scenarioFallbackScore < bestFallbackScore) {
       bestScenario = scenario;
       staleRetries = 0;
     } else {
@@ -15980,7 +16188,9 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
 
     scenario.attempts = attempt;
 
-    if (isViableFallbackScenario(scenario) && (!bestScenario || scenario.metrics.fitScore < bestScenario.metrics.fitScore)) {
+    const scenarioFallbackScore = getFallbackScenarioScore(scenario);
+    const bestFallbackScore = getFallbackScenarioScore(bestScenario);
+    if (Number.isFinite(scenarioFallbackScore) && scenarioFallbackScore < bestFallbackScore) {
       bestScenario = scenario;
     }
 
