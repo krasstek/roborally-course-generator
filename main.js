@@ -181,6 +181,86 @@ const OPPOSITE_DIRS = {
 const MAX_ATTEMPTS = 20;
 const GENERATION_SOFT_EXPANSION_BUDGET = 500000;
 const GENERATION_SOFT_BUDGET_MIN_ATTEMPTS = 8;
+const DEFAULT_GENERATION_MODE = "standard";
+const GENERATION_MODE_LABELS = Object.freeze({
+  fastest: "Fastest",
+  fast: "Fast",
+  standard: "Standard",
+  balanced: "Balanced",
+  thorough: "Thorough"
+});
+const GENERATION_MODE_PROFILES = Object.freeze({
+  fastest: Object.freeze({
+    maxAttempts: 5,
+    softExpansionBudget: 140000,
+    softBudgetMinAttempts: 3,
+    preflightOpeningExpansions: 800,
+    preflightLaterExpansions: 700,
+    lightStartExpansions: 4200,
+    fullCourseExpansions: 32000,
+    openingRoutes: 1,
+    laterRoutes: 1,
+    beamWidth: 1,
+    completionPool: 1,
+    fullCourseTrafficPasses: 1
+  }),
+  fast: Object.freeze({
+    maxAttempts: 8,
+    softExpansionBudget: 240000,
+    softBudgetMinAttempts: 4,
+    preflightOpeningExpansions: 1000,
+    preflightLaterExpansions: 850,
+    lightStartExpansions: 5200,
+    fullCourseExpansions: 38000,
+    openingRoutes: 1,
+    laterRoutes: 1,
+    beamWidth: 1,
+    completionPool: 2,
+    fullCourseTrafficPasses: 1
+  }),
+  standard: Object.freeze({
+    maxAttempts: 12,
+    softExpansionBudget: 360000,
+    softBudgetMinAttempts: 6,
+    preflightOpeningExpansions: 1200,
+    preflightLaterExpansions: 1000,
+    lightStartExpansions: 6000,
+    fullCourseExpansions: 44000,
+    openingRoutes: 1,
+    laterRoutes: 2,
+    beamWidth: 1,
+    completionPool: 2,
+    fullCourseTrafficPasses: 1
+  }),
+  balanced: Object.freeze({
+    maxAttempts: MAX_ATTEMPTS,
+    softExpansionBudget: GENERATION_SOFT_EXPANSION_BUDGET,
+    softBudgetMinAttempts: GENERATION_SOFT_BUDGET_MIN_ATTEMPTS,
+    preflightOpeningExpansions: 1400,
+    preflightLaterExpansions: 1200,
+    lightStartExpansions: 7000,
+    fullCourseExpansions: 52000,
+    openingRoutes: 1,
+    laterRoutes: 2,
+    beamWidth: 2,
+    completionPool: 3,
+    fullCourseTrafficPasses: 2
+  }),
+  thorough: Object.freeze({
+    maxAttempts: 36,
+    softExpansionBudget: 850000,
+    softBudgetMinAttempts: 10,
+    preflightOpeningExpansions: 1800,
+    preflightLaterExpansions: 1600,
+    lightStartExpansions: 9500,
+    fullCourseExpansions: 68000,
+    openingRoutes: 2,
+    laterRoutes: 3,
+    beamWidth: 3,
+    completionPool: 5,
+    fullCourseTrafficPasses: 3
+  })
+});
 const DIAGNOSTIC_ATTEMPTS = 24;
 const DIAGNOSTIC_PLAYER_COUNTS = [2, 4, 6];
 const DIAGNOSTIC_DIFFICULTIES = ["easy", "moderate", "hard", "brutal"];
@@ -215,6 +295,7 @@ const NO_DOCK_START_EDGE_FEATURE_TYPES = new Set([
 const FALLBACK_SOFT_FAILURE_PENALTIES = new Map([
   ["normal-start-balance", 45],
   ["competitive-start-balance", 60],
+  ["competitive-start-availability", 90],
   ["unused-board", 50],
   ["too-short", 80]
 ]);
@@ -1154,6 +1235,8 @@ function formatCappedContextHistory(history = []) {
 function getGenerationRejectionCategory(scenario, fallbackReason = "") {
   const failures = scenario?.metrics?.hardFailures ?? [];
   if (failures.includes("normal-start-balance")) return "balance";
+  if (failures.includes("competitive-start-balance")) return "competitive-balance";
+  if (failures.includes("competitive-start-availability")) return "competitive-start-capacity";
   if (failures.includes("usable-starts") || failures.includes("reachable-starts")) return "start-capacity";
   if (failures.includes("unused-board")) return "unused-board";
   if (failures.includes("too-short")) return "too-short";
@@ -2926,10 +3009,30 @@ function updateRulesNote(scenario) {
     notes.push(
       `Competitive Mode: before the game, players take turns blocking starting spaces, then choose strategically from the remaining starts. ` +
       appendRuleReference(
-        `The generator evaluates a larger starting pool (${scenario.playerCount * 2} starts for ${scenario.playerCount} players) to estimate those choices, so Competitive courses can take longer to generate.`,
+        `The generator does not pre-prune starting spaces on an accepted Competitive course: every physical start must remain available for the players. It evaluates the best player blocking choices and accepts the course only if the remaining start pool is balanced, so Competitive courses can take longer to generate.`,
         { page: 32 }
       )
     );
+
+    if (scenario.generationBestMatch) {
+      const competitiveFailures = new Set(scenario.metrics?.hardFailures ?? []);
+      const unavailableIndices = scenario.sequence?.firstLeg?.summary?.competitiveStaging?.unavailableIndices
+        ?? scenario.blockedStartIndices
+        ?? [];
+      if (competitiveFailures.has("competitive-start-availability") || unavailableIndices.length) {
+        const unavailableText = unavailableIndices.length
+          ? ` #${unavailableIndices.map((index) => index + 1).join(", #")}`
+          : "";
+        notes.push(
+          `Closest-match Competitive warning: ${unavailableIndices.length || "some"} physical starting space${unavailableIndices.length === 1 ? " is" : "s are"} generator-unavailable${unavailableText}. These are not player blocks; a fully accepted Competitive course has no such unavailable starts.`
+        );
+      }
+      if (competitiveFailures.has("competitive-start-balance")) {
+        notes.push(
+          "Closest-match Competitive warning: even the generator's best simulated player blocks did not leave a balanced remaining start pool. A fully accepted Competitive course passes this test."
+        );
+      }
+    }
   }
 
   if (scenario.subsidizedStarts) {
@@ -3565,11 +3668,42 @@ function chooseActFastMode(preferences = {}) {
   return sample(table[difficulty] || table.moderate);
 }
 
+function normalizeGenerationMode(value) {
+  return Object.prototype.hasOwnProperty.call(GENERATION_MODE_PROFILES, value)
+    ? value
+    : DEFAULT_GENERATION_MODE;
+}
+
+function getGenerationModeProfile(preferences = {}) {
+  return GENERATION_MODE_PROFILES[normalizeGenerationMode(preferences.generationMode)];
+}
+
+function formatGenerationModeLabel(value) {
+  const mode = normalizeGenerationMode(value);
+  return GENERATION_MODE_LABELS[mode] ?? GENERATION_MODE_LABELS[DEFAULT_GENERATION_MODE];
+}
+
+function getScenarioGenerationMode(scenario) {
+  const explicitMode = scenario?.generationDiagnostics?.generationMode ?? scenario?.preferences?.generationMode;
+  // Scenarios saved before the Mode control existed used today's Balanced
+  // search budgets. Preserve that meaning when reopening an old snapshot.
+  return explicitMode ? normalizeGenerationMode(explicitMode) : "balanced";
+}
+
+function getScenarioGenerationMaxAttempts(scenario) {
+  const diagnosticsMax = Number(scenario?.generationDiagnostics?.maxAttempts);
+  if (Number.isFinite(diagnosticsMax) && diagnosticsMax > 0) {
+    return Math.floor(diagnosticsMax);
+  }
+  return getGenerationModeProfile({ generationMode: getScenarioGenerationMode(scenario) }).maxAttempts;
+}
+
 function getPreferencesFromControls() {
   return {
     playerCount: Number(document.getElementById("player-count").value),
     difficulty: document.getElementById("difficulty").value,
     length: document.getElementById("length").value,
+    generationMode: normalizeGenerationMode(document.getElementById("generation-mode")?.value),
     overlayMode: normalizeOverlayMode(document.getElementById("overlay-mode")?.value),
     actFastMode: getActFastModeFromControls(),
     selectedExpansions: {
@@ -3600,6 +3734,14 @@ function applyPreferencesToControls(preferences) {
   document.getElementById("player-count").value = String(normalizedPreferences.playerCount ?? 4);
   document.getElementById("difficulty").value = normalizedPreferences.difficulty ?? "any";
   document.getElementById("length").value = normalizedPreferences.length ?? "any";
+  const generationModeEl = document.getElementById("generation-mode");
+  if (generationModeEl) {
+    // Missing means a pre-Mode saved scenario, whose search behavior was the
+    // current Balanced profile. Fresh pages still default to Standard in HTML.
+    generationModeEl.value = normalizedPreferences.generationMode
+      ? normalizeGenerationMode(normalizedPreferences.generationMode)
+      : "balanced";
+  }
   setOverlayModeControl(normalizedPreferences.overlayMode);
   document.getElementById("expansion-roborally").checked = normalizedPreferences.selectedExpansions?.roborally ?? true;
   document.getElementById("expansion-rr-dice").checked = normalizedPreferences.selectedExpansions?.["rr-dice"] ?? false;
@@ -10127,7 +10269,8 @@ function uniquePreflightStates(routes = []) {
   return states;
 }
 
-function getIntrinsicOpeningOutliers(analyses = [], playerCount = 4) {
+function getIntrinsicOpeningOutliers(analyses = [], playerCount = 4, options = {}) {
+  const generationProfile = getGenerationModeProfile(options);
   const routed = analyses.filter((analysis) => (
     analysis.reachable &&
     analysis.selectedRoute &&
@@ -10161,7 +10304,7 @@ function getIntrinsicOpeningOutliers(analyses = [], playerCount = 4) {
       scoreZ: Number(candidate.scoreZ.toFixed(2)),
       actionZ: Number(candidate.actionZ.toFixed(2)),
       minimumPool,
-      maxExpansions: COURSE_PREFLIGHT_OPENING_EXPANSIONS,
+      maxExpansions: generationProfile.preflightOpeningExpansions,
       onePass: true
     }
   }));
@@ -10174,6 +10317,7 @@ function getIntrinsicOpeningOutliers(analyses = [], playerCount = 4) {
 }
 
 function buildCoursePreflightSequence(tileMap, starts, flags, playerCount, options = {}) {
+  const generationProfile = getGenerationModeProfile(options);
   if (!flags.length || !starts.length) {
     return {
       valid: false,
@@ -10209,7 +10353,7 @@ function buildCoursePreflightSequence(tileMap, starts, flags, playerCount, optio
     skipTraffic: true,
     playerCount,
     maxActions: COURSE_PREFLIGHT_OPENING_MAX_ACTIONS,
-    maxExpansions: COURSE_PREFLIGHT_OPENING_EXPANSIONS,
+    maxExpansions: generationProfile.preflightOpeningExpansions,
     requiredReachableStarts: requiredOpeningCount,
     preferredReachableStarts: openingPoolPolicy?.targetCount ?? null,
     stopWhenPreferredReachableLost: Boolean(options.payToWin),
@@ -10229,7 +10373,7 @@ function buildCoursePreflightSequence(tileMap, starts, flags, playerCount, optio
     !options.payToWin &&
     !options.virtualBots
   )
-    ? getIntrinsicOpeningOutliers(opening.starts, playerCount)
+    ? getIntrinsicOpeningOutliers(opening.starts, playerCount, options)
     : { outliers: [], excludedIndices: new Set(), minimumPool: starts.length };
 
   if (routedOpening.length < requiredOpeningCount) {
@@ -10259,7 +10403,7 @@ function buildCoursePreflightSequence(tileMap, starts, flags, playerCount, optio
       routesPerFacing: 1,
       maxDistinctRoutes: 4,
       maxActions: COURSE_PREFLIGHT_LATER_MAX_ACTIONS,
-      maxExpansions: COURSE_PREFLIGHT_LATER_EXPANSIONS,
+      maxExpansions: generationProfile.preflightLaterExpansions,
       startStates: routeStates,
       playerCount,
       recoveryRule: options.recoveryRule,
@@ -10519,6 +10663,7 @@ function selectDiverseModeOpeningPool(entries, targetCount, options = {}) {
 }
 
 function buildReusableRoutePool(tileMap, starts, flags, playerCount, coursePreflight, options = {}) {
+  const generationProfile = getGenerationModeProfile(options);
   const excluded = coursePreflight?.excludedIndices ?? new Set();
   // v46.2: plausible coherent route alternatives belong to the shared route
   // layer, not to Normal mode. Competitive and Pay to Win can therefore
@@ -10527,6 +10672,25 @@ function buildReusableRoutePool(tileMap, starts, flags, playerCount, coursePrefl
   // older callers remain harmless.
   const preservePlausibleAlternatives = Boolean(
     options.preservePlausibleAlternatives ?? options.preserveTrafficAlternatives
+  );
+  const routeStrategy = preservePlausibleAlternatives
+    ? {
+      openingRoutesPerStart: generationProfile.openingRoutes,
+      laterRoutesPerContext: generationProfile.laterRoutes,
+      stitchedBeamWidth: generationProfile.beamWidth,
+      completionPool: generationProfile.completionPool
+    }
+    : {
+      openingRoutesPerStart: 1,
+      laterRoutesPerContext: 1,
+      stitchedBeamWidth: 1,
+      completionPool: 1
+    };
+  const retainsAlternatives = (
+    routeStrategy.openingRoutesPerStart > 1 ||
+    routeStrategy.laterRoutesPerContext > 1 ||
+    routeStrategy.stitchedBeamWidth > 1 ||
+    routeStrategy.completionPool > 1
   );
   const routedOpening = (coursePreflight?.opening?.starts ?? []).filter((analysis) => (
     analysis.reachable &&
@@ -10595,14 +10759,14 @@ function buildReusableRoutePool(tileMap, starts, flags, playerCount, coursePrefl
       // Once v42 production scoring is active, re-search Flag 1 so the coherent
       // pool is built entirely in the new route-aware Battery currency.
       contextualOpeningSeedAnalyses: options.routeAwareBatteryScoring ? null : candidateOpeningAnalyses,
-      contextualOpeningRoutes: 1,
-      contextualLaterRoutes: preservePlausibleAlternatives ? 2 : 1,
-      contextualBeamWidth: preservePlausibleAlternatives ? 2 : 1,
-      contextualCompletionPool: preservePlausibleAlternatives ? 3 : 1,
-      contextualWholePartialDiversity: preservePlausibleAlternatives,
-      contextualTrafficAlternativeRetention: preservePlausibleAlternatives,
-      contextualOpeningExpansions: COURSE_PREFLIGHT_OPENING_EXPANSIONS,
-      contextualLaterExpansions: COURSE_PREFLIGHT_LATER_EXPANSIONS,
+      contextualOpeningRoutes: routeStrategy.openingRoutesPerStart,
+      contextualLaterRoutes: routeStrategy.laterRoutesPerContext,
+      contextualBeamWidth: routeStrategy.stitchedBeamWidth,
+      contextualCompletionPool: routeStrategy.completionPool,
+      contextualWholePartialDiversity: retainsAlternatives,
+      contextualTrafficAlternativeRetention: retainsAlternatives,
+      contextualOpeningExpansions: generationProfile.preflightOpeningExpansions,
+      contextualLaterExpansions: generationProfile.preflightLaterExpansions,
       contextualLegMaxActions: COURSE_PREFLIGHT_LATER_MAX_ACTIONS,
       skipFullCourseTraffic: true,
       skipTraffic: true,
@@ -10648,12 +10812,9 @@ function buildReusableRoutePool(tileMap, starts, flags, playerCount, coursePrefl
     survivorStarts,
     seedStartAnalyses,
     routeStrategy: {
-      openingRoutesPerStart: 1,
-      laterRoutesPerContext: preservePlausibleAlternatives ? 2 : 1,
-      stitchedBeamWidth: preservePlausibleAlternatives ? 2 : 1,
-      completionPool: preservePlausibleAlternatives ? 3 : 1,
-      wholePartialDiversity: preservePlausibleAlternatives,
-      trafficAlternativeRetention: preservePlausibleAlternatives
+      ...routeStrategy,
+      wholePartialDiversity: retainsAlternatives,
+      trafficAlternativeRetention: retainsAlternatives
     },
     analysis
   };
@@ -10764,6 +10925,7 @@ function classifyCoursePreflight(preflight, preferences, context = {}) {
 }
 
 function getLightweightStartPruning(tileMap, starts, flags, playerCount, options = {}) {
+  const generationProfile = getGenerationModeProfile(options);
   const minimumPool = getLightweightPressurePoolTarget(starts.length, playerCount);
   if (
     options.competitiveMode ||
@@ -10788,7 +10950,7 @@ function getLightweightStartPruning(tileMap, starts, flags, playerCount, options
     skipTraffic: true,
     playerCount,
     maxActions: LIGHT_START_MAX_ACTIONS,
-    maxExpansions: LIGHT_START_MAX_EXPANSIONS,
+    maxExpansions: generationProfile.lightStartExpansions,
     recoveryRule: options.recoveryRule,
     ...getRouteAnalysisVariantOptions(options),
     startupSpinUp: options.startupSpinUp,
@@ -10834,7 +10996,7 @@ function getLightweightStartPruning(tileMap, starts, flags, playerCount, options
         scoreZ: Number(candidate.scoreZ.toFixed(2)),
         actionZ: Number(candidate.actionZ.toFixed(2)),
         minimumPool,
-        maxExpansions: LIGHT_START_MAX_EXPANSIONS
+        maxExpansions: generationProfile.lightStartExpansions
       }
     });
   }
@@ -10867,7 +11029,7 @@ function getLightweightStartPruning(tileMap, starts, flags, playerCount, options
           centralityCost: Number((ranking?.centralityCost ?? 0).toFixed(2)),
           minimumPool,
           sourcePool: starts.length,
-          maxExpansions: LIGHT_START_MAX_EXPANSIONS
+          maxExpansions: generationProfile.lightStartExpansions
         }
       });
     });
@@ -10973,6 +11135,7 @@ function screenSandwichedExtraDockOpening(
   playerCount,
   options = {}
 ) {
+  const generationProfile = getGenerationModeProfile(options);
   if (!goal || (dockPlacements?.length ?? 0) < 2 || options.movingTargets) {
     return { valid: true, tested: 0, reachable: 0, dockCoverage: 0, skipped: true };
   }
@@ -10992,7 +11155,7 @@ function screenSandwichedExtraDockOpening(
       skipTraffic: true,
       playerCount: Math.max(1, Number(playerCount ?? 1)),
       maxActions: Math.max(24, LIGHT_START_MAX_ACTIONS),
-      maxExpansions: LIGHT_START_MAX_EXPANSIONS,
+      maxExpansions: generationProfile.lightStartExpansions,
       recoveryRule: options.recoveryRule,
       ...getRouteAnalysisVariantOptions(options),
       startupSpinUp: options.startupSpinUp,
@@ -11036,6 +11199,7 @@ function screenSandwichedExtraDockOpening(
 }
 
 function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) {
+  const generationProfile = getGenerationModeProfile(options);
   const movingTargetTimelines = options.movingTargetTimelines ?? buildMovingTargetTimelines(
     tileMap,
     flags,
@@ -11068,7 +11232,7 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
       }
     );
   const lateRouteCount = contextualLegSearch
-    ? 2
+    ? generationProfile.laterRoutes
     : (
       !options.competitiveMode &&
       !options.payToWin &&
@@ -11083,7 +11247,8 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
     getPayToWinAnalysisOptions({
       maxRoutes: lateRouteCount,
       maxActions: Math.max(24, flags.length * 18 + 8),
-      maxExpansions: 52000,
+      maxExpansions: generationProfile.fullCourseExpansions,
+      fullCourseTrafficPasses: options.fullCourseTrafficPasses ?? generationProfile.fullCourseTrafficPasses,
       flags,
       playerCount,
       recoveryRule: options.recoveryRule,
@@ -11473,70 +11638,6 @@ function getCombinationCount(n, k, cap = 50001) {
 }
 
 
-function selectCompetitivePreferredStarts(firstLeg, playerCount = 4) {
-  const candidates = (firstLeg?.starts || []).filter((entry) => (
-    entry.reachable &&
-    entry.selectedRoute &&
-    Number.isFinite(entry.adjustedScore) &&
-    Number.isFinite(entry.bestActions)
-  ));
-  const targetCount = Math.max(1, Math.min(playerCount, candidates.length));
-  if (candidates.length <= targetCount) {
-    return candidates.map((entry) => entry.index);
-  }
-
-  let best = null;
-  const chosen = [];
-  let visited = 0;
-  const visitLimit = 20000;
-  const consider = () => {
-    visited += 1;
-    const entries = chosen.map((position) => candidates[position]);
-    const profile = getCompetitiveBalanceProfile(entries);
-    if (!best || profile.objective < best.profile.objective - 0.001) {
-      best = { indices: entries.map((entry) => entry.index), profile };
-    }
-  };
-  const visit = (offset) => {
-    if (visited >= visitLimit) return;
-    if (chosen.length === targetCount) {
-      consider();
-      return;
-    }
-    const needed = targetCount - chosen.length;
-    for (let position = offset; position <= candidates.length - needed; position += 1) {
-      chosen.push(position);
-      visit(position + 1);
-      chosen.pop();
-      if (visited >= visitLimit) break;
-    }
-  };
-  visit(0);
-
-  if (best) return best.indices;
-
-  return [...candidates]
-    .sort((left, right) => left.adjustedScore - right.adjustedScore)
-    .slice(0, targetCount)
-    .map((entry) => entry.index);
-}
-
-function getCompetitiveBlockedIndices(firstLeg, selectedIndices, playerCount = 4) {
-  const selectedSet = new Set(selectedIndices);
-  const selectedEntries = (firstLeg?.starts || []).filter((entry) => selectedSet.has(entry.index));
-  const selectedCenter = selectedEntries.length
-    ? medianValue(selectedEntries.map((entry) => entry.adjustedScore))
-    : 0;
-  return (firstLeg?.starts || [])
-    .filter((entry) => entry.reachable && !selectedSet.has(entry.index))
-    .sort((left, right) => (
-      Math.abs((right.adjustedScore ?? selectedCenter) - selectedCenter) -
-      Math.abs((left.adjustedScore ?? selectedCenter) - selectedCenter)
-    ))
-    .slice(0, Math.max(0, playerCount))
-    .map((entry) => entry.index);
-}
-
 function computeCompetitiveBlockImpact(
   firstLeg,
   tileMap,
@@ -11544,35 +11645,6 @@ function computeCompetitiveBlockImpact(
   playerCount = 4,
   options = {}
 ) {
-  const staging = firstLeg?.summary?.competitiveStaging;
-  if (staging?.active) {
-    const selected = (firstLeg?.starts || []).filter((entry) => (
-      entry.reachable && entry.selectedRoute && Number.isFinite(entry.adjustedScore)
-    ));
-    const profile = getCompetitiveBalanceProfile(selected);
-    const acceptable = (
-      selected.length >= playerCount &&
-      profile.outliers.length === 0 &&
-      profile.worstScoreZ < FULL_START_OUTLIER_Z &&
-      profile.worstActionZ < FULL_START_OUTLIER_Z + 0.35
-    );
-    return {
-      blockedStartCount: staging.blockedIndices?.length ?? Math.min(playerCount, staging.sourceStartCount ?? 0),
-      remainingStartCount: staging.remainingAfterBlocks ?? Math.max(0, (staging.sourceStartCount ?? selected.length) - playerCount),
-      blockedIndices: staging.blockedIndices ?? [],
-      selectedStartCount: selected.length,
-      selectedIndices: selected.map((entry) => entry.index),
-      remainingOutlierCount: profile.outliers.length,
-      scoreRange: profile.scoreRange,
-      actionRange: profile.actionRange,
-      worstScoreZ: profile.worstScoreZ,
-      worstActionZ: profile.worstActionZ,
-      acceptable,
-      method: "staged-perfect-blocks+perfect-starts",
-      trafficSubsetsTested: 0
-    };
-  }
-
   const reachable = (firstLeg?.starts || [])
     .filter((startAnalysis) => (
       startAnalysis.reachable &&
@@ -12665,8 +12737,16 @@ function classifyCandidate(sequence, preferences, context = {}) {
     hardFailures.push("normal-start-balance");
   }
 
-  if (preferences.competitiveMode && !skipCompetitiveBlockImpact && !competitiveBlockImpact?.acceptable) {
-    hardFailures.push("competitive-start-balance");
+  if (preferences.competitiveMode) {
+    const staging = sequence.firstLeg.summary.competitiveStaging;
+    const unavailableStartCount = staging?.unavailableIndices?.length
+      ?? Math.max(0, (staging?.sourceStartCount ?? reachableStarts.length) - (staging?.routedStartCount ?? reachableStarts.length));
+    if (unavailableStartCount > 0) {
+      hardFailures.push("competitive-start-availability");
+    }
+    if (!skipCompetitiveBlockImpact && !competitiveBlockImpact?.acceptable) {
+      hardFailures.push("competitive-start-balance");
+    }
   }
 
   if (context.boardPlacements?.length > 1 && context.pieceMap && context.checkpoints) {
@@ -12782,12 +12862,14 @@ function buildScenarioCopySummary(scenario) {
     .map((id) => formatExpansionName(id))
     .join(", ") || "none";
   const variantImpact = getVariantImpactSummary(scenario) || "none";
+  const scenarioMaxAttempts = getScenarioGenerationMaxAttempts(scenario);
   const resultLabel = scenario.generationBestMatch
-    ? `closest match, ${scenario.attempts ?? "?"} / ${MAX_ATTEMPTS} attempt(s), termination ${scenario.generationTerminationReason ?? diagnostics?.terminationReason ?? "attempt-limit"}`
-    : `accepted, ${scenario.attempts ?? "?"} / ${MAX_ATTEMPTS} attempt(s)`;
+    ? `closest match, ${scenario.attempts ?? "?"} / ${scenarioMaxAttempts} attempt(s), termination ${scenario.generationTerminationReason ?? diagnostics?.terminationReason ?? "attempt-limit"}`
+    : `accepted, ${scenario.attempts ?? "?"} / ${scenarioMaxAttempts} attempt(s)`;
 
   const lines = [
     `Requested: ${scenario.preferences?.playerCount ?? "?"}p, ${formatDifficultyLabel(scenario.preferences?.difficulty)} / ${formatLengthLabel(scenario.preferences?.length)}`,
+    `Mode: ${formatGenerationModeLabel(getScenarioGenerationMode(scenario))}`,
     `Sets: ${selectedSets}`,
     `Variants: ${variantImpact}`,
     `Result: ${resultLabel}`
@@ -12797,6 +12879,12 @@ function buildScenarioCopySummary(scenario) {
     lines.push(
       `Generation: ${formatGenerationDuration(diagnostics.totalMs)} total, ${formatGenerationDuration(diagnostics.routeSearchMs)} route search, ${diagnostics.routeSearches ?? 0} searches, ${diagnostics.routeExpansions ?? 0} expansions, ${diagnostics.cappedRouteSearches ?? 0} capped`
     );
+    if (diagnostics.searchProfile) {
+      const search = diagnostics.searchProfile;
+      lines.push(
+        `Search profile: ${diagnostics.generationModeLabel ?? formatGenerationModeLabel(getScenarioGenerationMode(scenario))}; attempts ${diagnostics.maxAttempts ?? scenarioMaxAttempts}, preflight ${search.preflightOpeningExpansions ?? "?"}/${search.preflightLaterExpansions ?? "?"}, full ${search.fullCourseExpansions ?? "?"}, routes ${search.openingRoutes ?? "?"}/${search.laterRoutes ?? "?"}, beam ${search.beamWidth ?? "?"}, completion ${search.completionPool ?? "?"}, traffic ${search.fullCourseTrafficPasses ?? "?"}`
+      );
+    }
     if (diagnostics.slowestRouteSearch) {
       const slowest = diagnostics.slowestRouteSearch;
       lines.push(
@@ -12905,7 +12993,7 @@ function buildScenarioCopySummary(scenario) {
     `Course: ${scenario.boardCount ?? scenario.mainBoardIds?.length ?? 0} board(s), ${playableCheckpoints.length} flag(s)`,
     `Boards: ${(scenario.mainBoardIds ?? []).map((pieceId, index) => `${pieceId}@${scenario.mainRotations?.[index] ?? 0}`).join(", ") || "none"}`,
     scenario.competitiveMode && summary.competitiveStaging?.active
-      ? `Starts: ${summary.competitiveStaging.routedStartCount ?? scenario.metrics?.reachableStarts ?? "?"} routed -> ${scenario.metrics?.usableStarts?.length ?? "?"} selected / ${summary.competitiveStaging.sourceStartCount ?? scenario.activeStarts?.length ?? "?"} total`
+      ? `Starts: ${summary.competitiveStaging.routedStartCount ?? scenario.metrics?.reachableStarts ?? "?"} routed -> ${scenario.metrics?.usableStarts?.length ?? "?"} available / ${summary.competitiveStaging.sourceStartCount ?? scenario.activeStarts?.length ?? "?"} total`
       : `Starts: ${scenario.metrics?.reachableStarts ?? summary.reachableStarts ?? "?"} reachable -> ${scenario.metrics?.usableStarts?.length ?? "?"} usable / ${scenario.activeStarts?.length ?? summary.coursePreflight?.sourceStartCount ?? summary.contextualStaging?.sourceStartCount ?? scenario.sequence?.starts?.length ?? "?"} total`
   );
   if (!scenario.virtualBots) {
@@ -13280,6 +13368,7 @@ function buildScenarioReport(scenario, selectedLegIndex) {
 
   const lines = [
     `Requested: ${scenario.preferences.playerCount} players, ${formatDifficultyLabel(scenario.preferences.difficulty)} difficulty, ${formatLengthLabel(scenario.preferences.length)} length`,
+    `Generation mode: ${formatGenerationModeLabel(getScenarioGenerationMode(scenario))}`,
     `Layout mode: ${scenario.preferences.alignedLayout ? "aligned" : "freeform"}`,
     `Sets: ${[...getSelectedExpansionIds(scenario.preferences)].map((id) => formatExpansionName(id)).join(", ") || "none"}`,
     `Allowed variants: ${describeAllowedVariants(scenario.preferences)}`,
@@ -13306,14 +13395,17 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     `Less Foreshadowing used: ${scenario.lessForeshadowing ? "yes" : "no"}`,
     `Staggered Boards used: ${scenario.staggeredBoards ? "yes" : "no"}`,
     scenario.generationBestMatch
-      ? `Closest match after ${scenario.attempts} / ${MAX_ATTEMPTS} attempt(s)`
-      : `Accepted after ${scenario.attempts} / ${MAX_ATTEMPTS} attempt(s)`,
+      ? `Closest match after ${scenario.attempts} / ${getScenarioGenerationMaxAttempts(scenario)} attempt(s)`
+      : `Accepted after ${scenario.attempts} / ${getScenarioGenerationMaxAttempts(scenario)} attempt(s)`,
     scenario.generationBestMatch
       ? `Best-match termination: ${scenario.generationTerminationReason ?? "attempt-limit"}`
       : "Best-match termination: n/a",
     scenario.generationDiagnostics
-      ? `Generation timing: total ${formatGenerationDuration(scenario.generationDiagnostics.totalMs)}, routeSearch ${formatGenerationDuration(scenario.generationDiagnostics.routeSearchMs)}, searches ${scenario.generationDiagnostics.routeSearches}, expansions ${scenario.generationDiagnostics.routeExpansions}, capped ${scenario.generationDiagnostics.cappedRouteSearches}, softBudget ${scenario.generationDiagnostics.softExpansionBudget ?? GENERATION_SOFT_EXPANSION_BUDGET}`
+      ? `Generation timing: total ${formatGenerationDuration(scenario.generationDiagnostics.totalMs)}, routeSearch ${formatGenerationDuration(scenario.generationDiagnostics.routeSearchMs)}, searches ${scenario.generationDiagnostics.routeSearches}, expansions ${scenario.generationDiagnostics.routeExpansions}, capped ${scenario.generationDiagnostics.cappedRouteSearches}, mode ${scenario.generationDiagnostics.generationModeLabel ?? formatGenerationModeLabel(getScenarioGenerationMode(scenario))}, softBudget ${scenario.generationDiagnostics.softExpansionBudget ?? getGenerationModeProfile({ generationMode: getScenarioGenerationMode(scenario) }).softExpansionBudget}`
       : "Generation timing: n/a",
+    scenario.generationDiagnostics?.searchProfile
+      ? `Generation search profile: attempts ${scenario.generationDiagnostics.maxAttempts ?? getScenarioGenerationMaxAttempts(scenario)}, preflight ${scenario.generationDiagnostics.searchProfile.preflightOpeningExpansions}/${scenario.generationDiagnostics.searchProfile.preflightLaterExpansions}, light ${scenario.generationDiagnostics.searchProfile.lightStartExpansions}, full ${scenario.generationDiagnostics.searchProfile.fullCourseExpansions}, routes ${scenario.generationDiagnostics.searchProfile.openingRoutes}/${scenario.generationDiagnostics.searchProfile.laterRoutes}, beam ${scenario.generationDiagnostics.searchProfile.beamWidth}, completion ${scenario.generationDiagnostics.searchProfile.completionPool}, traffic passes ${scenario.generationDiagnostics.searchProfile.fullCourseTrafficPasses}`
+      : "Generation search profile: legacy/n/a",
     scenario.generationDiagnostics?.slowestRouteSearch
       ? `Slowest route search: ${scenario.generationDiagnostics.slowestRouteSearch.kind} ${formatGenerationDuration(scenario.generationDiagnostics.slowestRouteSearch.durationMs)}, expansions ${scenario.generationDiagnostics.slowestRouteSearch.expansions}/${scenario.generationDiagnostics.slowestRouteSearch.maxExpansions}, returned ${scenario.generationDiagnostics.slowestRouteSearch.returnedRoutes}`
       : "Slowest route search: n/a",
@@ -13594,6 +13686,8 @@ function setGeneratingOverlay(visible, text = "", details = {}) {
 
   const attempt = details.attempt ?? generationOverlayState.attempt ?? 1;
   const stage = details.stage ?? generationOverlayState.stage ?? text;
+  const preferences = details.preferences ?? generationOverlayState.preferences ?? {};
+  const maxAttempts = details.maxAttempts ?? generationOverlayState.maxAttempts ?? getGenerationModeProfile(preferences).maxAttempts;
   const userState = getGenerationUserFacingState(stage, attempt);
 
   const headingEl = document.getElementById("overlay-heading");
@@ -13605,13 +13699,12 @@ function setGeneratingOverlay(visible, text = "", details = {}) {
     headingEl.textContent = userState.heading;
   }
   if (attemptEl) {
-    attemptEl.textContent = `Course attempt ${Math.max(1, attempt)} / ${MAX_ATTEMPTS}`;
+    attemptEl.textContent = `Course attempt ${Math.max(1, attempt)} / ${maxAttempts}`;
   }
   if (activityEl) {
     activityEl.textContent = userState.activity;
   }
   if (hintEl) {
-    const preferences = details.preferences ?? generationOverlayState.preferences ?? {};
     const hint = getGenerationConstraintHint(preferences);
     hintEl.textContent = hint;
     hintEl.classList.toggle("hidden", !hint);
@@ -14968,6 +15061,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
           boardRects: scenarioBoardRects,
           difficulty: generationPreferences.difficulty,
           length: generationPreferences.length,
+          generationMode: generationPreferences.generationMode,
           contextualEarlyExit: true
         }, effectiveVariantBundle);
         const indexedActiveStarts = activeStarts.map((start, index) => ({
@@ -15221,7 +15315,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
 
         if (competitiveMode && !virtualBots) {
           await reportStage(
-            `Competitive Mode — validating the offered start pool`,
+            `Competitive Mode — validating the full physical start pool`,
             evaluationsUsed
           );
           const requiredCompetitivePool = preferences.playerCount * 2;
@@ -15253,59 +15347,33 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
             break;
           }
 
-          const selectedIndices = selectCompetitivePreferredStarts(
-            preliminaryFirstLeg,
-            preferences.playerCount
-          );
-          const selectedSet = new Set(selectedIndices);
-          const selectedStarts = reusableRoutePool.survivorStarts.filter((start) => (
-            selectedSet.has(start.analysisIndex)
-          ));
-          const selectedSeedAnalyses = reusableRoutePool.seedStartAnalyses.filter((entry) => (
-            selectedSet.has(entry.index)
-          ));
-          if (selectedStarts.length < preferences.playerCount) {
-            sequenceFailureCategory = "competitive-start-capacity";
-            sequenceFailureReason = `competitive refinement selected only ${selectedStarts.length}/${preferences.playerCount} required starts`;
-            sequence = null;
-            break;
-          }
-          const blockedIndices = getCompetitiveBlockedIndices(
-            preliminaryFirstLeg,
-            selectedIndices,
-            preferences.playerCount
-          );
-          await reportStage(
-            `Refining competitive starts — ${selectedStarts.length} player-selected starts`,
-            evaluationsUsed
-          );
-          sequence = analyzeFlagSequence(
-            goalTileMap,
-            selectedStarts,
-            playableCheckpoints,
-            preferences.playerCount,
-            {
-              ...productionAnalysisOptions,
-              contextualSeedStartAnalyses: selectedSeedAnalyses,
-              contextualSeedRouteStrategy: reusableRoutePool.routeStrategy,
-              contextualRequiredStarts: preferences.playerCount
-            }
-          );
+          // Competitive never generator-prunes a merely weak start. Keep the full
+          // routed physical field and let classifyCandidate simulate the players'
+          // own optimal blocking choices. Exact acceptance additionally requires
+          // every physical start to have survived this route validation; a closest
+          // match may retain generator-unavailable starts with an explicit warning.
+          sequence = offeredSequence;
+          const routedIndexSet = new Set(routedStarts.map((entry) => entry.index));
+          const unavailableIndices = indexedActiveStarts
+            .map((start, index) => (
+              Number.isInteger(start.analysisIndex) ? start.analysisIndex : index
+            ))
+            .filter((index) => !routedIndexSet.has(index))
+            .sort((left, right) => left - right);
           const preliminaryCache = preliminaryFirstLeg.summary.contextualLegCache ?? {};
-          sequence.firstLeg.summary.contextualSearchMode = "competitive-shared-route-pool";
+          sequence.firstLeg.summary.contextualSearchMode = "competitive-full-offered-pool";
           sequence.firstLeg.summary.competitiveStaging = {
             active: true,
             sourceStartCount: indexedActiveStarts.length,
             routedStartCount: routedStarts.length,
             offeredStartCount: routedStarts.length,
             requiredOfferedStarts: requiredCompetitivePool,
-            selectedIndices,
-            blockedIndices,
-            remainingAfterBlocks: Math.max(0, routedStarts.length - blockedIndices.length),
+            unavailableIndices,
+            remainingAfterBlocks: Math.max(0, routedStarts.length - preferences.playerCount),
             preliminaryCache,
             preliminaryScoreStdDev: preliminaryFirstLeg.summary.scoreStdDev ?? 0,
             routePoolCandidateCount: reusableRoutePool.candidateCount,
-            method: "all-physical-validated+perfect-selection"
+            method: "all-available+optimal-human-blocks"
           };
         } else if (unconstrainedNormalRouting) {
           let fastAnyFailed = false;
@@ -15868,11 +15936,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     const analyzedReachableIndices = new Set(
       computeCourseReachableStarts(sequence.firstLeg).map((entry) => entry.index)
     );
-    const validatedStartIndices = competitiveMode
-      ? (reusableRoutePool?.seedStartAnalyses ?? [])
-        .filter((entry) => entry.reachable && entry.fullCourseRoute)
-        .map((entry) => entry.index)
-      : [...analyzedReachableIndices];
+    const validatedStartIndices = [...analyzedReachableIndices];
     const validatedStartSet = new Set(validatedStartIndices);
     const usableStartSet = new Set((metrics.usableStarts ?? []).map((entry) => entry.index));
     const blockedStartIndices = virtualBots
@@ -16409,7 +16473,11 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
 }
 
 async function generateScenarioForPreferences(assets, preferences, options = {}) {
-  const maxAttempts = options.maxAttempts ?? MAX_ATTEMPTS;
+  const generationMode = normalizeGenerationMode(preferences.generationMode);
+  const generationProfile = getGenerationModeProfile({ generationMode });
+  const maxAttempts = options.maxAttempts ?? generationProfile.maxAttempts;
+  const softExpansionBudget = options.softExpansionBudget ?? generationProfile.softExpansionBudget;
+  const softBudgetMinAttempts = options.softBudgetMinAttempts ?? generationProfile.softBudgetMinAttempts;
   const onProgress = options.onProgress ?? null;
   const generationStartedAt = generationNow();
   const generationDiagnostics = {
@@ -16426,8 +16494,22 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
     terminationReason: null,
     rejectionEvents: [],
     rejectionSummary: null,
-    softExpansionBudget: GENERATION_SOFT_EXPANSION_BUDGET,
-    softBudgetMinAttempts: GENERATION_SOFT_BUDGET_MIN_ATTEMPTS
+    generationMode,
+    generationModeLabel: formatGenerationModeLabel(generationMode),
+    maxAttempts,
+    softExpansionBudget,
+    softBudgetMinAttempts,
+    searchProfile: {
+      preflightOpeningExpansions: generationProfile.preflightOpeningExpansions,
+      preflightLaterExpansions: generationProfile.preflightLaterExpansions,
+      lightStartExpansions: generationProfile.lightStartExpansions,
+      fullCourseExpansions: generationProfile.fullCourseExpansions,
+      openingRoutes: generationProfile.openingRoutes,
+      laterRoutes: generationProfile.laterRoutes,
+      beamWidth: generationProfile.beamWidth,
+      completionPool: generationProfile.completionPool,
+      fullCourseTrafficPasses: generationProfile.fullCourseTrafficPasses
+    }
   };
   let bestScenario = null;
   let crashedAttempts = 0;
@@ -16473,9 +16555,9 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
   while (attempt < maxAttempts) {
     const workSnapshot = getAnalysisTelemetrySnapshotSafe();
     const softBudgetReached = (
-      attempt >= GENERATION_SOFT_BUDGET_MIN_ATTEMPTS &&
+      attempt >= softBudgetMinAttempts &&
       bestScenario &&
-      (workSnapshot.totalExpansions ?? 0) >= GENERATION_SOFT_EXPANSION_BUDGET
+      (workSnapshot.totalExpansions ?? 0) >= softExpansionBudget
     );
     if (softBudgetReached) {
       terminationReason = "soft-expansion-budget";
@@ -16534,14 +16616,14 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
         },
         ({ evaluationsUsed: localEvaluations, bestScenario: candidateBestScenario }) => {
           const completedEvaluations = attempt + Math.max(0, localEvaluations);
-          if (completedEvaluations < GENERATION_SOFT_BUDGET_MIN_ATTEMPTS) {
+          if (completedEvaluations < softBudgetMinAttempts) {
             return false;
           }
           if (!bestScenario && !isViableFallbackScenario(candidateBestScenario)) {
             return false;
           }
           const work = getAnalysisTelemetrySnapshotSafe();
-          return (work.totalExpansions ?? 0) >= GENERATION_SOFT_EXPANSION_BUDGET;
+          return (work.totalExpansions ?? 0) >= softExpansionBudget;
         }
       );
     } catch (error) {
@@ -16818,6 +16900,8 @@ async function runDiagnostics() {
 
 async function start() {
   const preferences = getPreferencesFromControls();
+  const generationProfile = getGenerationModeProfile(preferences);
+  const maxAttempts = generationProfile.maxAttempts;
   isGenerating = true;
 
   try {
@@ -16827,6 +16911,7 @@ async function start() {
       "",
       {
         attempt: 1,
+        maxAttempts,
         stage: "Loading course assets",
         preferences
       }
@@ -16842,13 +16927,14 @@ async function start() {
 
     clearAnalysisCachesSafe();
     const generation = await generateScenarioForPreferences(assets, preferences, {
-      maxAttempts: MAX_ATTEMPTS,
+      maxAttempts,
       onProgress: async (attempt, maxAttempts, stage = "") => {
         setGeneratingOverlay(
           true,
           "",
           {
             attempt,
+            maxAttempts,
             stage,
             preferences
           }
@@ -16860,8 +16946,8 @@ async function start() {
     if (!generation.scenario) {
       window.alert(
         generation.crashedAttempts > 0 && generation.lastAttemptError
-          ? `No playable course was found after ${MAX_ATTEMPTS} attempts. Last error: ${generation.lastAttemptError.message}`
-          : `No playable course was found after ${MAX_ATTEMPTS} attempts.`
+          ? `No playable course was found after ${maxAttempts} attempts. Last error: ${generation.lastAttemptError.message}`
+          : `No playable course was found after ${maxAttempts} attempts.`
       );
       return;
     }

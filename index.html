@@ -8,7 +8,7 @@
   <meta name="mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="mobile-web-app-title" content="RoboRally" />
   <meta name="application-name" content="RoboRally Course Generator" />
-  <meta name="app-version" content="20260815140428" />
+  <meta name="app-version" content="20260815200739" />
   <title>RoboRally Course Generator</title>
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="icon" type="image/png" sizes="16x16" href="./assets/icons/favicon-16.png" />
@@ -1327,6 +1327,16 @@
             <option value="short">Short</option>
             <option value="moderate">Medium</option>
             <option value="long">Long</option>
+          </select>
+        </label>
+        <label title="Controls generation speed versus search thoroughness. It does not change game rules or acceptance thresholds.">
+          Mode
+          <select id="generation-mode" aria-label="Generation mode">
+            <option value="fastest">Fastest</option>
+            <option value="fast">Fast</option>
+            <option value="standard" selected>Standard</option>
+            <option value="balanced">Balanced</option>
+            <option value="thorough">Thorough</option>
           </select>
         </label>
         <label>
