@@ -1100,6 +1100,7 @@ function drawStarts(
   startLateEnergyCosts = [],
   startEarlyUnavailable = [],
   startLateUnavailable = [],
+  startEnergyIsSubsidy = false,
   noDockStarts = false,
   hideUnusableStarts = false
 ) {
@@ -1135,16 +1136,19 @@ function drawStarts(
       lateEnergyCost !== energyCost
     );
     const hasSecondaryCostDisplay = earlyUnavailable || lateUnavailable || hasDistinctLateEnergyCost;
+    const formatEnergyValue = (value) => (
+      startEnergyIsSubsidy ? `+${value}` : String(value)
+    );
     const energyCostLabel = hasEnergyCost
       ? earlyUnavailable && lateUnavailable
         ? "—/—"
         : earlyUnavailable
-          ? Number.isFinite(lateEnergyCost) ? `—/${lateEnergyCost}` : "—"
+          ? Number.isFinite(lateEnergyCost) ? `—/${formatEnergyValue(lateEnergyCost)}` : "—"
           : lateUnavailable
-            ? `${energyCost}/—`
+            ? `${formatEnergyValue(energyCost)}/—`
             : hasDistinctLateEnergyCost
-              ? `${energyCost}/${lateEnergyCost}`
-              : String(energyCost)
+              ? `${formatEnergyValue(energyCost)}/${formatEnergyValue(lateEnergyCost)}`
+              : formatEnergyValue(energyCost)
       : "";
     const explicitStartLabel = startLabels[index];
     const hasExplicitStartLabel = explicitStartLabel !== null && explicitStartLabel !== undefined && explicitStartLabel !== "";
@@ -1169,10 +1173,13 @@ function drawStarts(
       ctx.fill();
       ctx.stroke();
     } else if (hasEnergyCost) {
-      // In the regular Pay to Win view, the energy-cost marker is square.
-      ctx.fillStyle = "rgba(21, 132, 86, 0.92)";
+      // Pay to Win remains green; Subsidized Starts uses light blue so the two
+      // inverse setup mechanisms are visually distinct at a glance.
+      ctx.fillStyle = startEnergyIsSubsidy
+        ? "rgba(91, 169, 214, 0.94)"
+        : "rgba(21, 132, 86, 0.92)";
       ctx.fillRect(badgeLeft, badgeTop, badgeSize, badgeSize);
-      ctx.strokeStyle = "#0c4f35";
+      ctx.strokeStyle = startEnergyIsSubsidy ? "#245b7b" : "#0c4f35";
       ctx.lineWidth = 1.35;
       ctx.strokeRect(badgeLeft, badgeTop, badgeSize, badgeSize);
     } else if (noDockStarts) {
@@ -1228,15 +1235,17 @@ function drawStarts(
     }
 
     if (devPayToWinStart) {
-      // In dev view, show the Pay to Win energy cost as a small green square
-      // in the upper-right of the tile, separate from the blue start circle.
+      // In dev view, keep the normal start as a blue circle and draw the
+      // Energy adjustment separately: green for P2W, light blue for subsidy.
       const costSize = tileSize * 0.32;
       const costLeft = px + tileSize - costSize - 3;
       const costTop = py + 3;
 
-      ctx.fillStyle = "rgba(21, 132, 86, 0.96)";
+      ctx.fillStyle = startEnergyIsSubsidy
+        ? "rgba(91, 169, 214, 0.97)"
+        : "rgba(21, 132, 86, 0.96)";
       ctx.fillRect(costLeft, costTop, costSize, costSize);
-      ctx.strokeStyle = "#0c4f35";
+      ctx.strokeStyle = startEnergyIsSubsidy ? "#245b7b" : "#0c4f35";
       ctx.lineWidth = 1.2;
       ctx.strokeRect(costLeft, costTop, costSize, costSize);
 
@@ -1717,6 +1726,7 @@ export function render(canvas, pieces, imageMap = {}, options = {}) {
   const startLateEnergyCosts = options.startLateEnergyCosts ?? [];
   const startEarlyUnavailable = options.startEarlyUnavailable ?? [];
   const startLateUnavailable = options.startLateUnavailable ?? [];
+  const startEnergyIsSubsidy = Boolean(options.startEnergyIsSubsidy);
   const noDockStarts = Boolean(options.noDockStarts);
   const hideUnusableStarts = Boolean(options.hideUnusableStarts);
   const edgeOutlineColor = options.edgeOutlineColor ?? null;
@@ -1764,6 +1774,7 @@ export function render(canvas, pieces, imageMap = {}, options = {}) {
     startLateEnergyCosts,
     startEarlyUnavailable,
     startLateUnavailable,
+    startEnergyIsSubsidy,
     noDockStarts,
     hideUnusableStarts
   );

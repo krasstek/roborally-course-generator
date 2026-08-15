@@ -192,12 +192,11 @@ const MAX_DOCK_COUNT = 2;
 const DEFAULT_STARTING_ENERGY = ROUTE_ENERGY_ECONOMY_DEFAULTS.startingEnergy;
 const DEFAULT_STARTING_UPGRADE_CARDS = ROUTE_ENERGY_ECONOMY_DEFAULTS.startingUpgradeCards;
 
-// Pay to Win v46 prices are evaluated directly through the shared v45
-// cards+Energy route economy. A displayed pE price means the route is replayed
-// from startingEnergy-p before the opening Upgrade Phase; 0..startingEnergy are
-// payable, while startingEnergy+1 remains the non-payable denial/pruning signal.
-// The moving zero baseline, bidirectional endpoint pruning, selector breakpoint
-// fit, and availability/player-floor safeguards remain unchanged.
+// Start-Energy balancing uses the shared v45 cards+Energy route economy.
+// Pay to Win replays routes from startingEnergy-p before the opening Upgrade
+// Phase. Subsidized Starts replays from startingEnergy+s, capped at maxEnergy.
+// The moving baseline, bidirectional endpoint pruning, selector breakpoint fit,
+// and availability/player-floor safeguards are shared by both setup variants.
 // Passive border geometry that may coexist with a No-Docks starting square.
 // Active edge devices (lasers, push panels, flamethrowers) are deliberately
 // excluded even though they are encoded directionally on an edge: a player
@@ -1168,6 +1167,7 @@ function getGenerationRejectionCategory(scenario, fallbackReason = "") {
   if (text.includes("checkpoint") || text.includes("choosing checkpoints")) return "checkpoint-layout";
   if (text.includes("reboot")) return "reboot-layout";
   if (text.includes("sandwiched")) return "sandwiched-layout";
+  if (text.includes("subsidized")) return "subsidized-starts";
   if (text.includes("pay to win")) return "pay-to-win";
   if (text.includes("extra dock")) return "extra-docks";
   return "other";
@@ -2711,7 +2711,12 @@ function getVariantImpactSummary(scenario) {
   if (scenario.competitiveMode) {
     addImpact("competitiveMode");
   }
-  if (scenario.payToWin) {
+  if (scenario.subsidizedStarts) {
+    const offeredStarts = (scenario.sequence.firstLeg.starts || []).filter((start) => (
+      Number.isFinite(start.energyCost) && !start.payToWinUnavailable
+    ));
+    addImpact("subsidizedStarts", `${offeredStarts.length} offered start${offeredStarts.length === 1 ? "" : "s"}`);
+  } else if (scenario.payToWin) {
     const pricedStarts = (scenario.sequence.firstLeg.starts || []).filter((start) => (
       Number.isFinite(start.energyCost) && !start.payToWinUnavailable
     ));
@@ -2900,7 +2905,9 @@ function updateRulesNote(scenario) {
   }
 
   if (scenario.noDocks) {
-    if (scenario.payToWin) {
+    if (scenario.subsidizedStarts) {
+      notes.push("No Docks: do not use a docking bay. The subsidized starting spaces along the indicated outer board edge replace docking-bay starting spaces.");
+    } else if (scenario.payToWin) {
       notes.push("No Docks: do not use a docking bay. The priced starting spaces along the indicated outer board edge replace docking-bay starting spaces.");
     } else if (scenario.startupSpinUp) {
       notes.push("No Docks: do not use a docking bay. White circles along the indicated outer board edge are the available starting spaces.");
@@ -2923,6 +2930,30 @@ function updateRulesNote(scenario) {
         { page: 32 }
       )
     );
+  }
+
+  if (scenario.subsidizedStarts) {
+    const subsidyPricing = scenario.sequence.firstLeg.summary.payToWin;
+    if (subsidyPricing?.hasLatePriceDifference) {
+      const firstLatePlayer = subsidyPricing.lateSelectorStart ?? scenario.playerCount;
+      const lastLatePlayer = subsidyPricing.lateSelectorEnd ?? scenario.playerCount;
+      const singleLatePlayer = firstLatePlayer === lastLatePlayer;
+      const latePlayerText = singleLatePlayer
+        ? `player ${firstLatePlayer}`
+        : `players ${firstLatePlayer}–${lastLatePlayer}`;
+      const hasUnavailableSelectors = (
+        (subsidyPricing.earlyUnavailableCount ?? 0) > 0 ||
+        (subsidyPricing.lateUnavailableCount ?? 0) > 0
+      );
+      const dashText = hasUnavailableSelectors
+        ? " A dash in either position means that starting space cannot be sufficiently compensated for that selector group; a fully unavailable space uses the prohibited-start marker instead of a subsidy."
+        : "";
+      notes.push(
+        `Subsidized Starts: light-blue starting spaces show extra starting Energy granted for choosing that space. Add the shown amount to the normal 3 starting Energy, never exceeding the 10E storage limit. ${latePlayerText} ${singleLatePlayer ? "uses" : "use"} the second value after the slash; earlier players use the first subsidy.${dashText} Resolve starting-space selection and subsidies before dealing or revealing any starting upgrade cards.`
+      );
+    } else {
+      notes.push("Subsidized Starts: light-blue starting spaces show extra starting Energy granted for choosing that space. Add the shown amount to the normal 3 starting Energy, never exceeding the 10E storage limit; a prohibited starting space cannot be sufficiently compensated even at the storage cap. Resolve starting-space selection and subsidies before dealing or revealing any starting upgrade cards.");
+    }
   }
 
   if (scenario.payToWin) {
@@ -3182,7 +3213,12 @@ function updateLegend(scenario) {
       : "Green marker: reboot token";
   }
   rebootTokenEl?.classList.toggle("hidden", !scenario?.virtualBots && !["reboot_tokens", "home_reboot"].includes(scenario?.recoveryRule));
-  payToWinStartEl?.classList.toggle("hidden", !scenario?.payToWin);
+  if (payToWinStartEl) {
+    payToWinStartEl.textContent = scenario?.subsidizedStarts
+      ? "Light-blue square: extra starting Energy subsidy"
+      : "Green square: Pay to Win starting Energy cost";
+  }
+  payToWinStartEl?.classList.toggle("hidden", !(scenario?.payToWin || scenario?.subsidizedStarts));
 }
 
 function normalizeVariantState(value) {
@@ -3354,6 +3390,7 @@ function getVariantBaseChance(variantId, preferences = {}) {
     classicSharedDeck: { easy: 0.01, moderate: 0.07, hard: 0.2 },
     competitiveMode: { easy: 0.08, moderate: 0.16, hard: 0.22 },
     payToWin: { easy: 0.1, moderate: 0.18, hard: 0.2 },
+    subsidizedStarts: { easy: 0.1, moderate: 0.18, hard: 0.2 },
     dynamicArchiving: { easy: 0.24, moderate: 0.4, hard: 0.34 },
     extraDocks: { easy: 0.08, moderate: 0.2, hard: 0.26 },
     factoryRejects: { easy: 0.06, moderate: 0.14, hard: 0.22 },
@@ -3392,6 +3429,7 @@ function getLateEasyVariantRescueBonus(variantId, preferences = {}) {
     classicSharedDeck: -0.08,
     competitiveMode: -0.05,
     payToWin: -0.04,
+    subsidizedStarts: -0.04,
     factoryRejects: -0.08,
     hazardousFlags: -0.08,
     movingTargets: -0.1,
@@ -7770,7 +7808,8 @@ function buildCourseEnergyEconomyDiagnostics(scenario) {
     ...(scenario.preferences || {}),
     playerCount: scenario.playerCount ?? scenario.preferences?.playerCount,
     upgradeWorld: Boolean(scenario.upgradeWorld ?? scenario.preferences?.upgradeWorld),
-    payToWin: Boolean(scenario.payToWin)
+    payToWin: Boolean(scenario.payToWin || scenario.subsidizedStarts),
+    subsidizedStarts: Boolean(scenario.subsidizedStarts)
   };
   const benchmark = typeof summarizePowerUpOpportunityBenchmark === "function"
     ? summarizePowerUpOpportunityBenchmark(
@@ -7950,8 +7989,73 @@ function buildUpgradeFeatureWeightAudit(options = {}) {
   };
 }
 
+function isSubsidizedStartsPricing(options = {}) {
+  return Boolean(options.subsidizedStarts);
+}
+
+function getStartEnergyAdjustmentLimit(options = {}) {
+  const startingEnergy = getCourseStartingEnergy(options);
+  if (isSubsidizedStartsPricing(options)) {
+    return Math.max(0, getCourseMaxEnergy(options) - startingEnergy);
+  }
+  return startingEnergy;
+}
+
 function getPayToWinDenialCost(options = {}) {
-  return getCourseStartingEnergy(options) + 1;
+  // Kept under the mature P2W helper name because the pricing/pruning engine is
+  // shared. For Subsidized Starts this is max subsidy + 1, i.e. 8E with the
+  // standard 3E start and 10E storage cap.
+  return getStartEnergyAdjustmentLimit(options) + 1;
+}
+
+function chooseSubsidizedStartAdjustment(paymentScores, baselineFullScore, maxAdjustment, denialCost) {
+  const epsilon = 1e-9;
+  const candidates = [];
+  let canReachBaseline = false;
+
+  // Include +0E in the closest-match candidates. A weak start may remain
+  // slightly below the baseline when its first subsidy point has no modeled
+  // benefit; in that case compensation should stay at +0E rather than grant
+  // Energy that does not improve the balance. +1..max still determine whether
+  // the start can be compensated at all.
+  for (let adjustment = 0; adjustment <= maxAdjustment; adjustment += 1) {
+    const postAdjustmentScore = Number(paymentScores?.[adjustment]);
+    if (!Number.isFinite(postAdjustmentScore)) continue;
+
+    // Lower full-course score is better. Positive delta means this start is
+    // still weaker than the 0E baseline; negative means the subsidy has made
+    // it stronger. A start is only offerable when the available storage cap
+    // can reach/cross the baseline at least once.
+    const delta = postAdjustmentScore - baselineFullScore;
+    if (adjustment > 0 && delta <= epsilon) canReachBaseline = true;
+    candidates.push({
+      adjustment,
+      delta,
+      absoluteGap: Math.abs(delta),
+      nonOvercompensating: delta >= -epsilon
+    });
+  }
+
+  if (!canReachBaseline || !candidates.length) {
+    return denialCost;
+  }
+
+  candidates.sort((left, right) => {
+    const gapDifference = left.absoluteGap - right.absoluteGap;
+    if (Math.abs(gapDifference) > epsilon) return gapDifference;
+
+    // If two integer subsidies are equally close, do not make the start
+    // stronger than the baseline when an equally good under-compensation
+    // exists. If the modeled result is otherwise identical, use the lower
+    // subsidy: Subsidized Starts is compensation, not a reason to grant Energy
+    // that the shared economy says adds no balancing value.
+    if (left.nonOvercompensating !== right.nonOvercompensating) {
+      return left.nonOvercompensating ? -1 : 1;
+    }
+    return left.adjustment - right.adjustment;
+  });
+
+  return candidates[0].adjustment;
 }
 
 function getPayToWinRemovalBias(options = {}) {
@@ -8049,6 +8153,7 @@ function getPayToWinRouteEconomyPricingOptions(firstLeg, options = {}) {
   return {
     ...options,
     payToWin: true,
+    subsidizedStarts: Boolean(options.subsidizedStarts),
     routeAwareBatteryScoring,
     routeEnergyHorizonTurns: horizonTurns,
     routeEnergyRegisterScore: registerScore,
@@ -8063,7 +8168,8 @@ function getPayToWinRouteEconomyPricingOptions(firstLeg, options = {}) {
     upgradeUsefulEnergyPerInstall: config.usefulEnergyPerInstall,
     upgradePowerRegistersPerEnergy: config.powerRegistersPerEnergy,
     routeRegistersPerTurn: config.registersPerTurn,
-    payToWinMaxPayment: config.startingEnergy
+    payToWinMaxPayment: config.startingEnergy,
+    subsidizedStartsMaxSubsidy: Math.max(0, config.maxEnergy - config.startingEnergy)
   };
 }
 
@@ -8126,6 +8232,9 @@ function buildPayToWinRegisterPricingState(
   paymentScoreByIndex = null
 ) {
   const startingEnergy = getCourseStartingEnergy(options);
+  const maxEnergy = getCourseMaxEnergy(options);
+  const subsidizedStarts = isSubsidizedStartsPricing(options);
+  const maxAdjustment = getStartEnergyAdjustmentLimit(options);
   const denialCost = getPayToWinDenialCost(options);
   const scoredStarts = activeStarts.map((item) => {
     const rawCurve = paymentScoreByIndex?.get(item.index);
@@ -8137,12 +8246,12 @@ function buildPayToWinRegisterPricingState(
         ? curveZero
         : getPayToWinFullCourseScore(item);
     const paymentScores = Array.from(
-      { length: startingEnergy + 1 },
-      (_, payment) => {
-        const value = Array.isArray(rawCurve) ? Number(rawCurve[payment]) : null;
+      { length: maxAdjustment + 1 },
+      (_, adjustment) => {
+        const value = Array.isArray(rawCurve) ? Number(rawCurve[adjustment]) : null;
         return Number.isFinite(value)
           ? value
-          : (payment === 0 && Number.isFinite(fullScore) ? fullScore : null);
+          : (adjustment === 0 && Number.isFinite(fullScore) ? fullScore : null);
       }
     );
     if (Number.isFinite(fullScore)) paymentScores[0] = fullScore;
@@ -8165,40 +8274,65 @@ function buildPayToWinRegisterPricingState(
     };
   }
 
-  const worst = [...scoredStarts].sort((left, right) =>
-    right.fullScore - left.fullScore || left.index - right.index
-  )[0];
+  // Lower full-course score is the stronger/easier start. Pay to Win anchors
+  // on the weakest/highest-score start and charges stronger starts. Subsidized
+  // Starts anchors on the strongest/lowest-score start and grants Energy to
+  // weaker starts until they catch up.
+  const baseline = [...scoredStarts].sort((left, right) => (
+    subsidizedStarts
+      ? left.fullScore - right.fullScore || left.index - right.index
+      : right.fullScore - left.fullScore || left.index - right.index
+  ))[0];
   const registerScore = Math.max(
     0.01,
     Number(pricingBenchmark?.registerScore) || 6.4
   );
   const entries = scoredStarts.map((entry) => {
-    const advantage = Math.max(0, worst.fullScore - entry.fullScore);
+    const advantage = subsidizedStarts
+      ? Math.max(0, entry.fullScore - baseline.fullScore)
+      : Math.max(0, baseline.fullScore - entry.fullScore);
     const registerEquivalent = advantage / registerScore;
     let energyCost = 0;
 
     if (advantage > 1e-9) {
-      energyCost = denialCost;
-      for (let payment = 1; payment <= startingEnergy; payment += 1) {
-        const postPaymentScore = Number(entry.paymentScores[payment]);
-        if (
-          Number.isFinite(postPaymentScore) &&
-          postPaymentScore + 1e-9 >= worst.fullScore
-        ) {
-          energyCost = payment;
-          break;
+      if (subsidizedStarts) {
+        // Subsidies are discrete and the v45 economy is intentionally
+        // nonlinear/plateaued. Choose the available integer subsidy whose
+        // post-subsidy route value is closest to the 0E baseline, while still
+        // requiring that the +max storage-cap subsidy can compensate the start
+        // at all. This avoids systematically taking the first overshoot.
+        energyCost = chooseSubsidizedStartAdjustment(
+          entry.paymentScores,
+          baseline.fullScore,
+          maxAdjustment,
+          denialCost
+        );
+      } else {
+        energyCost = denialCost;
+        for (let adjustment = 1; adjustment <= maxAdjustment; adjustment += 1) {
+          const postAdjustmentScore = Number(entry.paymentScores[adjustment]);
+          const balanced = Number.isFinite(postAdjustmentScore) &&
+            postAdjustmentScore + 1e-9 >= baseline.fullScore;
+          if (balanced) {
+            energyCost = adjustment;
+            break;
+          }
         }
       }
     }
 
-    const payable = energyCost <= startingEnergy;
-    const evaluatedPayment = payable ? energyCost : startingEnergy;
-    const postPaymentFullScore = Number(entry.paymentScores[evaluatedPayment]);
+    const payable = energyCost <= maxAdjustment;
+    const evaluatedAdjustment = payable ? energyCost : maxAdjustment;
+    const postPaymentFullScore = Number(entry.paymentScores[evaluatedAdjustment]);
     const paymentPenalty = Number.isFinite(postPaymentFullScore)
-      ? Math.max(0, postPaymentFullScore - entry.fullScore)
+      ? subsidizedStarts
+        ? Math.max(0, entry.fullScore - postPaymentFullScore)
+        : Math.max(0, postPaymentFullScore - entry.fullScore)
       : null;
     const remainingAdvantage = Number.isFinite(postPaymentFullScore)
-      ? Math.max(0, worst.fullScore - postPaymentFullScore)
+      ? subsidizedStarts
+        ? Math.max(0, postPaymentFullScore - baseline.fullScore)
+        : Math.max(0, baseline.fullScore - postPaymentFullScore)
       : advantage;
 
     return {
@@ -8214,6 +8348,12 @@ function buildPayToWinRegisterPricingState(
         : null,
       remainingAdvantage: Number(remainingAdvantage.toFixed(2)),
       remainingRegisterEquivalent: Number((remainingAdvantage / registerScore).toFixed(2)),
+      postAdjustmentDeltaScore: Number.isFinite(postPaymentFullScore)
+        ? Number((postPaymentFullScore - baseline.fullScore).toFixed(2))
+        : null,
+      postAdjustmentDeltaRegisters: Number.isFinite(postPaymentFullScore)
+        ? Number(((postPaymentFullScore - baseline.fullScore) / registerScore).toFixed(3))
+        : null,
       paymentScores: entry.paymentScores.map((value) => (
         Number.isFinite(Number(value)) ? Number(Number(value).toFixed(2)) : null
       ))
@@ -8221,37 +8361,44 @@ function buildPayToWinRegisterPricingState(
   });
 
   const paymentPenalties = [];
-  for (let payment = 1; payment <= startingEnergy; payment += 1) {
-    const penalties = scoredStarts.map((entry) => {
-      const after = Number(entry.paymentScores[payment]);
-      return Number.isFinite(after)
-        ? Math.max(0, after - entry.fullScore)
-        : null;
+  for (let adjustment = 1; adjustment <= maxAdjustment; adjustment += 1) {
+    const impacts = scoredStarts.map((entry) => {
+      const after = Number(entry.paymentScores[adjustment]);
+      if (!Number.isFinite(after)) return null;
+      return subsidizedStarts
+        ? Math.max(0, entry.fullScore - after)
+        : Math.max(0, after - entry.fullScore);
     }).filter(Number.isFinite);
     paymentPenalties.push({
-      payment,
-      medianScore: penalties.length
-        ? Number(medianValue(penalties).toFixed(2))
+      payment: adjustment,
+      medianScore: impacts.length
+        ? Number(medianValue(impacts).toFixed(2))
         : null,
-      maxScore: penalties.length
-        ? Number(Math.max(...penalties).toFixed(2))
+      maxScore: impacts.length
+        ? Number(Math.max(...impacts).toFixed(2))
         : null,
-      medianRegisters: penalties.length
-        ? Number((medianValue(penalties) / registerScore).toFixed(3))
+      medianRegisters: impacts.length
+        ? Number((medianValue(impacts) / registerScore).toFixed(3))
         : null,
-      maxRegisters: penalties.length
-        ? Number((Math.max(...penalties) / registerScore).toFixed(3))
+      maxRegisters: impacts.length
+        ? Number((Math.max(...impacts) / registerScore).toFixed(3))
         : null
     });
   }
 
   const pricingModel = {
-    method: "moving-baseline-post-payment-route-economy-v46",
-    baselineIndex: worst.index,
-    baselineFullScore: Number(worst.fullScore.toFixed(2)),
+    method: subsidizedStarts
+      ? "moving-baseline-post-subsidy-route-economy-v47"
+      : "moving-baseline-post-payment-route-economy-v46",
+    mode: subsidizedStarts ? "subsidy" : "payment",
+    baselineIndex: baseline.index,
+    baselineFullScore: Number(baseline.fullScore.toFixed(2)),
     registerScore,
     horizonTurns: pricingBenchmark?.horizonTurns ?? null,
     startingEnergy,
+    maxEnergy,
+    maxAdjustment,
+    maxSubsidy: subsidizedStarts ? maxAdjustment : 0,
     denialCost,
     paymentPenalties,
     maxRegisterAdvantage: Number(Math.max(
@@ -9045,33 +9192,41 @@ function getPayToWinLateCostEntries(
   };
 }
 
-function formatPayToWinEnergyCost(startAnalysis) {
+function formatPayToWinEnergyCost(startAnalysis, options = {}) {
   if (startAnalysis?.energyCost === null || startAnalysis?.energyCost === undefined) {
     return null;
   }
 
+  const subsidizedStarts = Boolean(options.subsidizedStarts);
+  const formatValue = (value) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return null;
+    return subsidizedStarts ? `+${numeric}` : String(numeric);
+  };
   const normalCost = Number(startAnalysis.energyCost);
   const lateCost = Number(startAnalysis.lateEnergyCost);
   const earlyUnavailable = Boolean(startAnalysis.earlyUnavailable);
   const lateUnavailable = Boolean(startAnalysis.lateUnavailable);
+  const normalLabel = formatValue(normalCost);
+  const lateLabel = formatValue(lateCost);
 
   if (earlyUnavailable && lateUnavailable) {
     return "—/—";
   }
 
   if (earlyUnavailable) {
-    return Number.isFinite(lateCost) ? `—/${lateCost}` : "—";
+    return lateLabel !== null ? `—/${lateLabel}` : "—";
   }
 
   if (lateUnavailable) {
-    return `${normalCost}/—`;
+    return `${normalLabel}/—`;
   }
 
-  if (Number.isFinite(lateCost) && lateCost !== normalCost) {
-    return `${normalCost}/${lateCost}`;
+  if (lateLabel !== null && lateCost !== normalCost) {
+    return `${normalLabel}/${lateLabel}`;
   }
 
-  return String(normalCost);
+  return normalLabel;
 }
 
 function choosePayToWinPruneEntry(entries, options = {}) {
@@ -9208,8 +9363,11 @@ function buildPayToWinEnergyShadow(firstLeg, tileMap, playerCount, options = {},
       ? initialEntryByIndex.get(item.index).fullScore
       : getPayToWinFullCourseScore(item)
   })).filter((entry) => Number.isFinite(entry.fullScore));
+  const subsidyMode = isSubsidizedStartsPricing(options);
   const worstFullScore = fullScores.length
-    ? Math.max(...fullScores.map((entry) => entry.fullScore))
+    ? (subsidyMode
+      ? Math.min(...fullScores.map((entry) => entry.fullScore))
+      : Math.max(...fullScores.map((entry) => entry.fullScore)))
     : null;
   const lateByIndex = new Map((lateCostState?.entries ?? []).map((entry) => [entry.index, entry]));
   const initialCostByIndex = comparisonState.initialCostByIndex instanceof Map
@@ -9237,12 +9395,14 @@ function buildPayToWinEnergyShadow(firstLeg, tileMap, playerCount, options = {},
     .map((entry) => entry.lateFullScore)
     .filter(Number.isFinite);
   const worstLateFullScore = finiteLateFullScores.length
-    ? Math.max(...finiteLateFullScores)
+    ? (subsidyMode ? Math.min(...finiteLateFullScores) : Math.max(...finiteLateFullScores))
     : null;
 
   return {
     active: true,
-    method: "all-validated-post-payment-route-economy-v46",
+    method: subsidyMode
+      ? "all-validated-post-subsidy-route-economy-v47"
+      : "all-validated-post-payment-route-economy-v46",
     validatedStartCount: activeStarts.length,
     offeredStartCount: activeStarts.filter((item) => (
       !prunedIndices.has(item.index) && !fullyUnavailableIndices.has(item.index)
@@ -9257,11 +9417,15 @@ function buildPayToWinEnergyShadow(firstLeg, tileMap, playerCount, options = {},
     worstLateFullScore: Number.isFinite(worstLateFullScore) ? Number(worstLateFullScore.toFixed(2)) : null,
     starts: fullScores.map((entry) => {
       const advantage = Number.isFinite(worstFullScore)
-        ? Math.max(0, worstFullScore - entry.fullScore)
+        ? subsidyMode
+          ? Math.max(0, entry.fullScore - worstFullScore)
+          : Math.max(0, worstFullScore - entry.fullScore)
         : 0;
       const lateEntry = lateByIndex.get(entry.index);
       const lateAdvantage = Number.isFinite(worstLateFullScore) && Number.isFinite(lateEntry?.lateFullScore)
-        ? Math.max(0, worstLateFullScore - lateEntry.lateFullScore)
+        ? subsidyMode
+          ? Math.max(0, lateEntry.lateFullScore - worstLateFullScore)
+          : Math.max(0, worstLateFullScore - lateEntry.lateFullScore)
         : null;
       const finalEntry = finalEntryByIndex.get(entry.index);
       const finalLateEntry = finalLateEntryByIndex.get(entry.index);
@@ -9324,6 +9488,12 @@ function buildPayToWinEnergyShadow(firstLeg, tileMap, playerCount, options = {},
           : null,
         finalPaymentPenalty: Number.isFinite(finalEntry?.paymentPenalty)
           ? Number(finalEntry.paymentPenalty.toFixed(2))
+          : null,
+        finalPostAdjustmentDeltaScore: Number.isFinite(finalEntry?.postAdjustmentDeltaScore)
+          ? Number(finalEntry.postAdjustmentDeltaScore.toFixed(2))
+          : null,
+        finalPostAdjustmentDeltaRegisters: Number.isFinite(finalEntry?.postAdjustmentDeltaRegisters)
+          ? Number(finalEntry.postAdjustmentDeltaRegisters.toFixed(3))
           : null,
         finalLatePaymentScores: Array.isArray(finalLateEntry?.paymentScores)
           ? finalLateEntry.paymentScores
@@ -9569,6 +9739,7 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
     actionDelta: 0,
     reasons: {
       payToWinPruned: true,
+      subsidizedStarts: isSubsidizedStartsPricing(options),
       energyCost: item.energyCost,
       outlierPass: item.pass,
       removalReason: item.reason,
@@ -9582,6 +9753,7 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
     actionDelta: 0,
     reasons: {
       payToWinUnavailable: true,
+      subsidizedStarts: isSubsidizedStartsPricing(options),
       energyCost: item.energyCost,
       lateEnergyCost: lateCostByIndex.get(item.index),
       startingEnergy,
@@ -9608,7 +9780,11 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
       outliers,
       payToWin: {
         active: true,
+        mode: isSubsidizedStartsPricing(options) ? "subsidy" : "payment",
+        subsidizedStarts: isSubsidizedStartsPricing(options),
         startingEnergy,
+        maxEnergy: getCourseMaxEnergy(options),
+        maxSubsidy: isSubsidizedStartsPricing(options) ? getStartEnergyAdjustmentLimit(options) : 0,
         startingUpgradeCards: energyShadow?.upgradeEconomy?.startingUpgradeCards ?? getCourseStartingUpgradeCards(options),
         denialCost,
         costUnit: earlyCostState.costUnit,
@@ -10233,9 +10409,14 @@ function buildRouteAwareBatteryScoringOptions(coursePreflight, options = {}) {
 
 function getRoutePoolMode(options = {}) {
   if (options.competitiveMode) return "competitive";
+  if (options.subsidizedStarts) return "subsidized-starts";
   if (options.payToWin) return "pay-to-win";
   if (options.virtualBots) return "virtual-bots";
   return "normal";
+}
+
+function isPricedStartRoutePoolMode(mode) {
+  return mode === "pay-to-win" || mode === "subsidized-starts";
 }
 
 function getReusableRoutePoolPolicy(availableCount, playerCount, options = {}) {
@@ -10251,7 +10432,7 @@ function getReusableRoutePoolPolicy(availableCount, playerCount, options = {}) {
       targetCount: availableCount
     };
   }
-  if (mode === "pay-to-win") {
+  if (isPricedStartRoutePoolMode(mode)) {
     const targetCount = Math.min(
       availableCount,
       LIGHT_START_MAX_PRESSURE_POOL,
@@ -10408,8 +10589,8 @@ function buildReusableRoutePool(tileMap, starts, flags, playerCount, coursePrefl
       contextualLegSearch: true,
       contextualEarlyExit: true,
       contextualRequiredStarts: policy.requiredCount,
-      contextualPreferredStarts: policy.mode === "pay-to-win" ? policy.targetCount : null,
-      contextualStopWhenPreferredLost: policy.mode === "pay-to-win",
+      contextualPreferredStarts: isPricedStartRoutePoolMode(policy.mode) ? policy.targetCount : null,
+      contextualStopWhenPreferredLost: isPricedStartRoutePoolMode(policy.mode),
       // Preflight opening routes still use the legacy static Battery score.
       // Once v42 production scoring is active, re-search Flag 1 so the coherent
       // pool is built entirely in the new route-aware Battery currency.
@@ -12032,6 +12213,7 @@ const VARIANT_DIFFICULTY_ACCOUNTING = Object.freeze({
   classicSharedDeck: "explicit",
   competitiveMode: "explicit+balance-gate",
   payToWin: "explicit+pricing",
+  subsidizedStarts: "explicit+pricing",
   staggeredBoards: "layout-derived"
 });
 
@@ -12094,7 +12276,7 @@ function applyVariantDifficultyModifiers(raw, preferences = {}, boardHarshness =
   if (preferences.competitiveMode) {
     adjusted += 1.8;
   }
-  if (preferences.payToWin) {
+  if (preferences.payToWin || preferences.subsidizedStarts) {
     adjusted += 1.4;
   }
 
@@ -12752,16 +12934,19 @@ function buildScenarioCopySummary(scenario) {
     lines.push(
       `Competitive balance: blocked ${competitive.blockedStartCount ?? 0}, remaining choices ${competitive.remainingStartCount ?? 0}, selected ${competitive.selectedStartCount ?? scenario.metrics?.usableStarts?.length ?? 0}, selectedOutliers ${competitive.remainingOutlierCount ?? "n/a"}, acceptable ${competitive.acceptable ? "yes" : "no"}, method ${competitive.method ?? "n/a"}`
     );
-  } else if (scenario.payToWin && payToWin?.active) {
+  } else if ((scenario.payToWin || scenario.subsidizedStarts) && payToWin?.active) {
+    const subsidyMode = Boolean(scenario.subsidizedStarts);
+    const pricingLabel = subsidyMode ? "Subsidized Starts" : "Pay to Win";
+    const pricingShortLabel = subsidyMode ? "Subsidy" : "P2W";
     const pricingModel = payToWin.pricingModel ?? {};
     const selectorSplit = payToWin.selectorSplit ?? null;
     lines.push(
-      `Pay to Win: model ${pricingModel.method ?? "n/a"}, baseline ${Number.isInteger(pricingModel.baselineIndex) ? `#${pricingModel.baselineIndex + 1}` : "n/a"}, startingEnergy ${payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY}, startingUpgradeCards ${payToWin.startingUpgradeCards ?? DEFAULT_STARTING_UPGRADE_CARDS} (unknown at start choice), priced ${payToWin.pricedStartCount ?? "n/a"}, pruned ${(payToWin.pruned ?? []).length}, fullyUnavailable ${payToWin.fullyUnavailableCount ?? 0}, earlyUnavailable ${payToWin.earlyUnavailableCount ?? 0}/${payToWin.maxEarlyUnavailable ?? 0}, lateUnavailable ${payToWin.lateUnavailableCount ?? 0}/${payToWin.maxLateUnavailable ?? 0}, surplusStarts ${payToWin.surplusStarts ?? 0}, latePricing ${payToWin.latePricingActive ? "active" : "inactive"}, slashPrices ${payToWin.hasLatePriceDifference ? "yes" : "no"}`
+      `${pricingLabel}: model ${pricingModel.method ?? "n/a"}, baseline ${Number.isInteger(pricingModel.baselineIndex) ? `#${pricingModel.baselineIndex + 1}` : "n/a"}, startingEnergy ${payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY}, startingUpgradeCards ${payToWin.startingUpgradeCards ?? DEFAULT_STARTING_UPGRADE_CARDS} (unknown at start choice), priced ${payToWin.pricedStartCount ?? "n/a"}, pruned ${(payToWin.pruned ?? []).length}, fullyUnavailable ${payToWin.fullyUnavailableCount ?? 0}, earlyUnavailable ${payToWin.earlyUnavailableCount ?? 0}/${payToWin.maxEarlyUnavailable ?? 0}, lateUnavailable ${payToWin.lateUnavailableCount ?? 0}/${payToWin.maxLateUnavailable ?? 0}, surplusStarts ${payToWin.surplusStarts ?? 0}, latePricing ${payToWin.latePricingActive ? "active" : "inactive"}, slashPrices ${payToWin.hasLatePriceDifference ? "yes" : "no"}`
     );
     if (payToWin.selectorPricingEvaluated && selectorSplit) {
       if (selectorSplit.selected) {
         lines.push(
-          `P2W selector split: after player ${selectorSplit.cutoffAfter} (early 1-${selectorSplit.cutoffAfter}, late ${selectorSplit.lateSelectorStart}-${selectorSplit.lateSelectorEnd}); one-group error ${selectorSplit.noSplitErrorR}R -> ${selectorSplit.splitErrorR}R, gain ${selectorSplit.gainR}R/${Number((selectorSplit.relativeGain * 100).toFixed(1))}%, separation ${selectorSplit.separationR}R`
+          `${pricingShortLabel} selector split: after player ${selectorSplit.cutoffAfter} (early 1-${selectorSplit.cutoffAfter}, late ${selectorSplit.lateSelectorStart}-${selectorSplit.lateSelectorEnd}); one-group error ${selectorSplit.noSplitErrorR}R -> ${selectorSplit.splitErrorR}R, gain ${selectorSplit.gainR}R/${Number((selectorSplit.relativeGain * 100).toFixed(1))}%, separation ${selectorSplit.separationR}R`
         );
       } else {
         const bestCandidate = [...(selectorSplit.candidates ?? [])].sort((left, right) => (
@@ -12769,18 +12954,26 @@ function buildScenarioCopySummary(scenario) {
           right.separationR - left.separationR
         ))[0];
         lines.push(
-          `P2W selector split: none; one-group error ${selectorSplit.noSplitErrorR ?? "n/a"}R${bestCandidate ? `, best candidate after player ${bestCandidate.cutoffAfter} gain ${bestCandidate.gainR}R/${Number((bestCandidate.relativeGain * 100).toFixed(1))}% separation ${bestCandidate.separationR}R` : ""}`
+          `${pricingShortLabel} selector split: none; one-group error ${selectorSplit.noSplitErrorR ?? "n/a"}R${bestCandidate ? `, best candidate after player ${bestCandidate.cutoffAfter} gain ${bestCandidate.gainR}R/${Number((bestCandidate.relativeGain * 100).toFixed(1))}% separation ${bestCandidate.separationR}R` : ""}`
         );
       }
     }
     if (pricingModel.paymentPenalties?.length) {
+      const impactText = pricingModel.paymentPenalties.map((entry) => (
+        subsidyMode
+          ? `+${entry.payment}E benefit median/max ${entry.medianScore ?? "n/a"}/${entry.maxScore ?? "n/a"} score (${entry.medianRegisters ?? "n/a"}/${entry.maxRegisters ?? "n/a"}R)`
+          : `${entry.payment}E median/max +${entry.medianScore ?? "n/a"}/+${entry.maxScore ?? "n/a"} score (${entry.medianRegisters ?? "n/a"}/${entry.maxRegisters ?? "n/a"}R)`
+      )).join(", ");
+      const denialText = subsidyMode
+        ? `+${payToWin.maxSubsidy ?? pricingModel.maxSubsidy ?? 7}E max subsidy; ${pricingModel.denialCost ?? getPayToWinDenialCost({ startingEnergy: payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY, maxEnergy: payToWin.maxEnergy ?? 10, subsidizedStarts: true })}E = uncompensated/prune signal`
+        : `${pricingModel.denialCost ?? getPayToWinDenialCost({ startingEnergy: payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY })}E = deny/prune`;
       lines.push(
-        `P2W final-field payment impact: register ${pricingModel.registerScore ?? "n/a"} score, horizon ${pricingModel.horizonTurns ?? "n/a"} turns; ${pricingModel.paymentPenalties.map((entry) => `${entry.payment}E median/max +${entry.medianScore ?? "n/a"}/+${entry.maxScore ?? "n/a"} score (${entry.medianRegisters ?? "n/a"}/${entry.maxRegisters ?? "n/a"}R)`).join(", ")}; ${pricingModel.denialCost ?? getPayToWinDenialCost({ startingEnergy: payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY })}E = deny/prune`
+        `${pricingShortLabel} final-field ${subsidyMode ? "subsidy benefit" : "payment impact"}: register ${pricingModel.registerScore ?? "n/a"} score, horizon ${pricingModel.horizonTurns ?? "n/a"} turns; ${impactText}; ${denialText}`
       );
     }
     if ((payToWin.pruned ?? []).length) {
       lines.push(
-        `P2W pruning passes: ${payToWin.pruned.map((item) => `p${item.pass} base ${Number.isInteger(item.pricingModel?.baselineIndex) ? `#${item.pricingModel.baselineIndex + 1}` : "n/a"} max ${item.pricingModel?.maxRegisterAdvantage ?? "n/a"}R -> #${item.index + 1} (${item.reason})`).join("; ")}; final base ${Number.isInteger(pricingModel.baselineIndex) ? `#${pricingModel.baselineIndex + 1}` : "n/a"}`
+        `${pricingShortLabel} pruning passes: ${payToWin.pruned.map((item) => `p${item.pass} base ${Number.isInteger(item.pricingModel?.baselineIndex) ? `#${item.pricingModel.baselineIndex + 1}` : "n/a"} max ${item.pricingModel?.maxRegisterAdvantage ?? "n/a"}R -> #${item.index + 1} (${item.reason})`).join("; ")}; final base ${Number.isInteger(pricingModel.baselineIndex) ? `#${pricingModel.baselineIndex + 1}` : "n/a"}`
       );
     }
     const energyShadow = payToWin.energyShadow;
@@ -12792,9 +12985,11 @@ function buildScenarioCopySummary(scenario) {
       const formatFeatureWeights = (entry) => entry
         ? `current ${entry.current ?? "n/a"}, base ${entry.base ?? "n/a"}, UpgradeWorld ${entry.upgradeWorld ?? "n/a"}`
         : "n/a";
-      const p2wEconomyText = (pricingModel.paymentPenalties ?? []).map((item) =>
-        `${item.payment}E costs median ${item.medianScore ?? "n/a"} score/${item.medianRegisters ?? "n/a"}R, max ${item.maxScore ?? "n/a"}/${item.maxRegisters ?? "n/a"}R`
-      ).join(" | ") || "n/a";
+      const p2wEconomyText = (pricingModel.paymentPenalties ?? []).map((item) => (
+        subsidyMode
+          ? `+${item.payment}E improves median ${item.medianScore ?? "n/a"} score/${item.medianRegisters ?? "n/a"}R, max ${item.maxScore ?? "n/a"}/${item.maxRegisters ?? "n/a"}R`
+          : `${item.payment}E costs median ${item.medianScore ?? "n/a"} score/${item.medianRegisters ?? "n/a"}R, max ${item.maxScore ?? "n/a"}/${item.maxRegisters ?? "n/a"}R`
+      )).join(" | ") || "n/a";
       const formatEnergySensitivity = (samples) => (samples ?? [])
         .map((sample) => `E${sample.energy}:${sample.valueR}R`)
         .join("/") || "n/a";
@@ -12810,33 +13005,41 @@ function buildScenarioCopySummary(scenario) {
         `@${item.turn}t, ${item.remainingTurns}t left, H${item.initialUpgradeOpportunities}: ${(item.reserveSensitivity ?? []).map((sample) => `E${sample.energy} energy ${sample.energyOptionR}R/card ${sample.cardOptionR}R->${sample.choice}`).join(" / ") || "n/a"}, static ${item.staticRouteWeight}`
       ).join(" | ") || "none on representative route";
       lines.push(
-        `P2W validated-field shadow: validated ${energyShadow.validatedStartCount ?? "n/a"}, final-offered ${energyShadow.offeredStartCount ?? "n/a"}, tempo-register ${benchmark.registerScoreMedian ?? "n/a"} score (${benchmark.registerSamples ?? 0} samples), Power Up strategic delta ${benchmark.powerUpStrategicDeltaMedian ?? benchmark.powerUpOpportunityMedian ?? "n/a"} score (${benchmark.powerUpStrategicDeltaSamples ?? benchmark.powerUpOpportunitySamples ?? 0} samples), validated-field horizon ${benchmark.medianFullCourseActions ?? "n/a"} registers/${benchmark.medianFullCourseTurns ?? "n/a"} turns`,
-        `Energy economy: start ${upgradeEconomy.startingEnergy ?? "n/a"}E, max ${upgradeEconomy.maxEnergy ?? "n/a"}E, starting hand ${upgradeEconomy.startingUpgradeCards ?? "n/a"}, horizon ${routeEconomy.horizonTurns ?? "n/a"}t, draw/install ${upgradeEconomy.drawsPerTurn ?? "n/a"}/${upgradeEconomy.installsPerTurn ?? "n/a"} per turn, ${upgradeEconomy.registersPerTurn ?? "n/a"} registers/turn, draw cost ${upgradeEconomy.drawEnergyCost ?? "n/a"}E, useful deployment ${upgradeEconomy.usefulEnergyPerInstall ?? "n/a"}E/install`,
-        `P2W economic shadow: ${p2wEconomyText}`,
+        `${pricingShortLabel} validated-field shadow: validated ${energyShadow.validatedStartCount ?? "n/a"}, final-offered ${energyShadow.offeredStartCount ?? "n/a"}, tempo-register ${benchmark.registerScoreMedian ?? "n/a"} score (${benchmark.registerSamples ?? 0} samples), Power Up strategic delta ${benchmark.powerUpStrategicDeltaMedian ?? benchmark.powerUpOpportunityMedian ?? "n/a"} score (${benchmark.powerUpStrategicDeltaSamples ?? benchmark.powerUpOpportunitySamples ?? 0} samples), validated-field horizon ${benchmark.medianFullCourseActions ?? "n/a"} registers/${benchmark.medianFullCourseTurns ?? "n/a"} turns`,
+        `Energy economy: start ${upgradeEconomy.startingEnergy ?? "n/a"}E, max ${upgradeEconomy.maxEnergy ?? "n/a"}E, starting hand ${upgradeEconomy.startingUpgradeCards ?? "n/a"}, horizon ${routeEconomy.horizonTurns ?? "n/a"}t, draw/install ${upgradeEconomy.drawsPerTurn ?? "n/a"}/${upgradeEconomy.installsPerTurn ?? "n/a"} per turn, ${upgradeEconomy.registersPerTurn ?? "n/a"} registers/turn, draw cost ${upgradeEconomy.drawEnergyCost ?? "n/a"}E, useful deployment budget up to ${upgradeEconomy.usefulEnergyPerInstall ?? "n/a"}E/install (partial Energy valued), surplus-card option uplift above ${upgradeEconomy.referenceStartingEnergy ?? upgradeEconomy.startingEnergy ?? "n/a"}E (diminishing; time-limited)`,
+        `${pricingShortLabel} economic shadow: ${p2wEconomyText}`,
         `Battery shadow: ${batteryText}`,
         `Power Up shadow: ${powerUpText}`,
         `Chop Shop shadow: ${chopShopText}`,
         `Upgrade feature weights (legacy static audit only; production v45 bypasses Battery/Chop Shop weights): battery ${formatFeatureWeights(featureWeights.battery)}; chopShop ${formatFeatureWeights(featureWeights.chopShop)}`,
-        `P2W start repricing: ${(energyShadow.starts ?? []).map((entry) => {
-          const initialPrice = Number.isFinite(entry.initialEnergyCost) ? `${entry.initialEnergyCost}E` : "n/a";
+        `${pricingShortLabel} start repricing: ${(energyShadow.starts ?? []).map((entry) => {
+          const formatAdjustment = (value) => Number.isFinite(value) ? `${subsidyMode ? "+" : ""}${value}E` : "n/a";
+          const initialPrice = formatAdjustment(entry.initialEnergyCost);
           const legacyPrice = Number.isFinite(entry.legacyInitialCost) ? `${entry.legacyInitialCost}E` : "n/a";
           const initialState = `${entry.registerEquivalent ?? "n/a"}R/${initialPrice}`;
           if (entry.pruned) {
-            return `#${entry.index + 1} initial ${initialState} -> pruned (legacy ${legacyPrice})`;
+            return `#${entry.index + 1} initial ${initialState} -> pruned${subsidyMode ? "" : ` (legacy ${legacyPrice})`}`;
           }
           const finalPrice = entry.finalEarlyUnavailable
             ? "—"
             : Number.isFinite(entry.finalEnergyCost)
-              ? `${entry.finalEnergyCost}E`
+              ? formatAdjustment(entry.finalEnergyCost)
               : (entry.fullyUnavailable ? "—" : "n/a");
           const finalState = `${entry.finalRegisterEquivalent ?? "n/a"}R/${finalPrice}`;
           const curveText = Array.isArray(entry.finalPaymentScores)
-            ? ` curve ${entry.finalPaymentScores.map((score, payment) => `${payment}E:${score ?? "—"}`).join("/")}`
+            ? ` curve ${entry.finalPaymentScores.map((score, payment) => `${subsidyMode ? "+" : ""}${payment}E:${score ?? "—"}`).join("/")}`
+            : "";
+          const residualText = subsidyMode && Number.isFinite(entry.finalPostAdjustmentDeltaRegisters)
+            ? entry.finalPostAdjustmentDeltaRegisters > 0.0005
+              ? ` residual ${entry.finalPostAdjustmentDeltaRegisters}R weaker`
+              : entry.finalPostAdjustmentDeltaRegisters < -0.0005
+                ? ` residual ${Math.abs(entry.finalPostAdjustmentDeltaRegisters)}R stronger`
+                : " residual balanced"
             : "";
           const lateText = payToWin.latePricingActive && Number.isFinite(entry.finalLateRegisterEquivalent)
-            ? `, late ${entry.finalLateRegisterEquivalent}R/${entry.finalLateUnavailable ? "—" : `${entry.finalLateEnergyCost ?? "n/a"}E`}`
+            ? `, late ${entry.finalLateRegisterEquivalent}R/${entry.finalLateUnavailable ? "—" : formatAdjustment(entry.finalLateEnergyCost)}`
             : "";
-          return `#${entry.index + 1} initial ${initialState} -> final ${finalState}${curveText}${lateText} (legacy ${legacyPrice})`;
+          return `#${entry.index + 1} initial ${initialState} -> final ${finalState}${residualText}${curveText}${lateText}${subsidyMode ? "" : ` (legacy ${legacyPrice})`}`;
         }).join(", ") || "none"}`
       );
     }
@@ -12927,8 +13130,17 @@ function buildScenarioCopySummary(scenario) {
       const laterMedian = laterSimilarities.length
         ? Number(medianValue(laterSimilarities).toFixed(3))
         : null;
+      const selectedTrafficPenalties = candidateDiagnostics
+        .map((entry) => Number(entry.selectedTrafficPenalty))
+        .filter(Number.isFinite);
+      const selectedTrafficAverage = selectedTrafficPenalties.length
+        ? Number((selectedTrafficPenalties.reduce((sum, value) => sum + value, 0) / selectedTrafficPenalties.length).toFixed(2))
+        : (routeStrategy.averagePenalty ?? 0);
+      const selectedTrafficMax = selectedTrafficPenalties.length
+        ? Number(Math.max(...selectedTrafficPenalties).toFixed(2))
+        : (routeStrategy.maxPenalty ?? 0);
       lines.push(
-        `Traffic candidates: ${candidateDiagnostics.length} starts, candidates median/range ${candidateMedian}/${candidateRange}, final alternate selections ${finalAltCount}, pass route-switches ${routeStrategy.routeSwitches ?? 0}, penalty avg/max ${routeStrategy.averagePenalty ?? 0}/${routeStrategy.maxPenalty ?? 0}, opening/later avg ${routeStrategy.averageOpeningPenalty ?? 0}/${routeStrategy.averageLaterPenalty ?? 0}; most-different similarity median whole/later ${wholeMedian ?? "n/a"}/${laterMedian ?? "n/a"} (0=different, 1=same)`
+        `Traffic candidates: ${candidateDiagnostics.length} starts, candidates median/range ${candidateMedian}/${candidateRange}, final alternate selections ${finalAltCount}, pass route-switches ${routeStrategy.routeSwitches ?? 0}, selected penalty avg/max ${selectedTrafficAverage}/${selectedTrafficMax}, opening/later avg ${routeStrategy.averageOpeningPenalty ?? 0}/${routeStrategy.averageLaterPenalty ?? 0}; most-different similarity median whole/later ${wholeMedian ?? "n/a"}/${laterMedian ?? "n/a"} (0=different, 1=same)`
       );
       if (switchedDiagnostics.length) {
         const medianOrZero = (values) => values.length
@@ -12992,7 +13204,9 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     const parts = [];
     if (reasons.payToWinPruned) {
       const threshold = reasons.costThreshold ?? 5;
-      if (Number.isFinite(reasons.energyCost) && reasons.energyCost >= threshold) {
+      if (reasons.subsidizedStarts) {
+        parts.push(`Subsidized Starts spread required pruning; ${Number.isFinite(reasons.energyCost) ? `needed +${reasons.energyCost}E` : "outside the compensable range"} (limit +${Math.max(0, threshold - 1)}E)`);
+      } else if (Number.isFinite(reasons.energyCost) && reasons.energyCost >= threshold) {
         parts.push(`Pay to Win cost ${reasons.energyCost} >= ${threshold}`);
       } else {
         parts.push(
@@ -13002,9 +13216,11 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     }
     if (reasons.payToWinUnavailable) {
       const startingEnergy = reasons.startingEnergy ?? DEFAULT_STARTING_ENERGY;
-      const early = Number.isFinite(reasons.energyCost) ? `${reasons.energyCost}E` : "unavailable";
-      const late = Number.isFinite(reasons.lateEnergyCost) ? `${reasons.lateEnergyCost}E` : "unavailable";
-      parts.push(`Pay to Win unavailable to all selectors (${early}/${late}; ${startingEnergy} starting energy)`);
+      const early = Number.isFinite(reasons.energyCost) ? `${reasons.subsidizedStarts ? "+" : ""}${reasons.energyCost}E` : "unavailable";
+      const late = Number.isFinite(reasons.lateEnergyCost) ? `${reasons.subsidizedStarts ? "+" : ""}${reasons.lateEnergyCost}E` : "unavailable";
+      parts.push(reasons.subsidizedStarts
+        ? `Subsidized Starts unable to compensate this start for all selectors (${early}/${late}; ${startingEnergy} base energy)`
+        : `Pay to Win unavailable to all selectors (${early}/${late}; ${startingEnergy} starting energy)`);
     }
     if (reasons.normalBalancePruned) {
       const zText = Number.isFinite(reasons.scoreZ)
@@ -13073,6 +13289,7 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     `Competitive Mode used: ${scenario.competitiveMode ? "yes" : "no"}`,
     `Virtual Bots used: ${scenario.virtualBots ? "yes" : "no"}`,
     `Pay to Win used: ${scenario.payToWin ? "yes" : "no"}`,
+    `Subsidized Starts used: ${scenario.subsidizedStarts ? "yes" : "no"}`,
     `Extra Docks used: ${scenario.extraDocks ? "yes" : "no"}`,
     `No Docks used: ${scenario.noDocks ? "yes" : "no"}${scenario.noDocks && (scenario.noDockEdges?.length ?? 0) ? ` (${scenario.noDockEdges.map((edge) => `${edge.pieceId} ${edge.side} full edge${edge.edgeLength ? ` ${edge.edgeLength}-wide` : ""} facing ${edge.facing}`).join("; ")})` : scenario.noDockEdge ? ` (${scenario.noDockEdge.pieceId} ${scenario.noDockEdge.side} full edge, facing ${scenario.noDockEdge.facing})` : ""}`,
     `Factory Rejects used: ${scenario.factoryRejects ? "yes" : "no"}`,
@@ -13262,7 +13479,9 @@ function buildScenarioReport(scenario, selectedLegIndex) {
       ? ` reason ${formatOutlierReasons(outlierReasonByIndex.get(startAnalysis.index))}`
       : "";
     const adjustedLabel = usable === "outlier" ? "outlierEstimate" : "finalAdjusted";
-    const formattedEnergyCost = scenario.payToWin ? formatPayToWinEnergyCost(startAnalysis) : null;
+    const formattedEnergyCost = (scenario.payToWin || scenario.subsidizedStarts)
+      ? formatPayToWinEnergyCost(startAnalysis, { subsidizedStarts: scenario.subsidizedStarts })
+      : null;
     const energyCost = formattedEnergyCost !== null
       ? ` energy ${formattedEnergyCost}${Number.isFinite(startAnalysis.lateAdjustedScore) ? ` lateAdjusted ${startAnalysis.lateAdjustedScore}` : ""}`
       : "";
@@ -13420,37 +13639,14 @@ function isDevViewEnabled() {
   return document.getElementById("dev-view")?.checked ?? true;
 }
 
-function isOutlierRoutesEnabled() {
-  return document.getElementById("show-outlier-routes")?.checked ?? false;
-}
-
-
-function getLegRouteEntries(scenario, legIndex, options = {}) {
-  const leg = scenario?.sequence?.legs?.[legIndex];
-  if (!leg) {
-    return [];
-  }
-
-  if (legIndex === 0) {
-    const outlierInfoByIndex = new Map((scenario.sequence.firstLeg.summary.outliers || []).map((item) => [item.index, item]));
-    return leg.analysis.starts
-      .filter((startAnalysis) => startAnalysis.routes?.length && startAnalysis.selectedRoute)
-      .filter((startAnalysis) => options.includeOutliers || !outlierInfoByIndex.has(startAnalysis.index))
-      .map((startAnalysis) => ({
-        id: `start:${startAnalysis.index}`,
-        label: `Start ${startAnalysis.index + 1}`,
-        route: startAnalysis.selectedRoute,
-        startAnalysis,
-        outlierInfo: outlierInfoByIndex.get(startAnalysis.index) ?? null
-      }));
-  }
-
-  return (leg.analysis.distinctRoutes || []).map((route, index) => ({
-    id: `route:${index}`,
-    label: Number.isFinite(route.startIndex) ? `Start ${route.startIndex + 1}` : `Route ${index + 1}`,
-    route,
-    routeIndex: index
-  }));
+function getRouteInspectionPrunedStatus(outlierInfo) {
+  const reasons = outlierInfo?.reasons ?? {};
+  if (!outlierInfo) return null;
+  if (reasons.normalBalancePruned && !reasons.balanceDispersionPruned) return "outlier";
+  if (reasons.normalBalancePruned) return "balance-pruned";
+  if (reasons.subsidizedStarts) return "subsidy-pruned";
+  if (reasons.payToWinPruned || reasons.payToWinUnavailable) return "price-pruned";
+  return "pruned";
 }
 
 function getFocusedRouteEntry(scenario, legIndex) {
@@ -13461,13 +13657,18 @@ function getFocusedRouteEntry(scenario, legIndex) {
   if (!fullRoute) return null;
   const route = legIndex === null ? fullRoute : fullRoute.legRoutes?.[legIndex];
   if (!route) return null;
+  const outlierInfo = (scenario.sequence.firstLeg.summary.outliers || []).find((item) => item.index === startIndex) ?? null;
+  const prunedStatus = getRouteInspectionPrunedStatus(outlierInfo);
+  const statusText = prunedStatus ? ` (${prunedStatus})` : "";
   return {
     id: `start:${startIndex}`,
     label: legIndex === null
-      ? `Start ${startIndex + 1} — all legs`
-      : `Start ${startIndex + 1} — ${formatLegLabel(scenario.sequence.legs[legIndex])}`,
+      ? `Start ${startIndex + 1}${statusText} — all legs`
+      : `Start ${startIndex + 1}${statusText} — ${formatLegLabel(scenario.sequence.legs[legIndex])}`,
     route,
-    startAnalysis
+    startAnalysis,
+    outlierInfo,
+    prunedStatus
   };
 }
 
@@ -13487,7 +13688,16 @@ function formatBoardTraceEvent(event) {
     const facing = event.facingBefore && event.facingAfter && event.facingBefore !== event.facingAfter
       ? `; facing ${event.facingBefore}→${event.facingAfter}`
       : "";
-    return `conveyor ${event.dir}${event.speed === 2 ? "×2" : ""} ${formatTraceState(event.from)}→${formatTraceState(event.to)}${facing}`;
+    const phase = event.phase === "blue"
+      ? `blue phase${Number.isFinite(Number(event.phaseStep)) ? ` ${event.phaseStep}` : ""}`
+      : event.phase === "green"
+        ? "green phase"
+        : event.phase === "current"
+          ? "current phase"
+          : event.speed === 2
+            ? "blue conveyor"
+            : "conveyor";
+    return `${phase}: ${event.dir} ${formatTraceState(event.from)}→${formatTraceState(event.to)}${facing}`;
   }
   if (event.type === "oil") return `oil slide ${event.dir} ${formatTraceState(event.from)}→${formatTraceState(event.to)}`;
   if (event.type === "pusher") return `pusher ${formatTraceState(event.from)}→${formatTraceState(event.to)}`;
@@ -13495,7 +13705,175 @@ function formatBoardTraceEvent(event) {
   return null;
 }
 
-function formatChronologicalRouteTrace(route) {
+const ROUTE_TRACE_REGISTER_COUNT = 5;
+const ROUTE_TRACE_TIMED_FEATURE_TYPES = new Set(["push", "crusher", "trapdoor", "flamethrower"]);
+
+function getRouteTraceTimedFeatures(tile) {
+  return (tile?.features || []).filter((feature) => (
+    ROUTE_TRACE_TIMED_FEATURE_TYPES.has(feature.type) &&
+    Array.isArray(feature.timing) &&
+    feature.timing.length > 0
+  ));
+}
+
+function isRouteTraceTimedFeatureActive(feature, registerInTurn) {
+  return Array.isArray(feature?.timing) && feature.timing.includes(registerInTurn);
+}
+
+function formatRouteTraceTiming(feature) {
+  const timing = [...new Set(feature?.timing || [])].sort((a, b) => a - b);
+  return `[${timing.map((register) => `R${register}`).join(",")}]`;
+}
+
+function formatRouteTraceTimedFeatureName(feature) {
+  if (feature?.type === "push") return `pusher${feature.dir ? ` ${feature.dir}` : ""}`;
+  if (feature?.type === "flamethrower") return "flamer";
+  return feature?.type ?? "timed feature";
+}
+
+function sameTracePoint(a, b) {
+  return Boolean(a && b && a.x === b.x && a.y === b.y);
+}
+
+function getActualTimedTraversalPoints(transition) {
+  const points = Array.isArray(transition?.traversed) ? transition.traversed : [];
+  return points.filter((point, index) => {
+    if (!point) return false;
+    // A paired portal moves onto its portal square and then jumps. Elements on
+    // that entry/transit square are skipped; the jump destination still counts.
+    const nextPoint = points[index + 1];
+    return !(!point.jump && nextPoint?.jump);
+  });
+}
+
+function getTimedFeatureTraceParts(tileMap, transition, registerInTurn) {
+  if (!tileMap || !transition) return [];
+  const parts = [];
+  const pushEvents = (transition.boardEvents || []).filter((event) => event.type === "pusher");
+  const actualTraversal = getActualTimedTraversalPoints(transition);
+  const lastTraversal = actualTraversal.length ? actualTraversal[actualTraversal.length - 1] : null;
+  const terminalFailure = Boolean(transition.rebooted || transition.crashed);
+
+  // Trapdoors are open for the entire active register, so register-start
+  // occupancy matters. Pushers and crushers are deliberately not reported
+  // here: they only matter at their own later board-element phases. Flamers
+  // likewise score on entry/pass-through and end-of-register occupancy.
+  const startTile = tileMap.get(`${transition.from?.x},${transition.from?.y}`);
+  for (const feature of getRouteTraceTimedFeatures(startTile)) {
+    if (feature.type !== "trapdoor") continue;
+    const name = formatRouteTraceTimedFeatureName(feature);
+    const timing = formatRouteTraceTiming(feature);
+    const active = isRouteTraceTimedFeatureActive(feature, registerInTurn);
+    if (active && terminalFailure) {
+      parts.push(`${name} ${timing}: ACTIVE → open at register start; ${transition.rebooted ? "dropped/rebooted" : "dropped"}`);
+    } else {
+      parts.push(`${name} ${timing}: ${active ? "ACTIVE" : "inactive"} at register start`);
+    }
+  }
+
+  // Only trapdoors and flamers care about traversal itself. A robot may cross
+  // a pusher or crusher tile earlier in the register without ever occupying it
+  // when that feature's phase resolves, so such crossings are intentionally
+  // silent here.
+  actualTraversal.forEach((point) => {
+    const tile = tileMap.get(`${point.x},${point.y}`);
+    for (const feature of getRouteTraceTimedFeatures(tile)) {
+      if (feature.type !== "flamethrower" && feature.type !== "trapdoor") continue;
+      const name = formatRouteTraceTimedFeatureName(feature);
+      const timing = formatRouteTraceTiming(feature);
+      const active = isRouteTraceTimedFeatureActive(feature, registerInTurn);
+      const at = ` at (${point.x},${point.y})`;
+      const isTerminalFailurePoint = sameTracePoint(point, lastTraversal) && terminalFailure;
+
+      if (feature.type === "flamethrower") {
+        parts.push(active
+          ? `${name} ${timing}: ACTIVE → entry/pass-through +1 damage${at}`
+          : `${name} ${timing}: inactive → crossed safely${at}`);
+      } else if (!active) {
+        parts.push(`${name} ${timing}: inactive → crossed safely${at}`);
+      } else if (isTerminalFailurePoint && sameTracePoint(point, transition.from)) {
+        // The register-start message already explains this drop.
+        continue;
+      } else if (isTerminalFailurePoint) {
+        parts.push(`${name} ${timing}: ACTIVE → open; ${transition.rebooted ? "dropped/rebooted" : "dropped"}${at}`);
+      } else {
+        parts.push(`${name} ${timing}: ACTIVE → OPEN TILE CROSSED (unexpected)${at}`);
+      }
+    }
+  });
+
+  // Pusher diagnostics are phase-aware. If a timed pusher actually moves the
+  // robot, the board event gives the exact pusher-phase position. If no push
+  // occurs on a surviving transition, the final coordinates are also the
+  // pusher-phase coordinates because gears only rotate and crushers do not
+  // move a surviving robot.
+  if (pushEvents.length) {
+    for (const event of pushEvents) {
+      const tile = tileMap.get(`${event.from?.x},${event.from?.y}`);
+      const activeTimedPushes = getRouteTraceTimedFeatures(tile).filter((feature) => (
+        feature.type === "push" && isRouteTraceTimedFeatureActive(feature, registerInTurn)
+      ));
+      for (const feature of activeTimedPushes) {
+        parts.push(`${formatRouteTraceTimedFeatureName(feature)} ${formatRouteTraceTiming(feature)}: ACTIVE → pushed ${formatTraceState(event.from)}→${formatTraceState(event.to)}`);
+      }
+    }
+  } else if (!terminalFailure && transition.to) {
+    const pusherTile = tileMap.get(`${transition.to.x},${transition.to.y}`);
+    for (const feature of getRouteTraceTimedFeatures(pusherTile)) {
+      if (feature.type !== "push") continue;
+      const active = isRouteTraceTimedFeatureActive(feature, registerInTurn);
+      parts.push(`${formatRouteTraceTimedFeatureName(feature)} ${formatRouteTraceTiming(feature)}: ${active ? "ACTIVE → no displacement" : "inactive"} at pusher phase`);
+    }
+  }
+
+  // Crushers resolve after gears. Report them only for the square occupied at
+  // the crusher phase, never merely because that square was crossed earlier.
+  // On a surviving transition that is transition.to. For a terminal crusher
+  // result, resolveCrusherPhase records its square as the terminal traversal.
+  let crusherPoint = null;
+  if (!terminalFailure && transition.to) {
+    crusherPoint = transition.to;
+  } else if (lastTraversal) {
+    const terminalTile = tileMap.get(`${lastTraversal.x},${lastTraversal.y}`);
+    const hasActiveCrusher = getRouteTraceTimedFeatures(terminalTile).some((feature) => (
+      feature.type === "crusher" && isRouteTraceTimedFeatureActive(feature, registerInTurn)
+    ));
+    if (hasActiveCrusher) crusherPoint = lastTraversal;
+  }
+
+  if (crusherPoint) {
+    const crusherTile = tileMap.get(`${crusherPoint.x},${crusherPoint.y}`);
+    for (const feature of getRouteTraceTimedFeatures(crusherTile)) {
+      if (feature.type !== "crusher") continue;
+      const name = formatRouteTraceTimedFeatureName(feature);
+      const timing = formatRouteTraceTiming(feature);
+      const active = isRouteTraceTimedFeatureActive(feature, registerInTurn);
+      const at = ` at (${crusherPoint.x},${crusherPoint.y})`;
+      if (!active) {
+        parts.push(`${name} ${timing}: inactive at crusher phase${at}`);
+      } else if (terminalFailure) {
+        parts.push(`${name} ${timing}: ACTIVE → ${transition.rebooted ? "crushed/rebooted" : "crushed"}${at}`);
+      } else {
+        parts.push(`${name} ${timing}: ACTIVE → SURVIVED CRUSHER (unexpected)${at}`);
+      }
+    }
+  }
+
+  if (!terminalFailure && transition.to) {
+    const endTile = tileMap.get(`${transition.to.x},${transition.to.y}`);
+    for (const feature of getRouteTraceTimedFeatures(endTile)) {
+      if (feature.type !== "flamethrower") continue;
+      if (!isRouteTraceTimedFeatureActive(feature, registerInTurn)) continue;
+      parts.push(`${formatRouteTraceTimedFeatureName(feature)} ${formatRouteTraceTiming(feature)}: ACTIVE → end-of-register +1 damage at (${transition.to.x},${transition.to.y})`);
+    }
+  }
+
+  // Do not de-duplicate: repeated passes through an active flamer are separate
+  // damage events and should remain visible in the trace.
+  return parts;
+}
+
+function formatChronologicalRouteTrace(route, tileMap = null) {
   if (!route?.transitions?.length) return ["Trace: none"];
 
   const startAction = route.absoluteStartAction ?? 0;
@@ -13511,13 +13889,21 @@ function formatChronologicalRouteTrace(route) {
     hitsByAction.set(absoluteAction, items);
   });
 
-  return route.transitions.map((transition, index) => {
-    const registerNumber = startAction + index + 1;
+  const lines = [];
+  route.transitions.forEach((transition, index) => {
+    const absoluteRegister = startAction + index + 1;
+    const turnNumber = Math.floor((absoluteRegister - 1) / ROUTE_TRACE_REGISTER_COUNT) + 1;
+    const registerInTurn = ((absoluteRegister - 1) % ROUTE_TRACE_REGISTER_COUNT) + 1;
     const pieces = [
-      `${registerNumber}. ${transition.action}`,
+      `${absoluteRegister}. [T${turnNumber} R${registerInTurn}] ${transition.action}`,
       `${formatTraceState(transition.from)}→${formatTraceState(transition.to)}`
     ];
-    const boardParts = (transition.boardEvents || []).map(formatBoardTraceEvent).filter(Boolean);
+    const timedParts = getTimedFeatureTraceParts(tileMap, transition, registerInTurn);
+    const hasTimedPusherMove = timedParts.some((part) => part.includes("pusher") && part.includes("ACTIVE → pushed"));
+    const boardParts = (transition.boardEvents || [])
+      .filter((event) => !(event.type === "pusher" && hasTimedPusherMove))
+      .map(formatBoardTraceEvent)
+      .filter(Boolean);
     if (boardParts.length) pieces.push(boardParts.join("; "));
     else if ((transition.conveyorSteps || []).length) {
       pieces.push(transition.conveyorSteps
@@ -13526,11 +13912,18 @@ function formatChronologicalRouteTrace(route) {
     } else if (transition.gearTurned) {
       pieces.push("gear turn");
     }
+    if (timedParts.length) pieces.push(timedParts.join("; "));
 
-    const hits = hitsByAction.get(registerNumber) ?? [];
+    const hits = hitsByAction.get(absoluteRegister) ?? [];
     if (hits.length) pieces.push(hits.map((hit) => `FLAG ${hit.checkpointId ?? hit.checkpointIndex + 1}`).join(", "));
-    return pieces.join(" → ");
+    lines.push(pieces.join(" → "));
+
+    if (registerInTurn === ROUTE_TRACE_REGISTER_COUNT && index < route.transitions.length - 1) {
+      lines.push(`──────── end turn ${turnNumber} / start turn ${turnNumber + 1} ────────`);
+    }
   });
+
+  return lines;
 }
 
 function formatRouteDetail(scenario, entry) {
@@ -13539,9 +13932,13 @@ function formatRouteDetail(scenario, entry) {
     return [];
   }
 
+  // Use the same effective tile map as route analysis. In particular, normal
+  // flags remove underlying board features unless Hazardous Flags is active,
+  // so diagnostics must not resurrect the raw printed feature under a flag.
+  const traceTileMap = scenario?.goalTileMap ?? null;
   const lines = [
     `${entry.label}: ${route.actions} register${route.actions === 1 ? "" : "s"}, distance ${route.distance}, forced ${route.forcedDistance}, raw score ${route.score}`,
-    ...formatChronologicalRouteTrace(route)
+    ...formatChronologicalRouteTrace(route, traceTileMap)
   ];
 
   if (route.hazard || route.rebootCount || route.conveyorComplexity) {
@@ -13553,9 +13950,12 @@ function formatRouteDetail(scenario, entry) {
   }
 
   if (entry.startAnalysis) {
-    const startStatus = entry.outlierInfo ? "outlier" : "usable";
+    const prunedStatus = entry.prunedStatus ?? getRouteInspectionPrunedStatus(entry.outlierInfo);
+    const startStatus = entry.outlierInfo ? `${prunedStatus ?? "pruned"}; unusable` : "usable";
     const trafficPenalty = entry.startAnalysis.trafficPenalty ?? 0;
-    const adjustedLabel = entry.outlierInfo ? "Outlier pass estimate" : "Final adjusted score";
+    const adjustedLabel = entry.outlierInfo
+      ? (prunedStatus === "outlier" ? "Outlier pass estimate" : "Pruned-start adjusted score")
+      : "Final adjusted score";
     lines.push(`${adjustedLabel}: ${entry.startAnalysis.adjustedScore} (${startStatus}; raw ${route.score} + traffic ${trafficPenalty})`);
     if (entry.startAnalysis.energyCost !== null && entry.startAnalysis.energyCost !== undefined) {
       const formattedCost = formatPayToWinEnergyCost(entry.startAnalysis);
@@ -13697,7 +14097,6 @@ function updateDevView() {
   const enabled = isDevViewEnabled();
   document.getElementById("trace-leg-label")?.classList.toggle("hidden", !enabled);
   document.getElementById("report-panel")?.classList.toggle("hidden", !enabled);
-  document.getElementById("outlier-routes-toggle-label")?.classList.toggle("hidden", !enabled);
   document.getElementById("board-audit-toggle-label")?.classList.toggle("hidden", !enabled);
   document.getElementById("run-diagnostics")?.classList.add("hidden");
   updateBoardAuditVisibility();
@@ -13936,23 +14335,25 @@ function getScenarioRenderState(scenario) {
       .map((start, index) => selectedStartKeys.has(`${start.x},${start.y}`) ? index : null)
       .filter((index) => index !== null)
     : [];
-  const startEnergyCosts = scenario.payToWin
+  const startEnergyPricing = Boolean(scenario.payToWin || scenario.subsidizedStarts);
+  const startEnergyCosts = startEnergyPricing
     ? scenario.activeStarts.map((start) => energyCostByKey.get(`${start.x},${start.y}`))
     : [];
-  const startLateEnergyCosts = scenario.payToWin
+  const startLateEnergyCosts = startEnergyPricing
     ? scenario.activeStarts.map((start) => lateEnergyCostByKey.get(`${start.x},${start.y}`))
     : [];
-  const startEarlyUnavailable = scenario.payToWin
+  const startEarlyUnavailable = startEnergyPricing
     ? scenario.activeStarts.map((start) => earlyUnavailableByKey.get(`${start.x},${start.y}`) ?? false)
     : [];
-  const startLateUnavailable = scenario.payToWin
+  const startLateUnavailable = startEnergyPricing
     ? scenario.activeStarts.map((start) => lateUnavailableByKey.get(`${start.x},${start.y}`) ?? false)
     : [];
 
   return {
     devViewEnabled, goal, iconBoardView, renderAnalysis, selectedLegIndex,
     startLabels, selectedStartIndices, startEnergyCosts, startLateEnergyCosts,
-    startEarlyUnavailable, startLateUnavailable, unusableStartIndices
+    startEarlyUnavailable, startLateUnavailable,
+    startEnergyIsSubsidy: Boolean(scenario.subsidizedStarts), unusableStartIndices
   };
 }
 
@@ -13972,6 +14373,7 @@ function drawScenarioCanvas(scenario, options = {}) {
     startLateEnergyCosts,
     startEarlyUnavailable,
     startLateUnavailable,
+    startEnergyIsSubsidy,
     unusableStartIndices
   } = getScenarioRenderState(scenario);
   const canvas = document.getElementById("canvas");
@@ -13992,6 +14394,7 @@ function drawScenarioCanvas(scenario, options = {}) {
     startLateEnergyCosts,
     startEarlyUnavailable,
     startLateUnavailable,
+    startEnergyIsSubsidy,
     rebootTokens: scenario.rebootTokens,
     tileMap: scenario.goalTileMap,
     unusableStartIndices,
@@ -14000,7 +14403,7 @@ function drawScenarioCanvas(scenario, options = {}) {
     showStartFacing: devViewEnabled,
     showAllStartMarkers: devViewEnabled && !scenario.virtualBots,
     noDockStarts: Boolean(scenario.noDocks),
-    hideUnusableStarts: Boolean(scenario.noDocks && !devViewEnabled && !scenario.payToWin),
+    hideUnusableStarts: Boolean(scenario.noDocks && !devViewEnabled && !(scenario.payToWin || scenario.subsidizedStarts)),
     showWalls: iconBoardView || devViewEnabled,
     showPieceImages: !iconBoardView,
     showFootprints: true,
@@ -14157,6 +14560,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     actFast,
     competitiveMode,
     payToWin,
+    subsidizedStarts,
     extraDocks,
     noDocks,
     sandwichedDock,
@@ -14182,6 +14586,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     variantComplexityBudget,
     variantComplexityUsed
   } = variantBundle;
+  const startEnergyPricing = Boolean(payToWin || subsidizedStarts);
   let effectiveNoDocks = noDocks;
   if (effectiveNoDocks) {
     variantBundle.extraDocks = false;
@@ -14216,6 +14621,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     actFastMode,
     competitiveMode,
     payToWin,
+    subsidizedStarts,
     extraDocks,
     noDocks: effectiveNoDocks,
     sandwichedDock,
@@ -14554,7 +14960,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
           generationPreferences.difficulty === "any" &&
           generationPreferences.length === "any" &&
           !competitiveMode &&
-          !payToWin &&
+          !startEnergyPricing &&
           !virtualBots
         );
         const baseAnalysisOptions = applyVariantAnalysisOptions({
@@ -14591,7 +14997,8 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
               ...baseAnalysisOptions,
               ...effectiveVariantBundle,
               competitiveMode,
-              payToWin: effectiveVariantBundle.payToWin,
+              payToWin: startEnergyPricing,
+              subsidizedStarts,
               virtualBots,
               movingTargets
             }
@@ -14688,7 +15095,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         const targetedNormalRouting = (
           !unconstrainedNormalRouting &&
           !competitiveMode &&
-          !payToWin &&
+          !startEnergyPricing &&
           !virtualBots &&
           !effectiveNoDocks &&
           !sandwichedDock &&
@@ -14699,13 +15106,14 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
           )
         );
 
-        // Any/Any Normal, targeted Normal, Competitive, and Pay to Win all
+        // Any/Any Normal, targeted Normal, Competitive, Pay to Win, and
+        // Subsidized Starts all
         // benefit from the same cheap coherent route pool. Targeted Normal uses
         // it as a target-fit gate before any rich multi-route refinement.
         const needsReusableRoutePool = Boolean(
           coursePreflight &&
           !virtualBots &&
-          (unconstrainedNormalRouting || targetedNormalRouting || competitiveMode || payToWin)
+          (unconstrainedNormalRouting || targetedNormalRouting || competitiveMode || startEnergyPricing)
         );
         if (needsReusableRoutePool) {
           const routePoolTelemetryBefore = getAnalysisTelemetrySnapshotSafe();
@@ -14719,7 +15127,8 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
               ...productionAnalysisOptions,
               ...effectiveVariantBundle,
               competitiveMode,
-              payToWin,
+              payToWin: startEnergyPricing,
+              subsidizedStarts,
               virtualBots: false,
               movingTargets,
               // v46.2: retain the same cheap plausible alternate capability for
@@ -14728,7 +15137,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
               // does not raise route-search expansion caps. Targeted Normal
               // already gets its richer refinement after the target-fit gate.
               preservePlausibleAlternatives: Boolean(
-                unconstrainedNormalRouting || competitiveMode || payToWin
+                unconstrainedNormalRouting || competitiveMode || startEnergyPricing
               )
             }
           );
@@ -15022,9 +15431,9 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
               escalationSurvivorHistory: sequence.firstLeg.summary.contextualLegCache?.survivorHistory ?? []
             };
           }
-        } else if (payToWin && !virtualBots) {
+        } else if (startEnergyPricing && !virtualBots) {
           await reportStage(
-            `Pricing Pay to Win starts — ${analysisStarts.length} validated choices`,
+            `${subsidizedStarts ? "Subsidizing" : "Pricing Pay to Win"} starts — ${analysisStarts.length} validated choices`,
             evaluationsUsed
           );
           sequence = analyzeFlagSequence(
@@ -15040,7 +15449,9 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
             }
           );
           if (sequence?.firstLeg?.summary) {
-            sequence.firstLeg.summary.contextualSearchMode = "pay-to-win-shared-route-pool";
+            sequence.firstLeg.summary.contextualSearchMode = subsidizedStarts
+              ? "subsidized-starts-shared-route-pool"
+              : "pay-to-win-shared-route-pool";
             sequence.firstLeg.summary.payToWinStaging = {
               active: true,
               sourceStartCount: indexedActiveStarts.length,
@@ -15276,6 +15687,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
           hazardousFlags,
           movingTargets,
           payToWin: effectiveVariantBundle.payToWin,
+          subsidizedStarts: effectiveVariantBundle.subsidizedStarts,
           lighterGame,
           lessSpammyGame,
           lessForeshadowing
@@ -15311,7 +15723,8 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       const usableStarts = computeUsableStarts(sequence.firstLeg, {
         competitiveMode,
         virtualBots,
-        payToWin: effectiveVariantBundle.payToWin
+        payToWin: Boolean(effectiveVariantBundle.payToWin || effectiveVariantBundle.subsidizedStarts),
+        subsidizedStarts: effectiveVariantBundle.subsidizedStarts
       });
       let pruningChanged = false;
       const prunedDocks = pruneUnusedDockPlacements(
@@ -15394,13 +15807,15 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       continue;
     }
     if (
-      effectiveVariantBundle.payToWin &&
+      (effectiveVariantBundle.payToWin || effectiveVariantBundle.subsidizedStarts) &&
       sequence.firstLeg.summary.payToWin?.availabilityValid === false
     ) {
       recordRejectionEvent(
         retryTelemetryBefore,
-        "pay-to-win",
-        "Pay to Win pricing left insufficient affordable starting-space availability"
+        effectiveVariantBundle.subsidizedStarts ? "subsidized-starts" : "pay-to-win",
+        effectiveVariantBundle.subsidizedStarts
+          ? "Subsidized Starts pricing left insufficient compensable starting-space availability"
+          : "Pay to Win pricing left insufficient affordable starting-space availability"
       );
       staleRetries += 1;
       continue;
@@ -15408,7 +15823,8 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     const finalUsableStarts = computeUsableStarts(sequence.firstLeg, {
       competitiveMode,
       virtualBots,
-      payToWin: effectiveVariantBundle.payToWin
+      payToWin: Boolean(effectiveVariantBundle.payToWin || effectiveVariantBundle.subsidizedStarts),
+      subsidizedStarts: Boolean(effectiveVariantBundle.subsidizedStarts)
     });
     const effectiveStartZoneCount = effectiveNoDocks
       ? (noDockEdge ? 1 : 0)
@@ -15480,15 +15896,18 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     const routeFailedIndices = virtualBots
       ? []
       : [...routePoolCandidateIndices].filter((index) => !validatedStartSet.has(index));
-    const payToWinPrunedIndices = effectiveVariantBundle.payToWin
+    const startEnergyPricingActive = Boolean(
+      effectiveVariantBundle.payToWin || effectiveVariantBundle.subsidizedStarts
+    );
+    const payToWinPrunedIndices = startEnergyPricingActive
       ? (sequence.firstLeg.summary.payToWin?.pruned ?? []).map((entry) => entry.index)
       : [];
-    const selectorUnavailableIndices = effectiveVariantBundle.payToWin
+    const selectorUnavailableIndices = startEnergyPricingActive
       ? sequence.firstLeg.starts
         .filter((entry) => entry.payToWinUnavailable)
         .map((entry) => entry.index)
       : [];
-    const normalPrunedIndices = (!competitiveMode && !effectiveVariantBundle.payToWin && !virtualBots)
+    const normalPrunedIndices = (!competitiveMode && !startEnergyPricingActive && !virtualBots)
       ? [...validatedStartSet].filter((index) => !usableStartSet.has(index))
       : [];
     const classifiedBlockedIndices = new Set([
@@ -15539,6 +15958,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       actFast,
       actFastMode,
       payToWin: effectiveVariantBundle.payToWin,
+      subsidizedStarts: effectiveVariantBundle.subsidizedStarts,
       noDocks: effectiveNoDocks,
       sandwichedDock: sandwichedDock && hasPhysicalSandwichedDock(
         scenarioBoardPlacements,
@@ -15566,6 +15986,8 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         actFast,
         actFastMode,
         competitiveMode,
+        payToWin: effectiveVariantBundle.payToWin,
+        subsidizedStarts: effectiveVariantBundle.subsidizedStarts,
         extraDocks: effectiveNoDocks ? false : scenarioDockPlacements.length > 1,
         noDocks: effectiveNoDocks,
         sandwichedDock: sandwichedDock && hasPhysicalSandwichedDock(
@@ -15587,7 +16009,6 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         hazardousFlags,
         repairStations: effectiveVariantBundle.repairStations,
         movingTargets,
-        payToWin: effectiveVariantBundle.payToWin,
         lighterGame,
         lessSpammyGame,
         lessForeshadowing,
@@ -15635,6 +16056,7 @@ function serializeScenario(scenario) {
     actFastMode: scenario.actFastMode,
     competitiveMode: scenario.competitiveMode,
     payToWin: scenario.payToWin,
+    subsidizedStarts: Boolean(scenario.subsidizedStarts),
     extraDocks: scenario.extraDocks,
     noDocks: scenario.noDocks,
     sandwichedDock: scenario.sandwichedDock,
@@ -15671,7 +16093,7 @@ function serializeScenario(scenario) {
     validatedStartIndices: scenario.validatedStartIndices ?? [],
     analysisStartIndices: scenario.analysisStartIndices ?? (scenario.metrics?.usableStarts ?? []).map((entry) => entry.index),
     startDisposition: scenario.startDisposition ?? null,
-    startPricing: scenario.payToWin
+    startPricing: (scenario.payToWin || scenario.subsidizedStarts)
       ? (scenario.sequence?.firstLeg?.starts ?? []).map((entry) => ({
         index: entry.index,
         energyCost: entry.energyCost ?? null,
@@ -15682,7 +16104,7 @@ function serializeScenario(scenario) {
         lateAdjustedScore: entry.lateAdjustedScore ?? null
       }))
       : null,
-    payToWinPricing: scenario.payToWin ? (scenario.sequence?.firstLeg?.summary?.payToWin ?? null) : null,
+    payToWinPricing: (scenario.payToWin || scenario.subsidizedStarts) ? (scenario.sequence?.firstLeg?.summary?.payToWin ?? null) : null,
     attempts: scenario.attempts ?? 0
   };
 }
@@ -15715,6 +16137,8 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
   const recoveryRule = snapshot.recoveryRule ?? "reboot_tokens";
   const competitiveMode = Boolean(snapshot.competitiveMode);
   const payToWin = Boolean(snapshot.payToWin);
+  const subsidizedStarts = Boolean(snapshot.subsidizedStarts);
+  const startEnergyPricing = Boolean(payToWin || subsidizedStarts);
   const noDocks = Boolean(snapshot.noDocks);
   const sandwichedDock = Boolean(snapshot.sandwichedDock);
   const noDockStarts = snapshot.noDockStarts || [];
@@ -15797,10 +16221,11 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     length: snapshot.preferences.length,
     // A restored course must preserve the accepted start disposition instead
     // of running a fresh Normal fairness pass and changing which spaces are open.
-    skipNormalStartBalancing: !competitiveMode && !payToWin && !virtualBots && Array.isArray(snapshot.analysisStartIndices)
+    skipNormalStartBalancing: !competitiveMode && !startEnergyPricing && !virtualBots && Array.isArray(snapshot.analysisStartIndices)
   }, {
     competitiveMode,
     payToWin,
+    subsidizedStarts,
     recoveryRule,
     lessDeadlyGame,
     lessSpammyGame,
@@ -15820,7 +16245,7 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     repairStations,
     lessForeshadowing
   }));
-  if (payToWin && Array.isArray(snapshot.startPricing)) {
+  if (startEnergyPricing && Array.isArray(snapshot.startPricing)) {
     const savedPricingByIndex = new Map(snapshot.startPricing.map((entry) => [entry.index, entry]));
     sequence.firstLeg.starts = sequence.firstLeg.starts.map((entry) => {
       const saved = savedPricingByIndex.get(entry.index);
@@ -15847,6 +16272,7 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     repairStations,
     movingTargets,
     payToWin,
+    subsidizedStarts,
     startupSpinUp,
     repulsorOverdrive,
     upgradeWorld,
@@ -15907,6 +16333,7 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     actFastMode,
     competitiveMode,
     payToWin,
+    subsidizedStarts,
     noDocks,
     sandwichedDock,
     noDockEdge: snapshot.noDockEdge ?? snapshotNoDockEdges[0] ?? null,
@@ -15953,6 +16380,7 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
       actFastMode,
       competitiveMode,
       payToWin,
+      subsidizedStarts,
       noDocks,
       sandwichedDock,
       extraDocks,
@@ -16618,12 +17046,6 @@ document.getElementById("course-explanation-toggle").addEventListener("click", (
 
 document.getElementById("dev-view").addEventListener("change", () => {
   updateDevView();
-  if (currentScenario) {
-    renderScenario(currentScenario);
-  }
-});
-
-document.getElementById("show-outlier-routes").addEventListener("change", () => {
   if (currentScenario) {
     renderScenario(currentScenario);
   }

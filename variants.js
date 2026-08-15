@@ -29,6 +29,7 @@ const VARIANT_COMPLEXITY = {
   startupSpinUp: 1,
   competitiveMode: 1,
   payToWin: 1,
+  subsidizedStarts: 1,
   staggeredBoards: 1,
   virtualBots: 2,
   noDocks: 1,
@@ -71,7 +72,7 @@ const VARIANT_DEFINITION_ROWS = [
     defaultState: "off",
     description: "Removes upgrade cards and makes battery spaces inactive.",
     cost: VARIANT_COMPLEXITY.lighterGame,
-    incompatibleWith: ["upgradeWorld", "payToWin"],
+    incompatibleWith: ["upgradeWorld", "payToWin", "subsidizedStarts"],
     applyBundle: applyBooleanField("lighterGame")
   },
   {
@@ -351,7 +352,7 @@ const VARIANT_DEFINITION_ROWS = [
     defaultState: "off",
     description: "Removes docking bays and starts every robot from one shared entry point. The first five registers do not create robot traffic pressure.",
     cost: VARIANT_COMPLEXITY.virtualBots,
-    incompatibleWith: ["competitiveMode", "payToWin", "extraDocks", "homeReboot", "noDocks", "sandwichedDock"],
+    incompatibleWith: ["competitiveMode", "payToWin", "subsidizedStarts", "extraDocks", "homeReboot", "noDocks", "sandwichedDock"],
     applyBundle: applyBooleanField("virtualBots")
   },
   {
@@ -384,7 +385,7 @@ const VARIANT_DEFINITION_ROWS = [
     defaultState: "off",
     description: "Before the game, players block starting spaces with energy cubes, then choose strategically from the remaining starts. Generation evaluates roughly twice as many starting choices as players and can take longer.",
     cost: VARIANT_COMPLEXITY.competitiveMode,
-    incompatibleWith: ["payToWin", "virtualBots"],
+    incompatibleWith: ["payToWin", "subsidizedStarts", "virtualBots"],
     applyBundle: applyBooleanField("competitiveMode")
   },
   {
@@ -395,8 +396,19 @@ const VARIANT_DEFINITION_ROWS = [
     defaultState: "off",
     description: "Better starting spaces cost starting energy instead of being automatically pruned as outliers.",
     cost: VARIANT_COMPLEXITY.payToWin,
-    incompatibleWith: ["competitiveMode", "lighterGame", "virtualBots"],
+    incompatibleWith: ["competitiveMode", "subsidizedStarts", "lighterGame", "virtualBots"],
     applyBundle: applyBooleanField("payToWin")
+  },
+  {
+    id: "subsidizedStarts",
+    label: "Subsidized Starts",
+    category: VARIANT_CATEGORIES.setup,
+    controlId: "variant-subsidized-starts",
+    defaultState: "off",
+    description: "Weaker starting spaces grant extra starting energy instead of being automatically pruned as outliers. Starting energy cannot exceed 10.",
+    cost: VARIANT_COMPLEXITY.subsidizedStarts,
+    incompatibleWith: ["competitiveMode", "payToWin", "lighterGame", "virtualBots"],
+    applyBundle: applyBooleanField("subsidizedStarts")
   },
   {
     id: "staggeredBoards",
@@ -472,7 +484,8 @@ export function applyVariantGenerationOptions(baseOptions = {}, variantBundle = 
     alignedLayout: variantBundle.alignedLayout ?? baseOptions.alignedLayout,
     actFast: Boolean(variantBundle.actFast),
     competitiveMode: Boolean(variantBundle.competitiveMode),
-    payToWin: Boolean(variantBundle.payToWin),
+    payToWin: Boolean(variantBundle.payToWin || variantBundle.subsidizedStarts),
+    subsidizedStarts: Boolean(variantBundle.subsidizedStarts),
     extraDocks: Boolean(variantBundle.extraDocks),
     noDocks: Boolean(variantBundle.noDocks),
     sandwichedDock: Boolean(variantBundle.sandwichedDock),
@@ -491,7 +504,8 @@ export function applyVariantAnalysisOptions(baseOptions = {}, variantBundle = {}
   return {
     ...baseOptions,
     competitiveMode: Boolean(variantBundle.competitiveMode),
-    payToWin: Boolean(variantBundle.payToWin),
+    payToWin: Boolean(variantBundle.payToWin || variantBundle.subsidizedStarts),
+    subsidizedStarts: Boolean(variantBundle.subsidizedStarts),
     startingEnergy: Number.isFinite(variantBundle.startingEnergy)
       ? Number(variantBundle.startingEnergy)
       : baseOptions.startingEnergy,

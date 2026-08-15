@@ -252,7 +252,7 @@ function getRouteEconomyPhaseChoices(energy, cardUnits, boundaryAction, fullHori
   const maxInstalls = config.installsPerTurn >= 1 ? 1 : 0;
   const drawCardUnits = getRouteUsefulCardUnitsPerDraw(config);
   const installCardUnits = getRouteUsefulCardUnitsPerInstall();
-  const installCost = config.usefulEnergyPerInstall;
+  const maxInstallInvestment = config.usefulEnergyPerInstall;
   const installValueR = getRouteEconomyInstallValueR(
     boundaryAction,
     fullHorizonActions,
@@ -265,20 +265,34 @@ function getRouteEconomyPhaseChoices(energy, cardUnits, boundaryAction, fullHori
     const energyAfterDraw = energy - drawCost;
     const cardsAfterDraw = cardUnits + draw * drawCardUnits;
 
+    // v47.9 smooths the shared Energy shadow without changing real upgrade
+    // throughput. usefulEnergyPerInstall is a coarse value/deployment budget,
+    // not a literal 2E card price: a single install opportunity may therefore
+    // absorb 1..N Energy of useful investment and receive the corresponding
+    // fraction of its modeled value. Any positive investment still consumes
+    // one useful-card opportunity and the one-install-per-turn slot.
     for (let install = 0; install <= maxInstalls; install += 1) {
-      if (install && installValueR <= 1e-9) continue;
-      const installEnergy = install * installCost;
-      const installCards = install * installCardUnits;
-      if (installEnergy > energyAfterDraw + 1e-9) continue;
-      if (installCards > cardsAfterDraw) continue;
-      choices.push({
-        draw,
-        install,
-        energyAfter: Math.max(0, energyAfterDraw - installEnergy),
-        cardUnitsAfter: Math.max(0, cardsAfterDraw - installCards),
-        immediateValueR: install * installValueR,
-        energySpent: drawCost + installEnergy
-      });
+      const minInvestment = install ? 1 : 0;
+      const maxInvestment = install
+        ? Math.min(maxInstallInvestment, Math.floor(energyAfterDraw + 1e-9))
+        : 0;
+      for (let investment = minInvestment; investment <= maxInvestment; investment += 1) {
+        if (install && installValueR <= 1e-9) continue;
+        const installCards = install * installCardUnits;
+        if (installCards > cardsAfterDraw) continue;
+        const valueFraction = install && maxInstallInvestment > 0
+          ? investment / maxInstallInvestment
+          : 0;
+        choices.push({
+          draw,
+          install,
+          installInvestment: investment,
+          energyAfter: Math.max(0, energyAfterDraw - investment),
+          cardUnitsAfter: Math.max(0, cardsAfterDraw - installCards),
+          immediateValueR: installValueR * valueFraction,
+          energySpent: drawCost + investment
+        });
+      }
     }
   }
 
@@ -798,6 +812,9 @@ function getCachedContextualPhysicalTransition(
     state.y,
     state.facing,
     action.id,
+    Number.isInteger(options.registerIndex)
+      ? `r${((options.registerIndex % REGISTER_COUNT) + REGISTER_COUNT) % REGISTER_COUNT}`
+      : "r?",
     goal?.x ?? "",
     goal?.y ?? "",
     optionSignature
@@ -1163,15 +1180,31 @@ function hasExplicitTiming(feature) {
   return Array.isArray(feature?.timing) && feature.timing.length > 0;
 }
 
+function getRegisterNumber(options = {}) {
+  if (!Number.isInteger(options.registerIndex)) return null;
+  const normalized = ((options.registerIndex % REGISTER_COUNT) + REGISTER_COUNT) % REGISTER_COUNT;
+  return normalized + 1;
+}
+
+function hasKnownRegisterTiming(options = {}) {
+  return getRegisterNumber(options) !== null;
+}
+
+function isFeatureActiveThisRegister(feature, options = {}) {
+  if (!hasExplicitTiming(feature)) return true;
+  const registerNumber = getRegisterNumber(options);
+  return registerNumber !== null && feature.timing.includes(registerNumber);
+}
+
+function hasActiveFeature(tile, type, options = {}) {
+  return (tile?.features || []).some((feature) => (
+    feature.type === type && isFeatureActiveThisRegister(feature, options)
+  ));
+}
+
 function getFeatureDutyCycle(feature, fallback = 1) {
   if (!hasExplicitTiming(feature)) return fallback;
   return Math.max(0, Math.min(1, new Set(feature.timing).size / REGISTER_COUNT));
-}
-
-function hasUntimedFeature(tile, type) {
-  return (tile?.features || []).some((feature) => (
-    feature.type === type && !hasExplicitTiming(feature)
-  ));
 }
 
 function hasHomingMissile(tile) {
@@ -1192,6 +1225,12 @@ function isOil(tile) {
 
 function isWater(tile) {
   return (tile?.features || []).some((feature) => feature.type === "water");
+}
+
+function isCurrent(tile) {
+  return (tile?.features || []).some((feature) => (
+    feature.type === "water" || feature.type === "radioactiveWaste"
+  ));
 }
 
 function isPit(tile) {
@@ -1557,11 +1596,12 @@ function getRouteEnergyShadowStep(
 
 // Re-evaluate only the shared v45 upgrade economy on an already discovered
 // physical/programming route. This is intentionally much cheaper than another
-// route search and is used by Pay to Win to ask what the SAME coherent route
-// is worth after 0E/1E/2E/3E has been paid before the opening Upgrade Phase.
-// Non-economy route cost (movement, hazards, card scarcity, timing, etc.) is
-// preserved exactly; Battery/Power Up/Chop Shop value and the carried Energy /
-// useful-card shadow are replayed from the requested starting economy state.
+// route search and is used by start-Energy balancing variants to ask what the
+// SAME coherent route is worth after starting Energy is reduced (Pay to Win) or
+// increased (Subsidized Starts) before the opening Upgrade Phase. Non-economy
+// route cost (movement, hazards, card scarcity, timing, etc.) is preserved
+// exactly; Battery/Power Up/Chop Shop value and the carried Energy/useful-card
+// shadow are replayed from the requested starting economy state.
 export function rescoreFixedRouteUpgradeEconomy(tileMap, route, options = {}) {
   if (!route || !Array.isArray(route.transitions)) return null;
   const originalScore = Number(route.score);
@@ -1588,10 +1628,15 @@ export function rescoreFixedRouteUpgradeEconomy(tileMap, route, options = {}) {
       0,
       { ...options, startingEnergy: referenceStartingEnergy }
     ).potential;
-  const startingEconomyPenaltyScore = Math.max(
-    0,
+  // Signed adjustment: spending starting Energy makes the route worse
+  // (positive score adjustment), while a starting subsidy can make it better
+  // (negative adjustment). The economy state itself enforces the 10E storage
+  // cap and the one-draw/one-install throughput limits.
+  const startingEconomyAdjustmentScore = (
     referenceStartingPotentialR - currentStartingPotentialR
   ) * registerScore;
+  const startingEconomyPenaltyScore = Math.max(0, startingEconomyAdjustmentScore);
+  const startingEconomyBenefitScore = Math.max(0, -startingEconomyAdjustmentScore);
 
   const originalEconomyReward = Number(route.routeEnergyEconomyRewardScore) || 0;
   const initial = getInitialRouteEconomyShadowState(options);
@@ -1640,12 +1685,14 @@ export function rescoreFixedRouteUpgradeEconomy(tileMap, route, options = {}) {
   const routeRewardDelta = currentStartingEnergy === referenceStartingEnergy
     ? 0
     : originalEconomyReward - totalReward;
-  const rescored = originalScore + startingEconomyPenaltyScore + routeRewardDelta;
+  const rescored = originalScore + startingEconomyAdjustmentScore + routeRewardDelta;
 
   return {
     score: Number(rescored.toFixed(2)),
     originalScore: Number(originalScore.toFixed(2)),
+    startingEconomyAdjustmentScore: Number(startingEconomyAdjustmentScore.toFixed(2)),
     startingEconomyPenaltyScore: Number(startingEconomyPenaltyScore.toFixed(2)),
+    startingEconomyBenefitScore: Number(startingEconomyBenefitScore.toFixed(2)),
     startingEconomyPotentialR: Number(currentStartingPotentialR.toFixed(3)),
     referenceStartingEconomyPotentialR: Number(referenceStartingPotentialR.toFixed(3)),
     routeEnergyEconomyRewardScore: Number(totalReward.toFixed(2)),
@@ -1703,6 +1750,7 @@ function getTilePenalty(tile, options = {}) {
       feature.type === "radiation" ||
       feature.type === "radioactiveWaste" ||
       feature.type === "repairDock" ||
+      (feature.type === "flamethrower" && hasKnownRegisterTiming(options)) ||
       (hasExplicitTiming(feature) && (
         feature.type === "push" ||
         feature.type === "crusher" ||
@@ -1846,7 +1894,15 @@ function canMoveBetween(tileMap, from, to, dir, options = {}) {
     return { ok: false, crash: false, offBoard: false };
   }
 
-  if (isPit(toTile)) {
+  // A paired portal is a discontinuous relocation. Once the robot can enter the
+  // portal square, terrain/features on that square are skipped by the portal
+  // transit; only the actual exit square is resolved afterward.
+  const portalDestination = resolvePortalDestination(
+    tileMap,
+    to,
+    options.portalMap ?? new Map()
+  );
+  if (!portalDestination && (isPit(toTile) || hasActiveFeature(toTile, "trapdoor", options))) {
     return { ok: false, crash: true, offBoard: false };
   }
 
@@ -2186,8 +2242,15 @@ function moveOneStep(tileMap, state, dir, mode, options = {}, moveBudget = null)
   const traversed = [{ x: next.x, y: next.y }];
   if (portalDestination) {
     traversed.push({ x: portalDestination.x, y: portalDestination.y, jump: true });
+    const portalDestinationTile = tileMap.get(tileKey(portalDestination.x, portalDestination.y));
+    if (isPit(portalDestinationTile) || hasActiveFeature(portalDestinationTile, "trapdoor", options)) {
+      return resolveCrashOrReboot(tileMap, state, resolvedState, traversed, options, 1, mode);
+    }
   }
 
+  const portalDestinationTile = portalDestination
+    ? tileMap.get(tileKey(portalDestination.x, portalDestination.y))
+    : null;
   const outcome = {
     state: resolvedState,
     blocked: false,
@@ -2203,7 +2266,16 @@ function moveOneStep(tileMap, state, dir, mode, options = {}, moveBudget = null)
       facingBefore: state.facing,
       facingAfter: resolvedState.facing
     }] : [],
-    hazard: getTilePenalty(nextTile, options) +
+    hazard: (portalDestination
+      ? 0
+      : getTilePenalty(nextTile, options) +
+        getActiveFlamethrowerEntryPenalty(nextTile, options) +
+        getTimedTraversalFragilityPenalty(nextTile, options)) +
+      (portalDestinationTile
+        ? getTilePenalty(portalDestinationTile, options) +
+          getActiveFlamethrowerEntryPenalty(portalDestinationTile, options) +
+          getTimedTraversalFragilityPenalty(portalDestinationTile, options)
+        : 0) +
       (hasHomingMissile(nextTile)
         ? (tileMap.get(tileKey(state.x, state.y))?.x !== nextTile?.x || tileMap.get(tileKey(state.x, state.y))?.y !== nextTile?.y
           ? getTilePenaltyForFeature({ type: "homingMissile" }, { onEntrance: true, playerCount: options.playerCount })
@@ -2318,6 +2390,8 @@ function resolveTeleporterMove(tileMap, state, action, options = {}) {
     ? movementDir(state.facing, "forward")
     : movementDir(state.facing, "back");
   const steps = Math.abs(signedDistance);
+  // Teleporter movement is a jump: no walls, pits, trapdoors, flamers, or other
+  // board elements on the skipped squares are traversed or resolved.
   const destination = {
     x: state.x + DIRS[dir].dx * steps,
     y: state.y + DIRS[dir].dy * steps
@@ -2325,7 +2399,7 @@ function resolveTeleporterMove(tileMap, state, action, options = {}) {
   const traversed = [{ x: destination.x, y: destination.y, jump: true }];
   const destinationTile = tileMap.get(tileKey(destination.x, destination.y));
 
-  if (!destinationTile || isPit(destinationTile)) {
+  if (!destinationTile || isPit(destinationTile) || hasActiveFeature(destinationTile, "trapdoor", options)) {
     return resolveCrashOrReboot(tileMap, state, destination, traversed, options, steps);
   }
 
@@ -2342,6 +2416,8 @@ function resolveTeleporterMove(tileMap, state, action, options = {}) {
     traversed,
     conveyorSteps: [],
     hazard: getTilePenalty(destinationTile, options) +
+      getActiveFlamethrowerEntryPenalty(destinationTile, options) +
+      getTimedTraversalFragilityPenalty(destinationTile, options) +
       getPitPressurePenalty(tileMap, resolvedState, options) +
       getLedgePressurePenalty(tileMap, resolvedState, options),
     rebootPenalty: 0,
@@ -2366,29 +2442,38 @@ function resolveConveyorPhase(tileMap, state, eligibleSpeed, options = {}) {
   let rebootPenalty = 0;
   let distance = 0;
   let forcedDistance = 0;
-  const maxSteps = eligibleSpeed === 2 ? 2 : 1;
+  const currentOnly = Boolean(options.currentOnly);
+  const maxSteps = currentOnly ? 1 : eligibleSpeed === 2 ? 2 : 1;
+  const conveyorPhase = options.conveyorPhase ?? (
+    currentOnly ? "current" : eligibleSpeed === 2 ? "blue" : "green"
+  );
   let stepsTaken = 0;
   let lastMoveDir = null;
 
   while (stepsTaken < maxSteps) {
     const tile = tileMap.get(tileKey(workingState.x, workingState.y));
     const belt = getBelt(tile);
-    const waterOnly = Boolean(options.waterOnly);
 
-    if (!belt || belt.speed !== eligibleSpeed) {
+    if (!belt) {
       break;
     }
-    if (waterOnly && !isWater(tile)) {
-      break;
-    }
-    if (!waterOnly && eligibleSpeed === 1 && isWater(tile)) {
-      break;
+    // Water and radioactive-waste conveyor spaces are currents. Currents do not
+    // participate in either conveyor phase; they get exactly one later current move.
+    if (currentOnly) {
+      if (!isCurrent(tile)) break;
+    } else {
+      if (belt.speed !== eligibleSpeed || isCurrent(tile)) break;
     }
 
     const step = moveOneStep(tileMap, workingState, belt.dir, "belt", options);
     lastMoveDir = belt.dir;
     traversed.push(...step.traversed);
-    conveyorSteps.push(...(step.conveyorSteps || []));
+    conveyorSteps.push(...(step.conveyorSteps || []).map((entry) => ({
+      ...entry,
+      speed: belt.speed,
+      phase: conveyorPhase,
+      phaseStep: stepsTaken + 1
+    })));
     hazard += step.hazard;
     rebootPenalty += step.rebootPenalty || 0;
     distance += step.distance;
@@ -2433,7 +2518,7 @@ function resolveConveyorPhase(tileMap, state, eligibleSpeed, options = {}) {
 
 function resolvePushPhase(tileMap, state, options = {}) {
   const tile = tileMap.get(tileKey(state.x, state.y));
-  const pushes = getPushes(tile).filter((push) => !hasExplicitTiming(push));
+  const pushes = getPushes(tile).filter((push) => isFeatureActiveThisRegister(push, options));
 
   if (!pushes.length) {
     return {
@@ -2503,7 +2588,7 @@ function resolvePushPhase(tileMap, state, options = {}) {
 function resolveCrusherPhase(tileMap, state, options = {}) {
   const tile = tileMap.get(tileKey(state.x, state.y));
 
-  if (!hasUntimedFeature(tile, "crusher") && !hasUntimedFeature(tile, "trapdoor")) {
+  if (!hasActiveFeature(tile, "crusher", options)) {
     return {
       state: cloneState(state),
       traversed: [],
@@ -2513,20 +2598,6 @@ function resolveCrusherPhase(tileMap, state, options = {}) {
       distance: 0,
       forcedDistance: 0,
       crashed: false,
-      rebooted: false
-    };
-  }
-
-  if (hasUntimedFeature(tile, "trapdoor")) {
-    return {
-      state: cloneState(state),
-      traversed: [{ x: state.x, y: state.y }],
-      conveyorSteps: [],
-      hazard: 30,
-      rebootPenalty: 0,
-      distance: 0,
-      forcedDistance: 0,
-      crashed: true,
       rebooted: false
     };
   }
@@ -2579,10 +2650,51 @@ function getTimedHazardSeverity(feature, options = {}) {
   if (!feature?.type) return 0;
   if (feature.type === "flamethrower") return 5.2;
   if (feature.type === "push") return 3.2;
-  if (feature.type === "crusher") return 8.5;
+  if (feature.type === "crusher") return 9.5;
   if (feature.type === "trapdoor") return 9.5;
   if (feature.type === "radiation") return 4.5;
   return 0;
+}
+
+function getFlamethrowerDamagePenalty(options = {}) {
+  // A flamer hit is one damage, comparable to a one-damage board laser.
+  // Flamers become more dangerous because the same register can inflict one
+  // hit on entry/pass-through and another at the end of the register.
+  const damagePressure = getDamageDeckPressureMultipliers(options);
+  return Number((4 * damagePressure.hazard).toFixed(2));
+}
+
+function getActiveFlamethrowerEntryPenalty(tile, options = {}) {
+  if (!hasKnownRegisterTiming(options)) return 0;
+  const activeCount = (tile?.features || []).filter((feature) => (
+    feature.type === "flamethrower" && isFeatureActiveThisRegister(feature, options)
+  )).length;
+  return Number((activeCount * getFlamethrowerDamagePenalty(options)).toFixed(2));
+}
+
+function getTimedFeatureFragilityPenalty(feature, scale = 0.16) {
+  if (!hasExplicitTiming(feature)) return 0;
+  const severity = getTimedHazardSeverity(feature);
+  if (severity <= 0) return 0;
+  return severity * getFeatureDutyCycle(feature) * scale;
+}
+
+function getTimedTraversalFragilityPenalty(tile, options = {}) {
+  if (!hasKnownRegisterTiming(options)) return 0;
+  let penalty = 0;
+  for (const feature of tile?.features || []) {
+    penalty += getTimedFeatureFragilityPenalty(feature, 0.12);
+  }
+  return Number(penalty.toFixed(2));
+}
+
+function getTimedOccupancyFragilityPenalty(tile, options = {}) {
+  if (!hasKnownRegisterTiming(options)) return 0;
+  let penalty = 0;
+  for (const feature of tile?.features || []) {
+    penalty += getTimedFeatureFragilityPenalty(feature, 0.18);
+  }
+  return Number(penalty.toFixed(2));
 }
 
 function getTimedHazardClusterPenalty(tileMap, state, options = {}) {
@@ -2719,14 +2831,28 @@ function getEndOfRegisterFeaturePenalty(tileMap, state, options = {}) {
     }
   }
 
-  for (const feature of tile.features || []) {
-    if (!hasExplicitTiming(feature)) continue;
-    if (feature.type === "push") {
-      penalty += getExpectedTimedPushPenalty(tileMap, state, feature, options);
-    } else if (feature.type === "crusher") {
-      penalty += getExpectedTimedCrusherPenalty(tileMap, state, feature, options);
-    } else if (feature.type === "trapdoor") {
-      penalty += getExpectedTimedTrapdoorPenalty(tileMap, state, feature, options);
+  if (hasKnownRegisterTiming(options)) {
+    for (const feature of tile.features || []) {
+      if (feature.type === "flamethrower" && isFeatureActiveThisRegister(feature, options)) {
+        penalty += getFlamethrowerDamagePenalty(options);
+      }
+    }
+    // Exact register physics does not remove real-play fragility: a route that
+    // depends on threading timed machinery is still harder to execute with an
+    // uncertain hand or after robot interference. Keep that as a smaller,
+    // non-physical residual instead of the old expected activation effect.
+    penalty += getTimedOccupancyFragilityPenalty(tile, options);
+  } else {
+    // Phase-less/static analysis keeps the old duty-cycle approximation.
+    for (const feature of tile.features || []) {
+      if (!hasExplicitTiming(feature)) continue;
+      if (feature.type === "push") {
+        penalty += getExpectedTimedPushPenalty(tileMap, state, feature, options);
+      } else if (feature.type === "crusher") {
+        penalty += getExpectedTimedCrusherPenalty(tileMap, state, feature, options);
+      } else if (feature.type === "trapdoor") {
+        penalty += getExpectedTimedTrapdoorPenalty(tileMap, state, feature, options);
+      }
     }
   }
 
@@ -2739,6 +2865,38 @@ export function simulateAction(tileMap, startState, action, options = {}) {
   const traversed = [];
   const conveyorSteps = [];
   const boardEvents = [];
+
+  // Trapdoors are open for the entire listed register. A robot beginning that
+  // register on an open trapdoor drops before its programmed card can move it.
+  if (hasActiveFeature(tileMap.get(tileKey(state.x, state.y)), "trapdoor", options)) {
+    const dropped = resolveCrashOrReboot(
+      tileMap,
+      state,
+      state,
+      [{ x: state.x, y: state.y }],
+      options,
+      0,
+      "trapdoor"
+    );
+    return {
+      action: action.id,
+      from: cloneState(startState),
+      to: dropped.state,
+      rebootChoices: dropped.rebootChoices ?? null,
+      traversed: dropped.traversed,
+      conveyorSteps: [],
+      boardEvents: [{ type: "trapdoor", at: { x: state.x, y: state.y } }],
+      gearTurned: false,
+      hazard: dropped.hazard,
+      rebootPenalty: dropped.rebootPenalty || 0,
+      distance: 0,
+      forcedDistance: 0,
+      crashed: dropped.crashed,
+      blocked: false,
+      rebooted: dropped.rebooted
+    };
+  }
+
   let hazard = getTilePenalty(tileMap.get(tileKey(state.x, state.y)), {
     ...options,
     randomizerAtRegisterStart: true
@@ -2863,7 +3021,7 @@ export function simulateAction(tileMap, startState, action, options = {}) {
     }
   }
 
-  const blue = resolveConveyorPhase(tileMap, state, 2, options);
+  const blue = resolveConveyorPhase(tileMap, state, 2, { ...options, conveyorPhase: "blue" });
   traversed.push(...blue.traversed);
   conveyorSteps.push(...blue.conveyorSteps);
   boardEvents.push(...(blue.conveyorSteps || []).map((step) => ({
@@ -2882,7 +3040,7 @@ export function simulateAction(tileMap, startState, action, options = {}) {
   state.facing = blue.state.facing;
 
   if (!crashed && !rebooted) {
-    const green = resolveConveyorPhase(tileMap, state, 1, options);
+    const green = resolveConveyorPhase(tileMap, state, 1, { ...options, conveyorPhase: "green" });
     traversed.push(...green.traversed);
     conveyorSteps.push(...green.conveyorSteps);
     boardEvents.push(...(green.conveyorSteps || []).map((step) => ({
@@ -2902,23 +3060,27 @@ export function simulateAction(tileMap, startState, action, options = {}) {
   }
 
   if (!crashed && !rebooted) {
-    const waterGreen = resolveConveyorPhase(tileMap, state, 1, { ...options, waterOnly: true });
-    traversed.push(...waterGreen.traversed);
-    conveyorSteps.push(...waterGreen.conveyorSteps);
-    boardEvents.push(...(waterGreen.conveyorSteps || []).map((step) => ({
+    const current = resolveConveyorPhase(tileMap, state, null, {
+      ...options,
+      currentOnly: true,
+      conveyorPhase: "current"
+    });
+    traversed.push(...current.traversed);
+    conveyorSteps.push(...current.conveyorSteps);
+    boardEvents.push(...(current.conveyorSteps || []).map((step) => ({
       type: "conveyor",
       ...step
     })));
-    hazard += waterGreen.hazard;
-    rebootPenalty += waterGreen.rebootPenalty || 0;
-    distance += waterGreen.distance;
-    forcedDistance += waterGreen.forcedDistance;
-    crashed = waterGreen.crashed;
-    rebooted = waterGreen.rebooted;
-    rebootChoices = waterGreen.rebootChoices ?? rebootChoices;
-    state.x = waterGreen.state.x;
-    state.y = waterGreen.state.y;
-    state.facing = waterGreen.state.facing;
+    hazard += current.hazard;
+    rebootPenalty += current.rebootPenalty || 0;
+    distance += current.distance;
+    forcedDistance += current.forcedDistance;
+    crashed = current.crashed;
+    rebooted = current.rebooted;
+    rebootChoices = current.rebootChoices ?? rebootChoices;
+    state.x = current.state.x;
+    state.y = current.state.y;
+    state.facing = current.state.facing;
   }
 
   if (!crashed && !rebooted) {
@@ -8079,6 +8241,14 @@ function selectContextualPartialBeam(
   width = CONTEXTUAL_BEAM_WIDTH,
   diversityOptions = {}
 ) {
+  // Exact register-aware factory physics can legitimately eliminate every
+  // continuation for a start on a later leg. Whole-route diversity used to
+  // fall through to sorted[0].score in that case, producing the intermittent
+  // "best.score" generation crash instead of an ordinary zero-route result.
+  if (!Array.isArray(partials) || !partials.length || width <= 0) {
+    return [];
+  }
+
   if (partials.length <= width && !diversityOptions.wholePartialDiversity) {
     return [...partials].sort(
       (left, right) => left.score - right.score
@@ -9543,12 +9713,12 @@ export function evaluateFullCourseFocusUnderOccupancy(
 }
 
 
-// Price-sensitive full-course evaluation for Pay to Win. Traffic is computed
-// once per already-discovered route candidate because paying starting Energy
-// does not alter the board geometry. The v45 economy is then replayed for each
-// payable cost and the focus robot may choose a different existing coherent
-// candidate at that price. This gives adaptive post-payment routing without
-// multiplying the expensive route-search budget.
+// Start-Energy-sensitive full-course evaluation. Traffic is computed once per
+// already-discovered route candidate because changing starting Energy does not
+// alter board geometry. The v45 economy is replayed for each Pay to Win payment
+// or Subsidized Starts grant, and the focus robot may choose a different
+// existing coherent candidate at that Energy level. This gives adaptive route
+// choice without multiplying the expensive route-search budget.
 export function evaluateFullCourseFocusPaymentCurveUnderOccupancy(
   tileMap,
   firstLeg,
@@ -9565,13 +9735,21 @@ export function evaluateFullCourseFocusPaymentCurveUnderOccupancy(
   if (!focus) return null;
 
   const baseStartingEnergy = getCourseStartingEnergy(options);
+  const maxEnergy = getCourseMaxEnergy(options);
+  const subsidizedStarts = Boolean(options.subsidizedStarts);
+  const defaultMaxAdjustment = subsidizedStarts
+    ? Math.max(0, maxEnergy - baseStartingEnergy)
+    : baseStartingEnergy;
+  const requestedMaxAdjustment = subsidizedStarts
+    ? Number(options.subsidizedStartsMaxSubsidy)
+    : Number(options.payToWinMaxPayment);
   const maxPayment = Math.max(
     0,
     Math.min(
-      baseStartingEnergy,
-      Number.isFinite(Number(options.payToWinMaxPayment))
-        ? Math.floor(Number(options.payToWinMaxPayment))
-        : baseStartingEnergy
+      defaultMaxAdjustment,
+      Number.isFinite(requestedMaxAdjustment)
+        ? Math.floor(requestedMaxAdjustment)
+        : defaultMaxAdjustment
     )
   );
   const payments = Array.from({ length: maxPayment + 1 }, (_, payment) => payment);
@@ -9626,12 +9804,15 @@ export function evaluateFullCourseFocusPaymentCurveUnderOccupancy(
       )
       : { ranged: 0, nearby: 0, competition: 0, total: 0 };
     const scores = payments.map((payment) => {
+      const adjustedStartingEnergy = subsidizedStarts
+        ? Math.min(maxEnergy, baseStartingEnergy + payment)
+        : Math.max(0, baseStartingEnergy - payment);
       const rescored = rescoreFixedRouteUpgradeEconomy(
         tileMap,
         candidate,
         {
           ...options,
-          startingEnergy: Math.max(0, baseStartingEnergy - payment),
+          startingEnergy: adjustedStartingEnergy,
           routeEconomyReferenceStartingEnergy: baseStartingEnergy
         }
       );
@@ -9677,9 +9858,15 @@ export function evaluateFullCourseFocusPaymentCurveUnderOccupancy(
       }
     });
     if (!best) return null;
+    const adjustedStartingEnergy = subsidizedStarts
+      ? Math.min(maxEnergy, baseStartingEnergy + payment)
+      : Math.max(0, baseStartingEnergy - payment);
     return {
       payment,
-      startingEnergyAfterPayment: Math.max(0, baseStartingEnergy - payment),
+      energyAdjustment: payment,
+      subsidy: subsidizedStarts ? payment : 0,
+      startingEnergyAfterPayment: adjustedStartingEnergy,
+      startingEnergyAfterAdjustment: adjustedStartingEnergy,
       fullCourseRouteIndex: best.routeIndex,
       fullCourseIntrinsic: Number(best.intrinsic.toFixed(2)),
       fullCourseTraffic: Number(best.traffic.total.toFixed(2)),
@@ -9695,7 +9882,9 @@ export function evaluateFullCourseFocusPaymentCurveUnderOccupancy(
   return {
     index: focusIndex,
     baseStartingEnergy,
+    maxEnergy,
     maxPayment,
+    subsidizedStarts,
     entries
   };
 }

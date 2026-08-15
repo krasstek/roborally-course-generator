@@ -320,7 +320,9 @@ export function getTilePenaltyForFeature(feature, options = {}) {
     return 2 * getTimingWeight(feature);
   }
   if (feature.type === "trapdoor") {
-    return scaleHazard(6 * getTimingWeight(feature));
+    // Falling through a trapdoor is route-level catastrophic in essentially the
+    // same way as a crusher. Keep their generic/phase-less hazard pressure comparable.
+    return scaleHazard((options.rebootDamagePenalty ?? 8) * getTimingWeight(feature));
   }
   if (feature.type === "gear") {
     return 1.5;
