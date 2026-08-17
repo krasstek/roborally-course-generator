@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "model": "additive-board-count-flag-count",
+  "outcome": "normal_length_raw",
+  "sampleSize": 396,
+  "diagnostics": {
+    "rmse": 21.650607,
+    "rSquared": 0.801679,
+    "adjustedRSquared": 0.798101,
+    "additiveAIC": 3577.225846,
+    "interactionAIC": 3585.512261
+  },
+  "prediction": {
+    "base": 70.206724,
+    "flagCount": {
+      "2": 0,
+      "3": 30.391683,
+      "4": 57.663905,
+      "5": 87.46398,
+      "6": 116.889436
+    },
+    "boardCount": {
+      "1": 0,
+      "2": 16.77506,
+      "3": 31.909956,
+      "4": 45.336783
+    }
+  }
+}

@@ -873,9 +873,28 @@ function getExtraDockModeState(preferences = {}) {
 }
 
 async function loadJSON(path) {
+  // Browser generation uses fetch as before. The calibration runner imports this
+  // module directly in Node, where project data should be read from disk rather
+  // than through a web server. No external package is needed for either path.
+  if (typeof window === "undefined" && typeof process !== "undefined") {
+    const { readFile } = await import("node:fs/promises");
+    const fileUrl = new URL(path, import.meta.url);
+    return JSON.parse(await readFile(fileUrl, "utf8"));
+  }
+
   const res = await fetch(versionedPath(path), { cache: "no-store" });
   if (!res.ok) throw new Error(`Could not load ${path}`);
   return res.json();
+}
+
+async function loadOptionalJSON(path) {
+  try {
+    return await loadJSON(path);
+  } catch {
+    // Calibration is an optimization only. A missing or stale calibration file
+    // must never prevent ordinary course generation.
+    return null;
+  }
 }
 
 async function loadImage(src) {
@@ -945,12 +964,16 @@ async function loadAssets() {
     return cachedAssets;
   }
 
-  const pieces = await Promise.all(
-    PIECE_DATA_FILES.map(async (pieceId) => loadJSON(`./data/${pieceId}.json`))
-  );
+  const [pieces, rawLengthCalibration] = await Promise.all([
+    Promise.all(
+      PIECE_DATA_FILES.map(async (pieceId) => loadJSON(`./data/${pieceId}.json`))
+    ),
+    loadOptionalJSON("./calibration/length-calibration.json")
+  ]);
   const pieceMap = Object.fromEntries(
     pieces.map((piece) => [piece.id, piece])
   );
+  const lengthCalibration = normalizeLengthConstructionCalibration(rawLengthCalibration);
 
   for (const piece of Object.values(pieceMap)) {
     piece.overlayCapable = piece.expansionId === "master-builder" && (
@@ -964,7 +987,7 @@ async function loadAssets() {
     piece.derivedBias = piece.boardProfile.bias;
   }
 
-  cachedAssets = { pieceMap, imageMap: {}, imageLoadPromises: new Map() };
+  cachedAssets = { pieceMap, imageMap: {}, imageLoadPromises: new Map(), lengthCalibration };
   return cachedAssets;
 }
 
@@ -3899,6 +3922,162 @@ function shouldUseTargetGuidedBoardSelection(preferences = {}, generationAttempt
     (getTuningDifficulty(preferences.difficulty) === "easy" && preferences.length === "short") ||
     generationAttempt >= BOARD_SELECTION_FALLBACK_ATTEMPT
   );
+}
+
+const LENGTH_CONSTRUCTION_EXPLORATION_FLOOR = 0.05;
+
+function normalizeLengthConstructionCalibration(calibration) {
+  const prediction = calibration?.prediction;
+  const diagnostics = calibration?.diagnostics;
+  const base = Number(prediction?.base);
+  const rmse = Number(diagnostics?.rmse);
+
+  if (Number(calibration?.schemaVersion) !== 1 || !Number.isFinite(base) || !(rmse > 0)) {
+    return null;
+  }
+
+  const normalizeEffects = (values = {}) => Object.fromEntries(
+    Object.entries(values)
+      .map(([key, value]) => [String(key), Number(value)])
+      .filter(([, value]) => Number.isFinite(value))
+  );
+  const flagCount = normalizeEffects(prediction?.flagCount);
+  const boardCount = normalizeEffects(prediction?.boardCount);
+
+  if (!Object.keys(flagCount).length || !Object.keys(boardCount).length) {
+    return null;
+  }
+
+  const referencePlayerCount = Number(calibration?.reference?.playerCount);
+  return {
+    schemaVersion: 1,
+    model: calibration?.model ?? "additive-board-count-flag-count",
+    outcome: calibration?.outcome ?? "normal_length_raw",
+    sampleSize: Number.isFinite(Number(calibration?.sampleSize)) ? Number(calibration.sampleSize) : null,
+    referencePlayerCount: Number.isFinite(referencePlayerCount) ? referencePlayerCount : 4,
+    rmse,
+    base,
+    flagCount,
+    boardCount
+  };
+}
+
+function standardNormalCdf(value) {
+  if (value === Infinity) return 1;
+  if (value === -Infinity) return 0;
+  if (!Number.isFinite(value)) return 0.5;
+
+  // Abramowitz-Stegun erf approximation is sufficient for soft generation weights.
+  const sign = value < 0 ? -1 : 1;
+  const z = Math.abs(value) / Math.sqrt(2);
+  const t = 1 / (1 + 0.3275911 * z);
+  const erf = 1 - (((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-z * z));
+  return 0.5 * (1 + sign * erf);
+}
+
+function getLengthBandProbability(predictedLength, rmse, thresholds) {
+  if (!Number.isFinite(predictedLength) || !(rmse > 0) || !Array.isArray(thresholds)) {
+    return 0;
+  }
+
+  const [minimum, maximum] = thresholds;
+  const lower = Number.isFinite(minimum)
+    ? standardNormalCdf((minimum - predictedLength) / rmse)
+    : 0;
+  const upper = Number.isFinite(maximum)
+    ? standardNormalCdf((maximum - predictedLength) / rmse)
+    : 1;
+  return clamp(upper - lower, 0, 1);
+}
+
+function getCalibratedLengthConstructionPlan(
+  lengthPreference,
+  maxBoards,
+  hasLargeBoards,
+  preferences = {},
+  calibration = null
+) {
+  const explicitBoardCount = Number(preferences.calibrationBoardCount);
+  const explicitFlagCount = Number(preferences.calibrationFlagCount);
+  if (
+    !calibration ||
+    !["short", "moderate", "long"].includes(lengthPreference) ||
+    isDynamicArchivingActive(preferences) ||
+    (Number.isInteger(explicitBoardCount) && explicitBoardCount > 0) ||
+    (Number.isInteger(explicitFlagCount) && explicitFlagCount > 0)
+  ) {
+    return null;
+  }
+
+  const supportedBoardCounts = Object.keys(calibration.boardCount)
+    .map(Number)
+    .filter((count) => Number.isInteger(count) && count >= 1 && count <= maxBoards)
+    .sort((left, right) => left - right);
+  const supportedFlagCounts = Object.keys(calibration.flagCount)
+    .map(Number)
+    .filter((count) => Number.isInteger(count) && count >= 1)
+    .sort((left, right) => left - right);
+
+  if (!supportedBoardCounts.length || !supportedFlagCounts.length) {
+    return null;
+  }
+
+  const maxSupportedBoardCount = Math.max(...supportedBoardCounts);
+  // Current calibration covers 1-4 boards. Keep the established small-board
+  // 5/6-board heuristic until those counts are measured instead of extrapolating.
+  if (!hasLargeBoards && maxBoards > maxSupportedBoardCount) {
+    return null;
+  }
+
+  const minimumBoardCount = Math.max(
+    hasLargeBoards ? 1 : getMinimumSmallOnlyBoardCount(lengthPreference, preferences),
+    preferences.sandwichedDock ? 2 : 1
+  );
+  const boardCounts = supportedBoardCounts.filter((count) => count >= minimumBoardCount);
+  if (!boardCounts.length) {
+    return null;
+  }
+
+  const thresholds = getLengthThresholds()[lengthPreference];
+  if (!thresholds) {
+    return null;
+  }
+
+  // The calibration sample is 4p. Player resolution load is a deterministic
+  // length component, so shift the structural prediction by the known delta.
+  const playerCount = Math.max(1, Number(preferences.playerCount) || 4);
+  const referencePlayerCount = Math.max(1, calibration.referencePlayerCount || 4);
+  const playerAdjustment = computePlayerTimeLoad(playerCount) - computePlayerTimeLoad(referencePlayerCount);
+  // Act Fast also contributes a direct known length offset. Other optional-rule
+  // effects remain in the real analyzer; Dynamic Archiving is excluded above
+  // because it changes route topology rather than adding a fixed adjustment.
+  const actFastAdjustment = computeActFastLengthLoad(preferences, playerCount);
+
+  const candidates = [];
+  for (const boardCount of boardCounts) {
+    const boardEffect = Number(calibration.boardCount[String(boardCount)]);
+    if (!Number.isFinite(boardEffect)) continue;
+
+    for (const flagCount of supportedFlagCounts) {
+      const flagEffect = Number(calibration.flagCount[String(flagCount)]);
+      if (!Number.isFinite(flagEffect)) continue;
+
+      const predictedLength = calibration.base + boardEffect + flagEffect + playerAdjustment + actFastAdjustment;
+      const bandProbability = getLengthBandProbability(predictedLength, calibration.rmse, thresholds);
+      candidates.push({
+        boardCount,
+        flagCount,
+        predictedLength: Number(predictedLength.toFixed(2)),
+        bandProbability: Number(bandProbability.toFixed(4)),
+        rmse: calibration.rmse,
+        sampleSize: calibration.sampleSize,
+        model: calibration.model,
+        weight: LENGTH_CONSTRUCTION_EXPLORATION_FLOOR + bandProbability
+      });
+    }
+  }
+
+  return sampleManyWeighted(candidates, 1)[0] ?? null;
 }
 
 function weightedFlagCount(lengthPreference, maxFlags, preferences = {}) {
@@ -7150,14 +7329,24 @@ function tryExtendAlignedBoardLayout(existingPlacements, nextBoardId, pieceMap) 
   return null;
 }
 
-function createBoardPlacements(pieceMap, lengthPreference, preferences, guidanceLevel, expansionIds = null, dockPieceId = "docking-bay-a", generationAttempt = 1) {
+function createBoardPlacements(pieceMap, lengthPreference, preferences, guidanceLevel, expansionIds = null, dockPieceId = "docking-bay-a", generationAttempt = 1, lengthCalibration = null) {
   const allowBlankMiniBoards = preferences.difficulty === "easy" || shouldUseMiniOverlays(preferences);
   const mainBoardIds = getAvailableMainBoardIds(pieceMap, expansionIds).filter((boardId) => (
     allowBlankMiniBoards || !isBlankCustomBoardPiece(pieceMap[boardId])
   ));
   const hasLargeBoards = mainBoardIds.some((boardId) => pieceMap[boardId]?.kind !== "small");
   const maxBoards = Math.min(hasLargeBoards ? 4 : 6, countPhysicalBoards(mainBoardIds, pieceMap));
-  let boardCount = weightedBoardCount(lengthPreference, maxBoards, hasLargeBoards, preferences);
+  const lengthConstructionPlan = getCalibratedLengthConstructionPlan(
+    lengthPreference,
+    maxBoards,
+    hasLargeBoards,
+    preferences,
+    lengthCalibration
+  );
+  const calibrationBoardCount = Number(preferences.calibrationBoardCount);
+  let boardCount = Number.isInteger(calibrationBoardCount) && calibrationBoardCount > 0
+    ? Math.min(maxBoards, calibrationBoardCount)
+    : lengthConstructionPlan?.boardCount ?? weightedBoardCount(lengthPreference, maxBoards, hasLargeBoards, preferences);
   if (preferences.sandwichedDock && maxBoards >= 2) {
     boardCount = Math.max(2, boardCount);
   }
@@ -7249,7 +7438,8 @@ function createBoardPlacements(pieceMap, lengthPreference, preferences, guidance
     placements,
     boardIds,
     boardCount,
-    layoutValidation
+    layoutValidation,
+    lengthConstructionPlan
   };
 }
 
@@ -11200,6 +11390,16 @@ function screenSandwichedExtraDockOpening(
 
 function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) {
   const generationProfile = getGenerationModeProfile(options);
+  // Generation Mode is the default search-effort contract for every rich
+  // contextual refinement. Explicit one-off overrides (for example the cheap
+  // target gate) still win, but an omitted contextual option must not fall
+  // through to analyze.js's older 2/3/2/4, 7000/6000 defaults.
+  const contextualOpeningRoutes = options.contextualOpeningRoutes ?? generationProfile.openingRoutes;
+  const contextualLaterRoutes = options.contextualLaterRoutes ?? generationProfile.laterRoutes;
+  const contextualBeamWidth = options.contextualBeamWidth ?? generationProfile.beamWidth;
+  const contextualCompletionPool = options.contextualCompletionPool ?? generationProfile.completionPool;
+  const contextualOpeningExpansions = options.contextualOpeningExpansions ?? generationProfile.preflightOpeningExpansions;
+  const contextualLaterExpansions = options.contextualLaterExpansions ?? generationProfile.preflightLaterExpansions;
   const movingTargetTimelines = options.movingTargetTimelines ?? buildMovingTargetTimelines(
     tileMap,
     flags,
@@ -11232,7 +11432,7 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
       }
     );
   const lateRouteCount = contextualLegSearch
-    ? generationProfile.laterRoutes
+    ? contextualLaterRoutes
     : (
       !options.competitiveMode &&
       !options.payToWin &&
@@ -11262,18 +11462,18 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
       virtualBots: options.virtualBots,
       contextualLegSearch,
       contextualEarlyExit: Boolean(options.contextualEarlyExit),
-      contextualOpeningRoutes: options.contextualOpeningRoutes,
-      contextualLaterRoutes: options.contextualLaterRoutes,
-      contextualBeamWidth: options.contextualBeamWidth,
-      contextualCompletionPool: options.contextualCompletionPool,
+      contextualOpeningRoutes,
+      contextualLaterRoutes,
+      contextualBeamWidth,
+      contextualCompletionPool,
       contextualSeedStartAnalyses: options.contextualSeedStartAnalyses,
       contextualSeedRouteStrategy: options.contextualSeedRouteStrategy,
       contextualOpeningSeedAnalyses: options.contextualOpeningSeedAnalyses,
       contextualRequiredStarts: options.contextualRequiredStarts,
       contextualPreferredStarts: options.contextualPreferredStarts,
       contextualStopWhenPreferredLost: options.contextualStopWhenPreferredLost,
-      contextualOpeningExpansions: options.contextualOpeningExpansions,
-      contextualLaterExpansions: options.contextualLaterExpansions,
+      contextualOpeningExpansions,
+      contextualLaterExpansions,
       contextualLegMaxActions: options.contextualLegMaxActions,
       contextualOptionalRouteBudgetRatio: options.contextualOptionalRouteBudgetRatio,
       skipFullCourseTraffic: Boolean(options.skipFullCourseTraffic),
@@ -11287,6 +11487,21 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
       prePruning,
       starts.length
     );
+
+  if (firstLeg?.summary) {
+    // Keep the effective contextual contract beside the route diagnostics so a
+    // future propagation regression is visible immediately in Dev View.
+    firstLeg.summary.contextualSearchProfile = {
+      generationMode: normalizeGenerationMode(options.generationMode),
+      generationModeLabel: formatGenerationModeLabel(options.generationMode),
+      openingRoutes: contextualOpeningRoutes,
+      laterRoutes: contextualLaterRoutes,
+      beamWidth: contextualBeamWidth,
+      completionPool: contextualCompletionPool,
+      openingExpansions: contextualOpeningExpansions,
+      laterExpansions: contextualLaterExpansions
+    };
+  }
 
   const legs = [
     {
@@ -12991,6 +13206,9 @@ function buildScenarioCopySummary(scenario) {
 
   lines.push(
     `Course: ${scenario.boardCount ?? scenario.mainBoardIds?.length ?? 0} board(s), ${playableCheckpoints.length} flag(s)`,
+    ...(scenario.lengthConstructionPrior
+      ? [`Length construction prior: ${scenario.lengthConstructionPrior.boardCount} board(s) + ${scenario.lengthConstructionPrior.flagCount} flag(s) -> predicted ${scenario.lengthConstructionPrior.predictedLength} raw, approx target-band probability ${Math.round((scenario.lengthConstructionPrior.bandProbability ?? 0) * 100)}%, RMSE ${Number(scenario.lengthConstructionPrior.rmse ?? 0).toFixed(2)}, n ${scenario.lengthConstructionPrior.sampleSize ?? "?"}`]
+      : []),
     `Boards: ${(scenario.mainBoardIds ?? []).map((pieceId, index) => `${pieceId}@${scenario.mainRotations?.[index] ?? 0}`).join(", ") || "none"}`,
     scenario.competitiveMode && summary.competitiveStaging?.active
       ? `Starts: ${summary.competitiveStaging.routedStartCount ?? scenario.metrics?.reachableStarts ?? "?"} routed -> ${scenario.metrics?.usableStarts?.length ?? "?"} available / ${summary.competitiveStaging.sourceStartCount ?? scenario.activeStarts?.length ?? "?"} total`
@@ -13166,12 +13384,13 @@ function buildScenarioCopySummary(scenario) {
 
   if (contextualCache) {
     const routeStrategy = summary.fullCourseTraffic ?? null;
+    const contextualProfile = summary.contextualSearchProfile ?? null;
     lines.push(
       `Contextual cache: cappedContexts ${contextualCache.zeroRouteCapFailures ?? 0} across ${contextualCache.zeroRouteFailureStarts ?? 0} starts, survivors ${contextualCache.survivingStarts ?? summary.reachableStarts ?? "?"}/${contextualCache.requiredSurvivingStarts ?? scenario.preferences?.playerCount ?? "?"}, exactHits ${contextualCache.exactHits ?? 0}, templateHits ${contextualCache.templateHits ?? 0}, misses ${contextualCache.misses ?? 0}`
     );
     if (summary.contextualSearchMode || routeStrategy) {
       lines.push(
-        `Contextual strategy: ${summary.contextualSearchMode ?? "standard"}, opening ${routeStrategy?.openingRoutesPerStart ?? "?"}, later ${routeStrategy?.laterRoutesPerContext ?? "?"}, beam ${routeStrategy?.stitchedBeamWidth ?? "?"}, completion ${routeStrategy?.completionPool ?? "?"}`
+        `Contextual strategy: ${summary.contextualSearchMode ?? "standard"}, opening ${routeStrategy?.openingRoutesPerStart ?? contextualProfile?.openingRoutes ?? "?"}, later ${routeStrategy?.laterRoutesPerContext ?? contextualProfile?.laterRoutes ?? "?"}, beam ${routeStrategy?.stitchedBeamWidth ?? contextualProfile?.beamWidth ?? "?"}, completion ${routeStrategy?.completionPool ?? contextualProfile?.completionPool ?? "?"}, caps ${contextualProfile?.openingExpansions ?? "?"}/${contextualProfile?.laterExpansions ?? "?"}, mode ${contextualProfile?.generationModeLabel ?? "?"}`
       );
     }
     if (summary.programmingScarcity) {
@@ -14748,7 +14967,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     const layoutAnchors = orderedDockIds.length ? orderedDockIds : [null];
     for (const candidateDockId of layoutAnchors) {
       const candidateBoardLayout = createBoardPlacements(
-        pieceMap, generationPreferences.length, generationPreferences, guidanceLevel, expansionIds, candidateDockId, attempt
+        pieceMap, generationPreferences.length, generationPreferences, guidanceLevel, expansionIds, candidateDockId, attempt, assets.lengthCalibration
       );
       if (candidateBoardLayout) {
         boardLayout = candidateBoardLayout;
@@ -14772,7 +14991,8 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
           guidanceLevel,
           expansionIds,
           candidateDockId,
-          attempt
+          attempt,
+          assets.lengthCalibration
         );
         if (!candidateBoardLayout) continue;
 
@@ -14875,7 +15095,24 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     };
   }
 
-  const flagCount = Math.min(weightedFlagCount(generationPreferences.length, flagCandidates.length, generationPreferences), flagCandidates.length);
+  const calibrationFlagCount = Number(generationPreferences.calibrationFlagCount);
+  const plannedFlagCount = Number(boardLayout.lengthConstructionPlan?.flagCount);
+  const usePlannedFlagCount = (
+    Number.isInteger(plannedFlagCount) &&
+    plannedFlagCount > 0 &&
+    plannedFlagCount <= flagCandidates.length
+  );
+  const flagCount = Math.min(
+    Number.isInteger(calibrationFlagCount) && calibrationFlagCount > 0
+      ? calibrationFlagCount
+      : usePlannedFlagCount
+        ? plannedFlagCount
+        : weightedFlagCount(generationPreferences.length, flagCandidates.length, generationPreferences),
+    flagCandidates.length
+  );
+  const lengthConstructionPrior = usePlannedFlagCount && flagCount === plannedFlagCount
+    ? { ...boardLayout.lengthConstructionPlan }
+    : null;
   const retryBudget = getFlagRetryBudget(generationPreferences, remainingEvaluations);
   const stallLimit = getFlagRetryStallLimit(generationPreferences);
   let evaluationsUsed = 0;
@@ -16038,6 +16275,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       mainRotations: scenarioBoardPlacements.map((placement) => placement.rotation),
       boardCount: scenarioBoardPlacements.length,
       boardRects: scenarioBoardRects,
+      lengthConstructionPrior,
       guidanceLevel,
       sequence,
       metrics,
@@ -16283,6 +16521,10 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     boardRects,
     difficulty: snapshot.preferences.difficulty,
     length: snapshot.preferences.length,
+    // Preserve the search-effort meaning of the saved course. Pre-Mode saves
+    // used the current Balanced budgets, so getScenarioGenerationMode() maps
+    // those legacy snapshots to Balanced rather than silently using Standard.
+    generationMode: getScenarioGenerationMode(snapshot),
     // A restored course must preserve the accepted start disposition instead
     // of running a fresh Normal fairness pass and changing which spaces are open.
     skipNormalStartBalancing: !competitiveMode && !startEnergyPricing && !virtualBots && Array.isArray(snapshot.analysisStartIndices)
@@ -16898,6 +17140,204 @@ async function runDiagnostics() {
   button.disabled = false;
 }
 
+
+// Calibration API -----------------------------------------------------------
+//
+// These exports intentionally reuse the production board construction and
+// route-analysis functions. They are for the zero-dependency Node calibration
+// runner and do not change browser generation unless the calibration-only
+// preference overrides are supplied explicitly.
+
+function getCalibrationExpansionIds(pieceMap = {}) {
+  return [...new Set(
+    Object.values(pieceMap)
+      .map((piece) => piece?.expansionId)
+      .filter(Boolean)
+  )].sort();
+}
+
+function buildCalibrationVariantStates({ staggered = false } = {}) {
+  const states = Object.fromEntries(
+    VARIANT_DEFINITIONS.map((variant) => [variant.id, "off"])
+  );
+  if (Object.prototype.hasOwnProperty.call(states, "staggeredBoards")) {
+    states.staggeredBoards = staggered ? "forced" : "off";
+  }
+  return states;
+}
+
+export async function loadCalibrationAssets() {
+  return loadAssets();
+}
+
+export function listCalibrationExpansionIds(assets) {
+  return getCalibrationExpansionIds(assets?.pieceMap ?? {});
+}
+
+export async function generateCalibrationScenario(assets, options = {}) {
+  const availableExpansionIds = getCalibrationExpansionIds(assets?.pieceMap ?? {});
+  const requestedExpansionIds = Array.isArray(options.expansionIds) && options.expansionIds.length
+    ? options.expansionIds.filter((id) => availableExpansionIds.includes(id))
+    : availableExpansionIds;
+  const selectedExpansions = Object.fromEntries(
+    requestedExpansionIds.map((id) => [id, true])
+  );
+  const playerCount = Math.max(2, Math.floor(Number(options.playerCount) || 4));
+  const boardCount = Math.max(1, Math.floor(Number(options.boardCount) || 1));
+  const flagCount = Math.max(1, Math.floor(Number(options.flagCount) || 2));
+  const staggered = Boolean(options.staggered);
+  const generationMode = normalizeGenerationMode(options.generationMode ?? "balanced");
+  const preferences = {
+    playerCount,
+    difficulty: "any",
+    length: "any",
+    generationMode,
+    overlayMode: OVERLAY_MODES.no,
+    selectedExpansions,
+    allowedVariantRules: buildCalibrationVariantStates({ staggered }),
+    calibrationBoardCount: boardCount,
+    calibrationFlagCount: flagCount
+  };
+
+  resetAnalysisTelemetrySafe();
+  clearAnalysisCachesSafe();
+  const startedAt = generationNow();
+  const result = await createRandomCandidate(
+    assets,
+    preferences,
+    1,
+    1,
+    null,
+    null,
+    null
+  );
+  const telemetry = getAnalysisTelemetrySnapshotSafe();
+
+  return {
+    ...result,
+    preferences,
+    elapsedMs: Number((generationNow() - startedAt).toFixed(2)),
+    telemetry
+  };
+}
+
+export function reanalyzeCalibrationScenario(assets, sourceScenario, options = {}) {
+  if (!sourceScenario?.placements?.length || !sourceScenario?.checkpoints?.length) {
+    return null;
+  }
+
+  const { pieceMap } = assets;
+  const recoveryRule = options.dynamicArchiving ? "dynamic_archiving" : "reboot_tokens";
+  const playerCount = Math.max(2, Math.floor(Number(options.playerCount ?? sourceScenario.playerCount) || 4));
+  const generationMode = normalizeGenerationMode(
+    options.generationMode ?? sourceScenario.preferences?.generationMode ?? "balanced"
+  );
+  const placements = sourceScenario.placements;
+  const checkpoints = sourceScenario.checkpoints;
+  const boardPlacements = placements.filter((placement) => {
+    const kind = pieceMap[placement.pieceId]?.kind;
+    return kind !== "dock" && !placement.overlay;
+  });
+  const dockPlacements = getDockPlacementsFromScenarioPlacements(placements, pieceMap);
+  const boardRects = buildBoardRects(boardPlacements, pieceMap);
+
+  resetAnalysisTelemetrySafe();
+  clearAnalysisCachesSafe();
+  const startedAt = generationNow();
+  const resolved = buildResolvedMap(placements, pieceMap);
+  const tileMap = resolved.tileMap;
+  const goalTileMap = applyFlagOverrides(tileMap, checkpoints, {
+    hazardousFlags: false,
+    movingTargets: false
+  });
+  const activeStarts = filterStartsForGoals(resolved.starts, checkpoints)
+    .map((start, index) => ({ ...start, analysisIndex: index }));
+  const rebootTokens = recoveryRule === "reboot_tokens"
+    ? placeRebootTokens(boardRects, pieceMap, tileMap, checkpoints, playerCount)
+    : [];
+  const variantBundle = {
+    recoveryRule,
+    competitiveMode: false,
+    payToWin: false,
+    subsidizedStarts: false,
+    lessDeadlyGame: false,
+    lessSpammyGame: false,
+    criticalSpam: false,
+    criticalHaywire: false,
+    permanentShutdown: false,
+    moreDeadlyGame: false,
+    homeReboot: false,
+    cuttingFloor: false,
+    flamingOil: false,
+    repulsorOverdrive: false,
+    startupSpinUp: false,
+    virtualBots: false,
+    upgradeWorld: false,
+    lighterGame: false,
+    hazardousFlags: false,
+    repairStations: false,
+    lessForeshadowing: false,
+    movingTargets: false,
+    classicSharedDeck: false
+  };
+  const analysisOptions = applyVariantAnalysisOptions({
+    rebootTokens,
+    boardRects,
+    difficulty: "any",
+    length: "any",
+    generationMode,
+    contextualEarlyExit: true
+  }, variantBundle);
+  const sequence = analyzeFlagSequence(
+    goalTileMap,
+    activeStarts,
+    checkpoints,
+    playerCount,
+    analysisOptions
+  );
+  const metrics = classifyCandidate(sequence, {
+    playerCount,
+    difficulty: "any",
+    length: "any",
+    generationMode,
+    flagCount: checkpoints.length,
+    recoveryRule,
+    ...variantBundle
+  }, {
+    boardPlacements,
+    pieceMap,
+    checkpoints,
+    tileMap,
+    goalTileMap
+  });
+
+  const telemetry = getAnalysisTelemetrySnapshotSafe();
+
+  return {
+    recoveryRule,
+    elapsedMs: Number((generationNow() - startedAt).toFixed(2)),
+    telemetry,
+    placements,
+    checkpoints,
+    boardPlacements,
+    dockPlacements,
+    boardRects,
+    rebootTokens,
+    activeStarts,
+    goalTileMap,
+    sequence,
+    metrics,
+    preferences: {
+      playerCount,
+      difficulty: "any",
+      length: "any",
+      generationMode,
+      flagCount: checkpoints.length,
+      recoveryRule
+    }
+  };
+}
+
 async function start() {
   const preferences = getPreferencesFromControls();
   const generationProfile = getGenerationModeProfile(preferences);
@@ -16969,306 +17409,309 @@ async function start() {
   }
 }
 
-document.getElementById("reroll").addEventListener("click", () => {
-  start().catch(console.error);
-});
-
-document.getElementById("about-button").addEventListener("click", () => {
-  openAboutDialog();
-});
-document.getElementById("canvas")?.addEventListener("click", (event) => {
-  if (!currentScenario || !isDevViewEnabled()) return;
-  const tile = getCanvasTileFromEvent(event);
-  applyRouteInspection(getInspectableAtTile(currentScenario, tile));
-  renderScenario(currentScenario);
-});
-
-document.getElementById("canvas")?.addEventListener("dblclick", (event) => {
-  if (!currentScenario || !isDevViewEnabled()) return;
-  event.preventDefault();
-  const tile = getCanvasTileFromEvent(event);
-  const legValue = document.getElementById("leg-select")?.value ?? "all";
-  const legIndex = legValue === "all" ? null : Number(legValue);
-  if (tileTouchesVisibleTrace(currentScenario, tile, legIndex)) {
-    selectAllTraceStarts(currentScenario);
-  } else {
-    clearTraceStarts();
-    clearRouteInspection();
-  }
-  renderScenario(currentScenario);
-});
-
-
-
-document.getElementById("run-diagnostics").addEventListener("click", () => {
-  runDiagnostics().catch((error) => {
-    document.getElementById("report").textContent = `Diagnostics failed: ${error.message}`;
-    document.getElementById("run-diagnostics").disabled = false;
-    console.error(error);
+if (typeof document !== "undefined") {
+  document.getElementById("reroll").addEventListener("click", () => {
+    start().catch(console.error);
   });
-});
 
-async function copyTextToClipboard(text, button, idleLabel, errorContext = "text") {
-  if (!text?.trim()) {
-    return;
-  }
-
-  try {
-    let copied = false;
-    if (navigator.clipboard?.write && typeof ClipboardItem !== "undefined") {
-      try {
-        const plainText = new Blob([text], { type: "text/plain" });
-        await navigator.clipboard.write([
-          new ClipboardItem({ "text/plain": plainText })
-        ]);
-        copied = true;
-      } catch (error) {
-        console.debug("Explicit text/plain clipboard write unavailable; falling back", error);
-      }
-    }
-    if (!copied && navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-      copied = true;
-    }
-    if (!copied) {
-      const textarea = document.createElement("textarea");
-      textarea.value = text;
-      textarea.setAttribute("readonly", "");
-      textarea.style.position = "fixed";
-      textarea.style.opacity = "0";
-      document.body.appendChild(textarea);
-      textarea.select();
-      copied = document.execCommand("copy");
-      textarea.remove();
-      if (!copied) {
-        throw new Error("Copy command was not available");
-      }
-    }
-
-    if (button) {
-      button.textContent = "Copied";
-      window.setTimeout(() => {
-        button.textContent = idleLabel;
-      }, 1400);
-    }
-  } catch (error) {
-    console.warn(`Unable to copy ${errorContext}`, error);
-    if (button) {
-      button.textContent = "Copy failed";
-      window.setTimeout(() => {
-        button.textContent = idleLabel;
-      }, 1800);
-    }
-  }
-}
-
-async function copyCourseEvaluationSummary() {
-  if (!currentScenario) {
-    return;
-  }
-  const button = document.getElementById("copy-course-evaluation-summary");
-  const text = buildScenarioCopySummary(currentScenario);
-  await copyTextToClipboard(text, button, "Copy summary", "Course Evaluation summary");
-}
-
-async function copyCourseEvaluationAll() {
-  const reportEl = document.getElementById("report");
-  const button = document.getElementById("copy-course-evaluation-all");
-  const text = reportEl?.textContent ?? "";
-  await copyTextToClipboard(text, button, "Copy all", "Course Evaluation");
-}
-
-document.getElementById("copy-course-evaluation-summary")?.addEventListener("click", () => {
-  copyCourseEvaluationSummary();
-});
-
-document.getElementById("copy-course-evaluation-all")?.addEventListener("click", () => {
-  copyCourseEvaluationAll();
-});
-
-document.getElementById("about-close-icon").addEventListener("click", () => {
-  closeAboutDialog();
-});
-
-document.getElementById("about-close-button").addEventListener("click", () => {
-  closeAboutDialog();
-});
-
-document.getElementById("about-dialog").addEventListener("click", (event) => {
-  const dialog = event.currentTarget;
-  if (event.target === dialog) {
-    closeAboutDialog();
-  }
-});
-
-document.getElementById("leg-select").addEventListener("change", () => {
-  if (currentScenario) renderScenario(currentScenario);
-});
-
-document.getElementById("board-view-mode").addEventListener("change", () => {
-  if (currentScenario) {
+  document.getElementById("about-button").addEventListener("click", () => {
+    openAboutDialog();
+  });
+  document.getElementById("canvas")?.addEventListener("click", (event) => {
+    if (!currentScenario || !isDevViewEnabled()) return;
+    const tile = getCanvasTileFromEvent(event);
+    applyRouteInspection(getInspectableAtTile(currentScenario, tile));
     renderScenario(currentScenario);
-  }
-});
+  });
 
-document.getElementById("course-explanation-toggle").addEventListener("click", () => {
-  if (!currentScenario) {
-    return;
-  }
-
-  const requestedDifficulty = currentScenario.preferences.difficulty;
-  const difficultyFit = currentScenario.metrics.difficultyFit ?? 0;
-  const lengthFit = currentScenario.metrics.lengthFit ?? 0;
-  const moderateDifficultyThreshold = requestedDifficulty === "easy" ? 20 : 14;
-  const autoOpen = (
-    currentScenario.generationBestMatch ||
-    (currentScenario.preferences.difficulty !== "any" && difficultyFit >= moderateDifficultyThreshold) ||
-    (currentScenario.preferences.length !== "any" && lengthFit >= 14)
-  );
-  const currentlyVisible = courseExplanationState.manualOpen ?? autoOpen;
-  courseExplanationState.manualOpen = !currentlyVisible;
-  renderScenario(currentScenario);
-});
-
-document.getElementById("dev-view").addEventListener("change", () => {
-  updateDevView();
-  if (currentScenario) {
+  document.getElementById("canvas")?.addEventListener("dblclick", (event) => {
+    if (!currentScenario || !isDevViewEnabled()) return;
+    event.preventDefault();
+    const tile = getCanvasTileFromEvent(event);
+    const legValue = document.getElementById("leg-select")?.value ?? "all";
+    const legIndex = legValue === "all" ? null : Number(legValue);
+    if (tileTouchesVisibleTrace(currentScenario, tile, legIndex)) {
+      selectAllTraceStarts(currentScenario);
+    } else {
+      clearTraceStarts();
+      clearRouteInspection();
+    }
     renderScenario(currentScenario);
-  }
-});
-
-document.getElementById("board-audit-toggle").addEventListener("change", () => {
-  updateBoardAuditVisibility();
-});
-
-function handleOptionalRuleControlClick(event) {
-  const button = event.target.closest(".variant-state");
-  if (!button) {
-    return;
-  }
-
-  if (button.dataset.unavailableReason) {
-    showToast(button.dataset.unavailableReason);
-    return;
-  }
-
-  if (button.dataset.overlayControl) {
-    cycleOverlayModeControl();
-    return;
-  }
-
-  if (button.dataset.variantAction === "toggle-category") {
-    toggleVariantCategoryStates(button.dataset.variantCategory);
-    return;
-  }
-
-  if (button.dataset.variantId === "actFast") {
-    cycleActFastControlChoice();
-    return;
-  }
-
-  cycleVariantControlState(button.dataset.variantId);
-}
-
-document.querySelectorAll("[data-variant-menu]").forEach((menuEl) => {
-  menuEl.addEventListener("click", handleOptionalRuleControlClick);
-});
-
-document.getElementById("optional-rules-index-list")?.addEventListener("click", handleOptionalRuleControlClick);
-document.getElementById("optional-rules-title")?.addEventListener("click", openOptionalRulesDialog);
-document.getElementById("optional-rules-close-icon")?.addEventListener("click", closeOptionalRulesDialog);
-document.getElementById("optional-rules-close-button")?.addEventListener("click", closeOptionalRulesDialog);
-document.getElementById("optional-rules-search")?.addEventListener("input", (event) => {
-  filterOptionalRulesIndex(event.target.value);
-});
-document.getElementById("optional-rules-dialog")?.addEventListener("click", (event) => {
-  if (event.target === event.currentTarget) {
-    closeOptionalRulesDialog();
-  }
-});
-
-document.getElementById("player-count")?.addEventListener("change", () => {
-  updateVariantAvailability();
-});
-
-document.getElementById("expansion-roborally").addEventListener("change", () => {
-  updateExpansionSummary();
-});
-
-document.getElementById("expansion-30th-anniversary").addEventListener("change", () => {
-  updateExpansionSummary();
-});
-
-document.getElementById("expansion-rr-dice").addEventListener("change", () => {
-  updateExpansionSummary();
-});
-
-document.getElementById("expansion-master-builder").addEventListener("change", () => {
-  updateExpansionSummary();
-});
-
-document.getElementById("expansion-thrills-and-spills").addEventListener("change", () => {
-  updateExpansionSummary();
-});
-
-document.getElementById("expansion-chaos-and-carnage").addEventListener("change", () => {
-  updateExpansionSummary();
-});
-
-document.getElementById("expansion-wet-and-wild").addEventListener("change", () => {
-  updateExpansionSummary();
-});
-
-document.addEventListener("click", (event) => {
-  document.querySelectorAll(".variant-picker").forEach((picker) => {
-    if (!picker.contains(event.target)) {
-      picker.removeAttribute("open");
-    }
   });
-});
 
-document.addEventListener("focusin", (event) => {
-  document.querySelectorAll(".variant-picker").forEach((picker) => {
-    if (!picker.contains(event.target)) {
-      picker.removeAttribute("open");
-    }
+
+
+  document.getElementById("run-diagnostics").addEventListener("click", () => {
+    runDiagnostics().catch((error) => {
+      document.getElementById("report").textContent = `Diagnostics failed: ${error.message}`;
+      document.getElementById("run-diagnostics").disabled = false;
+      console.error(error);
+    });
   });
-});
 
-document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") {
-    closeAboutDialog();
-    closeOptionalRulesDialog();
-    closeVariantPicker();
-  }
-});
-
-async function init() {
-  const assets = await loadAssets();
-  initializeBoardAudit(assets);
-  ensureScenarioAnimationLoop();
-  renderVariantControls();
-  updateExpansionSummary();
-  updateDevView();
-  const snapshot = loadScenarioSnapshot();
-
-  if (snapshot) {
-    applyPreferencesToControls(snapshot.preferences);
-    const restoredScenario = hydrateScenarioFromSnapshot(assets, snapshot);
-    if (restoredScenario) {
-      currentScenario = restoredScenario;
-      await ensureScenarioImages(assets, currentScenario);
-      pruneImageCache(assets, [
-        ...getPlacementImagePieceIds(currentScenario.placements, currentScenario.pieceMap),
-        boardAuditState.pieceId
-      ]);
-      renderScenario(currentScenario);
-      setGeneratingOverlay(false);
+  async function copyTextToClipboard(text, button, idleLabel, errorContext = "text") {
+    if (!text?.trim()) {
       return;
     }
+
+    try {
+      let copied = false;
+      if (navigator.clipboard?.write && typeof ClipboardItem !== "undefined") {
+        try {
+          const plainText = new Blob([text], { type: "text/plain" });
+          await navigator.clipboard.write([
+            new ClipboardItem({ "text/plain": plainText })
+          ]);
+          copied = true;
+        } catch (error) {
+          console.debug("Explicit text/plain clipboard write unavailable; falling back", error);
+        }
+      }
+      if (!copied && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        copied = true;
+      }
+      if (!copied) {
+        const textarea = document.createElement("textarea");
+        textarea.value = text;
+        textarea.setAttribute("readonly", "");
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.select();
+        copied = document.execCommand("copy");
+        textarea.remove();
+        if (!copied) {
+          throw new Error("Copy command was not available");
+        }
+      }
+
+      if (button) {
+        button.textContent = "Copied";
+        window.setTimeout(() => {
+          button.textContent = idleLabel;
+        }, 1400);
+      }
+    } catch (error) {
+      console.warn(`Unable to copy ${errorContext}`, error);
+      if (button) {
+        button.textContent = "Copy failed";
+        window.setTimeout(() => {
+          button.textContent = idleLabel;
+        }, 1800);
+      }
+    }
   }
 
-  await start();
-}
+  async function copyCourseEvaluationSummary() {
+    if (!currentScenario) {
+      return;
+    }
+    const button = document.getElementById("copy-course-evaluation-summary");
+    const text = buildScenarioCopySummary(currentScenario);
+    await copyTextToClipboard(text, button, "Copy summary", "Course Evaluation summary");
+  }
 
-init().catch(console.error);
+  async function copyCourseEvaluationAll() {
+    const reportEl = document.getElementById("report");
+    const button = document.getElementById("copy-course-evaluation-all");
+    const text = reportEl?.textContent ?? "";
+    await copyTextToClipboard(text, button, "Copy all", "Course Evaluation");
+  }
+
+  document.getElementById("copy-course-evaluation-summary")?.addEventListener("click", () => {
+    copyCourseEvaluationSummary();
+  });
+
+  document.getElementById("copy-course-evaluation-all")?.addEventListener("click", () => {
+    copyCourseEvaluationAll();
+  });
+
+  document.getElementById("about-close-icon").addEventListener("click", () => {
+    closeAboutDialog();
+  });
+
+  document.getElementById("about-close-button").addEventListener("click", () => {
+    closeAboutDialog();
+  });
+
+  document.getElementById("about-dialog").addEventListener("click", (event) => {
+    const dialog = event.currentTarget;
+    if (event.target === dialog) {
+      closeAboutDialog();
+    }
+  });
+
+  document.getElementById("leg-select").addEventListener("change", () => {
+    if (currentScenario) renderScenario(currentScenario);
+  });
+
+  document.getElementById("board-view-mode").addEventListener("change", () => {
+    if (currentScenario) {
+      renderScenario(currentScenario);
+    }
+  });
+
+  document.getElementById("course-explanation-toggle").addEventListener("click", () => {
+    if (!currentScenario) {
+      return;
+    }
+
+    const requestedDifficulty = currentScenario.preferences.difficulty;
+    const difficultyFit = currentScenario.metrics.difficultyFit ?? 0;
+    const lengthFit = currentScenario.metrics.lengthFit ?? 0;
+    const moderateDifficultyThreshold = requestedDifficulty === "easy" ? 20 : 14;
+    const autoOpen = (
+      currentScenario.generationBestMatch ||
+      (currentScenario.preferences.difficulty !== "any" && difficultyFit >= moderateDifficultyThreshold) ||
+      (currentScenario.preferences.length !== "any" && lengthFit >= 14)
+    );
+    const currentlyVisible = courseExplanationState.manualOpen ?? autoOpen;
+    courseExplanationState.manualOpen = !currentlyVisible;
+    renderScenario(currentScenario);
+  });
+
+  document.getElementById("dev-view").addEventListener("change", () => {
+    updateDevView();
+    if (currentScenario) {
+      renderScenario(currentScenario);
+    }
+  });
+
+  document.getElementById("board-audit-toggle").addEventListener("change", () => {
+    updateBoardAuditVisibility();
+  });
+
+  function handleOptionalRuleControlClick(event) {
+    const button = event.target.closest(".variant-state");
+    if (!button) {
+      return;
+    }
+
+    if (button.dataset.unavailableReason) {
+      showToast(button.dataset.unavailableReason);
+      return;
+    }
+
+    if (button.dataset.overlayControl) {
+      cycleOverlayModeControl();
+      return;
+    }
+
+    if (button.dataset.variantAction === "toggle-category") {
+      toggleVariantCategoryStates(button.dataset.variantCategory);
+      return;
+    }
+
+    if (button.dataset.variantId === "actFast") {
+      cycleActFastControlChoice();
+      return;
+    }
+
+    cycleVariantControlState(button.dataset.variantId);
+  }
+
+  document.querySelectorAll("[data-variant-menu]").forEach((menuEl) => {
+    menuEl.addEventListener("click", handleOptionalRuleControlClick);
+  });
+
+  document.getElementById("optional-rules-index-list")?.addEventListener("click", handleOptionalRuleControlClick);
+  document.getElementById("optional-rules-title")?.addEventListener("click", openOptionalRulesDialog);
+  document.getElementById("optional-rules-close-icon")?.addEventListener("click", closeOptionalRulesDialog);
+  document.getElementById("optional-rules-close-button")?.addEventListener("click", closeOptionalRulesDialog);
+  document.getElementById("optional-rules-search")?.addEventListener("input", (event) => {
+    filterOptionalRulesIndex(event.target.value);
+  });
+  document.getElementById("optional-rules-dialog")?.addEventListener("click", (event) => {
+    if (event.target === event.currentTarget) {
+      closeOptionalRulesDialog();
+    }
+  });
+
+  document.getElementById("player-count")?.addEventListener("change", () => {
+    updateVariantAvailability();
+  });
+
+  document.getElementById("expansion-roborally").addEventListener("change", () => {
+    updateExpansionSummary();
+  });
+
+  document.getElementById("expansion-30th-anniversary").addEventListener("change", () => {
+    updateExpansionSummary();
+  });
+
+  document.getElementById("expansion-rr-dice").addEventListener("change", () => {
+    updateExpansionSummary();
+  });
+
+  document.getElementById("expansion-master-builder").addEventListener("change", () => {
+    updateExpansionSummary();
+  });
+
+  document.getElementById("expansion-thrills-and-spills").addEventListener("change", () => {
+    updateExpansionSummary();
+  });
+
+  document.getElementById("expansion-chaos-and-carnage").addEventListener("change", () => {
+    updateExpansionSummary();
+  });
+
+  document.getElementById("expansion-wet-and-wild").addEventListener("change", () => {
+    updateExpansionSummary();
+  });
+
+  document.addEventListener("click", (event) => {
+    document.querySelectorAll(".variant-picker").forEach((picker) => {
+      if (!picker.contains(event.target)) {
+        picker.removeAttribute("open");
+      }
+    });
+  });
+
+  document.addEventListener("focusin", (event) => {
+    document.querySelectorAll(".variant-picker").forEach((picker) => {
+      if (!picker.contains(event.target)) {
+        picker.removeAttribute("open");
+      }
+    });
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      closeAboutDialog();
+      closeOptionalRulesDialog();
+      closeVariantPicker();
+    }
+  });
+
+  async function init() {
+    const assets = await loadAssets();
+    initializeBoardAudit(assets);
+    ensureScenarioAnimationLoop();
+    renderVariantControls();
+    updateExpansionSummary();
+    updateDevView();
+    const snapshot = loadScenarioSnapshot();
+
+    if (snapshot) {
+      applyPreferencesToControls(snapshot.preferences);
+      const restoredScenario = hydrateScenarioFromSnapshot(assets, snapshot);
+      if (restoredScenario) {
+        currentScenario = restoredScenario;
+        await ensureScenarioImages(assets, currentScenario);
+        pruneImageCache(assets, [
+          ...getPlacementImagePieceIds(currentScenario.placements, currentScenario.pieceMap),
+          boardAuditState.pieceId
+        ]);
+        renderScenario(currentScenario);
+        setGeneratingOverlay(false);
+        return;
+      }
+    }
+
+    await start();
+  }
+
+  init().catch(console.error);
+
+}
