@@ -4,6 +4,7 @@ import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  createCalibrationOverlayTreatment,
   generateCalibrationScenario,
   listCalibrationExpansionIds,
   loadCalibrationAssets,
@@ -20,6 +21,8 @@ const DEFAULTS = Object.freeze({
   boardCounts: [1, 2, 3, 4],
   generationMode: "balanced",
   staggeredChance: 0.5,
+  overlayChance: 0.5,
+  overlayMode: "yes",
   maxAttemptsPerSample: 12,
   seed: Date.now() >>> 0,
   outputRoot: join(PROJECT_DIR, "calibration-output"),
@@ -43,6 +46,8 @@ function parseArgs(argv) {
     boardCounts: [...DEFAULTS.boardCounts],
     generationMode: DEFAULTS.generationMode,
     staggeredChance: DEFAULTS.staggeredChance,
+    overlayChance: DEFAULTS.overlayChance,
+    overlayMode: DEFAULTS.overlayMode,
     maxAttemptsPerSample: DEFAULTS.maxAttemptsPerSample,
     seed: DEFAULTS.seed,
     outputRoot: DEFAULTS.outputRoot,
@@ -70,6 +75,15 @@ function parseArgs(argv) {
     } else if (arg === "--staggered-chance") {
       const value = Number(next());
       options.staggeredChance = Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : DEFAULTS.staggeredChance;
+    } else if (arg === "--overlay-chance") {
+      const value = Number(next());
+      options.overlayChance = Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : DEFAULTS.overlayChance;
+    } else if (arg === "--overlay-mode") {
+      const value = String(next() || DEFAULTS.overlayMode).trim().toLowerCase();
+      if (!["no", "tokens", "boards", "yes"].includes(value)) {
+        throw new Error(`Unknown overlay mode: ${value}`);
+      }
+      options.overlayMode = value;
     } else if (arg === "--max-attempts") {
       options.maxAttemptsPerSample = Math.max(1, Math.floor(Number(next()) || DEFAULTS.maxAttemptsPerSample));
     } else if (arg === "--seed") {
@@ -93,7 +107,7 @@ function parseArgs(argv) {
 }
 
 function printHelp() {
-  console.log(`Robo Rally calibration runner\n\nUsage:\n  node calibration-runner.js [options]\n\nOptions:\n  --runs N                 Analyzable course observations to collect (default ${DEFAULTS.runs})\n  --players N              Player count (default ${DEFAULTS.playerCount})\n  --flags 2,3,4,5,6        Flag counts to sample\n  --boards 1,2,3,4         Board counts to request\n  --sets all|id,id          Expansion IDs; default is every supported set found in data/\n  --mode balanced           Generation search profile; Balanced is the calibration reference\n  --staggered-chance 0.5    Probability of allowing staggered board placement\n  --max-attempts N          Raw physical candidates tried per requested observation (default ${DEFAULTS.maxAttemptsPerSample})\n  --seed N                  Deterministic random seed\n  --output NAME             Output folder under the project root\n  --verbose, -v             Print detailed setup, raw-attempt and summary lines\n  --help                    Show this message\n\nEach requested observation retries fresh physical candidates until one is analyzable (or the per-observation attempt limit is reached). Each successfully built physical course is then evaluated twice: ordinary reboot-token\nrecovery and Dynamic Archiving. Both analyses use the same boards, rotations, layout,\ndocks and flags. No third-party packages are required.`);
+  console.log(`Robo Rally calibration runner\n\nUsage:\n  node tools/calibration-runner.js [options]\n\nOptions:\n  --runs N                 Analyzable course observations to collect (default ${DEFAULTS.runs})\n  --players N              Player count (default ${DEFAULTS.playerCount})\n  --flags 2,3,4,5,6        Flag counts to sample\n  --boards 1,2,3,4         Board counts to request\n  --sets all|id,id          Expansion IDs; default is every supported set found in data/\n  --mode balanced           Generation search profile; Balanced is the calibration reference\n  --staggered-chance 0.5    Probability of allowing staggered board placement\n  --overlay-chance 0.5      Fraction of physical courses receiving a paired overlay treatment\n  --overlay-mode yes        Overlay treatment: no, tokens, boards, or yes\n  --max-attempts N          Raw physical candidates tried per requested observation (default ${DEFAULTS.maxAttemptsPerSample})\n  --seed N                  Deterministic random seed\n  --output NAME             Output folder under the project root\n  --verbose, -v             Print detailed setup, raw-attempt and summary lines\n  --help                    Show this message\n\nEach requested observation retries fresh physical candidates until one is analyzable (or the per-observation attempt limit is reached). Every successful physical course is evaluated under ordinary reboot-token recovery and Dynamic Archiving. A random subset also receives a production-selected overlay treatment on the same boards, layout, docks and checkpoint coordinates. Overlay treatments that invalidate a checkpoint are recorded as feasibility outcomes rather than silently discarded. No third-party packages are required.`);
 }
 
 function mulberry32(seed) {
@@ -466,6 +480,25 @@ const ANALYSIS_SUFFIXES = [
   "capped_searches"
 ];
 
+const OVERLAY_FEATURE_KEYS = [
+  "hazardWeight",
+  "congestionWeight",
+  "complexityWeight",
+  "swingWeight",
+  "pitCount",
+  "beltCount",
+  "portalCount",
+  "teleporterCount",
+  "randomizerCount",
+  "crusherCount",
+  "pushCount",
+  "hazardCount"
+];
+
+function overlayFeatureColumn(key) {
+  return `overlay_feature_${key.replace(/[A-Z]/g, (match) => `_${match.toLowerCase()}`)}_delta`;
+}
+
 const COURSE_COLUMNS = [
   "run_id",
   "candidate_index",
@@ -481,7 +514,16 @@ const COURSE_COLUMNS = [
   "generation_failures_before_success",
   "sets",
   "normal_status",
+  "paired_normal_status",
   "dynamic_status",
+  "overlay_requested",
+  "overlay_mode",
+  "overlay_status",
+  "overlay_checkpoint_compatible",
+  "overlay_incompatible_checkpoint_count",
+  "overlay_count",
+  "overlay_ids",
+  ...OVERLAY_FEATURE_KEYS.map(overlayFeatureColumn),
   "error",
   "boards",
   "rotations",
@@ -518,9 +560,17 @@ const COURSE_COLUMNS = [
   "push_count",
   "hazard_count",
   ...ANALYSIS_SUFFIXES.map((suffix) => `normal_${suffix}`),
+  ...ANALYSIS_SUFFIXES.map((suffix) => `paired_normal_${suffix}`),
   ...ANALYSIS_SUFFIXES.map((suffix) => `dynamic_${suffix}`),
+  ...ANALYSIS_SUFFIXES.map((suffix) => `overlay_${suffix}`),
   "delta_difficulty_dynamic_minus_normal",
-  "delta_length_dynamic_minus_normal"
+  "delta_length_dynamic_minus_normal",
+  "delta_difficulty_dynamic_minus_paired_normal",
+  "delta_length_dynamic_minus_paired_normal",
+  "delta_difficulty_overlay_minus_normal",
+  "delta_length_overlay_minus_normal",
+  "delta_difficulty_overlay_minus_paired_normal",
+  "delta_length_overlay_minus_paired_normal"
 ];
 
 const ATTEMPT_COLUMNS = [
@@ -576,6 +626,45 @@ const BOARD_COLUMNS = [
   "push_count",
   "hazard_count"
 ];
+
+
+const OVERLAY_COLUMNS = [
+  "run_id",
+  "candidate_index",
+  "overlay_index",
+  "overlay_mode",
+  "piece_id",
+  "physical_board_id",
+  "expansion_id",
+  "kind",
+  "rotation",
+  "x",
+  "y",
+  "width",
+  "height"
+];
+
+function buildOverlayRows(runId, candidateIndex, treatment, pieceMap) {
+  return (treatment?.overlayPlacements ?? []).map((placement, overlayIndex) => {
+    const piece = pieceMap[placement.pieceId];
+    const size = rotatedSize(piece ?? {}, placement.rotation ?? 0);
+    return {
+      run_id: runId,
+      candidate_index: candidateIndex,
+      overlay_index: overlayIndex + 1,
+      overlay_mode: treatment?.overlayMode ?? "",
+      piece_id: placement.pieceId,
+      physical_board_id: piece?.physicalBoardId ?? piece?.id ?? placement.pieceId,
+      expansion_id: piece?.expansionId ?? "",
+      kind: piece?.kind ?? "",
+      rotation: placement.rotation ?? "",
+      x: placement.x,
+      y: placement.y,
+      width: size.width ?? "",
+      height: size.height ?? ""
+    };
+  });
+}
 
 function buildBoardRows(runId, candidateIndex, scenario) {
   return (scenario.boardRects ?? []).map((rect, boardIndex) => {
@@ -735,15 +824,23 @@ async function main() {
   await mkdir(outputDir, { recursive: true });
   const coursesPath = join(outputDir, "calibration-courses.csv");
   const boardsPath = join(outputDir, "calibration-boards.csv");
+  const overlaysPath = join(outputDir, "calibration-overlays.csv");
   const attemptsPath = join(outputDir, "calibration-attempts.csv");
   const summaryPath = join(outputDir, "run-summary.txt");
   await writeFile(coursesPath, `${COURSE_COLUMNS.join(",")}\n`, "utf8");
   await writeFile(boardsPath, `${BOARD_COLUMNS.join(",")}\n`, "utf8");
+  await writeFile(overlaysPath, `${OVERLAY_COLUMNS.join(",")}\n`, "utf8");
   await writeFile(attemptsPath, `${ATTEMPT_COLUMNS.join(",")}\n`, "utf8");
 
   const startedAt = performance.now();
   let physicalScenarios = 0;
+  let pairedNormalSuccesses = 0;
   let dynamicSuccesses = 0;
+  let overlayRequestedCount = 0;
+  let overlaySuccesses = 0;
+  let overlayCheckpointIncompatible = 0;
+  let overlayRouteIncompatible = 0;
+  let overlayNoPlacement = 0;
   let failures = 0;
   let rawAttempts = 0;
   let exhaustedSamples = 0;
@@ -752,6 +849,7 @@ async function main() {
     console.log(`Run: ${runId}`);
     console.log(`Candidates: ${options.runs}; players: ${options.playerCount}; mode: ${options.generationMode}`);
     console.log(`Boards: ${options.boardCounts.join(",")}; flags: ${options.flagCounts.join(",")}; staggered chance: ${options.staggeredChance}`);
+    console.log(`Overlay treatment: chance ${options.overlayChance}; mode ${options.overlayMode}`);
     console.log(`Raw candidate limit per observation: ${options.maxAttemptsPerSample}`);
     console.log(`Sets: ${expansionIds.join(", ")}`);
     console.log(`Seed: ${options.seed}`);
@@ -767,9 +865,15 @@ async function main() {
     const staggered = Math.random() < options.staggeredChance;
     let generated = null;
     let normalScenario = null;
+    let pairedNormalScenario = null;
     let dynamicScenario = null;
+    let overlayTreatment = null;
+    let overlayScenario = null;
     let normalStatus = "no-scenario";
+    let pairedNormalStatus = "not-run";
     let dynamicStatus = "not-run";
+    const overlayRequested = Math.random() < options.overlayChance;
+    let overlayStatus = overlayRequested ? "pending" : "not-run";
     let errorText = "";
     let generationAttempts = 0;
 
@@ -857,9 +961,35 @@ async function main() {
       normalStatus = "ok";
       normalScenario.elapsedMs = generated.elapsedMs;
       normalScenario.telemetry = generated.telemetry;
-      writeCalibrationProgress(candidateIndex - 1, options.runs, 0.9, options.verbose);
+      writeCalibrationProgress(candidateIndex - 1, options.runs, 0.88, options.verbose);
       if (options.verbose) {
-        console.log(`  -> physical scenario found; running paired Dynamic Archiving analysis`);
+        console.log(`  -> physical scenario found; running canonical paired Normal analysis`);
+      }
+      try {
+        pairedNormalScenario = await withQuietGeneratorConsole(options.verbose, () =>
+          reanalyzeCalibrationScenario(assets, normalScenario, {
+            dynamicArchiving: false,
+            playerCount: options.playerCount,
+            generationMode: options.generationMode
+          })
+        );
+        if (pairedNormalScenario) {
+          pairedNormalSuccesses += 1;
+          pairedNormalStatus = "ok";
+        } else {
+          pairedNormalStatus = "no-scenario";
+        }
+      } catch (error) {
+        pairedNormalStatus = "error";
+        const pairedError = error?.message ?? String(error);
+        errorText = errorText
+          ? `${errorText} | Paired Normal: ${pairedError}`
+          : `Paired Normal: ${pairedError}`;
+      }
+
+      writeCalibrationProgress(candidateIndex - 1, options.runs, 0.92, options.verbose);
+      if (options.verbose) {
+        console.log(`  -> running paired Dynamic Archiving analysis`);
       }
       try {
         dynamicScenario = await withQuietGeneratorConsole(options.verbose, () =>
@@ -879,9 +1009,44 @@ async function main() {
         dynamicStatus = "error";
         errorText = `Dynamic Archiving: ${error?.message ?? String(error)}`;
       }
+
+      if (overlayRequested) {
+        overlayRequestedCount += 1;
+        writeCalibrationProgress(candidateIndex - 1, options.runs, 0.96, options.verbose);
+        if (options.verbose) {
+          console.log(`  -> running paired overlay treatment (${options.overlayMode})`);
+        }
+        try {
+          overlayTreatment = await withQuietGeneratorConsole(options.verbose, () =>
+            createCalibrationOverlayTreatment(assets, normalScenario, {
+              playerCount: options.playerCount,
+              generationMode: options.generationMode,
+              overlayMode: options.overlayMode
+            })
+          );
+          overlayStatus = overlayTreatment?.status ?? "no-treatment";
+          overlayScenario = overlayTreatment?.scenario ?? null;
+          if (overlayStatus === "ok" && overlayScenario) {
+            overlaySuccesses += 1;
+          } else if (overlayStatus === "checkpoint-incompatible") {
+            overlayCheckpointIncompatible += 1;
+          } else if (overlayStatus === "route-incompatible") {
+            overlayRouteIncompatible += 1;
+          } else if (overlayStatus === "no-overlay") {
+            overlayNoPlacement += 1;
+          }
+        } catch (error) {
+          overlayStatus = "error";
+          const overlayError = error?.message ?? String(error);
+          errorText = errorText
+            ? `${errorText} | Overlay: ${overlayError}`
+            : `Overlay: ${overlayError}`;
+        }
+      }
     } else {
       exhaustedSamples += 1;
       normalStatus = "exhausted";
+      overlayStatus = overlayRequested ? "not-run-no-base" : "not-run";
     }
 
     const baseRow = {
@@ -899,11 +1064,25 @@ async function main() {
       generation_failures_before_success: normalScenario ? Math.max(0, generationAttempts - 1) : generationAttempts,
       sets: expansionIds,
       normal_status: normalStatus,
+      paired_normal_status: pairedNormalStatus,
       dynamic_status: dynamicStatus,
+      overlay_requested: overlayRequested,
+      overlay_mode: overlayTreatment?.overlayMode ?? (overlayRequested ? options.overlayMode : ""),
+      overlay_status: overlayStatus,
+      overlay_checkpoint_compatible: overlayTreatment?.checkpointCompatible ?? "",
+      overlay_incompatible_checkpoint_count: overlayTreatment?.incompatibleCheckpointCount ?? "",
+      overlay_count: overlayTreatment?.overlayPlacements?.length ?? 0,
+      overlay_ids: overlayTreatment?.overlayPlacements?.map((placement) => placement.pieceId) ?? [],
       error: errorText,
       boards: normalScenario?.mainBoardIds ?? [],
       rotations: normalScenario?.mainRotations ?? []
     };
+
+    if (overlayTreatment?.featureDelta) {
+      for (const key of OVERLAY_FEATURE_KEYS) {
+        baseRow[overlayFeatureColumn(key)] = rounded(Number(overlayTreatment.featureDelta[key]) || 0);
+      }
+    }
 
     if (normalScenario) {
       const layout = summarizeLayout(normalScenario);
@@ -944,21 +1123,48 @@ async function main() {
         hazard_count: profiles.hazardCount
       });
       Object.assign(baseRow, summarizeAnalysis(normalScenario, "normal"));
+      if (pairedNormalScenario) Object.assign(baseRow, summarizeAnalysis(pairedNormalScenario, "paired_normal"));
       if (dynamicScenario) Object.assign(baseRow, summarizeAnalysis(dynamicScenario, "dynamic"));
+      if (overlayScenario) Object.assign(baseRow, summarizeAnalysis(overlayScenario, "overlay"));
 
       const normalDifficulty = baseRow.normal_difficulty_raw === "" ? NaN : Number(baseRow.normal_difficulty_raw);
+      const pairedNormalDifficulty = baseRow.paired_normal_difficulty_raw === "" ? NaN : Number(baseRow.paired_normal_difficulty_raw);
       const dynamicDifficulty = baseRow.dynamic_difficulty_raw === "" ? NaN : Number(baseRow.dynamic_difficulty_raw);
+      const overlayDifficulty = baseRow.overlay_difficulty_raw === "" ? NaN : Number(baseRow.overlay_difficulty_raw);
       const normalLength = baseRow.normal_length_raw === "" ? NaN : Number(baseRow.normal_length_raw);
+      const pairedNormalLength = baseRow.paired_normal_length_raw === "" ? NaN : Number(baseRow.paired_normal_length_raw);
       const dynamicLength = baseRow.dynamic_length_raw === "" ? NaN : Number(baseRow.dynamic_length_raw);
+      const overlayLength = baseRow.overlay_length_raw === "" ? NaN : Number(baseRow.overlay_length_raw);
       baseRow.delta_difficulty_dynamic_minus_normal = Number.isFinite(normalDifficulty) && Number.isFinite(dynamicDifficulty)
         ? rounded(dynamicDifficulty - normalDifficulty)
         : "";
       baseRow.delta_length_dynamic_minus_normal = Number.isFinite(normalLength) && Number.isFinite(dynamicLength)
         ? rounded(dynamicLength - normalLength)
         : "";
+      baseRow.delta_difficulty_dynamic_minus_paired_normal = Number.isFinite(pairedNormalDifficulty) && Number.isFinite(dynamicDifficulty)
+        ? rounded(dynamicDifficulty - pairedNormalDifficulty)
+        : "";
+      baseRow.delta_length_dynamic_minus_paired_normal = Number.isFinite(pairedNormalLength) && Number.isFinite(dynamicLength)
+        ? rounded(dynamicLength - pairedNormalLength)
+        : "";
+      baseRow.delta_difficulty_overlay_minus_normal = Number.isFinite(normalDifficulty) && Number.isFinite(overlayDifficulty)
+        ? rounded(overlayDifficulty - normalDifficulty)
+        : "";
+      baseRow.delta_length_overlay_minus_normal = Number.isFinite(normalLength) && Number.isFinite(overlayLength)
+        ? rounded(overlayLength - normalLength)
+        : "";
+      baseRow.delta_difficulty_overlay_minus_paired_normal = Number.isFinite(pairedNormalDifficulty) && Number.isFinite(overlayDifficulty)
+        ? rounded(overlayDifficulty - pairedNormalDifficulty)
+        : "";
+      baseRow.delta_length_overlay_minus_paired_normal = Number.isFinite(pairedNormalLength) && Number.isFinite(overlayLength)
+        ? rounded(overlayLength - pairedNormalLength)
+        : "";
 
       for (const boardRow of buildBoardRows(runId, candidateIndex, normalScenario)) {
         await appendFile(boardsPath, csvLine(BOARD_COLUMNS, boardRow), "utf8");
+      }
+      for (const overlayRow of buildOverlayRows(runId, candidateIndex, overlayTreatment, assets.pieceMap)) {
+        await appendFile(overlaysPath, csvLine(OVERLAY_COLUMNS, overlayRow), "utf8");
       }
     }
 
@@ -969,7 +1175,7 @@ async function main() {
       const perCandidate = elapsed / candidateIndex;
       const remaining = perCandidate * (options.runs - candidateIndex);
       logProgressLine(
-        `${candidateIndex}/${options.runs} observations | physical ${physicalScenarios} | DA pairs ${dynamicSuccesses} | exhausted ${exhaustedSamples} | raw attempts ${rawAttempts} | errors ${failures} | elapsed ${formatSeconds(elapsed)} | ETA ${formatSeconds(remaining)}`
+        `${candidateIndex}/${options.runs} observations | physical ${physicalScenarios} | paired Normal ${pairedNormalSuccesses} | DA ${dynamicSuccesses} | overlays ${overlaySuccesses}/${overlayRequestedCount} | exhausted ${exhaustedSamples} | raw attempts ${rawAttempts} | errors ${failures} | elapsed ${formatSeconds(elapsed)} | ETA ${formatSeconds(remaining)}`
       );
     } else if (!options.verbose) {
       writeCalibrationProgress(candidateIndex, options.runs, 0, false);
@@ -984,7 +1190,13 @@ async function main() {
     `Observations requested: ${options.runs}`,
     `Raw physical candidates attempted: ${rawAttempts}`,
     `Physical scenarios produced: ${physicalScenarios}`,
+    `Canonical paired Normal analyses produced: ${pairedNormalSuccesses}`,
     `Dynamic Archiving paired analyses produced: ${dynamicSuccesses}`,
+    `Overlay treatments requested: ${overlayRequestedCount}`,
+    `Overlay paired analyses produced: ${overlaySuccesses}`,
+    `Overlay checkpoint-incompatible treatments: ${overlayCheckpointIncompatible}`,
+    `Overlay route-incompatible treatments: ${overlayRouteIncompatible}`,
+    `Overlay treatments with no legal placement: ${overlayNoPlacement}`,
     `Observations exhausted without an analyzable scenario: ${exhaustedSamples}`,
     `Top-level generation errors: ${failures}`,
     `Players: ${options.playerCount}`,
@@ -993,14 +1205,19 @@ async function main() {
     `Requested board counts: ${options.boardCounts.join(", ")}`,
     `Requested flag counts: ${options.flagCounts.join(", ")}`,
     `Staggered chance: ${options.staggeredChance}`,
+    `Overlay chance: ${options.overlayChance}`,
+    `Overlay mode: ${options.overlayMode}`,
     `Raw candidate limit per observation: ${options.maxAttemptsPerSample}`,
     `Sets: ${expansionIds.join(", ")}`,
     `Elapsed: ${formatSeconds(elapsedMs)}`,
     `Courses CSV: ${coursesPath}`,
     `Boards CSV: ${boardsPath}`,
+    `Overlays CSV: ${overlaysPath}`,
     `Attempts CSV: ${attemptsPath}`,
     "",
-    "Dynamic Archiving is evaluated on the same physical boards, rotations, docks and flags as the ordinary-recovery course.",
+    "Canonical paired Normal, Dynamic Archiving and overlay analyses reuse the same physical boards, rotations, docks and checkpoint coordinates.",
+    "Overlay treatments use production overlay placement on the same base boards, layout, docks and checkpoint coordinates.",
+    "If an overlay invalidates a checkpoint location, that is recorded as a feasibility outcome and is not reanalyzed.",
     "The runner does not modify live generator weights or acceptance rules."
   ].join("\n");
   await writeFile(summaryPath, `${summary}\n`, "utf8");

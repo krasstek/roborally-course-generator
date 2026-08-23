@@ -6,6 +6,23 @@ export const BOARD_PROFILE_DENSITY_COMPONENT_WEIGHTS = {
   push: 0.8
 };
 export const RANDOMIZER_CONTROL_PENALTY = 11;
+
+// v38 programming-pressure accounting. These weights are deliberately not
+// ordinary route hazard: they describe how much factory-controlled facing /
+// movement must be mentally tracked when programming under uncertain-card or
+// timed-programming variants. A gear turn is therefore comparable to a conveyor
+// turn even though neither is automatically damaging.
+export const PROGRAMMING_CONTROL_PRESSURE_WEIGHTS = Object.freeze({
+  gearTurn: 1.0,
+  conveyorTurn: 0.9,
+  conveyorForcedSpace: 0.16,
+  otherForcedSpace: 0.1,
+  pusherEvent: 0.65,
+  oilEvent: 0.45,
+  currentEvent: 0.4,
+  portalJump: 0.55,
+  randomizerStart: 0.8
+});
 export const FLAG_APPROACH_WEIGHTS = {
   singleOpenBase: 30,
   singleOpenTraffic: 18,
@@ -47,7 +64,11 @@ const FLAG_AREA_FEATURE_WEIGHTS = {
   trapdoor: 5.2,
   repulsor: 2.4,
   chopShop: -3.2,
-  homingMissile: 3.8
+  homingMissile: 3.8,
+  // Compatibility only: old board data may still expose repairDock. Optional
+  // Repair Stations are modeled on checkpoints in Analyze, so this legacy tile
+  // feature should be neutral rather than turning flag-area scoring into NaN.
+  repairDock: 0
 };
 
 export function getTimingWeight(feature) {

@@ -1,3 +1,4 @@
+// Robo Rally Course Randomizer - main v40a unified route foundation
 // Mobile browsers may auto-detect number-like rule text and restyle it as a
 // tappable link even though the app emitted ordinary text. Keep rules/course
 // annotations visually plain; this is presentation-only and does not disable
@@ -54,7 +55,7 @@ const versionedPath = (path) => `${path}${VERSION_SUFFIX}`;
 
 const [
   { render },
-  { analyzeCourse, analyzeFullCourse, analyzeFlagLeg, analyzeGoalApproaches, clearAnalysisCaches, evaluateFullCourseFocusPaymentCurveUnderOccupancy, evaluateFullCourseSubsetTraffic, evaluateRouteUpgradePotential, estimateInitialUpgradeOpportunitiesRemaining, getAnalysisTelemetrySnapshot, getCourseMaxEnergy, getCourseStartingEnergy, getCourseStartingUpgradeCards, getRouteEnergyEconomyConfig, getRouteEnergyGainUtility, getRouteMarginalEnergyUtility, getRouteUpgradePotential, recomputeFirstLegPressure, resetAnalysisTelemetry, ROUTE_ENERGY_ECONOMY_DEFAULTS, scoreFlagArea, summarizePowerUpOpportunityBenchmark, summarizeProgramSequencePressure, summarizePowerUpProgramFeasibility },
+  { analyzeCourse, analyzeFullCourse, analyzeFlagLeg, analyzeGoalApproaches, clearAnalysisCaches, evaluateFullCourseFocusPaymentCurveUnderOccupancy, evaluateRouteUpgradePotential, estimateInitialUpgradeOpportunitiesRemaining, getAnalysisTelemetrySnapshot, getCourseMaxEnergy, getCourseStartingEnergy, getCourseStartingUpgradeCards, getRouteEnergyEconomyConfig, getRouteEnergyGainUtility, getRouteMarginalEnergyUtility, getRouteUpgradePotential, recomputeFirstLegPressure, resetAnalysisTelemetry, ROUTE_ENERGY_ECONOMY_DEFAULTS, scoreFlagArea, summarizePowerUpOpportunityBenchmark, summarizeProgramSequencePressure, summarizePowerUpProgramFeasibility },
   {
     buildMainFootprintTiles,
     buildResolvedMap,
@@ -72,6 +73,7 @@ const [
   {
     BOARD_PROFILE_DENSITY_COMPONENT_WEIGHTS,
     BOARD_PROFILE_DENSITY_WEIGHT,
+    PROGRAMMING_CONTROL_PRESSURE_WEIGHTS,
     getBoardProfileDelta,
     getEffectiveLaserDamage,
     getTilePenaltyForFeature
@@ -83,6 +85,8 @@ const [
   {
     getVariantAvailabilityRule,
     getVariantDefinition: getRegisteredVariantDefinition,
+    getVariantExclusiveGroupConflict,
+    getVariantGuidanceRules,
     getVariantRequirementIds,
     VARIANT_CONTROL_IDS,
     VARIANT_DEFINITIONS,
@@ -123,6 +127,7 @@ const getAnalysisTelemetrySnapshotSafe = typeof getAnalysisTelemetrySnapshot ===
     cappedSearches: 0,
     slowestSearch: null,
     totalsByKind: {},
+    physicalCacheTotals: { hits: 0, misses: 0 },
     contextualProfileTotals: {
       queueMs: 0,
       currentKeyMs: 0,
@@ -140,8 +145,41 @@ const getAnalysisTelemetrySnapshotSafe = typeof getAnalysisTelemetrySnapshot ===
       acceptedStates: 0,
       dominatedStates: 0,
       completedGoals: 0,
+      searchesWithGoal: 0,
+      cappedZeroGoalSearches: 0,
+      cappedWithGoalSearches: 0,
+      firstGoalExpansionTotal: 0,
+      postFirstGoalExpansions: 0,
+      optionalCompletionSearches: 0,
+      optionalCompletionStops: 0,
+      optionalCompletionShortReturns: 0,
+      cappedZeroGoalExpansions: 0,
+      cappedWithGoalExpansions: 0,
+      exactContextualSearches: 0,
+      exactContextualExpansions: 0,
+      horizonSolidSearches: 0,
+      horizonUncertainSearches: 0,
+      horizonSpeculativeSearches: 0,
+      horizonFirstGoalUncertain: 0,
+      horizonFirstGoalSpeculative: 0,
+      horizonOptionalSuppressed: 0,
       physicalCacheHits: 0,
-      physicalCacheMisses: 0
+      physicalCacheMisses: 0,
+      dominanceKeysFull: 0,
+      dominanceKeysPhysical: 0,
+      dominanceKeysPhysicalPhase: 0,
+      dominanceKeysNoProgramDetail: 0,
+      dominanceKeysNoPrevious: 0,
+      dominanceKeysNoUsage: 0,
+      dominanceKeysNoAgain: 0,
+      dominanceKeysNoAbsolute: 0,
+      dominanceKeysNoEnergy: 0,
+      dominanceKeysNoCards: 0,
+      dominanceKeysNoEconomyShadow: 0,
+      dominanceKeysNoGoal: 0,
+      dominanceUsageParetoStates: 0,
+      dominanceUsageParetoDominated: 0,
+      dominanceUsageParetoMultiStateGroups: 0,
     }
   });
 
@@ -179,6 +217,7 @@ const OPPOSITE_DIRS = {
   W: "E"
 };
 const MAX_ATTEMPTS = 20;
+const GENERATION_EMERGENCY_ATTEMPT_RESERVE = 3;
 const GENERATION_SOFT_EXPANSION_BUDGET = 500000;
 const GENERATION_SOFT_BUDGET_MIN_ATTEMPTS = 8;
 const DEFAULT_GENERATION_MODE = "standard";
@@ -189,6 +228,19 @@ const GENERATION_MODE_LABELS = Object.freeze({
   balanced: "Balanced",
   thorough: "Thorough"
 });
+const NORMAL_TRAFFIC_ALTERNATE_DEMAND_THRESHOLD = 3.2;
+const NORMAL_TRAFFIC_ALTERNATE_MIN_GAIN = 1.5;
+const NORMAL_FULL_COURSE_TRAFFIC_PASSES = 1;
+const NORMAL_PRUNE_BATCH_SIZE = 2;
+const NORMAL_CONTEXTUAL_FULL_FORECAST_SHARE = 0.65;
+
+// v35 generation-mode contract -------------------------------------------------
+// Modes never change route legality, reachability semantics, Energy valuation,
+// Normal fairness criteria, traffic scoring, or the minimum useful reroute gain.
+// They change only how much evidence/search effort the generator is willing to
+// buy. Balanced/Thorough may inspect some high raw congestion beyond Standard's
+// confidence horizon, but final route selection still uses the ordinary shared
+// confidence-weighted traffic score.
 const GENERATION_MODE_PROFILES = Object.freeze({
   fastest: Object.freeze({
     maxAttempts: 5,
@@ -198,11 +250,17 @@ const GENERATION_MODE_PROFILES = Object.freeze({
     preflightLaterExpansions: 700,
     lightStartExpansions: 4200,
     fullCourseExpansions: 32000,
-    openingRoutes: 1,
-    laterRoutes: 1,
-    beamWidth: 1,
-    completionPool: 1,
-    fullCourseTrafficPasses: 1
+    primaryWitnessRoutes: 1,
+    trafficEnabled: false,
+    trafficEpochs: 0,
+    trafficAlternateMaxNewSearchesPerEpoch: 0,
+    trafficAlternateExpansions: 0,
+    trafficAlternateMaxActions: 0,
+    trafficAlternateCachedProbeMargin: 0,
+    trafficAlternateCachedProbeMaxSimilarity: 0.84,
+    trafficAlternateLegsPerStart: 1,
+    trafficExplorationUncertaintyShare: 0,
+    trafficExplorationConfidenceFloor: 1,
   }),
   fast: Object.freeze({
     maxAttempts: 8,
@@ -212,13 +270,21 @@ const GENERATION_MODE_PROFILES = Object.freeze({
     preflightLaterExpansions: 850,
     lightStartExpansions: 5200,
     fullCourseExpansions: 38000,
-    openingRoutes: 1,
-    laterRoutes: 1,
-    beamWidth: 1,
-    completionPool: 2,
-    fullCourseTrafficPasses: 1
+    primaryWitnessRoutes: 2,
+    trafficEnabled: true,
+    trafficEpochs: 1,
+    // Fast may accept a useful already-paid witness, but never opens new geometry.
+    trafficAlternateMaxNewSearchesPerEpoch: 0,
+    trafficAlternateExpansions: 0,
+    trafficAlternateMaxActions: 0,
+    trafficAlternateCachedProbeMargin: 0,
+    trafficAlternateCachedProbeMaxSimilarity: 0.84,
+    trafficAlternateLegsPerStart: 1,
+    trafficExplorationUncertaintyShare: 0,
+    trafficExplorationConfidenceFloor: 1,
   }),
   standard: Object.freeze({
+    // v34 frozen reference behavior.
     maxAttempts: 12,
     softExpansionBudget: 360000,
     softBudgetMinAttempts: 6,
@@ -226,25 +292,39 @@ const GENERATION_MODE_PROFILES = Object.freeze({
     preflightLaterExpansions: 1000,
     lightStartExpansions: 6000,
     fullCourseExpansions: 44000,
-    openingRoutes: 1,
-    laterRoutes: 2,
-    beamWidth: 1,
-    completionPool: 2,
-    fullCourseTrafficPasses: 1
+    primaryWitnessRoutes: 2,
+    trafficEnabled: true,
+    trafficEpochs: 1,
+    trafficAlternateMaxNewSearchesPerEpoch: 6,
+    trafficAlternateExpansions: 320,
+    trafficAlternateMaxActions: 30,
+    trafficAlternateCachedProbeMargin: 0.75,
+    trafficAlternateCachedProbeMaxSimilarity: 0.84,
+    trafficAlternateLegsPerStart: 1,
+    trafficExplorationUncertaintyShare: 0,
+    trafficExplorationConfidenceFloor: 1,
   }),
   balanced: Object.freeze({
-    maxAttempts: MAX_ATTEMPTS,
-    softExpansionBudget: GENERATION_SOFT_EXPANSION_BUDGET,
-    softBudgetMinAttempts: GENERATION_SOFT_BUDGET_MIN_ATTEMPTS,
+    maxAttempts: 20,
+    softExpansionBudget: 500000,
+    softBudgetMinAttempts: 8,
     preflightOpeningExpansions: 1400,
     preflightLaterExpansions: 1200,
     lightStartExpansions: 7000,
     fullCourseExpansions: 52000,
-    openingRoutes: 1,
-    laterRoutes: 2,
-    beamWidth: 2,
-    completionPool: 3,
-    fullCourseTrafficPasses: 2
+    primaryWitnessRoutes: 3,
+    trafficEnabled: true,
+    trafficEpochs: 2,
+    trafficAlternateMaxNewSearchesPerEpoch: 10,
+    trafficAlternateExpansions: 450,
+    trafficAlternateMaxActions: 34,
+    trafficAlternateCachedProbeMargin: 0.40,
+    trafficAlternateCachedProbeMaxSimilarity: 0.88,
+    trafficAlternateLegsPerStart: 1,
+    // Exploration only: admit 18% of the raw/effective gap while confidence is
+    // still at least .20. Final candidate value never uses this relaxed score.
+    trafficExplorationUncertaintyShare: 0.18,
+    trafficExplorationConfidenceFloor: 0.20,
   }),
   thorough: Object.freeze({
     maxAttempts: 36,
@@ -254,11 +334,19 @@ const GENERATION_MODE_PROFILES = Object.freeze({
     preflightLaterExpansions: 1600,
     lightStartExpansions: 9500,
     fullCourseExpansions: 68000,
-    openingRoutes: 2,
-    laterRoutes: 3,
-    beamWidth: 3,
-    completionPool: 5,
-    fullCourseTrafficPasses: 3
+    primaryWitnessRoutes: 4,
+    trafficEnabled: true,
+    trafficEpochs: 3,
+    trafficAlternateMaxNewSearchesPerEpoch: 16,
+    trafficAlternateExpansions: 600,
+    trafficAlternateMaxActions: 36,
+    trafficAlternateCachedProbeMargin: 0.15,
+    trafficAlternateCachedProbeMaxSimilarity: 0.92,
+    trafficAlternateLegsPerStart: 2,
+    // Exploration only: look farther into high raw congestion, but never below
+    // .10 confidence and never use this relaxed value to choose the final route.
+    trafficExplorationUncertaintyShare: 0.35,
+    trafficExplorationConfidenceFloor: 0.10,
   })
 });
 const DIAGNOSTIC_ATTEMPTS = 24;
@@ -272,11 +360,13 @@ const MAX_DOCK_COUNT = 2;
 const DEFAULT_STARTING_ENERGY = ROUTE_ENERGY_ECONOMY_DEFAULTS.startingEnergy;
 const DEFAULT_STARTING_UPGRADE_CARDS = ROUTE_ENERGY_ECONOMY_DEFAULTS.startingUpgradeCards;
 
-// Start-Energy balancing uses the shared v45 cards+Energy route economy.
-// Pay to Win replays routes from startingEnergy-p before the opening Upgrade
-// Phase. Subsidized Starts replays from startingEnergy+s, capped at maxEnergy.
-// The moving baseline, bidirectional endpoint pruning, selector breakpoint fit,
-// and availability/player-floor safeguards are shared by both setup variants.
+// Start-Energy balancing uses the v37 card-aware fixed-route pricing economy.
+// Route search itself stays on the shared flattened production scorer; pricing
+// replays already-discovered routes from startingEnergy±adjustment before the
+// opening Upgrade Phase and respects starting cards, future draw/install capacity,
+// the storage cap, and remaining race horizon. Moving baseline, one-at-a-time
+// endpoint pruning, selector breakpoint fit, and player-floor safeguards are
+// shared by Pay to Win and Subsidized Starts.
 // Passive border geometry that may coexist with a No-Docks starting square.
 // Active edge devices (lasers, push panels, flamethrowers) are deliberately
 // excluded even though they are encoded directionally on an edge: a player
@@ -295,6 +385,7 @@ const NO_DOCK_START_EDGE_FEATURE_TYPES = new Set([
 const FALLBACK_SOFT_FAILURE_PENALTIES = new Map([
   ["normal-start-balance", 45],
   ["competitive-start-balance", 60],
+  ["priced-start-balance", 55],
   ["competitive-start-availability", 90],
   ["unused-board", 50],
   ["too-short", 80]
@@ -308,13 +399,23 @@ const LIGHT_START_MAX_EXPANSIONS = 7000;
 const LIGHT_START_MAX_ACTIONS = 18;
 const LIGHT_START_OUTLIER_Z = 2.5;
 // Universal cheap course preflight. These searches intentionally use a much
-// smaller budget than final contextual analysis: they are an audition, not a
-// proof of reachability. A candidate that cannot establish a healthy opening
-// pool cheaply is reshuffled rather than allowed to consume a long rich search.
+// smaller budget than final contextual analysis: they are an audition, never a
+// proof of reachability. A capped or short-horizon route sketch is recorded as
+// incomplete and handed to the exact contextual pass instead of causing a retry.
 const COURSE_PREFLIGHT_OPENING_EXPANSIONS = 1400;
 const COURSE_PREFLIGHT_LATER_EXPANSIONS = 1200;
 const COURSE_PREFLIGHT_OPENING_MAX_ACTIONS = 18;
 const COURSE_PREFLIGHT_LATER_MAX_ACTIONS = 20;
+// v12 design invariant: cheap pruning may reduce how many Normal/priced starts
+// receive rich follow-up, but it must use the same Energy-economy objective as
+// production whenever Energy/upgrades are active. Energy Crisis (lighterGame)
+// is currently the only rule that removes that economy entirely.
+//
+// This bounded coherent audition is therefore allowed to be *less exhaustive*,
+// not strategically different. Competitive never uses it: Competitive evaluates
+// every physical start because players themselves block spaces before selection.
+const TARGETED_NORMAL_CAPACITY_GATE_MIN_EXPANSIONS = 420;
+const TARGETED_NORMAL_CAPACITY_GATE_MAX_EXPANSIONS = 520;
 const COURSE_PREFLIGHT_DIFFICULTY_MARGIN = 35;
 const COURSE_PREFLIGHT_LENGTH_MARGIN = 40;
 const FULL_START_OUTLIER_Z = 2.25;
@@ -964,16 +1065,19 @@ async function loadAssets() {
     return cachedAssets;
   }
 
-  const [pieces, rawLengthCalibration] = await Promise.all([
+  const [pieces, rawLengthCalibration, rawConstructionCalibration] = await Promise.all([
     Promise.all(
       PIECE_DATA_FILES.map(async (pieceId) => loadJSON(`./data/${pieceId}.json`))
     ),
-    loadOptionalJSON("./calibration/length-calibration.json")
+    loadOptionalJSON("./calibration/length-calibration.json"),
+    loadOptionalJSON("./calibration/construction-calibration.json")
   ]);
   const pieceMap = Object.fromEntries(
     pieces.map((piece) => [piece.id, piece])
   );
   const lengthCalibration = normalizeLengthConstructionCalibration(rawLengthCalibration);
+  const constructionFeasibilityCalibration = normalizeConstructionFeasibilityCalibration(rawConstructionCalibration);
+  const constructionLengthGeometryCalibration = normalizeConstructionLengthGeometryCalibration(rawConstructionCalibration);
 
   for (const piece of Object.values(pieceMap)) {
     piece.overlayCapable = piece.expansionId === "master-builder" && (
@@ -987,19 +1091,90 @@ async function loadAssets() {
     piece.derivedBias = piece.boardProfile.bias;
   }
 
-  cachedAssets = { pieceMap, imageMap: {}, imageLoadPromises: new Map(), lengthCalibration };
+  cachedAssets = {
+    pieceMap,
+    imageMap: {},
+    imageLoadPromises: new Map(),
+    lengthCalibration,
+    constructionFeasibilityCalibration,
+    constructionLengthGeometryCalibration
+  };
   return cachedAssets;
 }
 
+let activeGenerationRandom = null;
+let devFrozenGenerationSeed = null;
+
+function createSeededGenerationRandom(seed) {
+  let state = Number(seed) >>> 0;
+  return () => {
+    state = (state + 0x6D2B79F5) >>> 0;
+    let value = state;
+    value = Math.imul(value ^ (value >>> 15), value | 1);
+    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function generationRandom() {
+  return activeGenerationRandom ? activeGenerationRandom() : Math.random();
+}
+
+async function withGenerationRandomSeed(seed, callback) {
+  const previousRandom = activeGenerationRandom;
+  activeGenerationRandom = Number.isInteger(seed)
+    ? createSeededGenerationRandom(seed)
+    : null;
+  try {
+    return await callback();
+  } finally {
+    activeGenerationRandom = previousRandom;
+  }
+}
+
+function createDevGenerationSeed() {
+  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+    const values = new Uint32Array(1);
+    crypto.getRandomValues(values);
+    return values[0] >>> 0;
+  }
+  return ((Date.now() ^ Math.floor((typeof performance !== "undefined" ? performance.now() : 0) * 1000)) >>> 0);
+}
+
+function formatDevGenerationSeed(seed) {
+  return Number(seed >>> 0).toString(16).padStart(8, "0").toUpperCase();
+}
+
+function parseDevGenerationSeed(value) {
+  const text = String(value ?? "").trim();
+  if (!text) {
+    return null;
+  }
+
+  const hexText = text.replace(/^0x/i, "");
+  if (/^[0-9a-fA-F]{1,8}$/.test(hexText)) {
+    return Number.parseInt(hexText, 16) >>> 0;
+  }
+
+  if (/^[0-9]{1,10}$/.test(text)) {
+    const decimal = Number(text);
+    if (Number.isSafeInteger(decimal) && decimal >= 0 && decimal <= 0xFFFFFFFF) {
+      return decimal >>> 0;
+    }
+  }
+
+  return null;
+}
+
 function sample(items) {
-  return items[Math.floor(Math.random() * items.length)];
+  return items[Math.floor(generationRandom() * items.length)];
 }
 
 function shuffle(items) {
   const out = [...items];
 
   for (let index = out.length - 1; index > 0; index -= 1) {
-    const swapIndex = Math.floor(Math.random() * (index + 1));
+    const swapIndex = Math.floor(generationRandom() * (index + 1));
     [out[index], out[swapIndex]] = [out[swapIndex], out[index]];
   }
 
@@ -1011,7 +1186,7 @@ function sampleMany(items, count) {
   const out = [];
 
   while (pool.length && out.length < count) {
-    const index = Math.floor(Math.random() * pool.length);
+    const index = Math.floor(generationRandom() * pool.length);
     out.push(pool.splice(index, 1)[0]);
   }
 
@@ -1028,7 +1203,7 @@ function sampleManyWeighted(items, count) {
       break;
     }
 
-    let roll = Math.random() * totalWeight;
+    let roll = generationRandom() * totalWeight;
     let index = 0;
 
     for (; index < pool.length; index += 1) {
@@ -1176,18 +1351,109 @@ function formatGenerationDuration(ms) {
 }
 
 function getGenerationConstraintHint(preferences = {}) {
-  const constrainedDifficulty = preferences.difficulty && preferences.difficulty !== "any";
-  const constrainedLength = preferences.length && preferences.length !== "any";
-  if (!constrainedDifficulty && !constrainedLength) {
-    return "";
+  const mode = normalizeGenerationMode(preferences.generationMode);
+  const length = preferences.length ?? "any";
+  const playerCount = Number(preferences.playerCount) || 4;
+
+  if (mode === "fastest" || mode === "fast") {
+    return "This mode might be faster.";
   }
-  if (constrainedDifficulty && constrainedLength) {
-    return "Broader difficulty or length settings may generate faster.";
+  if (mode === "balanced" || mode === "thorough") {
+    return "This mode might take a little longer.";
   }
-  if (constrainedDifficulty) {
-    return "Choosing Any difficulty may generate faster.";
+  if (length === "long") {
+    return "Long courses can take longer to check.";
   }
-  return "Choosing Any length may generate faster.";
+  if (playerCount >= 6) {
+    return "More players can make some layouts take longer to check.";
+  }
+  if (preferences.difficulty !== "any" || preferences.length !== "any") {
+    return "A specific difficulty or length can take a few tries.";
+  }
+  return "";
+}
+
+const CONTEXTUAL_PROFILE_TIME_KEYS = [
+  "queueMs",
+  "currentKeyMs",
+  "goalCompletionMs",
+  "simulationMs",
+  "actionScoringMs",
+  "historyBuildMs",
+  "destinationBuildMs",
+  "nextKeyMs",
+  "dominanceMs"
+];
+const CONTEXTUAL_PROFILE_COUNT_KEYS = [
+  "actionCandidates",
+  "simulationCalls",
+  "blockedTransitions",
+  "programLegalityPrunes",
+  "destinationCandidates",
+  "acceptedStates",
+  "dominatedStates",
+  "completedGoals",
+  "searchesWithGoal",
+  "cappedZeroGoalSearches",
+  "cappedWithGoalSearches",
+  "firstGoalExpansionTotal",
+  "postFirstGoalExpansions",
+  "optionalCompletionSearches",
+  "optionalCompletionStops",
+  "optionalCompletionShortReturns",
+  "cappedZeroGoalExpansions",
+  "cappedWithGoalExpansions",
+  "exactContextualSearches",
+  "exactContextualExpansions",
+  "horizonSolidSearches",
+  "horizonUncertainSearches",
+  "horizonSpeculativeSearches",
+  "horizonFirstGoalUncertain",
+  "horizonFirstGoalSpeculative",
+  "horizonOptionalSuppressed",
+  "physicalCacheHits",
+  "physicalCacheMisses",
+  "dominanceKeysFull",
+  "dominanceKeysPhysical",
+  "dominanceKeysPhysicalPhase",
+  "dominanceKeysNoProgramDetail",
+  "dominanceKeysNoPrevious",
+  "dominanceKeysNoUsage",
+  "dominanceKeysNoAgain",
+  "dominanceKeysNoAbsolute",
+  "dominanceKeysNoEnergy",
+  "dominanceKeysNoCards",
+  "dominanceKeysNoEconomyShadow",
+  "dominanceKeysNoGoal",
+  "dominanceUsageParetoStates",
+  "dominanceUsageParetoDominated",
+  "dominanceUsageParetoMultiStateGroups",
+];
+
+function createEmptyContextualProfile() {
+  return Object.fromEntries([
+    ...CONTEXTUAL_PROFILE_TIME_KEYS,
+    ...CONTEXTUAL_PROFILE_COUNT_KEYS
+  ].map((key) => [key, 0]));
+}
+
+function addContextualProfile(target, source) {
+  if (!source) return target;
+  for (const key of CONTEXTUAL_PROFILE_TIME_KEYS) {
+    target[key] = (target[key] ?? 0) + (source[key] ?? 0);
+  }
+  for (const key of CONTEXTUAL_PROFILE_COUNT_KEYS) {
+    target[key] = (target[key] ?? 0) + (source[key] ?? 0);
+  }
+  return target;
+}
+
+function finalizeContextualProfile(profile) {
+  const finalized = { ...profile };
+  for (const key of CONTEXTUAL_PROFILE_TIME_KEYS) {
+    finalized[key] = Number((finalized[key] ?? 0).toFixed(2));
+  }
+  return finalized;
 }
 
 function summarizeRouteSearchDelta(before, after) {
@@ -1200,12 +1466,46 @@ function summarizeRouteSearchDelta(before, after) {
     (best, entry) => !best || (entry.durationMs ?? 0) > (best.durationMs ?? 0) ? entry : best,
     null
   );
+  const totalsByKind = {};
+  const contextualProfile = createEmptyContextualProfile();
+  let contextualSearches = 0;
+  let contextualExpansions = 0;
+  let contextualDurationMs = 0;
+  for (const entry of searches) {
+    const kind = entry.kind ?? "unknown";
+    const bucket = totalsByKind[kind] ?? {
+      searches: 0,
+      expansions: 0,
+      durationMs: 0,
+      capped: 0
+    };
+    bucket.searches += 1;
+    bucket.expansions += entry.expansions ?? 0;
+    bucket.durationMs += entry.durationMs ?? 0;
+    if (entry.hitExpansionCap) bucket.capped += 1;
+    totalsByKind[kind] = bucket;
+
+    if (entry.contextualProfile) {
+      contextualSearches += 1;
+      contextualExpansions += entry.expansions ?? 0;
+      contextualDurationMs += entry.durationMs ?? 0;
+      addContextualProfile(contextualProfile, entry.contextualProfile);
+    }
+  }
+  Object.values(totalsByKind).forEach((bucket) => {
+    bucket.durationMs = Number(bucket.durationMs.toFixed(2));
+  });
   return {
     searches: searches.length,
     expansions,
     durationMs: Number(durationMs.toFixed(2)),
     capped,
-    slowest
+    slowest,
+    totalsByKind,
+    contextualSearches,
+    contextualExpansions,
+    contextualDurationMs: Number(contextualDurationMs.toFixed(2)),
+    contextualProfile: finalizeContextualProfile(contextualProfile)
   };
 }
 
@@ -1227,6 +1527,21 @@ function cloneContextualSearchHealth(health = null) {
     legNumber: health.legNumber ?? null,
     flagCount: health.flagCount ?? 0,
     seededOpeningStarts: health.seededOpeningStarts ?? 0,
+    catalogueEntries: health.catalogueEntries ?? 0,
+    catalogueLookups: health.catalogueLookups ?? 0,
+    catalogueCacheHits: health.catalogueCacheHits ?? 0,
+    catalogueSearches: health.catalogueSearches ?? 0,
+    catalogueCappedSearches: health.catalogueCappedSearches ?? 0,
+    catalogueExhaustedSearches: health.catalogueExhaustedSearches ?? 0,
+    catalogueSuppressedCappedLookups: health.catalogueSuppressedCappedLookups ?? 0,
+    catalogueReplayRouteChecks: health.catalogueReplayRouteChecks ?? 0,
+    catalogueCompatibleLineages: health.catalogueCompatibleLineages ?? 0,
+    catalogueCompatibleRoutes: health.catalogueCompatibleRoutes ?? 0,
+    catalogueIncompatibleLineages: health.catalogueIncompatibleLineages ?? 0,
+    catalogueRefinementSearches: health.catalogueRefinementSearches ?? 0,
+    catalogueEnrichmentSearches: health.catalogueEnrichmentSearches ?? 0,
+    catalogueEnrichmentSuccesses: health.catalogueEnrichmentSuccesses ?? 0,
+    catalogueEnrichmentSuppressed: health.catalogueEnrichmentSuppressed ?? 0,
     survivorHistory: Array.isArray(health.survivorHistory)
       ? health.survivorHistory.map((entry) => ({ ...entry }))
       : []
@@ -1241,18 +1556,6 @@ function compactRouteWork(work = null) {
     durationMs: work.durationMs ?? 0,
     capped: work.capped ?? 0
   };
-}
-
-function formatSurvivorHistory(history = []) {
-  if (!Array.isArray(history) || !history.length) return "n/a";
-  const first = history[0]?.sourceStarts;
-  const survivors = history.map((entry) => entry.survivingStarts);
-  return [first, ...survivors].filter(Number.isFinite).join(" -> ");
-}
-
-function formatCappedContextHistory(history = []) {
-  if (!Array.isArray(history) || !history.length) return "n/a";
-  return history.map((entry) => entry.cappedContextsThisLeg ?? 0).join("/");
 }
 
 function getGenerationRejectionCategory(scenario, fallbackReason = "") {
@@ -1279,6 +1582,50 @@ function getGenerationRejectionCategory(scenario, fallbackReason = "") {
   return "other";
 }
 
+function addRouteSearchKindTotals(target = {}, source = null) {
+  if (!source || typeof source !== "object") return target;
+  for (const [kind, bucket] of Object.entries(source)) {
+    if (!bucket) continue;
+    const current = target[kind] ?? {
+      searches: 0,
+      expansions: 0,
+      durationMs: 0,
+      capped: 0
+    };
+    current.searches += bucket.searches ?? 0;
+    current.expansions += bucket.expansions ?? 0;
+    current.durationMs += bucket.durationMs ?? 0;
+    current.capped += bucket.capped ?? 0;
+    target[kind] = current;
+  }
+  return target;
+}
+
+function finalizeRouteSearchKindTotals(totals = null) {
+  if (!totals || typeof totals !== "object") return null;
+  return Object.fromEntries(Object.entries(totals).map(([kind, bucket]) => [kind, {
+    searches: bucket.searches ?? 0,
+    expansions: bucket.expansions ?? 0,
+    durationMs: Number((bucket.durationMs ?? 0).toFixed(2)),
+    capped: bucket.capped ?? 0
+  }]));
+}
+
+function formatRouteSearchKindBreakdown(totals = null) {
+  if (!totals || typeof totals !== "object") return "n/a";
+  const entries = Object.entries(totals)
+    .filter(([, bucket]) => (bucket?.searches ?? 0) > 0)
+    .sort((left, right) => (
+      (right[1]?.durationMs ?? 0) - (left[1]?.durationMs ?? 0) ||
+      (right[1]?.expansions ?? 0) - (left[1]?.expansions ?? 0) ||
+      left[0].localeCompare(right[0])
+    ));
+  if (!entries.length) return "n/a";
+  return entries.map(([kind, bucket]) => (
+    `${kind} ${formatGenerationDuration(bucket.durationMs ?? 0)}/${bucket.searches ?? 0}s/${bucket.expansions ?? 0}exp/${bucket.capped ?? 0}cap`
+  )).join("; ");
+}
+
 function summarizeGenerationRejectionEvents(events = []) {
   const byCategory = new Map();
   for (const event of events) {
@@ -1289,20 +1636,33 @@ function summarizeGenerationRejectionEvents(events = []) {
       routeSearches: 0,
       routeExpansions: 0,
       routeSearchMs: 0,
-      cappedRouteSearches: 0
+      cappedRouteSearches: 0,
+      contextualSearches: 0,
+      contextualExpansions: 0,
+      contextualDurationMs: 0,
+      contextualProfile: createEmptyContextualProfile(),
+      routeSearchTotalsByKind: {}
     };
     current.count += 1;
     current.routeSearches += event.routeSearches ?? 0;
     current.routeExpansions += event.routeExpansions ?? 0;
     current.routeSearchMs += event.routeSearchMs ?? 0;
     current.cappedRouteSearches += event.cappedRouteSearches ?? 0;
+    current.contextualSearches += event.contextualSearches ?? 0;
+    current.contextualExpansions += event.contextualExpansions ?? 0;
+    current.contextualDurationMs += event.contextualDurationMs ?? 0;
+    addContextualProfile(current.contextualProfile, event.contextualProfile);
+    addRouteSearchKindTotals(current.routeSearchTotalsByKind, event.routeSearchTotalsByKind);
     byCategory.set(category, current);
   }
 
   const categories = [...byCategory.values()]
     .map((entry) => ({
       ...entry,
-      routeSearchMs: Number(entry.routeSearchMs.toFixed(2))
+      routeSearchMs: Number(entry.routeSearchMs.toFixed(2)),
+      contextualDurationMs: Number(entry.contextualDurationMs.toFixed(2)),
+      contextualProfile: finalizeContextualProfile(entry.contextualProfile),
+      routeSearchTotalsByKind: finalizeRouteSearchKindTotals(entry.routeSearchTotalsByKind)
     }))
     .sort((left, right) => (
       right.routeExpansions - left.routeExpansions ||
@@ -1335,6 +1695,127 @@ function formatContextualProfile(profile) {
     .join(", ");
 }
 
+function formatContextualProfileShare(profile, contextualDurationMs) {
+  if (!profile || !Number.isFinite(contextualDurationMs) || contextualDurationMs <= 0) {
+    return "n/a";
+  }
+  const timed = [
+    ["simulate", profile.simulationMs ?? 0],
+    ["actionScore", profile.actionScoringMs ?? 0],
+    ["keys", (profile.currentKeyMs ?? 0) + (profile.nextKeyMs ?? 0)],
+    ["dominance", profile.dominanceMs ?? 0],
+    ["heap", profile.queueMs ?? 0],
+    ["history", profile.historyBuildMs ?? 0],
+    ["build", profile.destinationBuildMs ?? 0],
+    ["goal", profile.goalCompletionMs ?? 0]
+  ].sort((left, right) => right[1] - left[1]);
+  const accountedMs = timed.reduce((sum, entry) => sum + entry[1], 0);
+  const otherMs = Math.max(0, contextualDurationMs - accountedMs);
+  if (otherMs >= 0.5) timed.push(["other", otherMs]);
+  return timed
+    .filter(([, ms]) => ms >= 0.5)
+    .map(([label, ms]) => {
+      const share = Math.round((ms / contextualDurationMs) * 100);
+      return `${label} ${share}%/${formatGenerationDuration(ms)}`;
+    })
+    .join(", ");
+}
+
+function formatContextualEfficiency(profile, contextualExpansions = 0) {
+  if (!profile) return "n/a";
+  const cacheTotal = (profile.physicalCacheHits ?? 0) + (profile.physicalCacheMisses ?? 0);
+  const cacheRate = cacheTotal > 0
+    ? `${Math.round(((profile.physicalCacheHits ?? 0) / cacheTotal) * 100)}%`
+    : "n/a";
+  const simulations = profile.simulationCalls ?? 0;
+  const blockedRate = simulations > 0
+    ? `${Math.round(((profile.blockedTransitions ?? 0) / simulations) * 100)}%`
+    : "n/a";
+  const stateOutcomes = (profile.acceptedStates ?? 0) + (profile.dominatedStates ?? 0);
+  const dominatedRate = stateOutcomes > 0
+    ? `${Math.round(((profile.dominatedStates ?? 0) / stateOutcomes) * 100)}%`
+    : "n/a";
+  const actionsPerExpansion = contextualExpansions > 0
+    ? ((profile.actionCandidates ?? 0) / contextualExpansions).toFixed(2)
+    : "n/a";
+  return [
+    `actions/exp ${actionsPerExpansion}`,
+    `physical-cache ${cacheRate}`,
+    `blocked ${blockedRate}`,
+    `dominated ${dominatedRate}`,
+    `accepted ${profile.acceptedStates ?? 0}`,
+    `goals ${profile.completedGoals ?? 0}`
+  ].join(", ");
+}
+
+function formatContextualGoalSearchHealth(profile, contextualSearches = 0) {
+  if (!profile || !(contextualSearches > 0)) return null;
+  const searchesWithGoal = profile.searchesWithGoal ?? 0;
+  const cappedZero = profile.cappedZeroGoalSearches ?? 0;
+  const cappedWithGoal = profile.cappedWithGoalSearches ?? 0;
+  const firstGoalAvg = searchesWithGoal > 0
+    ? Math.round((profile.firstGoalExpansionTotal ?? 0) / searchesWithGoal)
+    : null;
+  const afterFirst = profile.postFirstGoalExpansions ?? 0;
+  const cappedZeroExp = profile.cappedZeroGoalExpansions ?? 0;
+  const cappedWithGoalExp = profile.cappedWithGoalExpansions ?? 0;
+  return [
+    `goal found ${searchesWithGoal}/${contextualSearches} searches`,
+    `first-goal avg ${firstGoalAvg ?? "n/a"} exp`,
+    `post-first-goal ${afterFirst} exp`,
+    `optional stops ${profile.optionalCompletionStops ?? 0}/${profile.optionalCompletionSearches ?? 0}`,
+    `short returns ${profile.optionalCompletionShortReturns ?? 0}`,
+    `capped zero-goal ${cappedZero}/${cappedZeroExp} exp`,
+    `capped with-goal ${cappedWithGoal}/${cappedWithGoalExp} exp`
+  ].join(", ");
+}
+
+function formatContextualFidelityHealth(profile) {
+  if (!profile) return null;
+  const solid = profile.horizonSolidSearches ?? 0;
+  const uncertain = profile.horizonUncertainSearches ?? 0;
+  const speculative = profile.horizonSpeculativeSearches ?? 0;
+  if (!(solid > 0 || uncertain > 0 || speculative > 0)) return null;
+  return [
+    `breadth horizon solid/uncertain/speculative ${solid}/${uncertain}/${speculative}`,
+    `first-goal uncertain/speculative ${profile.horizonFirstGoalUncertain ?? 0}/${profile.horizonFirstGoalSpeculative ?? 0}`,
+    `optional searches suppressed ${profile.horizonOptionalSuppressed ?? 0}`,
+    `exact expansions ${profile.exactContextualExpansions ?? 0}`
+  ].join(", ");
+}
+function formatContextualDominanceKeyDiagnostics(profile) {
+  const full = profile?.dominanceKeysFull ?? 0;
+  if (!(full > 0)) return null;
+
+  const physical = profile.dominanceKeysPhysical ?? 0;
+  const physicalPhase = profile.dominanceKeysPhysicalPhase ?? 0;
+  const fragmentation = physical > 0 ? `${(full / physical).toFixed(1)}x` : "n/a";
+  const collapse = (value) => `${Math.max(0, Math.round((1 - ((value ?? full) / full)) * 100))}%`;
+
+  return [
+    `full ${full}`,
+    `physical ${physical} (${fragmentation})`,
+    `physical+phase ${physicalPhase}`,
+    `potential collapse if ignored: program-detail ${collapse(profile.dominanceKeysNoProgramDetail)}`,
+    `previous ${collapse(profile.dominanceKeysNoPrevious)}`,
+    `card-use ${collapse(profile.dominanceKeysNoUsage)}`,
+    `Again ${collapse(profile.dominanceKeysNoAgain)}`,
+    `absolute-action ${collapse(profile.dominanceKeysNoAbsolute)}`,
+    `Energy ${collapse(profile.dominanceKeysNoEnergy)}`,
+    `useful-cards ${collapse(profile.dominanceKeysNoCards)}`,
+    `economy-shadow ${collapse(profile.dominanceKeysNoEconomyShadow)}`,
+    `moving-goal ${collapse(profile.dominanceKeysNoGoal)}`
+  ].join(", ");
+}
+
+function formatContextualUsageParetoDiagnostics(profile) {
+  const states = profile?.dominanceUsageParetoStates ?? 0;
+  const dominated = profile?.dominanceUsageParetoDominated ?? 0;
+  if (!(states > 0)) return null;
+  const rate = `${Math.round((dominated / states) * 100)}%`;
+  return `tracked-card Pareto ${dominated}/${states} (${rate}) potentially dominated across ${profile?.dominanceUsageParetoMultiStateGroups ?? 0} multi-state groups`;
+}
+
 function roundCourseEvaluationNumbers(text) {
   if (typeof text !== "string" || !text) {
     return text;
@@ -1363,6 +1844,7 @@ function formatContextualCounts(profile) {
     `actions ${profile.actionCandidates ?? 0}`,
     `simulations ${profile.simulationCalls ?? 0}`,
     `blocked ${profile.blockedTransitions ?? 0}`,
+    `card-illegal ${profile.programLegalityPrunes ?? 0}`,
     `destinations ${profile.destinationCandidates ?? 0}`,
     `accepted ${profile.acceptedStates ?? 0}`,
     `dominated ${profile.dominatedStates ?? 0}`,
@@ -1543,9 +2025,12 @@ function getDifficultyThresholds() {
 
 function getLengthThresholds() {
   return {
-    short: [MIN_LENGTH_RAW, 140],
-    moderate: [135, 205],
-    long: [180, Infinity]
+    // Keep only a small five-point neighbor overlap. Ordinary construction is
+    // target-centered; closest-match fallback remains responsible for courses
+    // that miss these exact envelopes after the search budget is exhausted.
+    short: [MIN_LENGTH_RAW, 150],
+    moderate: [145, 210],
+    long: [205, 270]
   };
 }
 
@@ -1762,6 +2247,19 @@ function isNoDocksSandwichedDockPair(leftVariantId, rightVariantId) {
 }
 
 function variantsConflict(leftVariantId, rightVariantId) {
+  const pair = new Set([leftVariantId, rightVariantId]);
+  // Energy Crisis / A Lighter Game removes Energy and upgrades from the game, so
+  // starting-Energy prices or subsidies have no rules meaning. Keep this guard
+  // local even if the variant registry also declares the incompatibility.
+  if (
+    pair.has("lighterGame") &&
+    (pair.has("payToWin") || pair.has("subsidizedStarts"))
+  ) {
+    return true;
+  }
+  if (getVariantExclusiveGroupConflict(leftVariantId, rightVariantId)) {
+    return true;
+  }
   const left = getVariantDefinition(leftVariantId);
   const right = getVariantDefinition(rightVariantId);
   return Boolean(
@@ -1904,6 +2402,15 @@ function getVariantUnavailabilityReason(variantId, preferences = {}, pieceMap = 
     getVariantPreferenceState(preferences, conflictId) === "forced"
   ));
   if (forcedConflictIds.length) {
+    const exclusiveConflict = forcedConflictIds
+      .map((conflictId) => ({
+        conflictId,
+        group: getVariantExclusiveGroupConflict(variantId, conflictId)
+      }))
+      .find((entry) => entry.group);
+    if (exclusiveConflict) {
+      return `Unavailable while ${getVariantDefinitionLabel(exclusiveConflict.conflictId)} is set to Must. ${exclusiveConflict.group.description ?? "Only one rule from this mutually exclusive group can be active."}`;
+    }
     return `Unavailable while ${forcedConflictIds.map((id) => getVariantDefinitionLabel(id)).join(", ")} is set to Must.`;
   }
 
@@ -2925,6 +3432,70 @@ function hasCheckpointBoardFeatures(scenario, featureFilter = null) {
   });
 }
 
+function isVariantGuidanceSourceActive(scenario, variantId, activation = "active") {
+  if (!scenario || !variantId) return false;
+  if (activation === "forced") {
+    return isVariantExplicitlyForced(scenario.preferences ?? {}, variantId);
+  }
+  return Boolean(scenario[variantId]) || (
+    variantId === "dynamicArchiving" && scenario.recoveryRule === "dynamic_archiving"
+  ) || (
+    variantId === "homeReboot" && scenario.recoveryRule === "home_reboot"
+  );
+}
+
+function isVariantGuidanceTargetActive(scenario, variantId) {
+  if (!scenario || !variantId) return false;
+  if (variantId === "dynamicArchiving") return scenario.recoveryRule === "dynamic_archiving";
+  if (variantId === "homeReboot") return scenario.recoveryRule === "home_reboot";
+  return Boolean(scenario[variantId]);
+}
+
+function variantGuidanceTargetIsLegal(variantId, scenario) {
+  if (!variantId || !scenario) return false;
+  const preferences = scenario.preferences ?? {};
+  const pieceMap = cachedAssets?.pieceMap ?? null;
+  if (!variantIsAvailable(variantId, preferences, pieceMap)) return false;
+
+  const conflicts = getCourseConflictingVariantIds(variantId);
+  return !conflicts.some((conflictId) => isVariantGuidanceTargetActive(scenario, conflictId));
+}
+
+function buildVariantRuleGuidanceNotes(scenario) {
+  if (!scenario) return [];
+  const suggestions = [];
+  const warnings = [];
+
+  for (const source of VARIANT_DEFINITIONS) {
+    const rules = getVariantGuidanceRules(source.id) || [];
+    for (const rule of rules) {
+      if (!isVariantGuidanceSourceActive(scenario, source.id, rule.sourceActivation ?? "active")) {
+        continue;
+      }
+
+      const targetId = rule.targetId ?? null;
+      const targetActive = targetId ? isVariantGuidanceTargetActive(scenario, targetId) : false;
+      if (rule.kind === "suggest") {
+        if (targetId && (targetActive || !variantGuidanceTargetIsLegal(targetId, scenario))) {
+          continue;
+        }
+        if (rule.text) suggestions.push(rule.text);
+        continue;
+      }
+
+      if (rule.kind === "warning") {
+        if (targetId && !targetActive) continue;
+        if (rule.text) warnings.push(rule.text);
+      }
+    }
+  }
+
+  return [
+    ...suggestions.map((text) => `Suggestion: ${text}`),
+    ...warnings.map((text) => `Note: ${text}`)
+  ];
+}
+
 function updateRulesNote(scenario) {
   const topRulesBlockEl = document.getElementById("rules-block-top");
   const bottomRulesBlockEl = document.getElementById("rules-block-bottom");
@@ -2949,6 +3520,10 @@ function updateRulesNote(scenario) {
     photoRulesNoteEl.classList.add("hidden");
     noteEl.textContent = "";
     noteEl.classList.add("hidden");
+    if (adviceNoteEl) {
+      adviceNoteEl.textContent = "";
+      adviceNoteEl.classList.add("hidden");
+    }
     return;
   }
 
@@ -2968,14 +3543,14 @@ function updateRulesNote(scenario) {
 
   if (scenario.recoveryRule === "dynamic_archiving") {
     notes.push(appendRuleReference(
-      "Dynamic Archiving: No reboot tokens, robots archive when they end a register on a checkpoint or battery space.",
+      "Dynamic Archiving: do not use reboot tokens. A robot archives when it ends a register on a checkpoint or battery space.",
       { page: 32 }
     ));
   }
 
   if (scenario.recoveryRule === "home_reboot") {
     notes.push(appendRuleReference(
-      "Home Reboot: robots reboot at the token on the dock where the robot's starting archive token is located at.",
+      "Home Reboot: a robot reboots at the token on the dock where its starting Archive Token was placed.",
       { source: "previous-editions" }
     ));
   }
@@ -3032,7 +3607,7 @@ function updateRulesNote(scenario) {
     notes.push(
       `Competitive Mode: before the game, players take turns blocking starting spaces, then choose strategically from the remaining starts. ` +
       appendRuleReference(
-        `The generator does not pre-prune starting spaces on an accepted Competitive course: every physical start must remain available for the players. It evaluates the best player blocking choices and accepts the course only if the remaining start pool is balanced, so Competitive courses can take longer to generate.`,
+        `All shown starting spaces are available when blocking begins. Good blocking rewards players who can read the course and identify the strongest starts before the race.`,
         { page: 32 }
       )
     );
@@ -3047,12 +3622,12 @@ function updateRulesNote(scenario) {
           ? ` #${unavailableIndices.map((index) => index + 1).join(", #")}`
           : "";
         notes.push(
-          `Closest-match Competitive warning: ${unavailableIndices.length || "some"} physical starting space${unavailableIndices.length === 1 ? " is" : "s are"} generator-unavailable${unavailableText}. These are not player blocks; a fully accepted Competitive course has no such unavailable starts.`
+          `Competitive starting-space warning: do not use ${unavailableIndices.length || "some"} starting space${unavailableIndices.length === 1 ? "" : "s"}${unavailableText}. These are unavailable for this course and are not player blocks.`
         );
       }
       if (competitiveFailures.has("competitive-start-balance")) {
         notes.push(
-          "Closest-match Competitive warning: even the generator's best simulated player blocks did not leave a balanced remaining start pool. A fully accepted Competitive course passes this test."
+          "Competitive starting-space warning: this closest-match course may leave the final starting choices less even than usual after blocking."
         );
       }
     }
@@ -3060,6 +3635,8 @@ function updateRulesNote(scenario) {
 
   if (scenario.subsidizedStarts) {
     const subsidyPricing = scenario.sequence.firstLeg.summary.payToWin;
+    const baseStartingEnergy = subsidyPricing?.startingEnergy ?? DEFAULT_STARTING_ENERGY;
+    const maximumEnergy = subsidyPricing?.maxEnergy ?? ROUTE_ENERGY_ECONOMY_DEFAULTS.maxEnergy;
     if (subsidyPricing?.hasLatePriceDifference) {
       const firstLatePlayer = subsidyPricing.lateSelectorStart ?? scenario.playerCount;
       const lastLatePlayer = subsidyPricing.lateSelectorEnd ?? scenario.playerCount;
@@ -3075,15 +3652,16 @@ function updateRulesNote(scenario) {
         ? " A dash in either position means that starting space cannot be sufficiently compensated for that selector group; a fully unavailable space uses the prohibited-start marker instead of a subsidy."
         : "";
       notes.push(
-        `Subsidized Starts: light-blue starting spaces show extra starting Energy granted for choosing that space. Add the shown amount to the normal 3 starting Energy, never exceeding the 10E storage limit. ${latePlayerText} ${singleLatePlayer ? "uses" : "use"} the second value after the slash; earlier players use the first subsidy.${dashText} Resolve starting-space selection and subsidies before dealing or revealing any starting upgrade cards.`
+        `Subsidized Starts: light-blue starting spaces show extra starting Energy granted for choosing that space. Add the shown amount to the normal ${baseStartingEnergy} starting Energy, never exceeding the ${maximumEnergy}E storage limit. ${latePlayerText} ${singleLatePlayer ? "uses" : "use"} the second value after the slash; earlier players use the first subsidy.${dashText} Resolve starting-space selection and subsidies before dealing or revealing any starting upgrade cards.`
       );
     } else {
-      notes.push("Subsidized Starts: light-blue starting spaces show extra starting Energy granted for choosing that space. Add the shown amount to the normal 3 starting Energy, never exceeding the 10E storage limit; a prohibited starting space cannot be sufficiently compensated even at the storage cap. Resolve starting-space selection and subsidies before dealing or revealing any starting upgrade cards.");
+      notes.push(`Subsidized Starts: light-blue starting spaces show extra starting Energy granted for choosing that space. Add the shown amount to the normal ${baseStartingEnergy} starting Energy, never exceeding the ${maximumEnergy}E storage limit; a prohibited starting space cannot be sufficiently compensated even at the storage cap. Resolve starting-space selection and subsidies before dealing or revealing any starting upgrade cards.`);
     }
   }
 
   if (scenario.payToWin) {
     const payToWinPricing = scenario.sequence.firstLeg.summary.payToWin;
+    const baseStartingEnergy = payToWinPricing?.startingEnergy ?? DEFAULT_STARTING_ENERGY;
     if (payToWinPricing?.hasLatePriceDifference) {
       const firstLatePlayer = payToWinPricing.lateSelectorStart
         ?? scenario.playerCount;
@@ -3100,10 +3678,10 @@ function updateRulesNote(scenario) {
         ? " A dash in either position means that starting space is unavailable to that selector group; a fully unavailable space uses the prohibited-start marker instead of a price."
         : "";
       notes.push(
-        `Pay to Win: green starting spaces show starting energy costs. Pay the shown cost from your starting energy when choosing a starting space. ${latePlayerText} ${singleLatePlayer ? "uses" : "use"} the second value after the slash; earlier players use the first cost.${dashText} Resolve Pay to Win starting-space selection before dealing or revealing any starting upgrade cards.`
+        `Pay to Win: green starting spaces show starting Energy costs. Pay the shown cost from your ${baseStartingEnergy} starting Energy when choosing a starting space. ${latePlayerText} ${singleLatePlayer ? "uses" : "use"} the second value after the slash; earlier players use the first cost.${dashText} Resolve Pay to Win starting-space selection before dealing or revealing any starting upgrade cards.`
       );
     } else {
-      notes.push(`Pay to Win: green starting spaces show the starting energy cost for choosing that space. Pay that cost from your starting energy when choosing a starting space; a start whose cost exceeds your available starting energy is unavailable. Resolve Pay to Win starting-space selection before dealing or revealing any starting upgrade cards.`);
+      notes.push(`Pay to Win: green starting spaces show the starting Energy cost for choosing that space. Pay that cost from your ${baseStartingEnergy} starting Energy when choosing a starting space; a start whose cost exceeds your available starting Energy is unavailable. Resolve Pay to Win starting-space selection before dealing or revealing any starting upgrade cards.`);
     }
   }
 
@@ -3123,21 +3701,21 @@ function updateRulesNote(scenario) {
 
   if (scenario.lessSpammyGame) {
     notes.push(appendRuleReference(
-      "SPAM Filter: discard all SPAM cards from hand to your discard pile at the end of programming phase.",
+      "SPAM Filter: at the end of the programming phase, discard all SPAM cards from your hand to your discard pile.",
       { section: "A Less SPAM-Y Game", page: 32 }
     ));
   }
 
   if (scenario.criticalSpam) {
     notes.push(appendRuleReference(
-      "Critical Spam: SPAM is discarded to player discard pile instead of damage discard pile after resolution. Shutdown removes them normally.",
+      "Critical Spam: after a SPAM card resolves, put it in the player's discard pile instead of the damage discard pile. Shutdown removes SPAM normally.",
       { source: "previous-editions", relation: "patterned" }
     ));
   }
 
   if (scenario.criticalHaywire) {
     notes.push(appendRuleReference(
-      "Critical Haywire: haywires placed on registers are counted to hand size when drawing cards at the beginning of programming phase.",
+      "Critical Haywire: Haywire cards on registers count against hand size when drawing cards at the start of the programming phase.",
       { source: "previous-editions", relation: "patterned" }
     ));
   }
@@ -3157,15 +3735,15 @@ function updateRulesNote(scenario) {
   }
 
   if (scenario.cuttingFloor) {
-    notes.push("Cutting Floor: all board lasers deal double damage (ie. double board laser deals 4 damage).");
+    notes.push("Cutting Floor: all board lasers deal double damage; for example, a double board laser deals 4 damage.");
   }
 
   if (scenario.flamingOil) {
-    notes.push("Flaming Oil: the first time in a register a given robot enters, exits, or starts the register in an oil slick, they take 1 damage.");
+    notes.push("Flaming Oil: the first time each register that a robot enters, exits, or starts in an oil slick, it takes 1 damage.");
   }
 
   if (scenario.repulsorOverdrive) {
-    notes.push("Repulsor Overdrive: repulsors push robots twice the amount of remaining movement.");
+    notes.push("Repulsor Overdrive: repulsors push robots twice the remaining movement distance.");
   }
 
   if (scenario.setToKill) {
@@ -3176,7 +3754,7 @@ function updateRulesNote(scenario) {
   }
 
   if (scenario.setToStun) {
-    notes.push("Set to Stun: SPAM drawn as a result of robots main laser is immediately discarded to the damage discard pile without effect.");
+    notes.push("Set to Stun: SPAM drawn because of a robot's main laser is immediately discarded to the damage discard pile without effect.");
   }
 
   if (scenario.virtualBots) {
@@ -3226,46 +3804,37 @@ function updateRulesNote(scenario) {
 
   if (scenario.classicSharedDeck) {
     notes.push(appendRuleReference(
-      "Shared Deck: shuffle all players' decks as a combined programming deck, and spam cards go to hand instead of deck.",
+      "Shared Deck: shuffle all players' programming decks together into one shared deck. SPAM cards go to hand instead of into a player's deck.",
       { source: "previous-editions", relation: "altered" }
     ));
   }
 
   if (scenario.lighterGame) {
     notes.push(appendRuleReference(
-      "Energy Crisis: upgrade cards are removed and battery (and chop shop) spaces are inactive.",
+      "Energy Crisis: remove upgrade cards from the game; battery and Chop Shop spaces are inactive.",
       { section: "A Lighter Game", page: 32 }
     ));
   }
 
   if (scenario.lessForeshadowing) {
     notes.push(appendRuleReference(
-      "Less Foreshadowing: decks reshuffle every turn.",
+      "Less Foreshadowing: reshuffle each programming deck every turn.",
       { page: 32 }
     ));
   }
 
-  const adviceNotes = [];
-  if (scenario.virtualBots && isVariantExplicitlyForced(scenario.preferences, "virtualBots")) {
-    const suggestions = [];
-    if (!scenario.startupSpinUp) suggestions.push("Startup Spin-Up");
-    if (!scenario.dynamicArchiving) suggestions.push("Dynamic Archiving");
-    if (suggestions.length) {
-      adviceNotes.push(`Consider with Virtual Bots: ${suggestions.join(" and ")} ${suggestions.length === 1 ? "works" : "work"} well with this setup.`);
-    }
-  }
-  if (
-    scenario.competitiveMode &&
-    isVariantExplicitlyForced(scenario.preferences, "competitiveMode") &&
-    !scenario.lighterGame
-  ) {
-    adviceNotes.push(
-      "Consider with Competitive Mode: Energy Crisis / A Lighter Game keeps upgrades and energy from skewing the starting choices."
-    );
-  }
+  // v39a: Special Rules may also surface optional rule guidance. This is distinct
+  // from Course Notes: these entries describe relationships between rules, while
+  // Course Notes remain solely about the character of the generated course.
+  //
+  // Guidance is registry-driven. Suggestions are shown only when their target is
+  // legal and available for the current collection/preferences; warnings may be
+  // authored later for combinations that are legal but noteworthy. Hard blocks,
+  // prerequisites, and collection availability remain separate registry concepts.
+  const guidanceNotes = buildVariantRuleGuidanceNotes(scenario);
   if (adviceNoteEl) {
-    if (adviceNotes.length) {
-      adviceNoteEl.textContent = `RULES NOTES: ${adviceNotes.join(" ")}`;
+    if (guidanceNotes.length) {
+      adviceNoteEl.textContent = `RULES NOTES: ${guidanceNotes.join(" ")}`;
       adviceNoteEl.classList.remove("hidden");
     } else {
       adviceNoteEl.textContent = "";
@@ -3292,7 +3861,7 @@ function updateRulesNote(scenario) {
   bottomAnchorEl?.appendChild(bottomRulesBlockEl);
   bottomRulesBlockEl?.classList.toggle("hidden", !checkpointNotes.length && !photoNotes.length);
 
-  const hasTopRules = notes.length > 0 || adviceNotes.length > 0;
+  const hasTopRules = notes.length > 0;
   topAnchorEl?.appendChild(topRulesBlockEl);
   topRulesBlockEl?.classList.toggle("hidden", !hasTopRules);
   if (notes.length) {
@@ -3414,7 +3983,7 @@ function chooseVariantEnabled(variantState, allowedChance = 0.5) {
   if (normalized === "off") {
     return false;
   }
-  return Math.random() < allowedChance;
+  return generationRandom() < allowedChance;
 }
 
 function chooseRecoveryRule(preferences) {
@@ -3601,7 +4170,7 @@ function chooseVariantBundle(preferences = {}, options = {}) {
     }));
   const orderedEntries = weightedOrder(
     allowedEntries,
-    (entry) => Math.max(0.01, entry.chance + Math.random() * 0.08)
+    (entry) => Math.max(0.01, entry.chance + generationRandom() * 0.08)
   ).sort((left, right) => {
     if (left.id === "permanentShutdown" && right.id !== "permanentShutdown") {
       return 1;
@@ -3629,7 +4198,7 @@ function chooseVariantBundle(preferences = {}, options = {}) {
       chance = 0;
     }
 
-    if (Math.random() < chance) {
+    if (generationRandom() < chance) {
       active[entry.id] = true;
       usedBudget += entry.cost;
     }
@@ -3701,6 +4270,21 @@ function getGenerationModeProfile(preferences = {}) {
   return GENERATION_MODE_PROFILES[normalizeGenerationMode(preferences.generationMode)];
 }
 
+// Construction guidance and requested difficulty answer different questions.
+// Difficulty/length describe the course we want; generation mode describes how
+// strongly cheap construction heuristics should steer proposals before routing.
+// Thorough deliberately keeps a broad tail so exact analysis can rescue unusual
+// but good courses. These are proposal-strength values, not calibrated outcomes.
+function getConstructionGuidanceStrength(preferences = {}) {
+  return ({
+    fastest: 1.35,
+    fast: 1.18,
+    standard: 1,
+    balanced: 0.82,
+    thorough: 0.62
+  })[normalizeGenerationMode(preferences.generationMode)] ?? 1;
+}
+
 function formatGenerationModeLabel(value) {
   const mode = normalizeGenerationMode(value);
   return GENERATION_MODE_LABELS[mode] ?? GENERATION_MODE_LABELS[DEFAULT_GENERATION_MODE];
@@ -3714,9 +4298,13 @@ function getScenarioGenerationMode(scenario) {
 }
 
 function getScenarioGenerationMaxAttempts(scenario) {
-  const diagnosticsMax = Number(scenario?.generationDiagnostics?.maxAttempts);
+  const diagnostics = scenario?.generationDiagnostics ?? null;
+  const diagnosticsMax = Number(diagnostics?.maxAttempts);
+  const emergencyReserve = Number(diagnostics?.emergencyAttemptReserve) || 0;
   if (Number.isFinite(diagnosticsMax) && diagnosticsMax > 0) {
-    return Math.floor(diagnosticsMax);
+    return diagnostics?.emergencyActivated
+      ? Math.floor(diagnosticsMax + Math.max(0, emergencyReserve))
+      : Math.floor(diagnosticsMax);
   }
   return getGenerationModeProfile({ generationMode: getScenarioGenerationMode(scenario) }).maxAttempts;
 }
@@ -3924,7 +4512,15 @@ function shouldUseTargetGuidedBoardSelection(preferences = {}, generationAttempt
   );
 }
 
-const LENGTH_CONSTRUCTION_EXPLORATION_FLOOR = 0.05;
+const LENGTH_CONSTRUCTION_EXPLORATION_RATE = 0.05;
+const LENGTH_CONSTRUCTION_FEASIBILITY_FLOOR = 0.08;
+const LENGTH_CONSTRUCTION_FEASIBILITY_SATURATION = 0.35;
+const LENGTH_CONSTRUCTION_FEASIBILITY_POWER = 2;
+const LENGTH_CONSTRUCTION_TARGETS = Object.freeze({
+  short: Object.freeze({ target: 130, sigma: 14 }),
+  moderate: Object.freeze({ target: 180, sigma: 14 }),
+  long: Object.freeze({ target: 225, sigma: 22 })
+});
 
 function normalizeLengthConstructionCalibration(calibration) {
   const prediction = calibration?.prediction;
@@ -3962,32 +4558,380 @@ function normalizeLengthConstructionCalibration(calibration) {
   };
 }
 
-function standardNormalCdf(value) {
-  if (value === Infinity) return 1;
-  if (value === -Infinity) return 0;
-  if (!Number.isFinite(value)) return 0.5;
-
-  // Abramowitz-Stegun erf approximation is sufficient for soft generation weights.
-  const sign = value < 0 ? -1 : 1;
-  const z = Math.abs(value) / Math.sqrt(2);
-  const t = 1 / (1 + 0.3275911 * z);
-  const erf = 1 - (((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-z * z));
-  return 0.5 * (1 + sign * erf);
-}
-
-function getLengthBandProbability(predictedLength, rmse, thresholds) {
-  if (!Number.isFinite(predictedLength) || !(rmse > 0) || !Array.isArray(thresholds)) {
-    return 0;
+function normalizeConstructionFeasibilityCalibration(calibration) {
+  if (Number(calibration?.schemaVersion) !== 2) {
+    return null;
   }
 
-  const [minimum, maximum] = thresholds;
-  const lower = Number.isFinite(minimum)
-    ? standardNormalCdf((minimum - predictedLength) / rmse)
-    : 0;
-  const upper = Number.isFinite(maximum)
-    ? standardNormalCdf((maximum - predictedLength) / rmse)
-    : 1;
-  return clamp(upper - lower, 0, 1);
+  const model = calibration?.models?.feasibility;
+  const rows = Array.isArray(model?.predictionGrid) ? model.predictionGrid : [];
+  const probabilities = new Map();
+
+  for (const row of rows) {
+    const boardCount = Number(row?.requested_board_count);
+    const flagCount = Number(row?.requested_flag_count);
+    const staggered = Number(row?.staggered_requested);
+    const probability = Number(row?.probability);
+    if (
+      Number.isInteger(boardCount) && boardCount > 0 &&
+      Number.isInteger(flagCount) && flagCount > 0 &&
+      (staggered === 0 || staggered === 1) &&
+      Number.isFinite(probability)
+    ) {
+      probabilities.set(`${boardCount}:${flagCount}:${staggered}`, clamp(probability, 0, 1));
+    }
+  }
+
+  if (!probabilities.size) {
+    return null;
+  }
+
+  return {
+    schemaVersion: 2,
+    model: model?.model ?? "binomial-count-feasibility",
+    sampleSize: Number.isFinite(Number(model?.sampleSize)) ? Number(model.sampleSize) : null,
+    probabilities
+  };
+}
+
+function normalizeConstructionLengthGeometryCalibration(calibration) {
+  if (Number(calibration?.schemaVersion) !== 2) {
+    return null;
+  }
+
+  const model = calibration?.models?.length?.stagedModels?.geometryRefined;
+  const coefficients = model?.coefficients ?? {};
+  const intercept = Number(coefficients["(Intercept)"]);
+  const heldOutRmse = Number(model?.heldOut?.aggregate?.rmse);
+  const inSampleRmse = Number(model?.diagnostics?.rmse);
+  const rmse = Number.isFinite(heldOutRmse) && heldOutRmse > 0
+    ? heldOutRmse
+    : inSampleRmse;
+  const requiredTerms = [
+    "profile_overall_mean",
+    "profile_hazard_mean",
+    "profile_congestion_mean",
+    "profile_complexity_mean",
+    "profile_swinginess_mean",
+    "compactness",
+    "graph_diameter",
+    "first_start_distance_mean",
+    "sequential_flag_distance_sum",
+    "cross_board_legs"
+  ];
+
+  if (
+    model?.status !== "ok" ||
+    !Number.isFinite(intercept) ||
+    !(rmse > 0) ||
+    requiredTerms.some((term) => !Number.isFinite(Number(coefficients[term])))
+  ) {
+    return null;
+  }
+
+  return {
+    schemaVersion: 2,
+    model: model.model ?? "counts-profiles-plus-cheap-geometry",
+    stage: model.stage ?? "checkpoints-known",
+    sampleSize: Number.isFinite(Number(model.sampleSize)) ? Number(model.sampleSize) : null,
+    referencePlayerCount: Number(calibration?.reference?.playerCount) || 4,
+    rmse,
+    coefficients: Object.fromEntries(
+      Object.entries(coefficients)
+        .map(([key, value]) => [key, Number(value)])
+        .filter(([, value]) => Number.isFinite(value))
+    )
+  };
+}
+
+function calibrationGeometryMean(values = []) {
+  const finite = values.map(Number).filter(Number.isFinite);
+  if (!finite.length) return null;
+  return finite.reduce((sum, value) => sum + value, 0) / finite.length;
+}
+
+function calibrationGeometryOverlapLength(startA, lengthA, startB, lengthB) {
+  return Math.max(
+    0,
+    Math.min(startA + lengthA, startB + lengthB) - Math.max(startA, startB)
+  );
+}
+
+function calibrationGeometrySharedEdgeLength(left, right) {
+  if (!left || !right) return 0;
+  if (left.x + left.width === right.x || right.x + right.width === left.x) {
+    return calibrationGeometryOverlapLength(left.y, left.height, right.y, right.height);
+  }
+  if (left.y + left.height === right.y || right.y + right.height === left.y) {
+    return calibrationGeometryOverlapLength(left.x, left.width, right.x, right.width);
+  }
+  return 0;
+}
+
+function calibrationGeometryGraphDistances(adjacency, sources = []) {
+  const distances = new Map();
+  const queue = [];
+  for (const source of sources) {
+    if (!Number.isInteger(source) || distances.has(source)) continue;
+    distances.set(source, 0);
+    queue.push(source);
+  }
+
+  for (let offset = 0; offset < queue.length; offset += 1) {
+    const current = queue[offset];
+    const nextDistance = distances.get(current) + 1;
+    for (const next of adjacency.get(current) ?? []) {
+      if (distances.has(next)) continue;
+      distances.set(next, nextDistance);
+      queue.push(next);
+    }
+  }
+  return distances;
+}
+
+function summarizeConstructionLengthGeometry(boardPlacements, starts, checkpoints, pieceMap) {
+  const rects = buildBoardRects(boardPlacements ?? [], pieceMap);
+  if (!rects.length || !checkpoints?.length || !starts?.length) {
+    return null;
+  }
+
+  const minX = Math.min(...rects.map((rect) => rect.x));
+  const minY = Math.min(...rects.map((rect) => rect.y));
+  const maxX = Math.max(...rects.map((rect) => rect.x + rect.width));
+  const maxY = Math.max(...rects.map((rect) => rect.y + rect.height));
+  const bboxArea = Math.max(0, (maxX - minX) * (maxY - minY));
+  const boardArea = rects.reduce((sum, rect) => sum + rect.width * rect.height, 0);
+  const adjacency = new Map(rects.map((_, index) => [index, new Set()]));
+
+  for (let left = 0; left < rects.length; left += 1) {
+    for (let right = left + 1; right < rects.length; right += 1) {
+      if (calibrationGeometrySharedEdgeLength(rects[left], rects[right]) <= 0) continue;
+      adjacency.get(left).add(right);
+      adjacency.get(right).add(left);
+    }
+  }
+
+  let graphDiameter = 0;
+  for (let source = 0; source < rects.length; source += 1) {
+    const distances = calibrationGeometryGraphDistances(adjacency, [source]);
+    for (const distance of distances.values()) {
+      graphDiameter = Math.max(graphDiameter, distance);
+    }
+  }
+
+  const manhattan = (left, right) => Math.abs(left.x - right.x) + Math.abs(left.y - right.y);
+  const firstFlag = checkpoints[0];
+  const firstStartDistanceMean = calibrationGeometryMean(
+    starts.map((start) => manhattan(start, firstFlag))
+  );
+  let sequentialFlagDistanceSum = 0;
+  let crossBoardLegs = 0;
+  const flagBoardIndices = checkpoints.map((flag) => {
+    const index = rects.findIndex((rect) => pointOnRect(flag, rect));
+    return index >= 0 ? index : null;
+  });
+
+  for (let index = 1; index < checkpoints.length; index += 1) {
+    sequentialFlagDistanceSum += manhattan(checkpoints[index - 1], checkpoints[index]);
+    const fromBoard = flagBoardIndices[index - 1];
+    const toBoard = flagBoardIndices[index];
+    if (Number.isInteger(fromBoard) && Number.isInteger(toBoard) && fromBoard !== toBoard) {
+      crossBoardLegs += 1;
+    }
+  }
+
+  const profiles = (boardPlacements ?? [])
+    .map((placement) => pieceMap[placement.pieceId]?.boardProfile)
+    .filter(Boolean);
+  const profileMean = (selector) => calibrationGeometryMean(profiles.map(selector));
+  const features = {
+    actual_flag_count: checkpoints.length,
+    actual_board_count: rects.length,
+    profile_overall_mean: profileMean((profile) => profile.overall),
+    profile_hazard_mean: profileMean((profile) => profile.bias?.hazard),
+    profile_congestion_mean: profileMean((profile) => profile.bias?.congestion),
+    profile_complexity_mean: profileMean((profile) => profile.bias?.complexity),
+    profile_swinginess_mean: profileMean((profile) => profile.swinginess),
+    compactness: bboxArea > 0 ? boardArea / bboxArea : null,
+    graph_diameter: graphDiameter,
+    first_start_distance_mean: firstStartDistanceMean,
+    sequential_flag_distance_sum: sequentialFlagDistanceSum,
+    cross_board_legs: crossBoardLegs
+  };
+
+  if (Object.values(features).some((value) => !Number.isFinite(Number(value)))) {
+    return null;
+  }
+  return features;
+}
+
+function hasGeometryLengthGateIncompatibleVariant(preferences = {}, overlayPlacements = []) {
+  if (overlayPlacements?.length) return true;
+  return Boolean(
+    preferences.dynamicArchiving ||
+    preferences.lighterGame ||
+    preferences.lessSpammyGame ||
+    preferences.criticalSpam ||
+    preferences.criticalHaywire ||
+    preferences.lessForeshadowing ||
+    preferences.classicSharedDeck ||
+    preferences.movingTargets ||
+    preferences.cuttingFloor ||
+    preferences.flamingOil ||
+    preferences.repulsorOverdrive ||
+    preferences.setToKill ||
+    preferences.setToStun ||
+    preferences.lessDeadlyGame ||
+    preferences.moreDeadlyGame ||
+    preferences.homeReboot ||
+    preferences.hazardousFlags ||
+    preferences.repairStations ||
+    preferences.factoryRejects ||
+    preferences.upgradeWorld ||
+    preferences.startupSpinUp ||
+    preferences.extraDocks ||
+    preferences.noDocks ||
+    preferences.sandwichedDock
+  );
+}
+
+function predictConstructionGeometryLength(
+  calibration,
+  boardPlacements,
+  starts,
+  checkpoints,
+  pieceMap,
+  preferences = {},
+  overlayPlacements = []
+) {
+  if (
+    !calibration ||
+    hasGeometryLengthGateIncompatibleVariant(preferences, overlayPlacements)
+  ) {
+    return null;
+  }
+
+  const features = summarizeConstructionLengthGeometry(
+    boardPlacements,
+    starts,
+    checkpoints,
+    pieceMap
+  );
+  if (!features) return null;
+  if (
+    features.actual_board_count < 1 ||
+    features.actual_board_count > 4 ||
+    features.actual_flag_count < 2 ||
+    features.actual_flag_count > 6
+  ) {
+    return null;
+  }
+
+  const coefficients = calibration.coefficients;
+  let predicted = Number(coefficients["(Intercept)"]);
+  const flagFactor = features.actual_flag_count === 2
+    ? 0
+    : Number(coefficients[`actual_flag_count_factor${features.actual_flag_count}`]);
+  const boardFactor = features.actual_board_count === 1
+    ? 0
+    : Number(coefficients[`actual_board_count_factor${features.actual_board_count}`]);
+  if (!Number.isFinite(flagFactor) || !Number.isFinite(boardFactor)) return null;
+  predicted += flagFactor + boardFactor;
+
+  const numericTerms = [
+    "profile_overall_mean",
+    "profile_hazard_mean",
+    "profile_congestion_mean",
+    "profile_complexity_mean",
+    "profile_swinginess_mean",
+    "compactness",
+    "graph_diameter",
+    "first_start_distance_mean",
+    "sequential_flag_distance_sum",
+    "cross_board_legs"
+  ];
+  for (const term of numericTerms) {
+    predicted += Number(coefficients[term]) * Number(features[term]);
+  }
+
+  const playerCount = Math.max(1, Number(preferences.playerCount) || 4);
+  const referencePlayerCount = Math.max(1, Number(calibration.referencePlayerCount) || 4);
+  predicted += computePlayerTimeLoad(playerCount) - computePlayerTimeLoad(referencePlayerCount);
+  predicted += computeActFastLengthLoad(preferences, playerCount);
+
+  return {
+    predictedLengthRaw: Number(predicted.toFixed(2)),
+    rmse: calibration.rmse,
+    model: calibration.model,
+    sampleSize: calibration.sampleSize,
+    features
+  };
+}
+
+function getGeometryLengthGateMismatch(prediction, lengthPreference) {
+  if (!prediction || !["short", "moderate", "long"].includes(lengthPreference)) {
+    return { abort: false };
+  }
+  const band = getLengthThresholds()[lengthPreference];
+  if (!band) return { abort: false };
+  const predicted = Number(prediction.predictedLengthRaw);
+  const margin = Math.max(18, Number(prediction.rmse) * 2);
+  if (!Number.isFinite(predicted) || !Number.isFinite(margin)) {
+    return { abort: false };
+  }
+
+  if (Number.isFinite(band[0]) && predicted + margin < band[0]) {
+    return {
+      abort: true,
+      reason: "geometry-length-too-low",
+      metric: "length",
+      value: predicted,
+      limit: band[0],
+      margin,
+      requested: lengthPreference
+    };
+  }
+  if (Number.isFinite(band[1]) && predicted - margin > band[1]) {
+    return {
+      abort: true,
+      reason: "geometry-length-too-high",
+      metric: "length",
+      value: predicted,
+      limit: band[1],
+      margin,
+      requested: lengthPreference
+    };
+  }
+  return { abort: false, margin };
+}
+
+function getLengthConstructionTargetScore(predictedLength, targetSpec) {
+  const target = Number(targetSpec?.target);
+  const sigma = Number(targetSpec?.sigma);
+  if (!Number.isFinite(predictedLength) || !Number.isFinite(target) || !(sigma > 0)) {
+    return 0;
+  }
+  const z = (predictedLength - target) / sigma;
+  return Math.exp(-0.5 * z * z);
+}
+
+function getLengthConstructionFeasibilityProbability(calibration, boardCount, flagCount, preferences = {}) {
+  if (!calibration?.probabilities) {
+    return null;
+  }
+  const staggered = preferences.alignedLayout === false ? 1 : 0;
+  const value = calibration.probabilities.get(`${boardCount}:${flagCount}:${staggered}`);
+  return Number.isFinite(value) ? value : null;
+}
+
+function getLengthConstructionFeasibilityModifier(probability) {
+  if (!Number.isFinite(probability)) {
+    return 1;
+  }
+  const normalized = clamp(probability / LENGTH_CONSTRUCTION_FEASIBILITY_SATURATION, 0, 1);
+  const shaped = Math.pow(normalized, LENGTH_CONSTRUCTION_FEASIBILITY_POWER);
+  return LENGTH_CONSTRUCTION_FEASIBILITY_FLOOR +
+    (1 - LENGTH_CONSTRUCTION_FEASIBILITY_FLOOR) * shaped;
 }
 
 function getCalibratedLengthConstructionPlan(
@@ -3995,7 +4939,8 @@ function getCalibratedLengthConstructionPlan(
   maxBoards,
   hasLargeBoards,
   preferences = {},
-  calibration = null
+  calibration = null,
+  feasibilityCalibration = null
 ) {
   const explicitBoardCount = Number(preferences.calibrationBoardCount);
   const explicitFlagCount = Number(preferences.calibrationFlagCount);
@@ -4038,8 +4983,8 @@ function getCalibratedLengthConstructionPlan(
     return null;
   }
 
-  const thresholds = getLengthThresholds()[lengthPreference];
-  if (!thresholds) {
+  const targetSpec = LENGTH_CONSTRUCTION_TARGETS[lengthPreference];
+  if (!targetSpec) {
     return null;
   }
 
@@ -4063,21 +5008,50 @@ function getCalibratedLengthConstructionPlan(
       if (!Number.isFinite(flagEffect)) continue;
 
       const predictedLength = calibration.base + boardEffect + flagEffect + playerAdjustment + actFastAdjustment;
-      const bandProbability = getLengthBandProbability(predictedLength, calibration.rmse, thresholds);
+      const targetDesirability = getLengthConstructionTargetScore(predictedLength, targetSpec);
+      const feasibilityProbability = getLengthConstructionFeasibilityProbability(
+        feasibilityCalibration,
+        boardCount,
+        flagCount,
+        preferences
+      );
+      // Feasibility is deliberately a bounded secondary preference, but the
+      // calibrated 3/4-board high-flag cells are expensive enough that a linear
+      // near-flat floor still over-selected them in live Standard runs. Shape
+      // the modifier so very low-feasibility structures remain possible for
+      // exploration/fallback without dominating the normal construction draw.
+      const feasibilityModifier = getLengthConstructionFeasibilityModifier(feasibilityProbability);
       candidates.push({
         boardCount,
         flagCount,
         predictedLength: Number(predictedLength.toFixed(2)),
-        bandProbability: Number(bandProbability.toFixed(4)),
+        targetLength: targetSpec.target,
+        targetSigma: targetSpec.sigma,
+        targetDesirability: Number(targetDesirability.toFixed(4)),
+        feasibilityProbability: Number.isFinite(feasibilityProbability)
+          ? Number(feasibilityProbability.toFixed(4))
+          : null,
+        feasibilityModifier: Number(feasibilityModifier.toFixed(4)),
         rmse: calibration.rmse,
         sampleSize: calibration.sampleSize,
         model: calibration.model,
-        weight: LENGTH_CONSTRUCTION_EXPLORATION_FLOOR + bandProbability
+        weight: targetDesirability * feasibilityModifier
       });
     }
   }
 
-  return sampleManyWeighted(candidates, 1)[0] ?? null;
+  if (!candidates.length) {
+    return null;
+  }
+
+  // Exploration is an explicit mixture rather than an additive floor on every
+  // candidate. That keeps exploration near the intended 5% without flattening
+  // the target curve when many structurally poor choices are available.
+  if (generationRandom() < LENGTH_CONSTRUCTION_EXPLORATION_RATE) {
+    return sample(candidates);
+  }
+
+  return sampleManyWeighted(candidates, 1)[0] ?? sample(candidates);
 }
 
 function weightedFlagCount(lengthPreference, maxFlags, preferences = {}) {
@@ -4413,7 +5387,7 @@ function weightedOrder(items, getWeight) {
       break;
     }
 
-    let pick = Math.random() * total;
+    let pick = generationRandom() * total;
     let selectedIndex = 0;
     for (let index = 0; index < remaining.length; index += 1) {
       pick -= weights[index];
@@ -4550,10 +5524,10 @@ function boardPreferencePenalty(piece, preferences, guidanceLevel) {
         : 0;
 
   const jitter = guidanceLevel === 0
-    ? Math.random() * 2.4
+    ? generationRandom() * 2.4
     : guidanceLevel === 1
-      ? Math.random() * 1.2
-      : Math.random() * 0.45;
+      ? generationRandom() * 1.2
+      : generationRandom() * 0.45;
 
   return mismatch + guidancePenalty + sparsePenalty + jitter;
 }
@@ -5489,38 +6463,21 @@ function selectBoardIdsForCourse(boardIds, count, pieceMap, preferences, guidanc
 
   const ranked = scoredGroups.sort((a, b) => a.score - b.score);
 
-  const tuningDifficulty = getTuningDifficulty(preferences.difficulty);
-  const candidatePoolSize = tuningDifficulty === "hard"
-    ? Math.min(ranked.length, Math.max(count + 6, Math.ceil(ranked.length * 1)))
-    : Math.min(ranked.length, Math.max(count + 4, Math.ceil(ranked.length * 0.45)));
-
+  const mode = normalizeGenerationMode(preferences.generationMode);
+  const poolRatios = { fastest: 0.3, fast: 0.42, standard: 0.58, balanced: 0.75, thorough: 1 };
+  const baseRatio = poolRatios[mode] ?? poolRatios.standard;
+  const candidatePoolSize = Math.min(ranked.length, Math.max(count + 3, Math.ceil(ranked.length * baseRatio)));
   const candidatePool = ranked.slice(0, candidatePoolSize).map((entry) => entry.boardId);
 
   function getBoardPool(rankedEntries, attempt, currentPreferences, boardCount) {
     const total = rankedEntries.length;
-
-    const getTop = (ratio, extra = 0) =>
-      rankedEntries.slice(0, Math.min(total, Math.max(boardCount + extra, Math.ceil(total * ratio))));
-
-    const currentTuningDifficulty = getTuningDifficulty(currentPreferences.difficulty);
-
-    if (currentTuningDifficulty === "hard") {
-      if (attempt < 10) return rankedEntries;
-      if (attempt < 25) return getTop(0.8, 8);
-      if (attempt < 35) return getTop(0.55, 5);
-      return getTop(0.35, 3);
-    }
-
-    if (currentTuningDifficulty === "moderate") {
-      if (attempt < 5) return rankedEntries;
-      if (attempt < 20) return getTop(0.65, 6);
-      if (attempt < 35) return getTop(0.45, 4);
-      return getTop(0.3, 2);
-    }
-
-    if (attempt < 3) return getTop(0.75, 8);
-    if (attempt < 15) return getTop(0.55, 6);
-    return getTop(0.4, 4);
+    const currentMode = normalizeGenerationMode(currentPreferences.generationMode);
+    const modeRatio = poolRatios[currentMode] ?? poolRatios.standard;
+    // Later attempts may tighten toward better-matching board profiles, but a
+    // Thorough run always retains a much broader construction tail.
+    const tightening = Math.min(0.18, attempt * 0.006);
+    const ratio = Math.max(currentMode === "thorough" ? 0.72 : 0.25, modeRatio - tightening);
+    return rankedEntries.slice(0, Math.min(total, Math.max(boardCount + 3, Math.ceil(total * ratio))));
   }
 
   const attemptCount = Math.min(24, Math.max(6, ranked.length * 2));
@@ -5956,27 +6913,38 @@ function chooseNoDockStartingEdge(boardRects, tileMap, requiredStarts) {
 }
 
 function getFlagCandidates(placements, pieceMap) {
-  const candidates = [];
+  // A checkpoint site is a resolved coordinate, not one candidate per stacked
+  // board/overlay placement. Duplicate coordinates used to silently overweight
+  // overlay-covered spaces. Keep the first structural owner (boards/docks are
+  // passed before overlays) while merging the sampling weight conservatively.
+  const byCoordinate = new Map();
 
   for (const [placementIndex, placement] of placements.entries()) {
     const piece = pieceMap[placement.pieceId];
     if (!piece) continue;
 
     const placed = placePiece(piece, placement);
-    for (let dy = 0; dy < placed.height; dy += 1) {
-      for (let dx = 0; dx < placed.width; dx += 1) {
-        candidates.push({
-          x: placed.x + dx,
-          y: placed.y + dy,
-          pieceId: placement.pieceId,
-          placementIndex,
-          weight: piece.kind === "dock" ? 0.45 : 1
-        });
+    for (const tile of placed.tiles || []) {
+      const x = tile.x;
+      const y = tile.y;
+      const key = `${x},${y}`;
+      const weight = piece.kind === "dock" ? 0.45 : 1;
+      const existing = byCoordinate.get(key);
+      if (existing) {
+        existing.weight = Math.max(existing.weight, weight);
+        continue;
       }
+      byCoordinate.set(key, {
+        x,
+        y,
+        pieceId: placement.pieceId,
+        placementIndex,
+        weight
+      });
     }
   }
 
-  return candidates;
+  return [...byCoordinate.values()];
 }
 
 function getPlacementCenter(placement, pieceMap) {
@@ -6492,57 +7460,38 @@ function collectMovingTargetReentryMarkers(tileMap, checkpoints = [], enabled = 
   return [...grouped.values()];
 }
 
-function getConsecutiveFlagDistanceThreshold(preferences = {}, guidanceLevel = 0) {
-  const byDifficulty = {
-    easy: 6,
-    moderate: 5,
-    hard: 5
-  };
-  const byLengthOffset = {
-    short: -2,
-    moderate: 1,
-    long: 1
-  };
-
-  const base = byDifficulty[getTuningDifficulty(preferences.difficulty)] ?? byDifficulty.moderate;
-  const lengthOffset = byLengthOffset[preferences.length] ?? 0;
-
-  return Math.max(3, base + lengthOffset);
+function pickVirtualBotEntry(flagCandidates, tileMap, boardPlacements, pieceMap, preferences = {}) {
+  const eligible = flagCandidates
+    .filter((candidate) => getVirtualBotEntryDirections(tileMap, candidate).length > 0)
+    .map((candidate) => {
+      const approach = getFlagCandidateApproachStats(tileMap, candidate);
+      const boardUse = getCandidateBoardDepth(candidate, boardPlacements, pieceMap);
+      const rawWeight = Math.max(0.05,
+        (candidate.weight ?? 1) +
+        approach.openCount * 1.1 +
+        approach.convergencePotential * 0.55 +
+        Math.min(1.6, boardUse.depth * 0.35)
+      );
+      return { ...candidate, weight: Math.pow(rawWeight, getConstructionGuidanceStrength(preferences)) };
+    });
+  return sampleManyWeighted(eligible, 1)[0] ?? null;
 }
 
-function getSequentialFlagDistanceThreshold(preferences = {}, pairIndex = 0, totalFlags = 0, guidanceLevel = 0) {
-  const base = getConsecutiveFlagDistanceThreshold(preferences, guidanceLevel);
-  const lengthPreference = preferences.length ?? "moderate";
-
-  if (totalFlags < 2) {
-    return base;
-  }
-
-  let lateBonus = 0;
-  if (pairIndex === totalFlags - 2) {
-    if (lengthPreference === "moderate") {
-      lateBonus = 3;
-    } else if (lengthPreference === "long") {
-      lateBonus = 3;
-    } else if (getTuningDifficulty(preferences.difficulty) !== "hard") {
-      lateBonus = 1;
-    }
-  } else if (pairIndex === totalFlags - 3) {
-    if (lengthPreference === "moderate") {
-      lateBonus = 2;
-    } else if (lengthPreference === "long") {
-      lateBonus = 2;
-    }
-  }
-
-  return base + lateBonus;
+function getConsecutiveFlagDistanceThreshold(preferences = {}) {
+  // Only consecutive objectives need an anti-triviality floor. Non-consecutive
+  // checkpoints may be adjacent: returning to an earlier area can create useful
+  // crossings and incoming traffic. Actual leg length is verified after routing.
+  return preferences.length === "short" ? 2 : 3;
 }
 
 function getFirstFlagDistanceThresholds(lengthPreference, guidanceLevel) {
+  // Cheap geometric guard only. The exact opening-leg pacing score uses routed
+  // actions later, so Moderate/Long are preferences rather than increasingly
+  // rigid Manhattan requirements.
   const base = {
-    short: { nearest: 4, average: 6 },
-    moderate: { nearest: 6, average: 9 },
-    long: { nearest: 6, average: 9 }
+    short: { nearest: 3, average: 5 },
+    moderate: { nearest: 4, average: 7 },
+    long: { nearest: 5, average: 8 }
   };
   const selected = base[lengthPreference] || base.moderate;
   return {
@@ -6601,48 +7550,44 @@ function isFirstFlagFarEnough(flag, starts, thresholds, options = {}) {
   return retainedAverage >= thresholds.average;
 }
 
-function isValidFlagSequence(flags, preferences = {}, guidanceLevel = 0) {
+function isValidFlagSequence(flags, preferences = {}) {
+  const minDistance = getConsecutiveFlagDistanceThreshold(preferences);
   for (let index = 1; index < flags.length; index += 1) {
-    const minDistance = getSequentialFlagDistanceThreshold(preferences, index - 1, flags.length, guidanceLevel);
-    if (areFlagsTooClose(flags[index - 1], flags[index], minDistance)) {
-      return false;
-    }
+    if (areFlagsTooClose(flags[index - 1], flags[index], minDistance)) return false;
   }
-
   return true;
 }
 
 function getFlagCandidateApproachStats(tileMap, point) {
   const directions = [
-    { dx: 0, dy: -1 },
-    { dx: 1, dy: 0 },
-    { dx: 0, dy: 1 },
-    { dx: -1, dy: 0 }
+    { dir: "N", dx: 0, dy: -1 },
+    { dir: "E", dx: 1, dy: 0 },
+    { dir: "S", dx: 0, dy: 1 },
+    { dir: "W", dx: -1, dy: 0 }
   ];
   let openCount = 0;
   let pitCount = 0;
   let voidCount = 0;
+  let blockedCount = 0;
 
-  for (const { dx, dy } of directions) {
-    const tile = tileMap.get(`${point.x + dx},${point.y + dy}`);
-    if (!tile) {
-      voidCount += 1;
-      continue;
-    }
-
-    const features = tile.features || [];
-    if (features.some((feature) => feature.type === "pit")) {
-      pitCount += 1;
-      continue;
-    }
-
+  for (const { dir, dx, dy } of directions) {
+    const neighbor = { x: point.x + dx, y: point.y + dy };
+    const tile = tileMap.get(`${neighbor.x},${neighbor.y}`);
+    if (!tile) { voidCount += 1; continue; }
+    if ((tile.features || []).some((feature) => feature.type === "pit")) { pitCount += 1; continue; }
+    if (isBlockedBetween(tileMap, point, neighbor, dir)) { blockedCount += 1; continue; }
     openCount += 1;
   }
 
   return {
     openCount,
     pitCount,
-    voidCount
+    voidCount,
+    blockedCount,
+    // Several genuinely open sides are a cheap proxy for a checkpoint that can
+    // receive robots from different lines. Final traffic analysis decides if it
+    // actually becomes contested.
+    convergencePotential: Math.max(0, openCount - 1)
   };
 }
 
@@ -6674,7 +7619,11 @@ function getFlagCandidateTilePenalty(candidate, tileMap, difficulty, preferences
       cuttingFloor: preferences.cuttingFloor,
       criticalSpam: preferences.criticalSpam,
       criticalHaywire: preferences.criticalHaywire,
-      permanentShutdown: preferences.permanentShutdown
+      permanentShutdown: preferences.permanentShutdown,
+      flamingOil: preferences.flamingOil,
+      repulsorOverdrive: preferences.repulsorOverdrive,
+      setToKill: preferences.setToKill,
+      setToStun: preferences.setToStun
     });
 
     if (feature.type === "flamethrower") {
@@ -6738,7 +7687,11 @@ function getFlagCandidateAreaPenalty(candidate, tileMap, difficulty, preferences
           cuttingFloor: preferences.cuttingFloor,
           criticalSpam: preferences.criticalSpam,
           criticalHaywire: preferences.criticalHaywire,
-          permanentShutdown: preferences.permanentShutdown
+          permanentShutdown: preferences.permanentShutdown,
+          flamingOil: preferences.flamingOil,
+          repulsorOverdrive: preferences.repulsorOverdrive,
+          setToKill: preferences.setToKill,
+          setToStun: preferences.setToStun
         }) * (dist === 1 ? 0.32 : 0.16);
 
         if (feature.type === "portal" || feature.type === "teleporter") {
@@ -6796,7 +7749,22 @@ function getDynamicArchivingCandidateBonus(candidate, tileMap, preferences = {})
   return Number(Math.min(4.6, bonus).toFixed(2));
 }
 
-function getFlagCandidateWeight(candidate, tileMap, starts, preferences, sequenceIndex, guidanceLevel, thresholds, previousFlag = null, movingTargetTraceCache = null) {
+function getCandidateBoardDepth(candidate, boardPlacements = [], pieceMap = {}) {
+  let bestDepth = 0;
+  let boardIndex = -1;
+  boardPlacements.forEach((placement, index) => {
+    if (!pointOnPlacement(candidate, placement, pieceMap)) return;
+    const piece = pieceMap[placement.pieceId];
+    const dims = rotatedDimensions(piece, placement.rotation ?? 0);
+    const localX = candidate.x - placement.x;
+    const localY = candidate.y - placement.y;
+    const depth = Math.max(0, Math.min(localX, localY, dims.width - 1 - localX, dims.height - 1 - localY));
+    if (boardIndex < 0 || depth > bestDepth) { bestDepth = depth; boardIndex = index; }
+  });
+  return { boardIndex, depth: bestDepth };
+}
+
+function getFlagCandidateWeight(candidate, tileMap, starts, preferences, sequenceIndex, flagCount, guidanceLevel, thresholds, previousFlag = null, picked = [], boardPlacements = [], pieceMap = {}, movingTargetTraceCache = null) {
   let weight = candidate.weight ?? 1;
   const approachStats = getFlagCandidateApproachStats(tileMap, candidate);
   const difficulty = getTuningDifficulty(preferences.difficulty);
@@ -6804,64 +7772,62 @@ function getFlagCandidateWeight(candidate, tileMap, starts, preferences, sequenc
   const tilePenalty = getFlagCandidateTilePenalty(candidate, tileMap, difficulty, preferences);
   const areaPenalty = getFlagCandidateAreaPenalty(candidate, tileMap, difficulty, preferences);
   const dynamicArchivingBonus = getDynamicArchivingCandidateBonus(candidate, tileMap, preferences);
+  const boardUse = getCandidateBoardDepth(candidate, boardPlacements, pieceMap);
+  const representedBoards = new Set(picked.map((flag) => getCandidateBoardDepth(flag, boardPlacements, pieceMap).boardIndex).filter((index) => index >= 0));
 
-  weight += approachStats.openCount * (difficulty === "easy" ? 2.6 : 1.1);
+  weight += approachStats.openCount * (difficulty === "easy" ? 1.8 : 1.25);
+  weight += approachStats.convergencePotential * (difficulty === "easy" ? 0.5 : difficulty === "hard" ? 1.25 : 0.9);
   weight -= approachStats.pitCount * (difficulty === "easy" ? 2.2 : 0.9);
-  weight -= approachStats.voidCount * (difficulty === "easy" ? 1.7 : 0.7);
+  weight -= approachStats.voidCount * (difficulty === "easy" ? 1.4 : 0.55);
+  weight -= approachStats.blockedCount * (difficulty === "easy" ? 1.5 : 0.65);
   weight -= tilePenalty + areaPenalty;
   weight += dynamicArchivingBonus;
+
+  // A shallow edge checkpoint should not be enough by itself to make a board
+  // feel intentional. Deeper sites and not-yet-represented boards get a modest
+  // proposal bonus, but no board is required to contain a checkpoint because a
+  // route may use it meaningfully in transit.
+  if (boardUse.boardIndex >= 0) {
+    weight += Math.min(2.4, boardUse.depth * 0.55);
+    if (!representedBoards.has(boardUse.boardIndex)) weight += 1.1;
+  }
 
   if (sequenceIndex === 0 && starts.length) {
     const distances = starts.map((start) => manhattanDistance(candidate, start));
     const nearest = Math.min(...distances);
     const averageDistance = distances.reduce((sum, value) => sum + value, 0) / distances.length;
-    if (nearest >= thresholds.nearest && averageDistance >= thresholds.average) {
-      weight += difficulty === "easy" ? 4.2 : 2;
-    } else {
-      weight -= difficulty === "easy" ? 3.1 : 1.4;
-    }
+    const targetAverage = lengthPreference === "short" ? 7 : lengthPreference === "long" ? 12 : 9;
+    weight += Math.min(3.2, Math.max(-2, (averageDistance - targetAverage + 3) * 0.32));
+    if (nearest >= thresholds.nearest && averageDistance >= thresholds.average) weight += 1.2;
   }
 
   if (previousFlag) {
     const legDistance = manhattanDistance(previousFlag, candidate);
+    const finalLeg = sequenceIndex === flagCount - 1;
     if (lengthPreference === "short") {
-      weight += legDistance <= 7 ? 2.2 : legDistance <= 10 ? 0.9 : -1.8;
-    } else if (lengthPreference === "moderate") {
-      weight += legDistance >= 6 && legDistance <= 12 ? 1.4 : legDistance >= 5 ? 0.5 : 0;
-    } else if (legDistance >= 8) {
-      weight += 1.4;
+      weight += legDistance <= 8 ? 1.4 : legDistance <= 11 ? 0.5 : -1.2;
+    } else {
+      const desired = finalLeg ? (lengthPreference === "long" ? 11 : 9) : (lengthPreference === "long" ? 9 : 7);
+      weight += Math.min(finalLeg ? 3.6 : 2, Math.max(-1.2, (legDistance - desired + 3) * (finalLeg ? 0.55 : 0.3)));
     }
   }
 
   if (preferences.movingTargets) {
     const trace = getMovingCheckpointTrace(tileMap, candidate, movingTargetTraceCache, preferences);
     if (trace.moving) {
-      const baseBonus = difficulty === "easy"
-        ? 0.9
-        : difficulty === "moderate"
-          ? 2.8
-          : 4.4;
-      weight += baseBonus;
-      weight += Math.min(2.8, Math.max(0, trace.pathLength - 1) * 0.55);
-      weight += trace.turnCount * 0.4;
-      weight += trace.fastCount * 0.3;
+      const baseBonus = difficulty === "easy" ? 0.9 : difficulty === "moderate" ? 2.8 : 4.4;
+      weight += baseBonus + Math.min(2.8, Math.max(0, trace.pathLength - 1) * 0.55) + trace.turnCount * 0.4 + trace.fastCount * 0.3;
     }
   }
 
-  weight += Math.min(2, guidanceLevel * 0.35);
-  if (difficulty === "easy" && lengthPreference === "short") {
-    weight += 1.8;
-  } else if (difficulty !== "hard" && lengthPreference !== "long") {
-    weight += 0.6;
-  }
   return Math.max(0.05, Number(weight.toFixed(2)));
 }
 
-function sampleFlagSequence(flagCandidates, flagCount, tileMap, starts, preferences, guidanceLevel, thresholds, movingTargetTraceCache = null) {
-  const difficulty = getTuningDifficulty(preferences.difficulty);
-  const weighted = difficulty === "easy" || difficulty === "moderate";
+function sampleFlagSequence(flagCandidates, flagCount, tileMap, starts, preferences, guidanceLevel, thresholds, boardPlacements, pieceMap, movingTargetTraceCache = null) {
   const pool = [...flagCandidates];
   const picked = [];
+  const guidanceStrength = getConstructionGuidanceStrength(preferences);
+  const minSequentialDistance = getConsecutiveFlagDistanceThreshold(preferences);
 
   while (pool.length && picked.length < flagCount) {
     const sequenceIndex = picked.length;
@@ -6870,104 +7836,41 @@ function sampleFlagSequence(flagCandidates, flagCount, tileMap, starts, preferen
       .filter((candidate) => (
         canUseCheckpointTile(candidate, tileMap, starts, preferences) &&
         (sequenceIndex !== 0 || isFirstFlagFarEnough(candidate, starts, thresholds, preferences)) &&
-        picked.every((flag, index) => {
-          const minDistance = index === sequenceIndex - 1
-            ? getSequentialFlagDistanceThreshold(preferences, index, flagCount, guidanceLevel)
-            : getConsecutiveFlagDistanceThreshold(preferences, guidanceLevel);
-          return !areFlagsTooClose(flag, candidate, minDistance);
-        })
+        (!previousFlag || !areFlagsTooClose(previousFlag, candidate, minSequentialDistance))
       ))
       .map((candidate) => {
-        const dynamicArchivingBonus = getDynamicArchivingCandidateBonus(candidate, tileMap, preferences);
-        return {
-          ...candidate,
-          weight: weighted
-            ? getFlagCandidateWeight(
-              candidate,
-              tileMap,
-              starts,
-              preferences,
-              sequenceIndex,
-              guidanceLevel,
-              thresholds,
-              previousFlag,
-              movingTargetTraceCache
-            )
-            : (candidate.weight ?? 1) + dynamicArchivingBonus
-        };
+        const rawWeight = getFlagCandidateWeight(
+          candidate, tileMap, starts, preferences, sequenceIndex, flagCount, guidanceLevel, thresholds, previousFlag, picked, boardPlacements, pieceMap, movingTargetTraceCache
+        );
+        return { ...candidate, weight: Math.max(0.02, Math.pow(rawWeight, guidanceStrength)) };
       });
 
-    if (!eligible.length) {
-      break;
-    }
-
+    if (!eligible.length) break;
     const [chosen] = sampleManyWeighted(eligible, 1);
-    if (!chosen) {
-      break;
-    }
-
+    if (!chosen) break;
     picked.push(chosen);
-    const chosenIndex = pool.findIndex((candidate) => (
-      candidate.x === chosen.x &&
-      candidate.y === chosen.y &&
-      candidate.pieceId === chosen.pieceId
-    ));
-    if (chosenIndex >= 0) {
-      pool.splice(chosenIndex, 1);
-    }
+    const chosenIndex = pool.findIndex((candidate) => candidate.x === chosen.x && candidate.y === chosen.y);
+    if (chosenIndex >= 0) pool.splice(chosenIndex, 1);
   }
 
   return picked;
 }
 
 function pickFlags(flagCandidates, flagCount, boardPlacements, dockPlacements, pieceMap, starts = [], preferences = {}, guidanceLevel = 0) {
-  const farthestBoardIndex = preferences.noDocks && starts.length
-    ? getMostDistantBoardIndexFromStarts(boardPlacements, starts, pieceMap)
-    : getMostDistantBoardIndex(boardPlacements, dockPlacements, pieceMap);
-  const farthestBoardPieceId = boardPlacements[farthestBoardIndex]?.pieceId;
-  const mustUseFarthestBoard = boardPlacements.length > 1 && farthestBoardPieceId;
   const firstFlagThresholds = getFirstFlagDistanceThresholds(preferences.length, guidanceLevel);
   const { tileMap } = buildResolvedMap([...boardPlacements, ...(dockPlacements || [])], pieceMap);
   const movingTargetTraceCache = preferences.movingTargets ? new Map() : null;
   const movingCandidates = preferences.movingTargets
-    ? new Set(flagCandidates
-      .filter((candidate) => getMovingCheckpointTrace(tileMap, candidate, movingTargetTraceCache, preferences).moving)
-      .map((candidate) => `${candidate.x},${candidate.y}`))
+    ? new Set(flagCandidates.filter((candidate) => getMovingCheckpointTrace(tileMap, candidate, movingTargetTraceCache, preferences).moving).map((candidate) => `${candidate.x},${candidate.y}`))
     : null;
   const requiresMovingTarget = Boolean(movingCandidates?.size);
 
   for (let attempt = 0; attempt < 250; attempt += 1) {
-    const sampled = sampleFlagSequence(
-      flagCandidates,
-      flagCount,
-      tileMap,
-      starts,
-      preferences,
-      guidanceLevel,
-      firstFlagThresholds,
-      movingTargetTraceCache
-    );
-
-    if (sampled.length !== flagCount) {
-      continue;
-    }
-
-    if (mustUseFarthestBoard && !sampled.some((flag) => flag.pieceId === farthestBoardPieceId)) {
-      continue;
-    }
-
-    if (!isValidFlagSequence(sampled, preferences, guidanceLevel)) {
-      continue;
-    }
-
-    if (!isFirstFlagFarEnough(sampled[0], starts, firstFlagThresholds, preferences)) {
-      continue;
-    }
-
-    if (requiresMovingTarget && !sampled.some((flag) => movingCandidates.has(`${flag.x},${flag.y}`))) {
-      continue;
-    }
-
+    const sampled = sampleFlagSequence(flagCandidates, flagCount, tileMap, starts, preferences, guidanceLevel, firstFlagThresholds, boardPlacements, pieceMap, movingTargetTraceCache);
+    if (sampled.length !== flagCount) continue;
+    if (!isValidFlagSequence(sampled, preferences)) continue;
+    if (!isFirstFlagFarEnough(sampled[0], starts, firstFlagThresholds, preferences)) continue;
+    if (requiresMovingTarget && !sampled.some((flag) => movingCandidates.has(`${flag.x},${flag.y}`))) continue;
     return sampled.map(({ x, y }) => ({ x, y }));
   }
 
@@ -7073,7 +7976,7 @@ function createAttachedBoardPlacement(anchorPlacement, anchorPiece, pieceId, pie
     return null;
   }
 
-  const offset = range.min + Math.floor(Math.random() * (range.max - range.min + 1));
+  const offset = range.min + Math.floor(generationRandom() * (range.max - range.min + 1));
 
   if (side === "left") {
     return { pieceId, x: anchorPlacement.x - dims.width, y: offset, rotation };
@@ -7099,7 +8002,7 @@ function createBridgeBoardPlacement(anchorPlacement, anchorPiece, pieceId, piece
     return null;
   }
 
-  const offset = range.min + Math.floor(Math.random() * (range.max - range.min + 1));
+  const offset = range.min + Math.floor(generationRandom() * (range.max - range.min + 1));
 
   if (side === "left") {
     return { pieceId, x: anchorPlacement.x - dims.width - DOCK_BRIDGE_GAP, y: offset, rotation };
@@ -7329,7 +8232,7 @@ function tryExtendAlignedBoardLayout(existingPlacements, nextBoardId, pieceMap) 
   return null;
 }
 
-function createBoardPlacements(pieceMap, lengthPreference, preferences, guidanceLevel, expansionIds = null, dockPieceId = "docking-bay-a", generationAttempt = 1, lengthCalibration = null) {
+function createBoardPlacements(pieceMap, lengthPreference, preferences, guidanceLevel, expansionIds = null, dockPieceId = "docking-bay-a", generationAttempt = 1, lengthCalibration = null, feasibilityCalibration = null) {
   const allowBlankMiniBoards = preferences.difficulty === "easy" || shouldUseMiniOverlays(preferences);
   const mainBoardIds = getAvailableMainBoardIds(pieceMap, expansionIds).filter((boardId) => (
     allowBlankMiniBoards || !isBlankCustomBoardPiece(pieceMap[boardId])
@@ -7341,7 +8244,8 @@ function createBoardPlacements(pieceMap, lengthPreference, preferences, guidance
     maxBoards,
     hasLargeBoards,
     preferences,
-    lengthCalibration
+    lengthCalibration,
+    feasibilityCalibration
   );
   const calibrationBoardCount = Number(preferences.calibrationBoardCount);
   let boardCount = Number.isInteger(calibrationBoardCount) && calibrationBoardCount > 0
@@ -7770,33 +8674,31 @@ function buildDockSummaries(boardPlacements, dockPlacements, pieceMap) {
 }
 
 function getRouteAnalysisVariantOptions(options = {}) {
+  // v38: variants.js is the authoritative route-analysis projection. Main only
+  // layers non-variant route-economy tuning values and Act Fast's chosen mode on
+  // top of that projection. This prevents registry mechanics such as Set to Kill,
+  // Set to Stun, Repair Stations, or Less Foreshadowing from silently disappearing
+  // in a second hand-maintained option list.
+  const variantOptions = applyVariantAnalysisOptions({}, options);
   return {
-    lessDeadlyGame: options.lessDeadlyGame,
-    moreDeadlyGame: options.moreDeadlyGame,
-    lighterGame: options.lighterGame,
-    upgradeWorld: options.upgradeWorld,
-    lessSpammyGame: options.lessSpammyGame,
-    criticalSpam: options.criticalSpam,
-    criticalHaywire: options.criticalHaywire,
-    permanentShutdown: options.permanentShutdown,
+    ...variantOptions,
+    actFastMode: options.actFastMode ?? null,
     routeAwareBatteryScoring: options.routeAwareBatteryScoring,
     routeEnergyHorizonTurns: options.routeEnergyHorizonTurns,
     routeEnergyRegisterScore: options.routeEnergyRegisterScore,
     routeEnergyReferenceReserve: options.routeEnergyReferenceReserve,
-    startingEnergy: options.startingEnergy,
-    startingEnergyDelta: options.startingEnergyDelta,
-    startingUpgradeCards: options.startingUpgradeCards,
-    startingUpgradeCardDelta: options.startingUpgradeCardDelta,
-    maxEnergy: options.maxEnergy,
-    upgradeDrawsPerTurn: options.upgradeDrawsPerTurn,
-    upgradeInstallsPerTurn: options.upgradeInstallsPerTurn,
-    upgradeDrawEnergyCost: options.upgradeDrawEnergyCost,
-    upgradeUsefulEnergyPerInstall: options.upgradeUsefulEnergyPerInstall,
-    upgradePowerRegistersPerEnergy: options.upgradePowerRegistersPerEnergy,
-    routeRegistersPerTurn: options.routeRegistersPerTurn,
-    cuttingFloor: options.cuttingFloor,
-    flamingOil: options.flamingOil,
-    repulsorOverdrive: options.repulsorOverdrive
+    startingEnergy: options.startingEnergy ?? variantOptions.startingEnergy,
+    startingEnergyDelta: options.startingEnergyDelta ?? variantOptions.startingEnergyDelta,
+    startingUpgradeCards: options.startingUpgradeCards ?? variantOptions.startingUpgradeCards,
+    startingUpgradeCardDelta: options.startingUpgradeCardDelta ?? variantOptions.startingUpgradeCardDelta,
+    maxEnergy: options.maxEnergy ?? variantOptions.maxEnergy,
+    upgradeDrawsPerTurn: options.upgradeDrawsPerTurn ?? variantOptions.upgradeDrawsPerTurn,
+    upgradeInstallsPerTurn: options.upgradeInstallsPerTurn ?? variantOptions.upgradeInstallsPerTurn,
+    upgradeDrawEnergyCost: options.upgradeDrawEnergyCost ?? variantOptions.upgradeDrawEnergyCost,
+    upgradeUsefulCardRate: options.upgradeUsefulCardRate ?? variantOptions.upgradeUsefulCardRate,
+    upgradeUsefulEnergyPerInstall: options.upgradeUsefulEnergyPerInstall ?? variantOptions.upgradeUsefulEnergyPerInstall,
+    upgradePowerRegistersPerEnergy: options.upgradePowerRegistersPerEnergy ?? variantOptions.upgradePowerRegistersPerEnergy,
+    routeRegistersPerTurn: options.routeRegistersPerTurn ?? variantOptions.routeRegistersPerTurn
   };
 }
 
@@ -8222,7 +9124,6 @@ function buildCourseEnergyEconomyDiagnostics(scenario) {
     .filter((value) => value !== null && value !== undefined)
     .map(Number)
     .filter(Number.isFinite);
-  const productionEndingUsefulCards = routeStarts.map((entry) => Number(entry.fullCourseRoute?.routeUpgradeCardShadowUnitsEnd) / 3).filter(Number.isFinite);
   const overallShadow = buildRouteEnergyEconomyShadow(
     scenario.goalTileMap,
     routeStarts,
@@ -8232,7 +9133,7 @@ function buildCourseEnergyEconomyDiagnostics(scenario) {
 
   return {
     active: true,
-    method: "course-route-upgrade-economy-diagnostics-v45",
+    method: "course-route-upgrade-economy-diagnostics-v18-flat",
     routeCount: routeStarts.length,
     productionEnergyScoring: productionMetadata
       ? {
@@ -8258,8 +9159,6 @@ function buildCourseEnergyEconomyDiagnostics(scenario) {
         selectedRouteChopShopRewardMedian: productionChopShopRewardScores.length ? Number(medianValue(productionChopShopRewardScores).toFixed(2)) : 0,
         selectedRouteChopShopRewardMax: productionChopShopRewardScores.length ? Number(Math.max(...productionChopShopRewardScores).toFixed(2)) : 0,
         selectedRouteOpeningReserveMedian: productionOpeningReserves.length ? Number(medianValue(productionOpeningReserves).toFixed(2)) : null,
-        selectedRouteEndingUsefulCardsMedian: productionEndingUsefulCards.length ? Number(medianValue(productionEndingUsefulCards).toFixed(2)) : null,
-        selectedRouteEndingUsefulCardsMax: productionEndingUsefulCards.length ? Number(Math.max(...productionEndingUsefulCards).toFixed(2)) : null,
         selectedRoutePowerUpUsesMedian: productionPowerUpUses.length
           ? Number(medianValue(productionPowerUpUses).toFixed(2))
           : 0,
@@ -8392,10 +9291,13 @@ function chooseSubsidizedStartAdjustment(paymentScores, baselineFullScore, maxAd
 
 function getPayToWinRemovalBias(options = {}) {
   let bias = 0;
+  // Endpoint pruning is the priced-start setup's one deliberate freedom to
+  // reshape the offered course. Length is the primary reason for choosing which
+  // end to trim; difficulty is a weaker tiebreaker.
   if (options.length === "short") {
-    bias += 1;
+    bias += 2;
   } else if (options.length === "long") {
-    bias -= 1;
+    bias -= 2;
   }
 
   if (options.difficulty === "easy") {
@@ -8628,8 +9530,8 @@ function buildPayToWinRegisterPricingState(
 
     if (advantage > 1e-9) {
       if (subsidizedStarts) {
-        // Subsidies are discrete and the v45 economy is intentionally
-        // nonlinear/plateaued. Choose the available integer subsidy whose
+        // Subsidies are discrete and the card-aware fixed-route economy is
+        // intentionally nonlinear/plateaued. Choose the available integer subsidy whose
         // post-subsidy route value is closest to the 0E baseline, while still
         // requiring that the +max storage-cap subsidy can compensate the start
         // at all. This avoids systematically taking the first overshoot.
@@ -8720,8 +9622,8 @@ function buildPayToWinRegisterPricingState(
 
   const pricingModel = {
     method: subsidizedStarts
-      ? "moving-baseline-post-subsidy-route-economy-v47"
-      : "moving-baseline-post-payment-route-economy-v46",
+      ? "moving-baseline-card-aware-subsidy-v37"
+      : "moving-baseline-card-aware-payment-v37",
     mode: subsidizedStarts ? "subsidy" : "payment",
     baselineIndex: baseline.index,
     baselineFullScore: Number(baseline.fullScore.toFixed(2)),
@@ -8745,6 +9647,77 @@ function buildPayToWinRegisterPricingState(
     minScore: Math.min(...scoredStarts.map((entry) => entry.fullScore)),
     maxScore: Math.max(...scoredStarts.map((entry) => entry.fullScore)),
     pricingModel
+  };
+}
+
+function summarizePricedStartResidualBalance(entries = [], denialCost = Infinity, playerCount = 1, options = {}) {
+  const costKey = options.costKey ?? "energyCost";
+  const scoreKey = options.scoreKey ?? "postPaymentFullScore";
+  const offered = entries.filter((entry) => (
+    Number(entry?.[costKey]) < denialCost &&
+    Number.isFinite(Number(entry?.[scoreKey]))
+  ));
+  const balanceEntries = offered.map((entry) => ({
+    index: entry.index,
+    balanceScore: Number(entry[scoreKey]),
+    bestActions: Number(entry.startAnalysis?.fullCourseRoute?.actions ?? entry.startAnalysis?.bestActions),
+    startAnalysis: entry.startAnalysis
+  }));
+  const stddev = getNormalStartDispersion(balanceEntries, "balanceScore");
+
+  // v37b: Energy pricing is explicitly allowed to trade starting resources
+  // against physical route advantage/disadvantage. Normal's action-z guard is
+  // therefore not an independent rejection test here: using it after pricing
+  // double-counts the same long/short route difference that the Energy curve
+  // has just compensated. Keep action spread as a diagnostic, while residual
+  // acceptance is judged by the post-adjustment score distribution itself.
+  const scoreStats = getRobustOutlierStats(balanceEntries, "balanceScore");
+  const minimumScoreDelta = Math.max(5, Math.abs(scoreStats.center) * 0.08);
+  const outliers = balanceEntries
+    .map((entry) => {
+      const scoreDelta = entry.balanceScore - scoreStats.center;
+      const scoreZ = Math.abs(scoreDelta) / scoreStats.robustScale;
+      return { entry, scoreDelta, scoreZ };
+    })
+    .filter((item) => (
+      item.scoreZ >= FULL_START_OUTLIER_Z &&
+      Math.abs(item.scoreDelta) >= minimumScoreDelta
+    ))
+    .sort((left, right) => (
+      right.scoreZ - left.scoreZ ||
+      Math.abs(right.scoreDelta) - Math.abs(left.scoreDelta) ||
+      left.entry.index - right.entry.index
+    ));
+  const scores = balanceEntries.map((entry) => entry.balanceScore).filter(Number.isFinite);
+  const actions = balanceEntries.map((entry) => entry.bestActions).filter(Number.isFinite);
+  const minScore = scores.length ? Math.min(...scores) : null;
+  const maxScore = scores.length ? Math.max(...scores) : null;
+  const minActions = actions.length ? Math.min(...actions) : null;
+  const maxActions = actions.length ? Math.max(...actions) : null;
+  const acceptable = (
+    offered.length >= Math.max(1, playerCount || 1) &&
+    stddev <= NORMAL_START_FAIRNESS_STDDEV_LIMIT + 1e-9 &&
+    outliers.length === 0
+  );
+
+  return {
+    offeredCount: offered.length,
+    stddev: Number(stddev.toFixed(2)),
+    limit: NORMAL_START_FAIRNESS_STDDEV_LIMIT,
+    outlierCount: outliers.length,
+    outlierIndices: outliers.map((item) => item.entry.index),
+    minScore: Number.isFinite(minScore) ? Number(minScore.toFixed(2)) : null,
+    maxScore: Number.isFinite(maxScore) ? Number(maxScore.toFixed(2)) : null,
+    scoreRange: Number.isFinite(minScore) && Number.isFinite(maxScore)
+      ? Number((maxScore - minScore).toFixed(2))
+      : null,
+    actionMin: Number.isFinite(minActions) ? minActions : null,
+    actionMax: Number.isFinite(maxActions) ? maxActions : null,
+    actionRange: Number.isFinite(minActions) && Number.isFinite(maxActions)
+      ? maxActions - minActions
+      : null,
+    actionRangeDiagnosticOnly: true,
+    acceptable
   };
 }
 
@@ -8782,32 +9755,6 @@ function getPayToWinCostEntries(firstLeg, tileMap, excludedIndices = new Set(), 
   );
 }
 
-function getLegacyPayToWinCostEntries(firstLeg, excludedIndices = new Set()) {
-  const activeStarts = (firstLeg.starts || []).filter((item) => (
-    item.reachable &&
-    item.selectedRoute &&
-    Number.isFinite(item.adjustedScore) &&
-    !excludedIndices.has(item.index)
-  ));
-  if (!activeStarts.length) {
-    return { entries: [], costUnit: 1, minScore: 0, maxScore: 0 };
-  }
-  const adjustedScores = activeStarts.map((item) => item.adjustedScore);
-  const minScore = Math.min(...adjustedScores);
-  const maxScore = Math.max(...adjustedScores);
-  const costUnit = Math.max(1, minScore / 10);
-  return {
-    entries: activeStarts.map((item) => ({
-      startAnalysis: item,
-      index: item.index,
-      adjustedScore: item.adjustedScore,
-      energyCost: Math.max(0, Math.floor((maxScore - item.adjustedScore) / costUnit))
-    })),
-    costUnit: Number(costUnit.toFixed(2)),
-    minScore,
-    maxScore
-  };
-}
 
 // These are model-selection guards, not energy-price thresholds. They prevent a
 // mathematically optimal but strategically trivial breakpoint from creating a
@@ -9594,7 +10541,7 @@ function getActivePruningStarts(firstLeg, excludedIndices = new Set()) {
   return (firstLeg.starts || []).filter((item) => (
     item.reachable &&
     item.selectedRoute &&
-    Number.isFinite(item.adjustedScore) &&
+    Number.isFinite(item.balanceScore ?? item.adjustedScore) &&
     !excludedIndices.has(item.index)
   ));
 }
@@ -9612,7 +10559,11 @@ function runIterativeStartBalancing(firstLeg, tileMap, playerCount, analysisOpti
   // The incoming first-leg analysis already contains route-pressure scoring.
   // Recompute immediately only when an earlier lightweight stage has already
   // excluded starts; Pay to Win and untrimmed normal setups can reuse it.
-  let currentFirstLeg = excludedIndices.size
+  let currentFirstLeg = (
+    excludedIndices.size &&
+    !options.inputAlreadyReflectsExcluded &&
+    !analysisOptions.skipTraffic
+  )
     ? recomputeFirstLegPressure(tileMap, baseFirstLeg, {
       playerCount,
       ...analysisOptions,
@@ -9620,32 +10571,51 @@ function runIterativeStartBalancing(firstLeg, tileMap, playerCount, analysisOpti
     })
     : baseFirstLeg;
 
+  const pruneBatchSize = Math.max(1, Math.floor(Number(options.pruneBatchSize) || 1));
   for (let pass = 0; pass < (options.maxPasses ?? 12); pass += 1) {
-    const activeStarts = getActivePruningStarts(currentFirstLeg, excludedIndices);
-    const removal = chooser({
-      baseFirstLeg,
-      currentFirstLeg,
-      activeStarts,
-      excludedIndices,
-      removals,
-      pass: pass + 1
-    });
+    let batchActiveStarts = getActivePruningStarts(currentFirstLeg, excludedIndices);
+    let removedThisPass = 0;
 
-    if (!removal || excludedIndices.has(removal.index)) {
-      break;
+    while (removedThisPass < pruneBatchSize) {
+      if (batchActiveStarts.length <= Math.max(1, playerCount || 1)) break;
+      const removal = chooser({
+        baseFirstLeg,
+        currentFirstLeg,
+        activeStarts: batchActiveStarts,
+        excludedIndices,
+        removals,
+        pass: pass + 1,
+        batchIndex: removedThisPass
+      });
+
+      if (!removal || excludedIndices.has(removal.index)) break;
+      excludedIndices.add(removal.index);
+      removals.push({
+        ...removal,
+        pass: pass + 1,
+        batchIndex: removedThisPass
+      });
+      removedThisPass += 1;
+      batchActiveStarts = batchActiveStarts.filter((entry) => entry.index !== removal.index);
     }
 
-    excludedIndices.add(removal.index);
-    removals.push({
-      ...removal,
-      pass: pass + 1
-    });
+    if (!removedThisPass) break;
 
-    currentFirstLeg = recomputeFirstLegPressure(tileMap, baseFirstLeg, {
-      playerCount,
-      ...analysisOptions,
-      excludedIndices: [...excludedIndices]
-    });
+    // In the fast baseline, intrinsic full-course scores are already present and
+    // traffic is intentionally disabled. Do not call the occupancy/pressure engine
+    // merely to return zeros; continue pruning the frozen intrinsic field.
+    if (!analysisOptions.skipTraffic) {
+      // Traffic/occupancy is frozen within a batch, then recomputed exactly once.
+      currentFirstLeg = recomputeFirstLegPressure(
+        tileMap,
+        analysisOptions.carryOccupancyScores ? currentFirstLeg : baseFirstLeg,
+        {
+          playerCount,
+          ...analysisOptions,
+          excludedIndices: [...excludedIndices]
+        }
+      );
+    }
   }
 
   return {
@@ -9653,196 +10623,6 @@ function runIterativeStartBalancing(firstLeg, tileMap, playerCount, analysisOpti
     currentFirstLeg,
     excludedIndices,
     removals
-  };
-}
-
-function buildPayToWinEnergyShadow(firstLeg, tileMap, playerCount, options = {}, lateCostState = null, eligibleIndices = null, comparisonState = {}) {
-  const eligibleSet = Array.isArray(eligibleIndices) ? new Set(eligibleIndices) : null;
-  const activeStarts = (firstLeg.starts || []).filter((item) => (
-    item.reachable &&
-    item.selectedRoute &&
-    item.fullCourseRoute &&
-    Number.isFinite(item.adjustedScore) &&
-    (!eligibleSet || eligibleSet.has(item.index))
-  ));
-  const benchmark = typeof summarizePowerUpOpportunityBenchmark === "function"
-    ? summarizePowerUpOpportunityBenchmark(
-      tileMap,
-      activeStarts,
-      firstLeg.flags || [],
-      {
-        ...options,
-        playerCount,
-        payToWin: true
-      }
-    )
-    : null;
-  const routeEconomy = buildRouteEnergyEconomyShadow(tileMap, activeStarts, options, benchmark);
-  const upgradeEconomy = { active: true, method: routeEconomy.method, ...routeEconomy.config, horizonTurns: routeEconomy.horizonTurns };
-  const upgradeFeatureWeights = buildUpgradeFeatureWeightAudit(options);
-  const registerScore = Number(benchmark?.registerScoreMedian);
-  const usableRegisterScore = Number.isFinite(registerScore) && registerScore > 0
-    ? registerScore
-    : null;
-  // v46.1: comparison entries must be initialized before they are used to
-  // reconstruct the validated-field 0E route scores for diagnostics.
-  const initialEntryByIndex = comparisonState.initialEntryByIndex instanceof Map
-    ? comparisonState.initialEntryByIndex
-    : new Map();
-  const fullScores = activeStarts.map((item) => ({
-    index: item.index,
-    fullScore: Number.isFinite(initialEntryByIndex.get(item.index)?.fullScore)
-      ? initialEntryByIndex.get(item.index).fullScore
-      : getPayToWinFullCourseScore(item)
-  })).filter((entry) => Number.isFinite(entry.fullScore));
-  const subsidyMode = isSubsidizedStartsPricing(options);
-  const worstFullScore = fullScores.length
-    ? (subsidyMode
-      ? Math.min(...fullScores.map((entry) => entry.fullScore))
-      : Math.max(...fullScores.map((entry) => entry.fullScore)))
-    : null;
-  const lateByIndex = new Map((lateCostState?.entries ?? []).map((entry) => [entry.index, entry]));
-  const initialCostByIndex = comparisonState.initialCostByIndex instanceof Map
-    ? comparisonState.initialCostByIndex
-    : new Map();
-  const finalCostByIndex = comparisonState.finalCostByIndex instanceof Map
-    ? comparisonState.finalCostByIndex
-    : new Map();
-  const legacyInitialCostByIndex = comparisonState.legacyInitialCostByIndex instanceof Map
-    ? comparisonState.legacyInitialCostByIndex
-    : new Map();
-  const finalEntryByIndex = comparisonState.finalEntryByIndex instanceof Map
-    ? comparisonState.finalEntryByIndex
-    : new Map();
-  const finalLateEntryByIndex = comparisonState.finalLateEntryByIndex instanceof Map
-    ? comparisonState.finalLateEntryByIndex
-    : new Map();
-  const prunedIndices = comparisonState.prunedIndices instanceof Set
-    ? comparisonState.prunedIndices
-    : new Set(comparisonState.prunedIndices ?? []);
-  const fullyUnavailableIndices = comparisonState.fullyUnavailableIndices instanceof Set
-    ? comparisonState.fullyUnavailableIndices
-    : new Set(comparisonState.fullyUnavailableIndices ?? []);
-  const finiteLateFullScores = [...lateByIndex.values()]
-    .map((entry) => entry.lateFullScore)
-    .filter(Number.isFinite);
-  const worstLateFullScore = finiteLateFullScores.length
-    ? (subsidyMode ? Math.min(...finiteLateFullScores) : Math.max(...finiteLateFullScores))
-    : null;
-
-  return {
-    active: true,
-    method: subsidyMode
-      ? "all-validated-post-subsidy-route-economy-v47"
-      : "all-validated-post-payment-route-economy-v46",
-    validatedStartCount: activeStarts.length,
-    offeredStartCount: activeStarts.filter((item) => (
-      !prunedIndices.has(item.index) && !fullyUnavailableIndices.has(item.index)
-    )).length,
-    benchmark,
-    upgradeEconomy,
-    routeEconomy,
-    upgradeFeatureWeights,
-    initialPricingModel: comparisonState.initialPricingModel ?? null,
-    finalPricingModel: comparisonState.finalPricingModel ?? null,
-    worstFullScore: Number.isFinite(worstFullScore) ? Number(worstFullScore.toFixed(2)) : null,
-    worstLateFullScore: Number.isFinite(worstLateFullScore) ? Number(worstLateFullScore.toFixed(2)) : null,
-    starts: fullScores.map((entry) => {
-      const advantage = Number.isFinite(worstFullScore)
-        ? subsidyMode
-          ? Math.max(0, entry.fullScore - worstFullScore)
-          : Math.max(0, worstFullScore - entry.fullScore)
-        : 0;
-      const lateEntry = lateByIndex.get(entry.index);
-      const lateAdvantage = Number.isFinite(worstLateFullScore) && Number.isFinite(lateEntry?.lateFullScore)
-        ? subsidyMode
-          ? Math.max(0, lateEntry.lateFullScore - worstLateFullScore)
-          : Math.max(0, worstLateFullScore - lateEntry.lateFullScore)
-        : null;
-      const finalEntry = finalEntryByIndex.get(entry.index);
-      const finalLateEntry = finalLateEntryByIndex.get(entry.index);
-      return {
-        index: entry.index,
-        fullScore: Number(entry.fullScore.toFixed(2)),
-        // Backward-compatible shadow fields remain the INITIAL validated-field
-        // comparison. v37 adds explicit final-field values so a moving zero
-        // baseline cannot be mistaken for a threshold inconsistency in logs.
-        advantage: Number(advantage.toFixed(2)),
-        registerEquivalent: usableRegisterScore
-          ? Number((advantage / usableRegisterScore).toFixed(2))
-          : null,
-        lateFullScore: Number.isFinite(lateEntry?.lateFullScore)
-          ? Number(lateEntry.lateFullScore.toFixed(2))
-          : null,
-        lateAdvantage: Number.isFinite(lateAdvantage)
-          ? Number(lateAdvantage.toFixed(2))
-          : null,
-        lateRegisterEquivalent: usableRegisterScore && Number.isFinite(lateAdvantage)
-          ? Number((lateAdvantage / usableRegisterScore).toFixed(2))
-          : null,
-        lateEnergyCost: Number.isFinite(lateEntry?.lateEnergyCost)
-          ? lateEntry.lateEnergyCost
-          : null,
-        lateUnavailable: Boolean(lateEntry?.lateUnavailable),
-        finalFullScore: Number.isFinite(finalEntry?.fullScore)
-          ? Number(finalEntry.fullScore.toFixed(2))
-          : null,
-        finalAdvantage: Number.isFinite(finalEntry?.advantage)
-          ? Number(finalEntry.advantage.toFixed(2))
-          : null,
-        finalRegisterEquivalent: Number.isFinite(finalEntry?.registerEquivalent)
-          ? Number(finalEntry.registerEquivalent.toFixed(2))
-          : null,
-        finalLateFullScore: Number.isFinite(finalLateEntry?.lateFullScore)
-          ? Number(finalLateEntry.lateFullScore.toFixed(2))
-          : null,
-        finalLateAdvantage: Number.isFinite(finalLateEntry?.lateAdvantage)
-          ? Number(finalLateEntry.lateAdvantage.toFixed(2))
-          : null,
-        finalLateRegisterEquivalent: Number.isFinite(finalLateEntry?.lateRegisterEquivalent)
-          ? Number(finalLateEntry.lateRegisterEquivalent.toFixed(2))
-          : null,
-        finalLateEnergyCost: Number.isFinite(finalLateEntry?.lateEnergyCost)
-          ? finalLateEntry.lateEnergyCost
-          : null,
-        finalLateUnavailable: Boolean(finalLateEntry?.lateUnavailable),
-        initialEnergyCost: initialCostByIndex.has(entry.index)
-          ? initialCostByIndex.get(entry.index)
-          : null,
-        finalEnergyCost: finalCostByIndex.has(entry.index)
-          ? finalCostByIndex.get(entry.index)
-          : null,
-        finalPaymentScores: Array.isArray(finalEntry?.paymentScores)
-          ? finalEntry.paymentScores
-          : null,
-        finalPostPaymentFullScore: Number.isFinite(finalEntry?.postPaymentFullScore)
-          ? Number(finalEntry.postPaymentFullScore.toFixed(2))
-          : null,
-        finalPaymentPenalty: Number.isFinite(finalEntry?.paymentPenalty)
-          ? Number(finalEntry.paymentPenalty.toFixed(2))
-          : null,
-        finalPostAdjustmentDeltaScore: Number.isFinite(finalEntry?.postAdjustmentDeltaScore)
-          ? Number(finalEntry.postAdjustmentDeltaScore.toFixed(2))
-          : null,
-        finalPostAdjustmentDeltaRegisters: Number.isFinite(finalEntry?.postAdjustmentDeltaRegisters)
-          ? Number(finalEntry.postAdjustmentDeltaRegisters.toFixed(3))
-          : null,
-        finalLatePaymentScores: Array.isArray(finalLateEntry?.paymentScores)
-          ? finalLateEntry.paymentScores
-          : null,
-        finalEarlyUnavailable: Boolean(
-          Number.isFinite(finalEntry?.energyCost) &&
-          Number.isFinite(comparisonState.finalPricingModel?.denialCost) &&
-          finalEntry.energyCost >= comparisonState.finalPricingModel.denialCost
-        ),
-        legacyInitialCost: legacyInitialCostByIndex.has(entry.index)
-          ? legacyInitialCostByIndex.get(entry.index)
-          : null,
-        pruned: prunedIndices.has(entry.index),
-        fullyUnavailable: fullyUnavailableIndices.has(entry.index),
-        offered: !prunedIndices.has(entry.index) && !fullyUnavailableIndices.has(entry.index)
-      };
-    })
   };
 }
 
@@ -9876,6 +10656,110 @@ function buildInactivePayToWinLateCostState(costState, denialCost) {
   };
 }
 
+function evaluatePayToWinSelectorAwarePricingState(
+  firstLeg,
+  tileMap,
+  excludedIndices,
+  playerCount,
+  pricingOptions,
+  baseCostState = null
+) {
+  const denialCost = getPayToWinDenialCost(pricingOptions);
+  const costState = baseCostState ?? getPayToWinCostEntries(
+    firstLeg,
+    tileMap,
+    excludedIndices,
+    pricingOptions
+  );
+  const selectorPricingEligible = costState.entries.length > playerCount;
+  const lateCostState = selectorPricingEligible
+    ? getPayToWinLateCostEntries(
+      firstLeg,
+      tileMap,
+      excludedIndices,
+      playerCount,
+      pricingOptions,
+      costState
+    )
+    : buildInactivePayToWinLateCostState(costState, denialCost);
+  const earlyEntries = lateCostState.earlyEntries ?? costState.entries;
+  const lateEntries = lateCostState.entries ?? [];
+  const lateByIndex = new Map(lateEntries.map((entry) => [entry.index, entry]));
+  const latePricingActive = Boolean(lateCostState.active);
+
+  const earlyUnavailableCount = earlyEntries.filter((entry) => (
+    entry.energyCost >= denialCost
+  )).length;
+  const lateUnavailableCount = lateEntries.filter((entry) => (
+    entry.lateUnavailable
+  )).length;
+  const fullyUnavailableCount = earlyEntries.filter((entry) => {
+    const lateEntry = lateByIndex.get(entry.index);
+    return (
+      entry.energyCost >= denialCost &&
+      Boolean(lateEntry?.lateUnavailable ?? entry.energyCost >= denialCost)
+    );
+  }).length;
+  const pricedStartCount = Math.max(0, earlyEntries.length - fullyUnavailableCount);
+  const maxUnavailable = Math.max(0, earlyEntries.length - playerCount);
+  const earlyAvailabilityValid = earlyUnavailableCount <= maxUnavailable;
+  const lateAvailabilityValid = lateUnavailableCount <= maxUnavailable;
+  const availabilityValid = (
+    pricedStartCount >= playerCount &&
+    earlyAvailabilityValid &&
+    lateAvailabilityValid
+  );
+
+  const earlyResidual = summarizePricedStartResidualBalance(
+    earlyEntries,
+    denialCost,
+    playerCount,
+    { costKey: "energyCost", scoreKey: "postPaymentFullScore" }
+  );
+  const lateResidual = latePricingActive
+    ? summarizePricedStartResidualBalance(
+      lateEntries,
+      denialCost,
+      playerCount,
+      { costKey: "lateEnergyCost", scoreKey: "postPaymentFullScore" }
+    )
+    : earlyResidual;
+  const residualBalance = {
+    method: "post-adjustment-normal-fairness-v37",
+    early: earlyResidual,
+    late: lateResidual,
+    worstStdDev: Math.max(earlyResidual.stddev, lateResidual.stddev),
+    worstOutlierCount: Math.max(earlyResidual.outlierCount, lateResidual.outlierCount),
+    acceptable: earlyResidual.acceptable && lateResidual.acceptable
+  };
+  const balanceValid = residualBalance.acceptable;
+  const requiredCount = Math.max(1, playerCount || 1);
+  const penalty = (
+    Math.max(0, requiredCount - earlyResidual.offeredCount) * 40 +
+    Math.max(0, requiredCount - lateResidual.offeredCount) * 40 +
+    residualBalance.worstOutlierCount * 18 +
+    Math.max(0, residualBalance.worstStdDev - NORMAL_START_FAIRNESS_STDDEV_LIMIT) * 2
+  );
+
+  return {
+    costState,
+    lateCostState,
+    selectorPricingEligible,
+    latePricingActive,
+    pricedStartCount,
+    earlyOfferedCount: earlyResidual.offeredCount,
+    lateOfferedCount: lateResidual.offeredCount,
+    earlyUnavailableCount,
+    lateUnavailableCount,
+    maxUnavailable,
+    availabilityValid,
+    residualBalance,
+    balanceValid,
+    acceptable: availabilityValid && balanceValid,
+    penalty: Number(penalty.toFixed(4))
+  };
+}
+
 function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {}) {
   const analysisOptions = getPayToWinAnalysisOptions({
     ...options,
@@ -9884,52 +10768,111 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
   }, playerCount);
   const pricingOptions = { ...options, playerCount };
   const bias = getPayToWinRemovalBias(options);
-  // Capture the whole coherent field before v36 pruning. This lets diagnostics
-  // show both the initial moving-baseline prices and the final repriced field.
-  // The old v35 formula is retained only as a one-pass comparison number; it no
-  // longer decides which starts players are offered.
-  const shadowInitialCostState = getPayToWinCostEntries(
-    firstLeg,
-    tileMap,
-    new Set(),
-    pricingOptions
-  );
-  const legacyInitialCostState = getLegacyPayToWinCostEntries(firstLeg, new Set());
-  const shadowDenialCost = getPayToWinDenialCost(options);
+
+  // v37: pricing is downstream of the all-start route foundation. Endpoint
+  // pruning is setup interpretation only: if the current Energy range cannot
+  // express the route spread, remove one endpoint, rebuild occupancy/traffic,
+  // and reprice. Never prune below the player-count floor.
   const result = runIterativeStartBalancing(
     firstLeg,
     tileMap,
     playerCount,
     analysisOptions,
-    ({ currentFirstLeg, excludedIndices }) => {
-      // Recompute both the moving zero and the register/horizon benchmark after
-      // every endpoint removal. Pruning is allowed to change the character of
-      // the offered course, so its energy economy should follow that new field
-      // rather than remain frozen to the original eight-start audition.
-      const costState = getPayToWinCostEntries(currentFirstLeg, tileMap, excludedIndices, pricingOptions);
-      // Never price-prune below the number of robots that must be able to start.
-      if (costState.entries.length <= playerCount) {
-        return null;
-      }
+    ({ baseFirstLeg, currentFirstLeg, excludedIndices }) => {
+      const costState = getPayToWinCostEntries(
+        currentFirstLeg,
+        tileMap,
+        excludedIndices,
+        pricingOptions
+      );
+      if (costState.entries.length <= playerCount) return null;
 
-      const denialCost = getPayToWinDenialCost(options);
-      const expensiveEntries = costState.entries.filter((entry) => entry.energyCost >= denialCost);
-      if (!expensiveEntries.length) {
-        return null;
-      }
+      // v37c: pruning decisions use the same selector-aware economy that owns the
+      // final displayed prices. This closes the v37b gap where an endpoint could
+      // look like it rescued an extra start under one-group pricing, only for that
+      // gain to disappear after early/late selector occupancy was evaluated.
+      const currentEconomy = evaluatePayToWinSelectorAwarePricingState(
+        currentFirstLeg,
+        tileMap,
+        excludedIndices,
+        playerCount,
+        pricingOptions,
+        costState
+      );
 
-      // A price above available starting energy means the active start spread is too wide; it is not
-      // necessarily the start that should be removed. Pay to Win deliberately
-      // trims from either end according to the requested setup:
-      //   short/easy -> remove the weakest (longer/harder) start
-      //   long/hard  -> remove the strongest (shorter/easier) start
-      //   neutral    -> remove the end farthest from the mean
-      // Pricing is then recomputed after that removal.
-      const removed = choosePayToWinPruneEntry(costState.entries, options);
-      if (!removed) {
-        return null;
-      }
+      const sortedByFullScore = [...costState.entries].sort((left, right) => (
+        left.fullScore - right.fullScore || left.index - right.index
+      ));
+      const endpointCandidates = [...new Map(
+        [sortedByFullScore[0], sortedByFullScore.at(-1)]
+          .filter(Boolean)
+          .map((entry) => [entry.index, entry])
+      ).values()];
+      const preferred = choosePayToWinPruneEntry(costState.entries, options);
+      const previews = endpointCandidates.map((candidate) => {
+        const nextExcluded = new Set(excludedIndices);
+        nextExcluded.add(candidate.index);
 
+        // Match the state that runIterativeStartBalancing will actually create
+        // after a committed prune: first rebuild occupancy/traffic for the smaller
+        // field, then run the full selector-aware pricing interpretation on it.
+        const previewFirstLeg = analysisOptions.skipTraffic
+          ? currentFirstLeg
+          : recomputeFirstLegPressure(
+            tileMap,
+            analysisOptions.carryOccupancyScores ? currentFirstLeg : baseFirstLeg,
+            {
+              playerCount,
+              ...analysisOptions,
+              excludedIndices: [...nextExcluded]
+            }
+          );
+        const nextCostState = getPayToWinCostEntries(
+          previewFirstLeg,
+          tileMap,
+          nextExcluded,
+          pricingOptions
+        );
+        const nextEconomy = evaluatePayToWinSelectorAwarePricingState(
+          previewFirstLeg,
+          tileMap,
+          nextExcluded,
+          playerCount,
+          pricingOptions,
+          nextCostState
+        );
+        return {
+          candidate,
+          economy: nextEconomy,
+          offerableGain: nextEconomy.pricedStartCount - currentEconomy.pricedStartCount,
+          balanceGain: currentEconomy.penalty - nextEconomy.penalty,
+          preferred: candidate.index === preferred?.index
+        };
+      });
+
+      const rescueRequired = !currentEconomy.acceptable;
+      const eligible = previews.filter((preview) => (
+        rescueRequired
+          ? preview.balanceGain > 1e-9
+          : preview.offerableGain > 0 && preview.economy.acceptable
+      ));
+      if (!eligible.length) return null;
+
+      const selectedPreview = eligible.sort((left, right) => (
+        (right.economy.acceptable ? 1 : 0) - (left.economy.acceptable ? 1 : 0) ||
+        right.offerableGain - left.offerableGain ||
+        right.balanceGain - left.balanceGain ||
+        (right.preferred ? 1 : 0) - (left.preferred ? 1 : 0) ||
+        left.candidate.index - right.candidate.index
+      ))[0];
+      const removed = selectedPreview?.candidate ?? null;
+      if (!removed) return null;
+
+      const reasonLead = rescueRequired
+        ? !currentEconomy.availabilityValid
+          ? `selector-aware pricing left early/late ${currentEconomy.earlyOfferedCount}/${currentEconomy.lateOfferedCount} offerable starts for ${playerCount} players`
+          : "selector-aware post-adjustment balance required a narrower field"
+        : `selector-aware repricing increased offered starts ${currentEconomy.pricedStartCount}->${selectedPreview.economy.pricedStartCount}`;
       return {
         index: removed.index,
         score: removed.adjustedScore,
@@ -9937,11 +10880,22 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
         energyCost: removed.energyCost,
         registerEquivalent: removed.registerEquivalent,
         pricingModel: costState.pricingModel,
-        reason: bias > 0
-          ? "removed weakest start for a short/easier setup"
-          : bias < 0
-            ? "removed strongest start for a long/harder setup"
-            : "removed start farthest from the remaining mean"
+        offerableBefore: currentEconomy.pricedStartCount,
+        offerableAfterPreview: selectedPreview.economy.pricedStartCount,
+        earlyOfferableBefore: currentEconomy.earlyOfferedCount,
+        lateOfferableBefore: currentEconomy.lateOfferedCount,
+        earlyOfferableAfterPreview: selectedPreview.economy.earlyOfferedCount,
+        lateOfferableAfterPreview: selectedPreview.economy.lateOfferedCount,
+        balancePenaltyBefore: currentEconomy.penalty,
+        balancePenaltyAfterPreview: selectedPreview.economy.penalty,
+        selectorAwarePreview: true,
+        reason: `${reasonLead}; ${
+          bias > 0
+            ? "removed the weak/long endpoint when otherwise comparable"
+            : bias < 0
+              ? "removed the strong/short endpoint when otherwise comparable"
+              : "used the endpoint with the better economic repricing result"
+        }`
       };
     },
     { maxPasses: 12 }
@@ -9949,13 +10903,18 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
 
   const { currentFirstLeg, excludedIndices, removals: pruned } = result;
   const startingEnergy = getCourseStartingEnergy(options);
+  const maxEnergy = getCourseMaxEnergy(options);
+  const startingUpgradeCards = getCourseStartingUpgradeCards(options);
   const denialCost = getPayToWinDenialCost(options);
-  const finalCostState = getPayToWinCostEntries(currentFirstLeg, tileMap, excludedIndices, pricingOptions);
-  // v38 evaluates every selector position when surplus choices exist, then fits
-  // at most one breakpoint. The first displayed price represents the selected
-  // early group, and the optional second price represents the selected late
-  // group. If a two-group fit is not materially better, everybody shares the
-  // single all-selector representative price.
+  const finalCostState = getPayToWinCostEntries(
+    currentFirstLeg,
+    tileMap,
+    excludedIndices,
+    pricingOptions
+  );
+
+  // Preserve the existing selector-position model: evaluate each chooser position
+  // under known/future occupancy, then retain at most one meaningful breakpoint.
   const selectorPricingEligible = finalCostState.entries.length > playerCount;
   const lateCostState = selectorPricingEligible
     ? getPayToWinLateCostEntries(
@@ -9975,6 +10934,7 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
     pricingModel: lateCostState.earlyPricingModel ?? finalCostState.pricingModel
   };
   const latePricingActive = Boolean(lateCostState.active);
+
   const costByIndex = new Map(earlyCostState.entries.map((entry) => [entry.index, entry.energyCost]));
   const earlyUnavailableByIndex = new Map(earlyCostState.entries.map((entry) => [
     entry.index,
@@ -10002,9 +10962,34 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
     earlyAvailabilityValid &&
     lateAvailabilityValid
   );
-  // The late model may run internally and still collapse to the same integer
-  // prices. Slash notation/rules text is player-facing only when price or
-  // selector-specific availability actually changes.
+
+  // Authoritative fairness is measured *after* payment/subsidy. A price is not
+  // successful merely because it is numerically legal; it must actually collapse
+  // the retained start field to the same Normal fairness bar.
+  const earlyResidualBalance = summarizePricedStartResidualBalance(
+    earlyCostState.entries,
+    denialCost,
+    playerCount,
+    { costKey: "energyCost", scoreKey: "postPaymentFullScore" }
+  );
+  const lateResidualBalance = latePricingActive
+    ? summarizePricedStartResidualBalance(
+      lateCostState.entries,
+      denialCost,
+      playerCount,
+      { costKey: "lateEnergyCost", scoreKey: "postPaymentFullScore" }
+    )
+    : earlyResidualBalance;
+  const residualBalance = {
+    method: "post-adjustment-normal-fairness-v37",
+    early: earlyResidualBalance,
+    late: lateResidualBalance,
+    worstStdDev: Math.max(earlyResidualBalance.stddev, lateResidualBalance.stddev),
+    worstOutlierCount: Math.max(earlyResidualBalance.outlierCount, lateResidualBalance.outlierCount),
+    acceptable: earlyResidualBalance.acceptable && lateResidualBalance.acceptable
+  };
+  const balanceValid = residualBalance.acceptable;
+
   const hasLatePriceDifference = latePricingActive && lateCostState.entries.some((entry) => {
     if (!costByIndex.has(entry.index)) return false;
     const earlyUnavailable = earlyUnavailableByIndex.get(entry.index) ?? false;
@@ -10025,45 +11010,9 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
     !entry.lateUnavailable &&
     entry.lateEnergyCost < costByIndex.get(entry.index)
   )).length : 0;
+
   const activeScores = earlyCostState.entries.map((entry) => entry.adjustedScore);
   const meanScore = activeScores.length ? averageValues(activeScores) : 0;
-  const shadowSelectorPricingEligible = shadowInitialCostState.entries.length > playerCount;
-  // Reuse the normal adaptive selector calculation when pruning did not change
-  // the field. Otherwise evaluate the full initial field once so diagnostics
-  // can compare its independently chosen breakpoint with the final field.
-  const shadowLateCostState = shadowSelectorPricingEligible
-    ? (pruned.length === 0 && shadowInitialCostState.entries.length === finalCostState.entries.length
-      ? lateCostState
-      : getPayToWinLateCostEntries(
-        firstLeg,
-        tileMap,
-        new Set(),
-        playerCount,
-        pricingOptions,
-        shadowInitialCostState
-      ))
-    : buildInactivePayToWinLateCostState(shadowInitialCostState, shadowDenialCost);
-  const shadowLatePricingActive = Boolean(shadowLateCostState.active);
-  const energyShadow = buildPayToWinEnergyShadow(
-    firstLeg,
-    tileMap,
-    playerCount,
-    pricingOptions,
-    shadowLateCostState,
-    shadowInitialCostState.entries.map((entry) => entry.index),
-    {
-      initialCostByIndex: new Map(shadowInitialCostState.entries.map((entry) => [entry.index, entry.energyCost])),
-      finalCostByIndex: costByIndex,
-      legacyInitialCostByIndex: new Map(legacyInitialCostState.entries.map((entry) => [entry.index, entry.energyCost])),
-      initialEntryByIndex: new Map(shadowInitialCostState.entries.map((entry) => [entry.index, entry])),
-      finalEntryByIndex: new Map(earlyCostState.entries.map((entry) => [entry.index, entry])),
-      finalLateEntryByIndex: new Map(lateCostState.entries.map((entry) => [entry.index, entry])),
-      prunedIndices: new Set(pruned.map((entry) => entry.index)),
-      fullyUnavailableIndices,
-      initialPricingModel: shadowInitialCostState.pricingModel,
-      finalPricingModel: earlyCostState.pricingModel
-    }
-  );
   const prunedOutliers = pruned.map((item) => ({
     index: item.index,
     score: item.score,
@@ -10093,6 +11042,27 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
     }
   }));
   const outliers = [...prunedOutliers, ...unavailableOutliers];
+  const lateEntryByIndex = new Map(lateCostState.entries.map((entry) => [entry.index, entry]));
+  const pricingEntries = earlyCostState.entries.map((entry) => {
+    const lateEntry = lateEntryByIndex.get(entry.index);
+    return {
+      index: entry.index,
+      fullScore: entry.fullScore,
+      advantage: entry.advantage,
+      registerEquivalent: entry.registerEquivalent,
+      energyCost: entry.energyCost,
+      unavailable: entry.energyCost >= denialCost,
+      postPaymentFullScore: entry.postPaymentFullScore,
+      postAdjustmentDeltaScore: entry.postAdjustmentDeltaScore,
+      postAdjustmentDeltaRegisters: entry.postAdjustmentDeltaRegisters,
+      paymentScores: entry.paymentScores,
+      lateEnergyCost: lateEntry?.lateEnergyCost ?? null,
+      lateUnavailable: Boolean(lateEntry?.lateUnavailable),
+      lateFullScore: lateEntry?.fullScore ?? null,
+      latePostPaymentFullScore: lateEntry?.postPaymentFullScore ?? null,
+      latePostAdjustmentDeltaRegisters: lateEntry?.postAdjustmentDeltaRegisters ?? null
+    };
+  });
 
   return {
     ...currentFirstLeg,
@@ -10109,26 +11079,31 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
     })),
     summary: {
       ...currentFirstLeg.summary,
+      // For priced starts, public fairness is the residual field after the
+      // displayed Energy adjustment, not the raw pre-price route spread.
+      scoreStdDev: Number(residualBalance.worstStdDev.toFixed(2)),
+      fairnessScore: Number(Math.max(0, 100 - residualBalance.worstStdDev * 4).toFixed(2)),
       outliers,
       payToWin: {
         active: true,
         mode: isSubsidizedStartsPricing(options) ? "subsidy" : "payment",
         subsidizedStarts: isSubsidizedStartsPricing(options),
+        pricingEconomyMethod: "card-aware-fixed-route-expected-economy-v37",
+        pruningPolicy: "selector-aware-endpoint-preview-v37c",
         startingEnergy,
-        maxEnergy: getCourseMaxEnergy(options),
+        maxEnergy,
+        startingUpgradeCards,
         maxSubsidy: isSubsidizedStartsPricing(options) ? getStartEnergyAdjustmentLimit(options) : 0,
-        startingUpgradeCards: energyShadow?.upgradeEconomy?.startingUpgradeCards ?? getCourseStartingUpgradeCards(options),
         denialCost,
         costUnit: earlyCostState.costUnit,
         lateCostUnit: lateCostState.costUnit,
         pricingModel: earlyCostState.pricingModel,
-        initialPricingModel: shadowInitialCostState.pricingModel,
         latePricingModel: lateCostState.pricingModel ?? null,
         selectorSplit: lateCostState.selectorSplit ?? null,
         selectorPricingEvaluated: Boolean(lateCostState.evaluated),
         selectorScenarioSamplesByPosition: lateCostState.scenarioSamplesBySelector ?? {},
-        legacyInitialCostUnit: legacyInitialCostState.costUnit,
         pruned,
+        pricingEntries,
         pricedStartCount,
         trafficScaleMultiplier: getPayToWinTrafficScaleMultiplier(playerCount),
         lateSelectorStart: lateCostState.lateSelectorStart,
@@ -10139,9 +11114,6 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
           ? "adaptive-one-breakpoint"
           : (selectorPricingEligible ? "adaptive-no-meaningful-split" : "inactive-no-surplus"),
         lateScenarioSamples: lateCostState.scenarioSamples,
-        shadowLatePricingActive,
-        shadowLateScenarioSamples: shadowLateCostState.scenarioSamples,
-        energyShadow,
         earlyUnavailableCount,
         maxEarlyUnavailable,
         earlyAvailabilityValid,
@@ -10150,6 +11122,8 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
         lateAvailabilityValid,
         fullyUnavailableCount,
         availabilityValid,
+        residualBalance,
+        balanceValid,
         latePriceHigherCount,
         latePriceLowerCount,
         hasLatePriceDifference
@@ -10256,10 +11230,11 @@ function getNormalStartDispersion(entries, scoreKey = "adjustedScore") {
   );
 }
 
-function getNormalStartBalanceDiagnostics(entry, entries) {
-  const scoreStats = getRobustOutlierStats(entries, "adjustedScore");
+function getNormalStartBalanceDiagnostics(entry, entries, scoreKey = "balanceScore") {
+  const scoreStats = getRobustOutlierStats(entries, scoreKey);
   const actionStats = getRobustOutlierStats(entries, "bestActions");
-  const scoreDelta = entry.adjustedScore - scoreStats.center;
+  const scoreValue = Number(entry[scoreKey]);
+  const scoreDelta = scoreValue - scoreStats.center;
   const actionDelta = Number.isFinite(entry.bestActions)
     ? entry.bestActions - actionStats.center
     : 0;
@@ -10274,16 +11249,60 @@ function getNormalStartBalanceDiagnostics(entry, entries) {
   };
 }
 
+function summarizeNormalRetainedBalance(entries = []) {
+  const active = entries.filter((entry) => Number.isFinite(entry.balanceScore));
+  if (!active.length) {
+    return {
+      count: 0,
+      stdDev: 0,
+      min: null,
+      max: null,
+      range: 0,
+      worstScoreZ: 0,
+      worstScoreIndex: null,
+      worstActionZ: 0,
+      worstActionIndex: null
+    };
+  }
+
+  const values = active.map((entry) => entry.balanceScore);
+  let worstScore = { z: -Infinity, index: null };
+  let worstAction = { z: -Infinity, index: null };
+  active.forEach((entry) => {
+    const diagnostics = getNormalStartBalanceDiagnostics(entry, active, "balanceScore");
+    if (diagnostics.scoreZ > worstScore.z) {
+      worstScore = { z: diagnostics.scoreZ, index: entry.index };
+    }
+    if (diagnostics.actionZ > worstAction.z) {
+      worstAction = { z: diagnostics.actionZ, index: entry.index };
+    }
+  });
+
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  return {
+    count: active.length,
+    stdDev: Number(getNormalStartDispersion(active, "balanceScore").toFixed(2)),
+    min: Number(min.toFixed(2)),
+    max: Number(max.toFixed(2)),
+    range: Number((max - min).toFixed(2)),
+    worstScoreZ: Number(Math.max(0, worstScore.z).toFixed(2)),
+    worstScoreIndex: worstScore.index,
+    worstActionZ: Number(Math.max(0, worstAction.z).toFixed(2)),
+    worstActionIndex: worstAction.index
+  };
+}
+
 function chooseNormalStartBalanceRemoval(entries, playerCount, stdDevLimit = NORMAL_START_FAIRNESS_STDDEV_LIMIT) {
   const minimumStarts = Math.max(1, playerCount || 1);
   if (entries.length <= minimumStarts) {
     return null;
   }
 
-  const currentStdDev = getNormalStartDispersion(entries);
+  const currentStdDev = getNormalStartDispersion(entries, "balanceScore");
   const rankedOutliers = rankNormalStartOutliers(
     entries,
-    "adjustedScore",
+    "balanceScore",
     FULL_START_OUTLIER_Z
   );
 
@@ -10292,7 +11311,7 @@ function chooseNormalStartBalanceRemoval(entries, playerCount, stdDevLimit = NOR
     const retained = entries.filter((entry) => entry.index !== ranked.entry.index);
     return {
       index: ranked.entry.index,
-      score: ranked.entry.adjustedScore,
+      score: ranked.entry.balanceScore,
       actions: ranked.entry.bestActions,
       balanceDispersionPruned: false,
       scoreZ: ranked.scoreZ,
@@ -10300,7 +11319,7 @@ function chooseNormalStartBalanceRemoval(entries, playerCount, stdDevLimit = NOR
       scoreDelta: ranked.scoreDelta,
       actionDelta: ranked.actionDelta,
       balanceStdDevBefore: currentStdDev,
-      balanceStdDevAfterEstimate: getNormalStartDispersion(retained)
+      balanceStdDevAfterEstimate: getNormalStartDispersion(retained, "balanceScore")
     };
   }
 
@@ -10312,7 +11331,7 @@ function chooseNormalStartBalanceRemoval(entries, playerCount, stdDevLimit = NOR
     const retained = entries.filter((item) => item.index !== entry.index);
     return {
       entry,
-      scoreStdDev: getNormalStartDispersion(retained),
+      scoreStdDev: getNormalStartDispersion(retained, "balanceScore"),
       actionStdDev: getNormalStartDispersion(retained, "bestActions")
     };
   }).sort((left, right) => (
@@ -10326,10 +11345,10 @@ function chooseNormalStartBalanceRemoval(entries, playerCount, stdDevLimit = NOR
     return null;
   }
 
-  const diagnostics = getNormalStartBalanceDiagnostics(best.entry, entries);
+  const diagnostics = getNormalStartBalanceDiagnostics(best.entry, entries, "balanceScore");
   return {
     index: best.entry.index,
-    score: best.entry.adjustedScore,
+    score: best.entry.balanceScore,
     actions: best.entry.bestActions,
     balanceDispersionPruned: true,
     scoreZ: diagnostics.scoreZ,
@@ -10428,21 +11447,14 @@ function getCoursePreflightOpeningMinimum(startCount, playerCount, preferences =
   if (preferences.virtualBots) {
     return Math.min(startCount, 1);
   }
-  if (preferences.competitiveMode) {
-    // Competitive needs an offered pool large enough for one block per player
-    // while still leaving one choice per player.
-    return Math.max(1, playerCount * 2);
-  }
   if (preferences.payToWin) {
     return Math.min(startCount, Math.max(1, playerCount));
   }
 
-  // Normal prefers a little opening surplus, but an otherwise valid layout is
-  // not rejected merely because the physical setup offers exactly playerCount.
-  return Math.min(
-    startCount,
-    Math.max(1, playerCount + LIGHT_START_SURPLUS)
-  );
+  // Normal's hard preflight floor is only the number of robots that must be able
+  // to start. Fairness surplus is decided later from full-course intrinsic quality
+  // plus opening traffic; the cheap Flag-1 sketch must not pre-prune that choice.
+  return Math.min(startCount, Math.max(1, playerCount));
 }
 
 function uniquePreflightStates(routes = []) {
@@ -10457,53 +11469,6 @@ function uniquePreflightStates(routes = []) {
     states.push({ x: state.x, y: state.y, facing: state.facing ?? "E" });
   }
   return states;
-}
-
-function getIntrinsicOpeningOutliers(analyses = [], playerCount = 4, options = {}) {
-  const generationProfile = getGenerationModeProfile(options);
-  const routed = analyses.filter((analysis) => (
-    analysis.reachable &&
-    analysis.selectedRoute &&
-    Number.isFinite(analysis.bestScore) &&
-    Number.isFinite(analysis.bestActions)
-  ));
-  const minimumPool = Math.min(
-    routed.length,
-    Math.max(playerCount, playerCount + LIGHT_START_SURPLUS)
-  );
-
-  // One-pass only: judge every start against the original opening field. Do
-  // not let removing one outlier move the center and create another cascade.
-  const ranked = rankNormalStartOutliers(
-    routed.map((analysis) => ({
-      ...analysis,
-      adjustedScore: analysis.bestScore
-    })),
-    "adjustedScore",
-    LIGHT_START_OUTLIER_Z
-  );
-  const maxRemovals = Math.max(0, routed.length - minimumPool);
-  const outliers = ranked.slice(0, maxRemovals).map((candidate) => ({
-    index: candidate.entry.index,
-    score: candidate.score,
-    delta: Number(candidate.scoreDelta.toFixed(2)),
-    actionDelta: Number(candidate.actionDelta.toFixed(2)),
-    reasons: {
-      lightweightPruned: true,
-      stage: "intrinsic-first-leg-outlier",
-      scoreZ: Number(candidate.scoreZ.toFixed(2)),
-      actionZ: Number(candidate.actionZ.toFixed(2)),
-      minimumPool,
-      maxExpansions: generationProfile.preflightOpeningExpansions,
-      onePass: true
-    }
-  }));
-
-  return {
-    outliers,
-    excludedIndices: new Set(outliers.map((entry) => entry.index)),
-    minimumPool
-  };
 }
 
 function buildCoursePreflightSequence(tileMap, starts, flags, playerCount, options = {}) {
@@ -10534,19 +11499,19 @@ function buildCoursePreflightSequence(tileMap, starts, flags, playerCount, optio
     playerCount,
     options
   );
-  const openingPoolPolicy = options.payToWin
-    ? getReusableRoutePoolPolicy(starts.length, playerCount, options)
-    : null;
   const opening = analyzeCourse(tileMap, starts, firstGoal, {
     flags: [firstGoal],
     maxRoutes: 1,
     skipTraffic: true,
     playerCount,
     maxActions: COURSE_PREFLIGHT_OPENING_MAX_ACTIONS,
-    maxExpansions: generationProfile.preflightOpeningExpansions,
+    maxExpansions: Math.min(generationProfile.preflightOpeningExpansions, 700),
+    physicalTimingOnly: true,
+    physicalTelemetryKind: "physical-preflight-opening",
+    optionalTemplateExpansions: 60,
     requiredReachableStarts: requiredOpeningCount,
-    preferredReachableStarts: openingPoolPolicy?.targetCount ?? null,
-    stopWhenPreferredReachableLost: Boolean(options.payToWin),
+    preferredReachableStarts: null,
+    stopWhenPreferredReachableLost: false,
     recoveryRule: options.recoveryRule,
     ...getRouteAnalysisVariantOptions(options),
     startupSpinUp: options.startupSpinUp,
@@ -10558,27 +11523,23 @@ function buildCoursePreflightSequence(tileMap, starts, flags, playerCount, optio
     analysis.reachable && analysis.selectedRoute
   ));
 
-  const normalOpeningPruning = (
-    !options.competitiveMode &&
-    !options.payToWin &&
-    !options.virtualBots
-  )
-    ? getIntrinsicOpeningOutliers(opening.starts, playerCount, options)
-    : { outliers: [], excludedIndices: new Set(), minimumPool: starts.length };
+  // v23: preflight is an audition, never a Normal start-quality prune. The first
+  // real prune happens only after every detailed candidate has a full-course
+  // intrinsic route and Flag-1 traffic score.
+  const normalOpeningPruning = {
+    outliers: [],
+    excludedIndices: new Set(),
+    minimumPool: starts.length
+  };
 
-  if (routedOpening.length < requiredOpeningCount) {
-    return {
-      valid: false,
-      reason: `cheap opening sketch found ${routedOpening.length}/${requiredOpeningCount} desired routed starts`,
-      opening,
-      sequence: null,
-      openingRoutedCount: routedOpening.length,
-      requiredOpeningCount,
-      intrinsicOutliers: normalOpeningPruning.outliers,
-      excludedIndices: normalOpeningPruning.excludedIndices,
-      laterLegs: []
-    };
-  }
+  const unresolvedOpeningCount = opening.summary?.capacityShortCircuit?.unresolvedStarts ?? 0;
+  const incompleteOpeningSketch = routedOpening.length < requiredOpeningCount
+    ? {
+      routedStarts: routedOpening.length,
+      requiredStarts: requiredOpeningCount,
+      cappedOrUnresolvedStarts: unresolvedOpeningCount
+    }
+    : null;
 
   // The rest of preflight is deliberately representative, not a coherent
   // proof for every start. Its only job is to estimate the course profile and
@@ -10587,13 +11548,17 @@ function buildCoursePreflightSequence(tileMap, starts, flags, playerCount, optio
     routedOpening.map((analysis) => analysis.selectedRoute)
   );
   const laterLegs = [];
+  let incompleteLaterSketch = null;
 
   for (let legIndex = 1; legIndex < flags.length; legIndex += 1) {
     const leg = analyzeFlagLeg(tileMap, flags[legIndex - 1], flags[legIndex], {
       routesPerFacing: 1,
       maxDistinctRoutes: 4,
       maxActions: COURSE_PREFLIGHT_LATER_MAX_ACTIONS,
-      maxExpansions: generationProfile.preflightLaterExpansions,
+      maxExpansions: Math.min(generationProfile.preflightLaterExpansions, 600),
+      physicalTimingOnly: true,
+      physicalTelemetryKind: "physical-preflight-leg",
+      optionalTemplateExpansions: 60,
       startStates: routeStates,
       playerCount,
       recoveryRule: options.recoveryRule,
@@ -10604,17 +11569,13 @@ function buildCoursePreflightSequence(tileMap, starts, flags, playerCount, optio
     });
 
     if (!leg.distinctRoutes?.length) {
-      return {
-        valid: false,
-        reason: `cheap route sketch found no continuation for leg ${legIndex + 1}`,
-        opening,
-        sequence: null,
-        openingRoutedCount: routedOpening.length,
-        requiredOpeningCount,
-        intrinsicOutliers: normalOpeningPruning.outliers,
-        excludedIndices: normalOpeningPruning.excludedIndices,
-        laterLegs
+      const cappedZeroRouteStarts = leg.summary?.routeSearchHealth?.cappedZeroRouteStarts ?? 0;
+      incompleteLaterSketch = {
+        leg: legIndex + 1,
+        reason: cappedZeroRouteStarts > 0 ? "expansion-cap" : "cheap-horizon-exhausted",
+        cappedZeroRouteStarts
       };
+      break;
     }
 
     const intrinsicLeg = {
@@ -10674,6 +11635,8 @@ function buildCoursePreflightSequence(tileMap, starts, flags, playerCount, optio
     intrinsicOutliers: normalOpeningPruning.outliers,
     excludedIndices: normalOpeningPruning.excludedIndices,
     laterLegs,
+    incompleteOpeningSketch,
+    incompleteLaterSketch,
     sequence: {
       starts,
       firstLeg,
@@ -10689,13 +11652,17 @@ function buildCoursePreflightSequence(tileMap, starts, flags, playerCount, optio
 }
 
 function buildRouteAwareBatteryScoringOptions(coursePreflight, options = {}) {
-  if (!coursePreflight?.valid || options.lighterGame) {
+  // Design invariant: Energy Crisis / A Lighter Game is currently the only rule
+  // that removes Energy and upgrades from route quality. Missing calibration
+  // evidence may force a conservative fallback estimate, but must not silently
+  // turn the economy off on an otherwise normal course.
+  if (options.lighterGame) {
     return { routeAwareBatteryScoring: false };
   }
 
   const config = getRouteEnergyEconomyConfig(options);
-  const horizonActions = Number(coursePreflight.sequence?.summary?.totalActions);
-  const horizonTurns = Number.isFinite(horizonActions) && horizonActions > 0
+  const horizonActions = Number(coursePreflight?.sequence?.summary?.totalActions);
+  const measuredHorizonTurns = Number.isFinite(horizonActions) && horizonActions > 0
     ? horizonActions / config.registersPerTurn
     : 0;
   const registerSamples = [];
@@ -10707,17 +11674,26 @@ function buildRouteAwareBatteryScoringOptions(coursePreflight, options = {}) {
     }
   };
 
-  (coursePreflight.opening?.starts || []).forEach((analysis) => {
+  (coursePreflight?.opening?.starts || []).forEach((analysis) => {
     if (analysis?.reachable) addRoute(analysis.selectedRoute);
   });
-  (coursePreflight.laterLegs || []).forEach((leg) => {
+  (coursePreflight?.laterLegs || []).forEach((leg) => {
     (leg?.distinctRoutes || []).forEach(addRoute);
   });
 
-  const registerScore = medianValue(registerSamples);
-  if (!(horizonTurns > 0) || !(registerScore > 0)) {
-    return { routeAwareBatteryScoring: false };
-  }
+  const measuredRegisterScore = medianValue(registerSamples);
+  const fallbackHorizonTurns = Number(options.routeEnergyHorizonTurns) > 0
+    ? Number(options.routeEnergyHorizonTurns)
+    : 4;
+  const fallbackRegisterScore = Number(options.routeEnergyRegisterScore) > 0
+    ? Number(options.routeEnergyRegisterScore)
+    : 6.4;
+  const horizonTurns = measuredHorizonTurns > 0
+    ? measuredHorizonTurns
+    : fallbackHorizonTurns;
+  const registerScore = measuredRegisterScore > 0
+    ? measuredRegisterScore
+    : fallbackRegisterScore;
 
   return {
     routeAwareBatteryScoring: true,
@@ -10735,279 +11711,140 @@ function buildRouteAwareBatteryScoringOptions(coursePreflight, options = {}) {
     upgradeUsefulEnergyPerInstall: config.usefulEnergyPerInstall,
     upgradePowerRegistersPerEnergy: config.powerRegistersPerEnergy,
     routeRegistersPerTurn: config.registersPerTurn,
-    // v45 carries coupled Energy/card state and spends it through one normal
-    // draw and one install per Upgrade Phase, so 10E remains a storage cap.
+    // v18 keeps only reserve + race progress in production search. Unknown
+    // upgrade cards are valued immediately as expectations; no persistent card
+    // shadow survives into route dominance/cache state. The reference reserve
+    // remains useful for Pay to Win / Subsidized Starts fixed-route repricing.
     routeEnergyReferenceReserve: config.startingEnergy
   };
 }
 
-function getRoutePoolMode(options = {}) {
-  if (options.competitiveMode) return "competitive";
-  if (options.subsidizedStarts) return "subsidized-starts";
-  if (options.payToWin) return "pay-to-win";
-  if (options.virtualBots) return "virtual-bots";
-  return "normal";
-}
-
-function isPricedStartRoutePoolMode(mode) {
-  return mode === "pay-to-win" || mode === "subsidized-starts";
-}
-
-function getReusableRoutePoolPolicy(availableCount, playerCount, options = {}) {
-  const mode = getRoutePoolMode(options);
-  if (mode === "competitive") {
-    const requiredCount = Math.max(1, playerCount * 2);
-    return {
-      mode,
-      requiredCount,
-      // Competitive is the one mode where every physical starting space must
-      // receive a coherent evaluation. The 2P value is the acceptance floor,
-      // not a shortlist target.
-      targetCount: availableCount
-    };
-  }
-  if (isPricedStartRoutePoolMode(mode)) {
-    const targetCount = Math.min(
-      availableCount,
-      LIGHT_START_MAX_PRESSURE_POOL,
-      Math.max(playerCount + LIGHT_START_SURPLUS, playerCount * 2)
-    );
-    return {
-      mode,
-      requiredCount: Math.min(targetCount, playerCount + 1),
-      targetCount
-    };
-  }
-  if (mode === "virtual-bots") {
-    return { mode, requiredCount: 1, targetCount: Math.min(availableCount, 1) };
-  }
-
-  const targetCount = getLightweightPressurePoolTarget(availableCount, playerCount);
-  const reserveRoom = Math.max(0, targetCount - playerCount);
-  const requiredCount = Math.min(
-    targetCount,
-    playerCount + Math.min(LIGHT_START_SURPLUS, Math.floor(reserveRoom / 2))
-  );
-  return {
-    mode,
-    requiredCount: Math.max(1, requiredCount),
-    targetCount
-  };
-}
-
-function selectDiverseModeOpeningPool(entries, targetCount, options = {}) {
-  if (entries.length <= targetCount) {
-    return new Set(entries.map((entry) => entry.index));
-  }
-  if (!options.competitiveMode && !options.payToWin) {
-    return selectLightweightPressurePool(entries, targetCount);
-  }
-
-  const sortedByScore = [...entries].sort((left, right) => (
-    (left.bestScore ?? 0) - (right.bestScore ?? 0) || left.index - right.index
-  ));
-  const selected = [];
-  const selectedIndices = new Set();
-  const add = (entry) => {
-    if (!entry || selectedIndices.has(entry.index) || selected.length >= targetCount) return;
-    selected.push(entry);
-    selectedIndices.add(entry.index);
-  };
-
-  // Preserve both ends of the intrinsic start spectrum. Competitive can use
-  // them strategically; Pay to Win can price them.
-  add(sortedByScore[0]);
-  add(sortedByScore.at(-1));
-
-  const scoreValues = sortedByScore.map((entry) => entry.bestScore).filter(Number.isFinite);
-  const scoreRange = Math.max(1, (Math.max(...scoreValues) - Math.min(...scoreValues)) || 1);
-
-  while (selected.length < targetCount) {
-    let best = null;
-    let bestValue = -Infinity;
-    for (const candidate of entries) {
-      if (selectedIndices.has(candidate.index)) continue;
-      const start = candidate.start ?? {};
-      const spatial = selected.length
-        ? Math.min(...selected.map((chosen) => {
-          const other = chosen.start ?? {};
-          return Math.abs((start.x ?? 0) - (other.x ?? 0)) + Math.abs((start.y ?? 0) - (other.y ?? 0));
-        }))
-        : 0;
-      const scoreNovelty = selected.length && Number.isFinite(candidate.bestScore)
-        ? Math.min(...selected.map((chosen) => (
-          Math.abs(candidate.bestScore - (chosen.bestScore ?? candidate.bestScore)) / scoreRange
-        )))
-        : 0;
-      const value = spatial + scoreNovelty * 2;
-      if (value > bestValue) {
-        bestValue = value;
-        best = candidate;
-      }
-    }
-    if (!best) break;
-    add(best);
-  }
-
-  return selectedIndices;
-}
-
-function buildReusableRoutePool(tileMap, starts, flags, playerCount, coursePreflight, options = {}) {
-  const generationProfile = getGenerationModeProfile(options);
-  const excluded = coursePreflight?.excludedIndices ?? new Set();
-  // v46.2: plausible coherent route alternatives belong to the shared route
-  // layer, not to Normal mode. Competitive and Pay to Win can therefore
-  // select/reprice from the same small already-found route set without
-  // increasing the contextual expansion caps. Keep the legacy option alias so
-  // older callers remain harmless.
-  const preservePlausibleAlternatives = Boolean(
-    options.preservePlausibleAlternatives ?? options.preserveTrafficAlternatives
-  );
-  const routeStrategy = preservePlausibleAlternatives
-    ? {
-      openingRoutesPerStart: generationProfile.openingRoutes,
-      laterRoutesPerContext: generationProfile.laterRoutes,
-      stitchedBeamWidth: generationProfile.beamWidth,
-      completionPool: generationProfile.completionPool
-    }
-    : {
-      openingRoutesPerStart: 1,
-      laterRoutesPerContext: 1,
-      stitchedBeamWidth: 1,
-      completionPool: 1
-    };
-  const retainsAlternatives = (
-    routeStrategy.openingRoutesPerStart > 1 ||
-    routeStrategy.laterRoutesPerContext > 1 ||
-    routeStrategy.stitchedBeamWidth > 1 ||
-    routeStrategy.completionPool > 1
-  );
-  const routedOpening = (coursePreflight?.opening?.starts ?? []).filter((analysis) => (
-    analysis.reachable &&
-    analysis.selectedRoute &&
-    !excluded.has(analysis.index)
-  ));
-  const policy = getReusableRoutePoolPolicy(
-    options.competitiveMode ? starts.length : routedOpening.length,
-    playerCount,
-    options
-  );
-  if (routedOpening.length < policy.requiredCount) {
+function screenTargetedNormalCoherentCapacity(
+  tileMap,
+  starts,
+  flags,
+  playerCount,
+  openingSeedAnalyses,
+  options = {}
+) {
+  if (!flags.length || starts.length < playerCount) {
     return {
       valid: false,
-      reason: `${policy.mode} route pool has only ${routedOpening.length}/${policy.requiredCount} cheap opening routes`,
-      ...policy,
-      sourceOpeningCount: routedOpening.length,
-      candidateCount: 0,
-      coherentRoutedCount: 0,
-      survivorStarts: [],
-      seedStartAnalyses: []
+      skipped: false,
+      survivingStarts: 0,
+      requiredStarts: playerCount,
+      maxExpansions: 0,
+      failureHealth: null,
+      analysis: null
     };
   }
 
-  const selectedSet = options.competitiveMode
-    ? new Set(starts.map((start, index) => (
-      Number.isInteger(start.analysisIndex) ? start.analysisIndex : index
-    )))
-    : selectDiverseModeOpeningPool(
-      routedOpening,
-      policy.targetCount,
-      options
-    );
-  const candidateOpeningAnalyses = routedOpening.filter((analysis) => selectedSet.has(analysis.index));
-  const candidateStarts = starts.filter((start, index) => {
-    const sourceIndex = Number.isInteger(start.analysisIndex) ? start.analysisIndex : index;
-    return selectedSet.has(sourceIndex);
-  });
-  const movingTargetTimelines = coursePreflight?.sequence?.movingTargetTimelines ?? buildMovingTargetTimelines(
-    tileMap,
-    flags,
-    options.movingTargets,
-    { maxActions: 16 }
+  // Fast/Fastest already have tight total budgets; avoid adding an extra gate
+  // there. The tail-latency regression this experiment targets is most visible
+  // in Standard and richer modes.
+  const mode = normalizeGenerationMode(options.generationMode);
+  if (mode === "fastest" || mode === "fast") {
+    return {
+      valid: true,
+      skipped: true,
+      survivingStarts: starts.length,
+      requiredStarts: playerCount,
+      maxExpansions: 0,
+      failureHealth: null,
+      analysis: null
+    };
+  }
+
+  const generationProfile = getGenerationModeProfile(options);
+  const maxExpansions = Math.min(
+    TARGETED_NORMAL_CAPACITY_GATE_MAX_EXPANSIONS,
+    Math.max(
+      TARGETED_NORMAL_CAPACITY_GATE_MIN_EXPANSIONS,
+      Math.round(generationProfile.preflightLaterExpansions * 0.42)
+    )
   );
 
-  let analysis = null;
   try {
-    analysis = analyzeFullCourse(tileMap, candidateStarts, flags, {
-      flags,
+    const analysis = analyzeFullCourse(tileMap, starts, flags, {
+      ...options,
       playerCount,
-      recoveryRule: options.recoveryRule,
-      ...getRouteAnalysisVariantOptions(options),
-      startupSpinUp: options.startupSpinUp,
-      rebootTokens: options.rebootTokens,
-      boardRects: options.boardRects,
-      dynamicGoals: movingTargetTimelines,
-      payToWin: options.payToWin,
-      competitiveMode: options.competitiveMode,
-      virtualBots: false,
+      // v12 design invariant: this gate is allowed to be shallow, but not to
+      // change what makes a route good. Keep route-aware Energy economy active
+      // whenever the production options have it active. Only Energy Crisis
+      // (lighterGame) legitimately removes Energy/upgrades from route quality.
       contextualLegSearch: true,
       contextualEarlyExit: true,
-      contextualRequiredStarts: policy.requiredCount,
-      contextualPreferredStarts: isPricedStartRoutePoolMode(policy.mode) ? policy.targetCount : null,
-      contextualStopWhenPreferredLost: isPricedStartRoutePoolMode(policy.mode),
-      // Preflight opening routes still use the legacy static Battery score.
-      // Once v42 production scoring is active, re-search Flag 1 so the coherent
-      // pool is built entirely in the new route-aware Battery currency.
-      contextualOpeningSeedAnalyses: options.routeAwareBatteryScoring ? null : candidateOpeningAnalyses,
-      contextualOpeningRoutes: routeStrategy.openingRoutesPerStart,
-      contextualLaterRoutes: routeStrategy.laterRoutesPerContext,
-      contextualBeamWidth: routeStrategy.stitchedBeamWidth,
-      contextualCompletionPool: routeStrategy.completionPool,
-      contextualWholePartialDiversity: retainsAlternatives,
-      contextualTrafficAlternativeRetention: retainsAlternatives,
-      contextualOpeningExpansions: generationProfile.preflightOpeningExpansions,
-      contextualLaterExpansions: generationProfile.preflightLaterExpansions,
+      contextualRequiredStarts: playerCount,
+      contextualPreferredStarts: null,
+      contextualStopWhenPreferredLost: false,
+      // Preflight Flag-1 seeds were selected with the legacy static Battery
+      // score. They are safe to reuse only when route-aware economy is inactive;
+      // otherwise let the bounded gate search Flag 1 under the same economy as
+      // production rather than silently changing the route objective.
+      contextualOpeningSeedAnalyses: options.routeAwareBatteryScoring
+        ? null
+        : openingSeedAnalyses,
+      contextualSeedStartAnalyses: null,
+      contextualSeedRouteStrategy: null,
+      contextualOpeningRoutes: 1,
+      contextualLaterRoutes: 1,
+      contextualBeamWidth: 1,
+      contextualCompletionPool: 1,
+      contextualOptionalCompletionExpansions: 0,
+      contextualUncertaintyBreadth: true,
+      contextualOpeningExpansions: maxExpansions,
+      contextualLaterExpansions: maxExpansions,
       contextualLegMaxActions: COURSE_PREFLIGHT_LATER_MAX_ACTIONS,
+      contextualDetailedProfiling: false,
+      contextualDominanceKeyProfiling: false,
       skipFullCourseTraffic: true,
       skipTraffic: true,
       diverseFullCourseSearch: false
     });
+    const survivingStarts = analysis?.starts?.filter((entry) => (
+      entry.reachable && entry.fullCourseRoute
+    )).length ?? 0;
+    return {
+      valid: survivingStarts >= playerCount,
+      skipped: false,
+      survivingStarts,
+      requiredStarts: playerCount,
+      maxExpansions,
+      failureHealth: analysis?.summary?.contextualLegCache ?? null,
+      analysis
+    };
   } catch (error) {
     if (error?.code !== "CONTEXTUAL_START_CAPACITY_LOST") throw error;
-    const health = error.contextualSearchHealth ?? {};
+    const health = cloneContextualSearchHealth(error.contextualSearchHealth);
+    const cappedContextsThisLeg = Math.max(
+      0,
+      Number(health?.cappedContextsThisLeg ?? health?.zeroRouteCapFailures ?? 0) || 0
+    );
+    const cappedStartsThisLeg = Math.max(
+      0,
+      Number(health?.cappedStartsThisLeg ?? 0) || 0
+    );
+    const inconclusive = cappedContextsThisLeg > 0 || cappedStartsThisLeg > 0;
+
+    // Design invariant (v14): this is a cheap *screen*, not a second route
+    // acceptance model. A zero-route result produced by the 420-520 expansion
+    // audition is evidence only if that search actually finished. If one or more
+    // starts disappeared because their bounded route search hit its cap, the gate
+    // has learned "not cheaply proven", not "unplayable". Let production
+    // contextual analysis decide those cases with its normal budget. This preserves
+    // the intended early-pruning win on obvious dead starts without turning a
+    // performance cap into a hidden gameplay rule.
     return {
-      valid: false,
-      reason: `${policy.mode} coherent pool kept ${health.survivingStarts ?? 0}/${policy.requiredCount} routed starts through leg ${health.legNumber ?? "?"}${Number.isFinite(health.maximumPossibleStarts) ? ` (at most ${health.maximumPossibleStarts} could still survive)` : ""}`,
-      ...policy,
-      sourceOpeningCount: routedOpening.length,
-      candidateCount: candidateStarts.length,
-      coherentRoutedCount: health.survivingStarts ?? 0,
-      survivorStarts: [],
-      seedStartAnalyses: [],
-      failureHealth: cloneContextualSearchHealth(health)
+      valid: inconclusive,
+      inconclusive,
+      skipped: false,
+      survivingStarts: health?.survivingStarts ?? 0,
+      requiredStarts: health?.requiredStarts ?? playerCount,
+      maxExpansions,
+      failureHealth: health,
+      analysis: null
     };
   }
-
-  const seedStartAnalyses = analysis.starts.filter((entry) => (
-    entry.reachable && entry.fullCourseRoute
-  ));
-  const survivorIndices = new Set(seedStartAnalyses.map((entry) => entry.index));
-  const survivorStarts = candidateStarts.filter((start, index) => {
-    const sourceIndex = Number.isInteger(start.analysisIndex) ? start.analysisIndex : index;
-    return survivorIndices.has(sourceIndex);
-  });
-  const coherentRoutedCount = seedStartAnalyses.length;
-
-  return {
-    valid: coherentRoutedCount >= policy.requiredCount,
-    reason: coherentRoutedCount >= policy.requiredCount
-      ? null
-      : `${policy.mode} coherent pool found ${coherentRoutedCount}/${policy.requiredCount} required starts`,
-    ...policy,
-    sourceOpeningCount: routedOpening.length,
-    candidateCount: candidateStarts.length,
-    coherentRoutedCount,
-    openingReused: !options.routeAwareBatteryScoring,
-    selectedIndices: [...selectedSet].sort((left, right) => left - right),
-    survivorStarts,
-    seedStartAnalyses,
-    routeStrategy: {
-      ...routeStrategy,
-      wholePartialDiversity: retainsAlternatives,
-      trafficAlternativeRetention: retainsAlternatives
-    },
-    analysis
-  };
 }
 
 function getPreflightGrossCourseMismatch(metrics, preferences = {}) {
@@ -11077,6 +11914,16 @@ function getPreflightGrossCourseMismatch(metrics, preferences = {}) {
 
 function classifyCoursePreflight(preflight, preferences, context = {}) {
   if (!preflight?.sequence) return null;
+  if (preflight.incompleteOpeningSketch || preflight.incompleteLaterSketch) {
+    return {
+      difficultyRaw: null,
+      lengthRaw: null,
+      lengthFitRaw: null,
+      lengthMetrics: null,
+      incompleteOpeningSketch: preflight.incompleteOpeningSketch ?? null,
+      incompleteLaterSketch: preflight.incompleteLaterSketch ?? null
+    };
+  }
   const boardHarshness = computeBoardHarshness(context.boardPlacements, context.pieceMap);
   const checkpointPressure = computeLaterCheckpointPressure(
     context.tileMap,
@@ -11093,7 +11940,8 @@ function classifyCoursePreflight(preflight, preferences, context = {}) {
       movingTargetStats,
       goalTileMap: context.goalTileMap ?? context.tileMap
     },
-    boardHarshness
+    boardHarshness,
+    preflight.sequence
   );
   const lengthMetrics = computeLengthMetrics(
     preflight.sequence,
@@ -11114,6 +11962,8 @@ function classifyCoursePreflight(preflight, preferences, context = {}) {
   };
 }
 
+// Legacy diagnostic helper. v33 production Normal no longer calls this as a
+// pruning/eligibility stage; all structural starts go to full-course routing first.
 function getLightweightStartPruning(tileMap, starts, flags, playerCount, options = {}) {
   const generationProfile = getGenerationModeProfile(options);
   const minimumPool = getLightweightPressurePoolTarget(starts.length, playerCount);
@@ -11388,58 +12238,238 @@ function screenSandwichedExtraDockOpening(
   };
 }
 
+function adjustNormalStartsAfterFullTraffic(
+  firstLeg,
+  totalLength,
+  tileMap,
+  playerCount,
+  options = {}
+) {
+  const previousBalance = firstLeg.summary?.normalStartBalance ?? {};
+  const initialExcludedIndices = new Set([
+    ...(previousBalance.lightweightPruned ?? []),
+    ...(previousBalance.pressurePruned ?? []).map((entry) => entry.index)
+  ]);
+  const analysisOptions = {
+    ...getRouteAnalysisVariantOptions(options),
+    playerCount,
+    openingTrafficOnly: false,
+    balanceTrafficScope: "full",
+    trafficOccupancyUseBalanceScore: true,
+    carryOccupancyScores: true,
+    fullCourseTrafficPasses: options.fullCourseTrafficPasses ?? 1
+  };
+  const initialActive = getActivePruningStarts(firstLeg, initialExcludedIndices);
+  const initialStdDev = getNormalStartDispersion(initialActive, "balanceScore");
+  const maxIterations = Math.max(
+    0,
+    Math.min(
+      Number(options.normalFullTrafficPrunePasses) || 0,
+      initialActive.length - Math.max(1, playerCount || 1)
+    )
+  );
+
+  if (!(maxIterations > 0)) {
+    const remainingOutliers = rankNormalStartOutliers(
+      initialActive,
+      "balanceScore",
+      FULL_START_OUTLIER_Z
+    );
+    const reject = (
+      remainingOutliers.length > 0 ||
+      initialStdDev > NORMAL_START_FAIRNESS_STDDEV_LIMIT
+    );
+    return {
+      ...firstLeg,
+      summary: {
+        ...firstLeg.summary,
+        normalStartBalance: {
+          ...previousBalance,
+          fullTrafficFeedback: true,
+          fullTrafficIterations: 0,
+          fullTrafficPruned: [],
+          balanceStdDevAfterFullTraffic: Number(initialStdDev.toFixed(2)),
+          remainingBadStarts: remainingOutliers.map((item) => ({
+            index: item.entry.index,
+            score: item.score,
+            scoreZ: Number(item.scoreZ.toFixed(2)),
+            actionZ: Number(item.actionZ.toFixed(2))
+          })),
+          reject
+        }
+      }
+    };
+  }
+
+  const result = runIterativeStartBalancing(
+    firstLeg,
+    tileMap,
+    playerCount,
+    analysisOptions,
+    ({ activeStarts }) => chooseNormalStartBalanceRemoval(
+      activeStarts,
+      playerCount,
+      NORMAL_START_FAIRNESS_STDDEV_LIMIT
+    ),
+    {
+      initialExcludedIndices: [...initialExcludedIndices],
+      inputAlreadyReflectsExcluded: true,
+      pruneBatchSize: options.normalPruneBatchSize ?? 1,
+      maxPasses: maxIterations
+    }
+  );
+
+  const remainingActive = getActivePruningStarts(
+    result.currentFirstLeg,
+    result.excludedIndices
+  );
+  const remainingOutliers = rankNormalStartOutliers(
+    remainingActive,
+    "balanceScore",
+    FULL_START_OUTLIER_Z
+  );
+  const remainingStdDev = getNormalStartDispersion(
+    remainingActive,
+    "balanceScore"
+  );
+  const newRemovals = result.removals.filter((removed) => (
+    !initialExcludedIndices.has(removed.index)
+  )).map((removed, removalIndex) => ({
+    index: removed.index,
+    score: removed.score,
+    actions: removed.actions,
+    pass: removed.pass,
+    diagnostics: {
+      normalBalancePruned: true,
+      balanceDispersionPruned: Boolean(removed.balanceDispersionPruned),
+      stage: removed.balanceDispersionPruned
+        ? "iterative-full-traffic-dispersion"
+        : "iterative-full-traffic-outlier",
+      scoreZ: Number((removed.scoreZ ?? 0).toFixed(2)),
+      actionZ: Number((removed.actionZ ?? 0).toFixed(2)),
+      scoreDelta: Number((removed.scoreDelta ?? 0).toFixed(2)),
+      actionDelta: Number((removed.actionDelta ?? 0).toFixed(2)),
+      balanceStdDevBefore: Number((removed.balanceStdDevBefore ?? 0).toFixed(2)),
+      balanceStdDevAfterEstimate: Number((removed.balanceStdDevAfterEstimate ?? 0).toFixed(2)),
+      balanceStdDevLimit: NORMAL_START_FAIRNESS_STDDEV_LIMIT,
+      removalReason: "removed after full-course traffic/rerouting, then recomputed occupancy before the next feedback pass",
+      totalCourseLength: Number((totalLength || 0).toFixed(2)),
+      fullTrafficRemovalIndex: removalIndex
+    }
+  }));
+  const combinedPressurePruned = [
+    ...(previousBalance.pressurePruned ?? []),
+    ...newRemovals
+  ];
+  const reject = (
+    remainingOutliers.length > 0 ||
+    remainingStdDev > NORMAL_START_FAIRNESS_STDDEV_LIMIT
+  );
+
+  return {
+    ...result.currentFirstLeg,
+    summary: {
+      ...result.currentFirstLeg.summary,
+      outliers: [
+        ...(firstLeg.summary?.outliers ?? []),
+        ...newRemovals.map((removal) => ({
+          index: removal.index,
+          score: removal.score,
+          delta: 0,
+          actionDelta: Number(removal.actions ?? 0),
+          reasons: removal.diagnostics
+        }))
+      ],
+      normalStartBalance: {
+        ...previousBalance,
+        pressurePruned: combinedPressurePruned,
+        dispersionPruned: combinedPressurePruned
+          .filter((item) => item.diagnostics?.balanceDispersionPruned)
+          .map((item) => item.index),
+        fullTrafficFeedback: true,
+        fullTrafficIterations: new Set(newRemovals.map((item) => item.pass)).size,
+        fullTrafficPruned: newRemovals,
+        trafficRecomputations: (previousBalance.trafficRecomputations ?? 0) +
+          new Set(newRemovals.map((item) => item.pass)).size,
+        balanceStdDevBeforeFullTraffic: Number(initialStdDev.toFixed(2)),
+        balanceStdDevAfterFullTraffic: Number(remainingStdDev.toFixed(2)),
+        balanceStdDevAfter: Number(remainingStdDev.toFixed(2)),
+        remainingBadStarts: remainingOutliers.map((item) => ({
+          index: item.entry.index,
+          score: item.score,
+          scoreZ: Number(item.scoreZ.toFixed(2)),
+          actionZ: Number(item.actionZ.toFixed(2))
+        })),
+        reject
+      }
+    }
+  };
+}
+
 function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) {
   const generationProfile = getGenerationModeProfile(options);
-  // Generation Mode is the default search-effort contract for every rich
-  // contextual refinement. Explicit one-off overrides (for example the cheap
-  // target gate) still win, but an omitted contextual option must not fall
-  // through to analyze.js's older 2/3/2/4, 7000/6000 defaults.
-  const contextualOpeningRoutes = options.contextualOpeningRoutes ?? generationProfile.openingRoutes;
-  const contextualLaterRoutes = options.contextualLaterRoutes ?? generationProfile.laterRoutes;
-  const contextualBeamWidth = options.contextualBeamWidth ?? generationProfile.beamWidth;
-  const contextualCompletionPool = options.contextualCompletionPool ?? generationProfile.completionPool;
+  // v35: generation modes are effort envelopes around one Normal model. They do
+  // not select different route/fairness objectives. Dev View may still explicitly
+  // disable traffic or traffic exploration for controlled comparisons.
+  const trafficEnabled = typeof options.trafficEnabledOverride === "boolean"
+    ? options.trafficEnabledOverride
+    : Boolean(
+      options.fastBaselineTrafficEnabled === true ||
+      options.modeTrafficEnabled === true ||
+      generationProfile.trafficEnabled === true
+    );
+  const trafficFeedbackLoopEnabled = Boolean(
+    trafficEnabled &&
+    options.contextualEstimatedPrimaryRouting &&
+    (options.contextualTrafficFeedbackEnabled !== false) &&
+    (Number(options.contextualTrafficEpochs ?? generationProfile.trafficEpochs) || 0) > 0
+  );
+  const trafficDrivenAlternatesEnabled = Boolean(
+    trafficFeedbackLoopEnabled &&
+    (options.contextualTrafficDrivenAlternates !== false)
+  );
+  const contextualOpeningRoutes = 1;
+  const contextualLaterRoutes = 1;
+  const contextualBeamWidth = 1;
+  const contextualCompletionPool = 1;
+  const contextualOptionalCompletionExpansions = 0;
+  const contextualFullForecastShare = NORMAL_CONTEXTUAL_FULL_FORECAST_SHARE;
   const contextualOpeningExpansions = options.contextualOpeningExpansions ?? generationProfile.preflightOpeningExpansions;
   const contextualLaterExpansions = options.contextualLaterExpansions ?? generationProfile.preflightLaterExpansions;
+  const normalOpeningTrafficFirst = Boolean(
+    trafficEnabled &&
+    !trafficFeedbackLoopEnabled &&
+    !options.virtualBots &&
+    !options.payToWin &&
+    !options.subsidizedStarts &&
+    !options.skipNormalStartBalancing &&
+    !options.skipFullCourseTraffic
+  );
   const movingTargetTimelines = options.movingTargetTimelines ?? buildMovingTargetTimelines(
     tileMap,
     flags,
     options.movingTargets,
     { maxActions: options.movingTargetMaxActions ?? 16 }
   );
+  // v33 production invariant: every structural start enters the contextual
+  // estimate→realize pipeline. The old lightweight first-leg pruning helper is
+  // retained below only for historical/targeted diagnostics; it is not a Normal
+  // eligibility stage and cannot hide a start before full-course routing.
   const contextualLegSearch = true;
-  const prePruning = contextualLegSearch
-    ? {
-      starts: starts.map((start, index) => ({
-        ...start,
-        analysisIndex: Number.isInteger(start.analysisIndex)
-          ? start.analysisIndex
-          : index
-      })),
-      analyses: [],
-      excludedIndices: new Set(),
-      outliers: [],
-      minimumPool: starts.length,
-      active: false
-    }
-    : getLightweightStartPruning(
-      tileMap,
-      starts,
-      flags,
-      playerCount,
-      {
-        ...options,
-        movingTargetTimelines
-      }
-    );
-  const lateRouteCount = contextualLegSearch
-    ? contextualLaterRoutes
-    : (
-      !options.competitiveMode &&
-      !options.payToWin &&
-      prePruning.starts.length <= prePruning.minimumPool
-    )
-      ? 3
-      : 2;
+  const prePruning = {
+    starts: starts.map((start, index) => ({
+      ...start,
+      analysisIndex: Number.isInteger(start.analysisIndex)
+        ? start.analysisIndex
+        : index
+    })),
+    analyses: [],
+    excludedIndices: new Set(),
+    outliers: [],
+    minimumPool: starts.length,
+    active: false
+  };
+  const lateRouteCount = contextualLaterRoutes;
   const analyzedFirstLeg = analyzeFullCourse(
     tileMap,
     prePruning.starts,
@@ -11448,7 +12478,7 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
       maxRoutes: lateRouteCount,
       maxActions: Math.max(24, flags.length * 18 + 8),
       maxExpansions: generationProfile.fullCourseExpansions,
-      fullCourseTrafficPasses: options.fullCourseTrafficPasses ?? generationProfile.fullCourseTrafficPasses,
+      fullCourseTrafficPasses: options.fullCourseTrafficPasses ?? NORMAL_FULL_COURSE_TRAFFIC_PASSES,
       flags,
       playerCount,
       recoveryRule: options.recoveryRule,
@@ -11466,6 +12496,39 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
       contextualLaterRoutes,
       contextualBeamWidth,
       contextualCompletionPool,
+      contextualOptionalCompletionExpansions,
+      contextualFullForecastShare,
+      contextualUncertaintyBreadth: Boolean(
+        options.contextualUncertaintyBreadth || options.contextualAdaptiveUncertaintyHorizon
+      ),
+      contextualSharedLaterLegCatalogue: Boolean(options.contextualSharedLaterLegCatalogue),
+      contextualEstimatedPrimaryRouting: Boolean(options.contextualEstimatedPrimaryRouting),
+      contextualEstimatedEnergyGuidance: options.contextualEstimatedEnergyGuidance !== false,
+      contextualTrafficFeedbackEnabled: trafficFeedbackLoopEnabled,
+      contextualTrafficDrivenAlternates: trafficDrivenAlternatesEnabled,
+      contextualTrafficEpochs: options.contextualTrafficEpochs ?? generationProfile.trafficEpochs,
+      contextualTrafficAlternateDemandThreshold:
+        options.contextualTrafficAlternateDemandThreshold ?? NORMAL_TRAFFIC_ALTERNATE_DEMAND_THRESHOLD,
+      contextualTrafficAlternateMinGain:
+        options.contextualTrafficAlternateMinGain ?? NORMAL_TRAFFIC_ALTERNATE_MIN_GAIN,
+      contextualTrafficAlternateMaxNewSearchesPerEpoch:
+        options.contextualTrafficAlternateMaxNewSearchesPerEpoch ??
+        generationProfile.trafficAlternateMaxNewSearchesPerEpoch,
+      contextualTrafficAlternateExpansions:
+        options.contextualTrafficAlternateExpansions ?? generationProfile.trafficAlternateExpansions,
+      contextualTrafficAlternateMaxActions:
+        options.contextualTrafficAlternateMaxActions ?? generationProfile.trafficAlternateMaxActions,
+      contextualTrafficAlternateCachedProbeMargin:
+        options.contextualTrafficAlternateCachedProbeMargin ?? generationProfile.trafficAlternateCachedProbeMargin,
+      contextualTrafficAlternateCachedProbeMaxSimilarity:
+        options.contextualTrafficAlternateCachedProbeMaxSimilarity ?? generationProfile.trafficAlternateCachedProbeMaxSimilarity,
+      contextualTrafficAlternateLegsPerStart:
+        options.contextualTrafficAlternateLegsPerStart ?? generationProfile.trafficAlternateLegsPerStart,
+      contextualTrafficExplorationUncertaintyShare:
+        options.contextualTrafficExplorationUncertaintyShare ?? generationProfile.trafficExplorationUncertaintyShare,
+      contextualTrafficExplorationConfidenceFloor:
+        options.contextualTrafficExplorationConfidenceFloor ?? generationProfile.trafficExplorationConfidenceFloor,
+      contextualTrafficUncertainty: options.contextualTrafficUncertainty,
       contextualSeedStartAnalyses: options.contextualSeedStartAnalyses,
       contextualSeedRouteStrategy: options.contextualSeedRouteStrategy,
       contextualOpeningSeedAnalyses: options.contextualOpeningSeedAnalyses,
@@ -11475,18 +12538,27 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
       contextualOpeningExpansions,
       contextualLaterExpansions,
       contextualLegMaxActions: options.contextualLegMaxActions,
-      contextualOptionalRouteBudgetRatio: options.contextualOptionalRouteBudgetRatio,
-      skipFullCourseTraffic: Boolean(options.skipFullCourseTraffic),
+      contextualPhysicalTemplateRoutes: options.contextualPhysicalTemplateRoutes,
+      contextualPrimaryWitnessRoutes: options.contextualPrimaryWitnessRoutes,
+      contextualPhysicalTemplateExpansions: options.contextualPhysicalTemplateExpansions,
+      contextualPhysicalTemplateMaxActions: options.contextualPhysicalTemplateMaxActions,
+      contextualExactRepairExpansions: options.contextualExactRepairExpansions,
+      contextualDetailedProfiling: Boolean(options.contextualDetailedProfiling),
+      contextualDominanceKeyProfiling: Boolean(options.contextualDominanceKeyProfiling),
+      contextualFastCardState: options.contextualFastCardState !== false,
+      skipTraffic: Boolean(options.skipTraffic || !trafficEnabled),
+      // The new loop evaluates full-course traffic before the stable pruning
+      // checkpoint. Legacy opening-first traffic remains available outside the
+      // estimate→realize path.
+      trafficOccupancyUseBalanceScore: normalOpeningTrafficFirst,
+      balanceTrafficScope: trafficFeedbackLoopEnabled ? "full" : options.balanceTrafficScope,
+      skipFullCourseTraffic: Boolean(
+        options.skipFullCourseTraffic || !trafficEnabled || normalOpeningTrafficFirst
+      ),
       diverseFullCourseSearch: false
     }, playerCount)
   );
-  const firstLeg = contextualLegSearch
-    ? analyzedFirstLeg
-    : mergeLightweightPrunedStarts(
-      analyzedFirstLeg,
-      prePruning,
-      starts.length
-    );
+  const firstLeg = analyzedFirstLeg;
 
   if (firstLeg?.summary) {
     // Keep the effective contextual contract beside the route diagnostics so a
@@ -11494,12 +12566,51 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
     firstLeg.summary.contextualSearchProfile = {
       generationMode: normalizeGenerationMode(options.generationMode),
       generationModeLabel: formatGenerationModeLabel(options.generationMode),
-      openingRoutes: contextualOpeningRoutes,
-      laterRoutes: contextualLaterRoutes,
-      beamWidth: contextualBeamWidth,
-      completionPool: contextualCompletionPool,
+      primaryRoutePolicy: "single-estimate+internal-witnesses",
+      uncertaintyBreadth: Boolean(
+        options.contextualUncertaintyBreadth || options.contextualAdaptiveUncertaintyHorizon
+      ),
+      uncertaintyMechanism: options.contextualEstimatedPrimaryRouting
+        ? "soft-estimate+exact-whole-route-realization"
+        : "exact-card-count-state",
+      fastCardState: options.contextualFastCardState !== false,
+      trafficEnabled,
+      trafficFeedbackLoopEnabled,
+      trafficAlternatesEnabled: trafficDrivenAlternatesEnabled,
+      trafficEpochs: trafficFeedbackLoopEnabled
+        ? (options.contextualTrafficEpochs ?? generationProfile.trafficEpochs)
+        : 0,
+      trafficAlternateDemandThreshold:
+        options.contextualTrafficAlternateDemandThreshold ?? NORMAL_TRAFFIC_ALTERNATE_DEMAND_THRESHOLD,
+      trafficAlternateMinGain:
+        options.contextualTrafficAlternateMinGain ?? NORMAL_TRAFFIC_ALTERNATE_MIN_GAIN,
+      trafficAlternateMaxNewSearchesPerEpoch:
+        options.contextualTrafficAlternateMaxNewSearchesPerEpoch ??
+        generationProfile.trafficAlternateMaxNewSearchesPerEpoch,
+      trafficAlternateExpansions:
+        options.contextualTrafficAlternateExpansions ?? generationProfile.trafficAlternateExpansions,
+      trafficAlternateMaxActions:
+        options.contextualTrafficAlternateMaxActions ?? generationProfile.trafficAlternateMaxActions,
+      trafficAlternateCachedProbeMargin:
+        options.contextualTrafficAlternateCachedProbeMargin ?? generationProfile.trafficAlternateCachedProbeMargin,
+      trafficAlternateCachedProbeMaxSimilarity:
+        options.contextualTrafficAlternateCachedProbeMaxSimilarity ?? generationProfile.trafficAlternateCachedProbeMaxSimilarity,
+      trafficExplorationUncertaintyShare:
+        options.contextualTrafficExplorationUncertaintyShare ?? generationProfile.trafficExplorationUncertaintyShare,
+      trafficExplorationConfidenceFloor:
+        options.contextualTrafficExplorationConfidenceFloor ?? generationProfile.trafficExplorationConfidenceFloor,
+      estimatedEnergyGuidance: options.contextualEstimatedEnergyGuidance !== false,
+      normalPruneBatchSize: NORMAL_PRUNE_BATCH_SIZE,
+      sharedLaterLegCatalogue: Boolean(options.contextualSharedLaterLegCatalogue),
+      estimatedPrimaryRouting: Boolean(options.contextualEstimatedPrimaryRouting),
       openingExpansions: contextualOpeningExpansions,
-      laterExpansions: contextualLaterExpansions
+      laterExpansions: contextualLaterExpansions,
+      physicalTemplateRoutes: options.contextualPhysicalTemplateRoutes ?? 3,
+      primaryWitnessRoutes: options.contextualPrimaryWitnessRoutes ?? 3,
+      arrivalClassRouting: Boolean(options.contextualSharedLaterLegCatalogue),
+      physicalTemplateExpansions: options.contextualPhysicalTemplateExpansions ?? 700,
+      physicalTemplateMaxActions: options.contextualPhysicalTemplateMaxActions ?? 36,
+      exactRepairExpansions: options.contextualExactRepairExpansions ?? 550
     };
   }
 
@@ -11541,31 +12652,80 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
 
     return sum + (leg.analysis.summary.averageRouteActions || 0);
   }, 0);
-  const courseAdjustedFirstLeg = (options.competitiveMode || options.virtualBots || options.skipNormalStartBalancing)
-    ? {
-      ...firstLeg,
-      summary: {
-        ...firstLeg.summary,
-        outliers: []
+  // v36: Competitive uses the same route construction, programming realization,
+  // Energy valuation and traffic model as Normal. The only semantic fork is the
+  // pruning stage: P players make P sequential optimal blocks, one at a time,
+  // then the best P remaining starts are evaluated against Normal's fairness bar.
+  const courseAdjustedFirstLeg = options.competitiveMode
+    ? applyCompetitiveStrategicBlocking(firstLeg, tileMap, playerCount, {
+      ...options,
+      skipTraffic: Boolean(options.skipTraffic || !trafficEnabled),
+      competitiveBlockTrafficScope: trafficFeedbackLoopEnabled ? "full" : "opening",
+      fullCourseTrafficPasses: options.fullCourseTrafficPasses ?? NORMAL_FULL_COURSE_TRAFFIC_PASSES
+    })
+    : (options.virtualBots || options.skipNormalStartBalancing)
+      ? {
+        ...firstLeg,
+        summary: {
+          ...firstLeg.summary,
+          outliers: []
+        }
       }
-    }
-    : options.payToWin
-      ? applyPayToWinStartPricing(firstLeg, tileMap, playerCount, {
+      : (options.payToWin || options.subsidizedStarts)
+        ? applyPayToWinStartPricing(firstLeg, tileMap, playerCount, {
+          ...options,
+          totalActions,
+          totalLength
+        })
+        : adjustStartOutliersForCourseLength(firstLeg, totalLength, tileMap, playerCount, {
+          ...getRouteAnalysisVariantOptions(options),
+          totalActions,
+          trafficOccupancyUseBalanceScore: true,
+          carryOccupancyScores: true,
+          balanceTrafficScope: trafficFeedbackLoopEnabled ? "full" : "opening",
+          skipTraffic: Boolean(options.skipTraffic || !trafficEnabled),
+          deferReject: normalOpeningTrafficFirst,
+          normalPruneBatchSize: NORMAL_PRUNE_BATCH_SIZE
+        });
+
+  let finalFirstLeg = courseAdjustedFirstLeg;
+  if (normalOpeningTrafficFirst && !options.competitiveMode) {
+    const balance = courseAdjustedFirstLeg.summary?.normalStartBalance ?? null;
+    const excludedIndices = new Set([
+      ...(balance?.lightweightPruned ?? []),
+      ...(balance?.pressurePruned ?? []).map((entry) => entry.index)
+    ]);
+    finalFirstLeg = recomputeFirstLegPressure(tileMap, courseAdjustedFirstLeg, {
+      ...getRouteAnalysisVariantOptions(options),
+      playerCount,
+      excludedIndices: [...excludedIndices],
+      fullCourseTrafficPasses: options.fullCourseTrafficPasses ?? NORMAL_FULL_COURSE_TRAFFIC_PASSES,
+      trafficOccupancyUseBalanceScore: true,
+      balanceTrafficScope: "full",
+      openingTrafficOnly: false
+    });
+    finalFirstLeg.summary.normalStartBalance = courseAdjustedFirstLeg.summary.normalStartBalance;
+    finalFirstLeg.summary.outliers = courseAdjustedFirstLeg.summary.outliers;
+    finalFirstLeg = adjustNormalStartsAfterFullTraffic(
+      finalFirstLeg,
+      totalLength,
+      tileMap,
+      playerCount,
+      {
         ...options,
-        totalActions,
-        totalLength
-      })
-      : adjustStartOutliersForCourseLength(firstLeg, totalLength, tileMap, playerCount, {
-        ...getRouteAnalysisVariantOptions(options),
-        totalActions
-      });
+        fullCourseTrafficPasses: options.fullCourseTrafficPasses ?? NORMAL_FULL_COURSE_TRAFFIC_PASSES,
+        normalPruneBatchSize: NORMAL_PRUNE_BATCH_SIZE,
+        normalFullTrafficPrunePasses: 0
+      }
+    );
+  }
 
   const adjustedLegs = [
     {
       ...legs[0],
-      analysis: courseAdjustedFirstLeg
+      analysis: finalFirstLeg
     },
-    ...(courseAdjustedFirstLeg.expectedLegAnalyses || []).map((analysis, index) => ({
+    ...(finalFirstLeg.expectedLegAnalyses || []).map((analysis, index) => ({
       from: index + 1,
       to: index + 2,
       analysis
@@ -11574,7 +12734,7 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
 
   return {
     starts,
-    firstLeg: courseAdjustedFirstLeg,
+    firstLeg: finalFirstLeg,
     legs: adjustedLegs,
     movingTargetTimelines,
     summary: {
@@ -11601,7 +12761,12 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
 }
 
 function adjustStartOutliersForCourseLength(firstLeg, totalLength, tileMap, playerCount, options = {}) {
-  const analysisOptions = getRouteAnalysisVariantOptions(options);
+  const analysisOptions = {
+    ...getRouteAnalysisVariantOptions(options),
+    openingTrafficOnly: options.balanceTrafficScope !== "full",
+    balanceTrafficScope: options.balanceTrafficScope,
+    skipTraffic: Boolean(options.skipTraffic)
+  };
   const prePrunedOutliers = (firstLeg.summary.outliers || []).filter(
     (item) => item.reasons?.lightweightPruned
   );
@@ -11612,16 +12777,17 @@ function adjustStartOutliersForCourseLength(firstLeg, totalLength, tileMap, play
     firstLeg,
     initialExcludedIndices
   );
-  const initialStdDev = getNormalStartDispersion(initialActive);
+  const initialStdDev = getNormalStartDispersion(initialActive, "balanceScore");
   const maximumNormalPasses = Math.max(
     0,
     initialActive.length - Math.max(1, playerCount || 1)
   );
 
-  // Normal mode borrows Pay to Win's iterative balancing framework, but not its
-  // pricing-specific chooser. Remove one start, recompute occupancy / route
-  // pressure, and only then decide whether another start still needs pruning.
-  // Player count is a floor, never a target: a balanced 12-start field stays 12.
+  // Normal uses iterative full-course balancing, not player-count trimming. Within
+  // a pruning batch the traffic field is frozen while robust score/action stats are
+  // recalculated after every removal; after the batch, occupancy/traffic is rebuilt.
+  // With traffic off there is nothing relational to rebuild. Player count is a
+  // floor, never a target: a balanced 12-start field stays 12.
   const result = runIterativeStartBalancing(
     firstLeg,
     tileMap,
@@ -11634,7 +12800,8 @@ function adjustStartOutliersForCourseLength(firstLeg, totalLength, tileMap, play
     ),
     {
       initialExcludedIndices: [...initialExcludedIndices],
-      maxPasses: maximumNormalPasses
+      maxPasses: maximumNormalPasses,
+      pruneBatchSize: options.normalPruneBatchSize ?? 1
     }
   );
 
@@ -11649,10 +12816,12 @@ function adjustStartOutliersForCourseLength(firstLeg, totalLength, tileMap, play
   );
   const remainingOutliers = rankNormalStartOutliers(
     remainingActive,
-    "adjustedScore",
+    "balanceScore",
     FULL_START_OUTLIER_Z
   );
-  const remainingStdDev = getNormalStartDispersion(remainingActive);
+  const remainingStdDev = getNormalStartDispersion(remainingActive, "balanceScore");
+  const retainedBalance = summarizeNormalRetainedBalance(remainingActive);
+  const legacyAdjustedScoreStdDev = Number(currentFirstLeg.summary?.scoreStdDev);
   const badLimit = Math.ceil((playerCount || 1) * 0.25);
 
   const pressureRemovals = removals.map((removed, removalIndex) => {
@@ -11692,13 +12861,14 @@ function adjustStartOutliersForCourseLength(firstLeg, totalLength, tileMap, play
   // If the iterative process reaches the player-count floor or cannot improve
   // the field and it is still outside the Normal balance criteria, reject the
   // course rather than silently accepting an unbalanced start set.
-  const shouldReject = (
+  const provisionalReject = (
     remainingOutliers.length > 0 ||
     remainingStdDev > NORMAL_START_FAIRNESS_STDDEV_LIMIT
   );
+  const shouldReject = options.deferReject ? false : provisionalReject;
 
   const activeScores = remainingActive
-    .map((entry) => entry.adjustedScore)
+    .map((entry) => entry.balanceScore ?? entry.adjustedScore)
     .filter(Number.isFinite);
   const meanScore = activeScores.length
     ? averageValues(activeScores)
@@ -11720,6 +12890,11 @@ function adjustStartOutliersForCourseLength(firstLeg, totalLength, tileMap, play
     ...currentFirstLeg,
     summary: {
       ...currentFirstLeg.summary,
+      // v33: the public Normal fairness metric is the exact same retained
+      // full-course balanceScore dispersion used by iterative pruning. Keep the
+      // older first-leg adjusted-score spread only as an explicitly named audit.
+      scoreStdDev: Number(remainingStdDev.toFixed(2)),
+      fairnessScore: Number(Math.max(0, 100 - remainingStdDev * 4).toFixed(2)),
       outliers: allOutliers,
       normalStartBalance: {
         active: true,
@@ -11738,10 +12913,25 @@ function adjustStartOutliersForCourseLength(firstLeg, totalLength, tileMap, play
         dispersionPruned: pressureRemovals
           .filter((item) => item.diagnostics?.balanceDispersionPruned)
           .map((item) => item.index),
-        trafficRecomputations: pressureRemovals.length + (initialExcludedIndices.size ? 1 : 0),
+        trafficRecomputations: options.skipTraffic
+          ? 0
+          : new Set(pressureRemovals.map((item) => item.pass)).size + (initialExcludedIndices.size ? 1 : 0),
+        pruneBatchSize: options.normalPruneBatchSize ?? 1,
         balanceStdDevBefore: Number(initialStdDev.toFixed(2)),
         balanceStdDevAfter: Number(remainingStdDev.toFixed(2)),
         balanceStdDevLimit: NORMAL_START_FAIRNESS_STDDEV_LIMIT,
+        retainedCount: retainedBalance.count,
+        retainedScoreMin: retainedBalance.min,
+        retainedScoreMax: retainedBalance.max,
+        retainedScoreRange: retainedBalance.range,
+        worstRemainingScoreZ: retainedBalance.worstScoreZ,
+        worstRemainingScoreIndex: retainedBalance.worstScoreIndex,
+        worstRemainingActionZ: retainedBalance.worstActionZ,
+        worstRemainingActionIndex: retainedBalance.worstActionIndex,
+        legacyAdjustedScoreStdDev: Number.isFinite(legacyAdjustedScoreStdDev)
+          ? Number(legacyAdjustedScoreStdDev.toFixed(2))
+          : null,
+        fairnessMetric: "full-course-balanceScore",
         remainingBadStarts: remainingOutliers.map((item) => ({
           index: item.entry.index,
           score: item.score,
@@ -11749,6 +12939,7 @@ function adjustStartOutliersForCourseLength(firstLeg, totalLength, tileMap, play
           actionZ: Number(item.actionZ.toFixed(2))
         })),
         badLimit,
+        provisionalReject,
         reject: shouldReject
       }
     }
@@ -11771,7 +12962,15 @@ function computeCourseReachableStarts(firstLeg) {
 
 function computeUsableStarts(firstLeg, preferences = {}) {
   const courseReachable = computeCourseReachableStarts(firstLeg);
-  if (preferences.competitiveMode || preferences.virtualBots) {
+  if (preferences.competitiveMode) {
+    const selectedIndices = firstLeg?.summary?.competitiveStartBalance?.selectedIndices ?? [];
+    if (selectedIndices.length) {
+      const selectedSet = new Set(selectedIndices);
+      return courseReachable.filter((startAnalysis) => selectedSet.has(startAnalysis.index));
+    }
+    return courseReachable;
+  }
+  if (preferences.virtualBots) {
     return courseReachable;
   }
 
@@ -11810,34 +13009,21 @@ function getFallbackScenarioScore(scenario) {
 }
 
 function getCompetitiveBalanceProfile(entries = []) {
-  const scores = entries.map((entry) => entry.adjustedScore).filter(Number.isFinite);
-  const actions = entries.map((entry) => entry.bestActions).filter(Number.isFinite);
-  const scoreStats = getRobustOutlierStats(entries, "adjustedScore");
-  const actionStats = getRobustOutlierStats(entries, "bestActions");
-  const outliers = rankNormalStartOutliers(entries, "adjustedScore", FULL_START_OUTLIER_Z);
-  const scoreRange = scores.length ? Math.max(...scores) - Math.min(...scores) : 0;
-  const actionRange = actions.length ? Math.max(...actions) - Math.min(...actions) : 0;
-  const worstScoreZ = entries.length
-    ? Math.max(...entries.map((entry) => Math.abs(entry.adjustedScore - scoreStats.center) / scoreStats.robustScale))
-    : 0;
-  const worstActionZ = entries.length
-    ? Math.max(...entries.map((entry) => Number.isFinite(entry.bestActions)
-      ? Math.abs(entry.bestActions - actionStats.center) / actionStats.robustScale
-      : 0))
-    : 0;
-  const objective = (
-    outliers.length * 1000 +
-    Math.max(worstScoreZ, worstActionZ * 0.9) * 55 +
-    scoreRange * 0.18 +
-    actionRange * 1.2
+  const active = (entries || []).filter((entry) => Number.isFinite(entry?.balanceScore));
+  const retained = summarizeNormalRetainedBalance(active);
+  const outliers = rankNormalStartOutliers(
+    active,
+    "balanceScore",
+    FULL_START_OUTLIER_Z
   );
   return {
     outliers,
-    scoreRange: Number(scoreRange.toFixed(2)),
-    actionRange: Number(actionRange.toFixed(2)),
-    worstScoreZ: Number(worstScoreZ.toFixed(2)),
-    worstActionZ: Number(worstActionZ.toFixed(2)),
-    objective: Number(objective.toFixed(3))
+    stdDev: retained.stdDev,
+    scoreRange: retained.range,
+    worstScoreZ: retained.worstScoreZ,
+    worstScoreIndex: retained.worstScoreIndex,
+    worstActionZ: retained.worstActionZ,
+    worstActionIndex: retained.worstActionIndex
   };
 }
 
@@ -11852,188 +13038,306 @@ function getCombinationCount(n, k, cap = 50001) {
   return Math.round(value);
 }
 
+function chooseCompetitiveStrategicBlock(entries = []) {
+  const active = (entries || []).filter((entry) => Number.isFinite(entry?.balanceScore));
+  if (!active.length) return null;
 
-function computeCompetitiveBlockImpact(
+  // Competitive blocks are player decisions, not generator fairness repairs.
+  // A rational blocker removes the strongest currently available start: lower
+  // full-course balanceScore means a faster/easier start after current traffic.
+  // Recompute the field after every single block before choosing the next one.
+  const ordered = [...active].sort((left, right) => (
+    left.balanceScore - right.balanceScore ||
+    (left.bestActions ?? Infinity) - (right.bestActions ?? Infinity) ||
+    left.index - right.index
+  ));
+  const chosen = ordered[0];
+  const runnerUp = ordered[1] ?? null;
+  const scoreStats = getRobustOutlierStats(active, "balanceScore");
+  const robustScale = Math.max(0.01, Number(scoreStats.robustScale) || 0.01);
+  const advantageVsMedian = Math.max(0, scoreStats.center - chosen.balanceScore);
+  const decisionMargin = runnerUp
+    ? Math.max(0, runnerUp.balanceScore - chosen.balanceScore)
+    : 0;
+  const advantageZ = advantageVsMedian / robustScale;
+  const decisionMarginZ = decisionMargin / robustScale;
+  const ambiguity = 1 - Math.min(1, decisionMarginZ / 1.25);
+  const consequence = Math.min(1, advantageZ / 1.5);
+  // Ambiguity itself is a Competitive skill burden even when a wrong block is
+  // cheap; meaningful consequences amplify it. This feeds only the provisional
+  // Competitive difficulty modifier, not the blocking choice or fairness gate.
+  const strategicChallenge = ambiguity * (0.55 + 0.45 * consequence);
+  return {
+    index: chosen.index,
+    score: chosen.balanceScore,
+    actions: chosen.bestActions,
+    intrinsic: Number(chosen.fullCourseRoute?.score),
+    traffic: Number(chosen.fullCourseTrafficPenalty ?? 0),
+    runnerUpIndex: runnerUp?.index ?? null,
+    runnerUpScore: Number.isFinite(runnerUp?.balanceScore) ? runnerUp.balanceScore : null,
+    advantageVsMedian: Number(advantageVsMedian.toFixed(2)),
+    advantageZ: Number(advantageZ.toFixed(3)),
+    decisionMargin: Number(decisionMargin.toFixed(2)),
+    decisionMarginZ: Number(decisionMarginZ.toFixed(3)),
+    ambiguity: Number(ambiguity.toFixed(3)),
+    consequence: Number(consequence.toFixed(3)),
+    strategicChallenge: Number(strategicChallenge.toFixed(3))
+  };
+}
+
+function getCompetitiveStrategicDifficulty(blockSequence = [], selectedStdDev = 0) {
+  const challenges = (blockSequence || [])
+    .map((entry) => Number(entry?.strategicChallenge))
+    .filter(Number.isFinite);
+  const meanBlockChallenge = challenges.length
+    ? challenges.reduce((sum, value) => sum + value, 0) / challenges.length
+    : 0.5;
+  const selectionAmbiguity = Math.max(
+    0,
+    Math.min(1, 1 - (Number(selectedStdDev) || 0) / NORMAL_START_FAIRNESS_STDDEV_LIMIT)
+  );
+
+  // Provisional v36c scale. Competitive previously carried a hand-tuned +1.8
+  // difficulty adjustment. Preserve that approximate magnitude while letting the
+  // actual strategic reading burden move it modestly: subtle block choices and a
+  // close remaining field are harder to read; obvious choices are easier. Keep
+  // this bounded until the later special-rules/calibration review can fit it from
+  // generated-course evidence instead of hand tuning.
+  const difficulty = Math.max(
+    1.2,
+    Math.min(
+      2.4,
+      1.8 + (meanBlockChallenge - 0.5) * 0.9 + (selectionAmbiguity - 0.5) * 0.3
+    )
+  );
+  return {
+    difficulty: Number(difficulty.toFixed(2)),
+    meanBlockChallenge: Number(meanBlockChallenge.toFixed(3)),
+    selectionAmbiguity: Number(selectionAmbiguity.toFixed(3)),
+    calibrationCenter: 1.8,
+    calibrationRange: [1.2, 2.4],
+    provisional: true
+  };
+}
+
+function selectCompetitiveBestStarts(entries = [], playerCount = 4) {
+  const count = Math.max(1, Math.floor(Number(playerCount) || 1));
+  return [...(entries || [])]
+    .filter((entry) => Number.isFinite(entry?.balanceScore))
+    .sort((left, right) => (
+      left.balanceScore - right.balanceScore ||
+      (left.bestActions ?? Infinity) - (right.bestActions ?? Infinity) ||
+      left.index - right.index
+    ))
+    .slice(0, count);
+}
+
+function applyCompetitiveStrategicBlocking(
   firstLeg,
   tileMap,
-  flags,
   playerCount = 4,
   options = {}
 ) {
-  const reachable = (firstLeg?.starts || [])
-    .filter((startAnalysis) => (
-      startAnalysis.reachable &&
-      startAnalysis.selectedRoute &&
-      Number.isFinite(startAnalysis.adjustedScore)
-    ));
-  const blockCount = Math.max(
-    0,
-    Math.min(playerCount, reachable.length)
-  );
-  const requiredRemaining = Math.max(1, playerCount);
+  const count = Math.max(1, Math.floor(Number(playerCount) || 1));
+  const requiredOfferedStarts = count * 2;
+  const sourceStartCount = firstLeg?.starts?.length ?? 0;
+  const routedStarts = computeCourseReachableStarts(firstLeg);
+  const routedIndexSet = new Set(routedStarts.map((entry) => entry.index));
+  const unavailableIndices = (firstLeg?.starts || [])
+    .map((entry) => entry.index)
+    .filter((index) => !routedIndexSet.has(index))
+    .sort((left, right) => left - right);
 
-  if (reachable.length < blockCount + requiredRemaining) {
-    return {
-      blockedStartCount: blockCount,
-      remainingStartCount: Math.max(0, reachable.length - blockCount),
-      blockedIndices: [],
-      remainingOutlierCount: Infinity,
-      scoreRange: Infinity,
-      actionRange: Infinity,
-      worstScoreZ: Infinity,
-      worstActionZ: Infinity,
-      acceptable: false,
-      method: "insufficient-starts",
-      trafficSubsetsTested: 0
-    };
-  }
-
-  const cheapCandidates = [];
-  const cheapLimit = 64;
-  const keepCheapCandidate = (blockedIndices, method) => {
-    const blockedSet = new Set(blockedIndices);
-    const remaining = reachable.filter(
-      (entry) => !blockedSet.has(entry.index)
-    );
-    const profile = getCompetitiveBalanceProfile(remaining);
-    cheapCandidates.push({
-      blockedIndices: [...blockedIndices],
-      remainingIndices: remaining.map((entry) => entry.index),
-      cheapObjective: profile.objective,
-      method
-    });
-    cheapCandidates.sort(
-      (left, right) => left.cheapObjective - right.cheapObjective
-    );
-    if (cheapCandidates.length > cheapLimit) {
-      cheapCandidates.length = cheapLimit;
+  let currentFirstLeg = {
+    ...firstLeg,
+    summary: {
+      ...firstLeg.summary,
+      // Simulated player blocks are never rendered as generator-pruned starts.
+      outliers: []
     }
   };
-
-  const combinationCount = getCombinationCount(
-    reachable.length,
-    blockCount
+  const excludedIndices = new Set();
+  const blockSequence = [];
+  const desiredBlockCount = Math.min(
+    count,
+    Math.max(0, routedStarts.length - count)
   );
+  const recomputeTraffic = !options.skipTraffic;
+  const blockTrafficScope = options.competitiveBlockTrafficScope === "opening"
+    ? "opening"
+    : "full";
+  const sharedPressureOptions = {
+    ...getRouteAnalysisVariantOptions(options),
+    playerCount: count,
+    trafficOccupancyUseBalanceScore: true,
+    carryOccupancyScores: true,
+    fullCourseTrafficPasses:
+      options.fullCourseTrafficPasses ?? NORMAL_FULL_COURSE_TRAFFIC_PASSES,
+    contextualTrafficAlternateMinGain:
+      options.contextualTrafficAlternateMinGain ?? NORMAL_TRAFFIC_ALTERNATE_MIN_GAIN
+  };
+  const blockPressureOptions = {
+    ...sharedPressureOptions,
+    openingTrafficOnly: blockTrafficScope !== "full",
+    balanceTrafficScope: blockTrafficScope
+  };
+  const finalPressureOptions = {
+    ...sharedPressureOptions,
+    openingTrafficOnly: false,
+    balanceTrafficScope: "full"
+  };
 
-  if (combinationCount <= 20000) {
-    const chosen = [];
-    const visit = (offset) => {
-      if (chosen.length === blockCount) {
-        keepCheapCandidate(
-          chosen.map((position) => reachable[position].index),
-          "exact-prefilter"
-        );
-        return;
-      }
-      const needed = blockCount - chosen.length;
-      for (
-        let position = offset;
-        position <= reachable.length - needed;
-        position += 1
-      ) {
-        chosen.push(position);
-        visit(position + 1);
-        chosen.pop();
-      }
-    };
-    visit(0);
-  } else {
-    const beamWidth = 96;
-    let beam = [{
-      blockedIndices: [],
-      nextOffset: 0,
-      objective: getCompetitiveBalanceProfile(reachable).objective
-    }];
+  for (let blockIndex = 0; blockIndex < desiredBlockCount; blockIndex += 1) {
+    const activeStarts = getActivePruningStarts(currentFirstLeg, excludedIndices);
+    if (activeStarts.length <= count) break;
+    const block = chooseCompetitiveStrategicBlock(activeStarts);
+    if (!block || excludedIndices.has(block.index)) break;
 
-    for (let depth = 0; depth < blockCount; depth += 1) {
-      const nextBeam = [];
-      for (const state of beam) {
-        for (
-          let position = state.nextOffset;
-          position < reachable.length;
-          position += 1
-        ) {
-          const blockedIndices = [
-            ...state.blockedIndices,
-            reachable[position].index
-          ];
-          const blockedSet = new Set(blockedIndices);
-          const remaining = reachable.filter(
-            (entry) => !blockedSet.has(entry.index)
-          );
-          nextBeam.push({
-            blockedIndices,
-            nextOffset: position + 1,
-            objective: getCompetitiveBalanceProfile(remaining).objective
-          });
+    excludedIndices.add(block.index);
+    blockSequence.push({
+      ...block,
+      order: blockIndex + 1,
+      fieldSizeBefore: activeStarts.length
+    });
+
+    // Competitive blocks are sequential game decisions. Unlike Normal's
+    // two-at-a-time pruning batch, every player sees the traffic field created by
+    // all earlier blocks, so occupancy is rebuilt after each individual block.
+    if (recomputeTraffic) {
+      currentFirstLeg = recomputeFirstLegPressure(
+        tileMap,
+        currentFirstLeg,
+        {
+          ...blockPressureOptions,
+          excludedIndices: [...excludedIndices]
         }
-      }
-      nextBeam.sort(
-        (left, right) => left.objective - right.objective
       );
-      beam = nextBeam.slice(0, beamWidth);
     }
-
-    beam.slice(0, cheapLimit).forEach((state) => (
-      keepCheapCandidate(state.blockedIndices, "beam-prefilter")
-    ));
   }
 
-  let best = null;
-  for (const candidate of cheapCandidates) {
-    const evaluated = evaluateFullCourseSubsetTraffic(
+  const remainingStarts = getActivePruningStarts(currentFirstLeg, excludedIndices);
+  const selectedBeforeFinalTraffic = selectCompetitiveBestStarts(
+    remainingStarts,
+    count
+  );
+  const selectedIndices = selectedBeforeFinalTraffic
+    .map((entry) => entry.index)
+    .sort((left, right) => left - right);
+  const selectedIndexSet = new Set(selectedIndices);
+  const unselectedRemainingIndices = remainingStarts
+    .filter((entry) => !selectedIndexSet.has(entry.index))
+    .map((entry) => entry.index)
+    .sort((left, right) => left - right);
+
+  // The simulated blocks remain invisible to players, but acceptance should model
+  // the race that would actually be occupied: after P optimal blocks, assume the
+  // P strongest remaining starts are selected. Re-evaluate traffic on that P-start
+  // field before applying the same fairness standard used by Normal.
+  let selectedFirstLeg = currentFirstLeg;
+  const needsFinalTrafficRecompute = (
+    recomputeTraffic &&
+    selectedIndices.length &&
+    (blockTrafficScope !== "full" || unselectedRemainingIndices.length > 0)
+  );
+  if (needsFinalTrafficRecompute) {
+    const finalExcluded = new Set([
+      ...excludedIndices,
+      ...unselectedRemainingIndices
+    ]);
+    selectedFirstLeg = recomputeFirstLegPressure(
       tileMap,
-      firstLeg,
-      flags,
-      candidate.remainingIndices,
+      currentFirstLeg,
       {
-        ...options,
-        playerCount,
-        payToWin: false,
-        fullCourseTrafficPasses: 2
+        ...finalPressureOptions,
+        excludedIndices: [...finalExcluded]
       }
     );
-    const profile = getCompetitiveBalanceProfile(evaluated.entries);
-    const denseCandidate = {
-      ...candidate,
-      profile,
-      evaluated
-    };
-
-    if (
-      !best ||
-      denseCandidate.profile.objective <
-        best.profile.objective - 0.001
-    ) {
-      best = denseCandidate;
-    }
   }
 
-  const profile = best?.profile ??
-    getCompetitiveBalanceProfile(reachable);
-  const remainingStartCount = best?.remainingIndices?.length ??
-    reachable.length;
-  const acceptable = (
-    remainingStartCount >= requiredRemaining &&
-    profile.outliers.length === 0 &&
-    profile.worstScoreZ < FULL_START_OUTLIER_Z &&
-    profile.worstActionZ < FULL_START_OUTLIER_Z + 0.35
+  const selectedEntries = (selectedFirstLeg.starts || []).filter((entry) => (
+    selectedIndexSet.has(entry.index) &&
+    entry.reachable &&
+    entry.fullCourseRoute &&
+    Number.isFinite(entry.balanceScore)
+  ));
+  const profile = getCompetitiveBalanceProfile(selectedEntries);
+  const selectedStdDev = profile.stdDev;
+  const strategicDifficulty = getCompetitiveStrategicDifficulty(
+    blockSequence,
+    selectedStdDev
   );
-
-  return {
-    blockedStartCount: blockCount,
-    remainingStartCount,
-    blockedIndices: best?.blockedIndices ?? [],
+  const sufficientPhysicalField = (
+    sourceStartCount >= requiredOfferedStarts &&
+    routedStarts.length >= requiredOfferedStarts &&
+    unavailableIndices.length === 0
+  );
+  const acceptable = (
+    sufficientPhysicalField &&
+    blockSequence.length === count &&
+    selectedEntries.length === count &&
+    profile.outliers.length === 0 &&
+    selectedStdDev <= NORMAL_START_FAIRNESS_STDDEV_LIMIT
+  );
+  const remainingIndices = remainingStarts
+    .map((entry) => entry.index)
+    .sort((left, right) => left - right);
+  const competitiveStartBalance = {
+    active: true,
+    sequential: true,
+    pruneBatchSize: 1,
+    sourceStartCount,
+    routedStartCount: routedStarts.length,
+    requiredOfferedStarts,
+    unavailableIndices,
+    blockedStartCount: blockSequence.length,
+    blockedIndices: blockSequence.map((entry) => entry.index),
+    blockSequence,
+    remainingStartCount: remainingStarts.length,
+    remainingIndices,
+    selectedStartCount: selectedEntries.length,
+    selectedIndices,
+    unselectedRemainingIndices,
+    selectedStdDev: Number(selectedStdDev.toFixed(2)),
+    balanceStdDevLimit: NORMAL_START_FAIRNESS_STDDEV_LIMIT,
+    selectedOutlierCount: profile.outliers.length,
     remainingOutlierCount: profile.outliers.length,
     scoreRange: profile.scoreRange,
-    actionRange: profile.actionRange,
     worstScoreZ: profile.worstScoreZ,
+    worstScoreIndex: profile.worstScoreIndex,
     worstActionZ: profile.worstActionZ,
+    worstActionIndex: profile.worstActionIndex,
+    blockTrafficScope,
+    trafficRecomputations: recomputeTraffic
+      ? blockSequence.length + (needsFinalTrafficRecompute ? 1 : 0)
+      : 0,
+    strategicDifficulty: strategicDifficulty.difficulty,
+    strategicDifficultyEvidence: strategicDifficulty,
     acceptable,
-    method: best
-      ? `${best.method}+traffic`
-      : "none",
-    trafficSubsetsTested: cheapCandidates.length
+    method: "sequential-optimal-best-start-blocks+best-p-selection"
+  };
+
+  return {
+    ...selectedFirstLeg,
+    summary: {
+      ...selectedFirstLeg.summary,
+      scoreStdDev: Number(selectedStdDev.toFixed(2)),
+      fairnessScore: Number(Math.max(0, 100 - selectedStdDev * 4).toFixed(2)),
+      outliers: [],
+      competitiveStartBalance,
+      competitiveStaging: {
+        active: true,
+        sourceStartCount,
+        routedStartCount: routedStarts.length,
+        offeredStartCount: sourceStartCount,
+        requiredOfferedStarts,
+        unavailableIndices,
+        remainingAfterBlocks: remainingStarts.length,
+        selectedStartCount: selectedEntries.length,
+        selectedIndices,
+        preliminaryScoreStdDev: Number(firstLeg.summary?.scoreStdDev ?? 0),
+        method: "normal-route-foundation+sequential-optimal-blocks"
+      }
+    }
   };
 }
 
@@ -12466,125 +13770,361 @@ function computeBoardHarshness(boardPlacements = [], pieceMap = {}) {
   };
 }
 
+
+function meanFinite(values = []) {
+  const finite = values.map(Number).filter(Number.isFinite);
+  return finite.length ? finite.reduce((sum, value) => sum + value, 0) / finite.length : 0;
+}
+
+function getProgrammingPressureRouteEntries(sequence) {
+  const starts = sequence?.firstLeg?.starts ?? [];
+  const entries = starts
+    .filter((entry) => entry?.reachable !== false && entry?.fullCourseRoute)
+    .map((entry) => ({
+      route: entry.fullCourseRoute,
+      traffic: Number(entry.fullCourseTrafficPenalty ?? entry.trafficPenalty ?? 0) || 0
+    }));
+  if (entries.length) return entries;
+
+  // Virtual/shared-entry or compatibility fallback: retain route geometry even if
+  // there is no ordinary per-start array in an older saved scenario.
+  const routes = sequence?.legs
+    ?.flatMap((leg) => leg?.analysis?.distinctRoutes ?? [])
+    ?.filter(Boolean) ?? [];
+  return routes.map((route) => ({ route, traffic: 0 }));
+}
+
+function summarizeRouteControlPressure(route) {
+  const weights = PROGRAMMING_CONTROL_PRESSURE_WEIGHTS ?? {};
+  const transitions = route?.transitions ?? [];
+  let gearTurns = 0;
+  let conveyorTurns = 0;
+  let conveyorForcedSpaces = 0;
+  let otherForcedSpaces = 0;
+  let pusherEvents = 0;
+  let oilEvents = 0;
+  let currentEvents = 0;
+  let portalJumps = 0;
+  let randomizerStarts = 0;
+
+  for (const transition of transitions) {
+    if (transition?.gearTurned) gearTurns += 1;
+    const conveyorSteps = transition?.conveyorSteps ?? [];
+    conveyorTurns += conveyorSteps.filter((step) => step?.turned).length;
+    conveyorForcedSpaces += conveyorSteps.length;
+    otherForcedSpaces += Math.max(0, (Number(transition?.forcedDistance) || 0) - conveyorSteps.length);
+    for (const event of transition?.boardEvents ?? []) {
+      if (event?.type === "pusher") pusherEvents += 1;
+      else if (event?.type === "oil") oilEvents += 1;
+      else if (event?.type === "current") currentEvents += 1;
+    }
+    portalJumps += (transition?.traversed ?? []).filter((point) => point?.jump).length;
+    if (transition?.randomizerAtRegisterStart || transition?.randomizedAction) randomizerStarts += 1;
+  }
+
+  const controlUnits =
+    gearTurns * (weights.gearTurn ?? 1) +
+    conveyorTurns * (weights.conveyorTurn ?? 0.9) +
+    conveyorForcedSpaces * (weights.conveyorForcedSpace ?? 0.16) +
+    otherForcedSpaces * (weights.otherForcedSpace ?? 0.1) +
+    pusherEvents * (weights.pusherEvent ?? 0.65) +
+    oilEvents * (weights.oilEvent ?? 0.45) +
+    currentEvents * (weights.currentEvent ?? 0.4) +
+    portalJumps * (weights.portalJump ?? 0.55) +
+    randomizerStarts * (weights.randomizerStart ?? 0.8);
+
+  return {
+    controlUnits,
+    gearTurns,
+    conveyorTurns,
+    conveyorForcedSpaces,
+    otherForcedSpaces,
+    pusherEvents,
+    oilEvents,
+    currentEvents,
+    portalJumps,
+    randomizerStarts
+  };
+}
+
+function computeProgrammingPressureProfile(sequence, preferences = {}) {
+  const entries = getProgrammingPressureRouteEntries(sequence);
+  if (!entries.length) {
+    return {
+      active: false,
+      routeCount: 0,
+      averageActions: 0,
+      hazardPerRegister: 0,
+      trafficPerRegister: 0,
+      controlPerRegister: 0,
+      cardPerRegister: 0,
+      againRate: 0,
+      hazardPressure: 0,
+      trafficPressure: 0,
+      controlPressure: 0,
+      cardPressure: 0,
+      planningPressure: 0,
+      timedPressure: 0,
+      method: "route-hazard-traffic-control-v38"
+    };
+  }
+
+  const actionCounts = [];
+  const hazardTotals = [];
+  const trafficTotals = [];
+  const controlTotals = [];
+  const cardTotals = [];
+  const againRates = [];
+  const controlDetails = [];
+
+  for (const entry of entries) {
+    const route = entry.route;
+    const actions = Math.max(1, Number(route?.actions ?? route?.transitions?.length) || 1);
+    const control = summarizeRouteControlPressure(route);
+    const cardPenalty = Math.max(
+      0,
+      Number(route?.cardAvailabilityPenalty ?? route?.approximateCardPlausibilityPenalty) || 0
+    );
+    const againUses = (route?.transitions ?? []).filter((transition) => (
+      transition?.programCard === "AGAIN" ||
+      transition?.programCardId === "AGAIN" ||
+      transition?.approximateProgramCard === "AGAIN"
+    )).length;
+
+    actionCounts.push(actions);
+    hazardTotals.push(Math.max(0, Number(route?.hazard) || 0));
+    trafficTotals.push(Math.max(0, Number(entry.traffic) || 0));
+    controlTotals.push(control.controlUnits);
+    cardTotals.push(cardPenalty);
+    againRates.push(againUses / actions);
+    controlDetails.push(control);
+  }
+
+  const averageActions = meanFinite(actionCounts);
+  const hazardPerRegister = meanFinite(hazardTotals.map((value, index) => value / actionCounts[index]));
+  let trafficPerRegister = meanFinite(trafficTotals.map((value, index) => value / actionCounts[index]));
+  // Some route families store only the aggregate selection traffic value.
+  if (!(trafficPerRegister > 0)) {
+    const aggregateTraffic = Number(sequence?.firstLeg?.summary?.fullCourseTraffic?.averagePenalty);
+    if (Number.isFinite(aggregateTraffic) && averageActions > 0) {
+      trafficPerRegister = aggregateTraffic / averageActions;
+    }
+  }
+  const controlPerRegister = meanFinite(controlTotals.map((value, index) => value / actionCounts[index]));
+  const cardPerRegister = meanFinite(cardTotals.map((value, index) => value / actionCounts[index]));
+  const againRate = meanFinite(againRates);
+
+  // These normalizers only put unlike evidence on a common 0..~1 scale. They are
+  // not difficulty calibration constants; the later calibration pass should fit
+  // the variant response to this evidence rather than replacing the evidence.
+  const hazardPressure = clamp(hazardPerRegister / 1.15, 0, 1.5);
+  const trafficPressure = clamp(trafficPerRegister / 4.25, 0, 1.5);
+  const controlPressure = clamp(controlPerRegister / 0.42, 0, 1.5);
+  const cardPressure = clamp(cardPerRegister / 0.28 + againRate * 0.8, 0, 1.25);
+
+  // Random/limited programming rules are most consequential where robot traffic,
+  // hazards, and factory-controlled movement make an imperfect program costly.
+  const planningPressure = clamp(
+    hazardPressure * 0.32 +
+    trafficPressure * 0.34 +
+    controlPressure * 0.27 +
+    cardPressure * 0.07,
+    0,
+    1.5
+  );
+  // Timers lean a little more heavily on immediate control/traffic reasoning.
+  const timedPressure = clamp(
+    hazardPressure * 0.24 +
+    trafficPressure * 0.35 +
+    controlPressure * 0.35 +
+    cardPressure * 0.06,
+    0,
+    1.5
+  );
+
+  const detailTotals = {
+    gearTurns: meanFinite(controlDetails.map((item) => item.gearTurns)),
+    conveyorTurns: meanFinite(controlDetails.map((item) => item.conveyorTurns)),
+    forcedSpaces: meanFinite(controlDetails.map((item) => item.conveyorForcedSpaces + item.otherForcedSpaces)),
+    pusherEvents: meanFinite(controlDetails.map((item) => item.pusherEvents)),
+    portalJumps: meanFinite(controlDetails.map((item) => item.portalJumps))
+  };
+
+  return {
+    active: true,
+    routeCount: entries.length,
+    averageActions: Number(averageActions.toFixed(2)),
+    hazardPerRegister: Number(hazardPerRegister.toFixed(3)),
+    trafficPerRegister: Number(trafficPerRegister.toFixed(3)),
+    controlPerRegister: Number(controlPerRegister.toFixed(3)),
+    cardPerRegister: Number(cardPerRegister.toFixed(3)),
+    againRate: Number(againRate.toFixed(3)),
+    hazardPressure: Number(hazardPressure.toFixed(3)),
+    trafficPressure: Number(trafficPressure.toFixed(3)),
+    controlPressure: Number(controlPressure.toFixed(3)),
+    cardPressure: Number(cardPressure.toFixed(3)),
+    planningPressure: Number(planningPressure.toFixed(3)),
+    timedPressure: Number(timedPressure.toFixed(3)),
+    averageGearTurns: Number(detailTotals.gearTurns.toFixed(2)),
+    averageConveyorTurns: Number(detailTotals.conveyorTurns.toFixed(2)),
+    averageForcedSpaces: Number(detailTotals.forcedSpaces.toFixed(2)),
+    averagePusherEvents: Number(detailTotals.pusherEvents.toFixed(2)),
+    averagePortalJumps: Number(detailTotals.portalJumps.toFixed(2)),
+    method: "route-hazard-traffic-control-v38"
+  };
+}
+
+function getActFastPressureWeight(mode) {
+  return ({
+    countdown_3m: 0,
+    countdown_2m: 0.12,
+    last_player_30s: 0.44,
+    countdown_1m: 0.68,
+    countdown_30s: 1
+  })[mode] ?? 0;
+}
+
+function computeVariantDifficultyAccounting(raw, preferences = {}, boardHarshness = null, sequence = null) {
+  const harshness = boardHarshness ?? computeBoardHarshness();
+  const programmingPressure = computeProgrammingPressureProfile(sequence, preferences);
+  let adjusted = Number(raw) || 0;
+  const contributions = [];
+  const mechanicalRules = [];
+  const add = (id, delta, kind = "residual", evidence = null) => {
+    const value = Number(delta) || 0;
+    if (Math.abs(value) > 0.0001) adjusted += value;
+    contributions.push({
+      id,
+      kind,
+      delta: Number(value.toFixed(2)),
+      evidence
+    });
+  };
+  const scale = (id, multiplier, kind = "residual", evidence = null) => {
+    const before = adjusted;
+    adjusted *= multiplier;
+    contributions.push({
+      id,
+      kind,
+      delta: Number((adjusted - before).toFixed(2)),
+      multiplier: Number(multiplier.toFixed(4)),
+      evidence
+    });
+  };
+  const mechanical = (id, note) => mechanicalRules.push({ id, note });
+
+  // These damage/recovery rules are already reflected in intrinsic hazards,
+  // reboot costs, and/or robot traffic. v38 removes their old generic course-wide
+  // multipliers so the same danger is not paid twice.
+  if (preferences.lessSpammyGame) mechanical("lessSpammyGame", "hazard/traffic/reboot model");
+  if (preferences.criticalSpam) mechanical("criticalSpam", "hazard/traffic/reboot model");
+  if (preferences.criticalHaywire) mechanical("criticalHaywire", "hazard/traffic/reboot model");
+  if (preferences.permanentShutdown && preferences.criticalSpam) mechanical("permanentShutdown", "damage-deck/reboot model");
+  if (preferences.cuttingFloor) mechanical("cuttingFloor", "laser damage model");
+  if (preferences.flamingOil) mechanical("flamingOil", "oil hazard model");
+  if (preferences.setToKill) mechanical("setToKill", "robot-laser traffic model");
+  if (preferences.setToStun) mechanical("setToStun", "robot-laser traffic model");
+  if (preferences.repairStations) mechanical("repairStations", "checkpoint repair route value");
+
+  // Energy Crisis removes a broad strategic resource system that the flattened
+  // route economy does not fully express. Keep its small residual for now, but it
+  // is explicitly separated for later calibration rather than hidden in route cost.
+  if (preferences.lighterGame) {
+    scale("lighterGame", 0.96, "residual-resource", { provisional: true });
+  }
+
+  if (preferences.lessForeshadowing) {
+    add(
+      "lessForeshadowing",
+      programmingPressure.planningPressure * 4.4,
+      "residual-programming",
+      { planningPressure: programmingPressure.planningPressure }
+    );
+  }
+  if (preferences.classicSharedDeck) {
+    const sharedDeckPressure = getSharedDeckPlayerPressure(preferences.playerCount);
+    add(
+      "classicSharedDeck",
+      programmingPressure.planningPressure * (4.3 + sharedDeckPressure * 1.7),
+      "residual-programming",
+      {
+        planningPressure: programmingPressure.planningPressure,
+        playerPressure: Number(sharedDeckPressure.toFixed(3))
+      }
+    );
+  }
+  if (preferences.factoryRejects) {
+    add(
+      "factoryRejects",
+      programmingPressure.planningPressure * 3.2,
+      "residual-programming",
+      { planningPressure: programmingPressure.planningPressure }
+    );
+  }
+  if (preferences.actFastMode) {
+    const timerWeight = getActFastPressureWeight(preferences.actFastMode);
+    add(
+      "actFast",
+      programmingPressure.timedPressure * 6.2 * timerWeight,
+      "residual-programming",
+      {
+        mode: preferences.actFastMode,
+        timerWeight,
+        timedPressure: programmingPressure.timedPressure
+      }
+    );
+  }
+  if (preferences.movingTargetStats?.activeCount) {
+    // Dynamic routing already pays the chase in actions/distance. Preserve only a
+    // smaller residual for tracking/anticipating a moving objective in real play.
+    add(
+      "movingTargets",
+      (preferences.movingTargetStats.difficultyBonus ?? 0) * 0.35,
+      "residual-tracking",
+      { routeAware: true, retainedFraction: 0.35 }
+    );
+  }
+
+  if (preferences.competitiveMode) {
+    const strategicDifficulty = Number(preferences.competitiveStrategicDifficulty);
+    add(
+      "competitiveMode",
+      Number.isFinite(strategicDifficulty) ? strategicDifficulty : 1.8,
+      "residual-setup",
+      { provisional: true }
+    );
+  }
+  if (preferences.payToWin || preferences.subsidizedStarts) {
+    add(
+      preferences.subsidizedStarts ? "subsidizedStarts" : "payToWin",
+      1.4,
+      "residual-setup",
+      { provisional: true }
+    );
+  }
+
+  return {
+    base: Number((Number(raw) || 0).toFixed(2)),
+    final: Number(adjusted.toFixed(2)),
+    delta: Number((adjusted - (Number(raw) || 0)).toFixed(2)),
+    contributions,
+    mechanicalRules,
+    programmingPressure,
+    method: "mechanical-plus-residual-variant-accounting-v38"
+  };
+}
+
 function getSharedDeckPlayerPressure(playerCount = 4) {
   return clamp(((playerCount || 4) - 2) / 4, 0, 1);
 }
 
-const VARIANT_DIFFICULTY_ACCOUNTING = Object.freeze({
-  actFast: "explicit",
-  lighterGame: "mechanical+explicit",
-  upgradeWorld: "mechanical",
-  lessSpammyGame: "mechanical+explicit",
-  criticalSpam: "mechanical+explicit",
-  criticalHaywire: "mechanical+explicit",
-  permanentShutdown: "mechanical+explicit",
-  lessDeadlyGame: "mechanical",
-  moreDeadlyGame: "mechanical",
-  cuttingFloor: "mechanical+explicit",
-  flamingOil: "mechanical+explicit",
-  repulsorOverdrive: "mechanical",
-  setToKill: "mechanical",
-  setToStun: "mechanical",
-  dynamicArchiving: "mechanical",
-  homeReboot: "mechanical",
-  hazardousFlags: "mechanical",
-  repairStations: "mechanical",
-  movingTargets: "mechanical+explicit",
-  extraDocks: "layout-derived",
-  noDocks: "layout-derived",
-  sandwichedDock: "layout-derived",
-  factoryRejects: "explicit",
-  startupSpinUp: "mechanical",
-  virtualBots: "mechanical",
-  lessForeshadowing: "explicit",
-  classicSharedDeck: "explicit",
-  competitiveMode: "explicit+balance-gate",
-  payToWin: "explicit+pricing",
-  subsidizedStarts: "explicit+pricing",
-  staggeredBoards: "layout-derived"
-});
-
-function applyVariantDifficultyModifiers(raw, preferences = {}, boardHarshness = null) {
-  let adjusted = raw;
-  const harshness = boardHarshness ?? computeBoardHarshness();
-
-  if (preferences.lighterGame) {
-    adjusted *= 0.96;
-  }
-  if (preferences.lessSpammyGame) {
-    adjusted *= 0.95;
-  }
-  if (preferences.criticalSpam) {
-    adjusted *= 1.03 + harshness.normalized * 0.035;
-  }
-  if (preferences.criticalHaywire) {
-    adjusted *= 1.035 + harshness.normalized * 0.04;
-  }
-  if (preferences.permanentShutdown && preferences.criticalSpam) {
-    adjusted *= 1.01 + harshness.normalized * 0.05;
-  }
-  if (preferences.lessForeshadowing) {
-    adjusted *= 1.1;
-  }
-  if (preferences.cuttingFloor) {
-    adjusted += Math.min(10, countBoardLasers(preferences.goalTileMap) * 0.45);
-  }
-  if (preferences.flamingOil) {
-    adjusted += Math.min(8, countFeatureTypeInTileMap(preferences.goalTileMap, "oil") * 0.38);
-  }
-  if (preferences.classicSharedDeck) {
-    const sharedDeckPressure = getSharedDeckPlayerPressure(preferences.playerCount);
-    adjusted *= (
-      1.04 +
-      sharedDeckPressure * 0.07 +
-      harshness.normalized * (0.04 + sharedDeckPressure * 0.07)
-    );
-  }
-  if (preferences.factoryRejects) {
-    adjusted *= 1.06;
-  }
-  if (preferences.actFastMode) {
-    const actFastBase = {
-      countdown_3m: 0.7,
-      countdown_2m: 1.6,
-      countdown_1m: 3.1,
-      countdown_30s: 5.1,
-      last_player_30s: 1.9
-    }[preferences.actFastMode] ?? 0;
-    adjusted += Number((actFastBase * (0.9 + harshness.normalized * 0.95)).toFixed(2));
-  }
-  if (preferences.movingTargetStats?.activeCount) {
-    adjusted += preferences.movingTargetStats.difficultyBonus;
-  }
-
-  // Setup-choice rules whose difficulty is primarily strategic rather than
-  // geometric need a small explicit contribution. These apply identically
-  // whether the rule was randomly selected or explicitly forced.
-  if (preferences.competitiveMode) {
-    adjusted += 1.8;
-  }
-  if (preferences.payToWin || preferences.subsidizedStarts) {
-    adjusted += 1.4;
-  }
-
-  return Number(adjusted.toFixed(2));
-}
-
-function getCompetitiveModeDifficultyBonus(fairnessStdDev = 0) {
-  if (fairnessStdDev <= 2) {
-    return 0;
-  }
-  if (fairnessStdDev <= 6) {
-    return Number((((fairnessStdDev - 2) / 4) * 3.5).toFixed(2));
-  }
-  if (fairnessStdDev <= 10) {
-    return Number((3.5 + ((fairnessStdDev - 6) / 4) * 2.5).toFixed(2));
-  }
-  if (fairnessStdDev <= 16) {
-    return Number((6 - ((fairnessStdDev - 10) / 6) * 3).toFixed(2));
-  }
-
-  return Number(Math.max(0.5, 3 - (fairnessStdDev - 16) * 0.3).toFixed(2));
+function applyVariantDifficultyModifiers(raw, preferences = {}, boardHarshness = null, sequence = null) {
+  return computeVariantDifficultyAccounting(
+    raw,
+    preferences,
+    boardHarshness,
+    sequence
+  ).final;
 }
 
 function computeDifficultyLengthLoad(totalDifficulty = 0, flagCount = 0) {
@@ -12618,6 +14158,7 @@ function computeLengthMetrics(sequence, flagCount, playerCount, boardCount, pref
   const totalCongestion = first.averageTrafficPenalty + later.reduce((sum, leg) => sum + (leg.analysis.summary.congestionScore || 0), 0);
   const safePlayerCount = Math.max(1, playerCount || 4);
   const harshness = boardHarshness ?? computeBoardHarshness();
+  const programmingPressure = computeProgrammingPressureProfile(sequence, preferences);
   const checkpointLoad = 0;
   const playerLoad = computePlayerTimeLoad(safePlayerCount);
   const actionLoad = totalActionLoad * 2.8;
@@ -12625,9 +14166,7 @@ function computeLengthMetrics(sequence, flagCount, playerCount, boardCount, pref
   // Traffic costs real play time even on a forgiving board. That cost rises
   // when more robots must be resolved and when collisions happen on harsher
   // boards, where displacement is more likely to trigger damage, reboots, or
-  // consequential rerouting. Difficulty is therefore folded into this
-  // interaction term via the existing physical board-harshness profile rather
-  // than added again as a generic length penalty.
+  // consequential rerouting.
   const congestionWeight = (
     0.08 +
     harshness.normalized * 0.10 +
@@ -12636,45 +14175,81 @@ function computeLengthMetrics(sequence, flagCount, playerCount, boardCount, pref
   const congestionLoad = totalCongestion * congestionWeight;
   const flagAreaLoad = 0;
   const difficultyLoad = 0;
-  const movingTargetLoad = preferences.movingTargetStats?.lengthBonus ?? 0;
+  // v38: the moving target is already followed by the route solver. Its chase
+  // therefore appears naturally in action/distance load; the old path-length
+  // bonus is retained only as a diagnostic estimate, not added again here.
+  const movingTargetLoad = 0;
+  const movingTargetLegacyEstimate = preferences.movingTargetStats?.lengthBonus ?? 0;
   const actFastLoad = computeActFastLengthLoad(preferences, safePlayerCount);
   const routeLoad = actionLoad + distanceLoad;
-  const frictionLoad = congestionLoad + movingTargetLoad + actFastLoad;
+  const baseFrictionLoad = congestionLoad + actFastLoad;
+  const baseRaw = playerLoad + routeLoad + baseFrictionLoad;
+
+  // Shared/reshuffled programming can lengthen a game when a course actually
+  // punishes imperfect programs. Tie that residual to the same route evidence
+  // used for difficulty instead of applying a course-wide multiplier.
+  const lessForeshadowingLoad = preferences.lessForeshadowing
+    ? baseRaw * programmingPressure.planningPressure * 0.022
+    : 0;
+  const sharedDeckPlayerPressure = preferences.classicSharedDeck
+    ? getSharedDeckPlayerPressure(safePlayerCount)
+    : 0;
+  const sharedDeckLoad = preferences.classicSharedDeck
+    ? baseRaw * programmingPressure.planningPressure * (0.016 + sharedDeckPlayerPressure * 0.012)
+    : 0;
+  const programmingVariantLoad = lessForeshadowingLoad + sharedDeckLoad;
+  const frictionLoad = baseFrictionLoad + programmingVariantLoad;
+
   let compactnessRaw = Number((playerLoad + routeLoad + frictionLoad).toFixed(2));
   let raw = Number((playerLoad + routeLoad + frictionLoad).toFixed(2));
+  const variantLengthContributions = [];
+  if (lessForeshadowingLoad) {
+    variantLengthContributions.push({
+      id: "lessForeshadowing",
+      kind: "residual-programming",
+      delta: Number(lessForeshadowingLoad.toFixed(2)),
+      evidence: { planningPressure: programmingPressure.planningPressure }
+    });
+  }
+  if (sharedDeckLoad) {
+    variantLengthContributions.push({
+      id: "classicSharedDeck",
+      kind: "residual-programming",
+      delta: Number(sharedDeckLoad.toFixed(2)),
+      evidence: {
+        planningPressure: programmingPressure.planningPressure,
+        playerPressure: Number(sharedDeckPlayerPressure.toFixed(3))
+      }
+    });
+  }
+  if (actFastLoad) {
+    variantLengthContributions.push({
+      id: "actFast",
+      kind: "direct-timer",
+      delta: Number(actFastLoad.toFixed(2)),
+      evidence: { mode: preferences.actFastMode ?? null }
+    });
+  }
 
+  // Energy Crisis still has unmodeled real-play speed effects beyond route
+  // geometry; keep the old residual isolated until calibration can revisit it.
   if (preferences.lighterGame) {
+    const before = raw;
     compactnessRaw = Number((compactnessRaw * 0.89).toFixed(2));
     raw = Number((raw * 0.89).toFixed(2));
+    variantLengthContributions.push({
+      id: "lighterGame",
+      kind: "residual-resource",
+      delta: Number((raw - before).toFixed(2)),
+      multiplier: 0.89,
+      evidence: { provisional: true }
+    });
   }
-  if (preferences.lessSpammyGame) {
-    compactnessRaw = Number((compactnessRaw * 0.97).toFixed(2));
-    raw = Number((raw * 0.97).toFixed(2));
-  }
-  if (preferences.criticalSpam) {
-    const multiplier = 1.015 + harshness.normalized * 0.015;
-    compactnessRaw = Number((compactnessRaw * multiplier).toFixed(2));
-    raw = Number((raw * multiplier).toFixed(2));
-  }
-  if (preferences.criticalHaywire) {
-    const multiplier = 1.015 + harshness.normalized * 0.02;
-    compactnessRaw = Number((compactnessRaw * multiplier).toFixed(2));
-    raw = Number((raw * multiplier).toFixed(2));
-  }
-  if (preferences.lessForeshadowing) {
-    compactnessRaw = Number((compactnessRaw * 1.04).toFixed(2));
-    raw = Number((raw * 1.04).toFixed(2));
-  }
-  if (preferences.classicSharedDeck) {
-    const sharedDeckPressure = getSharedDeckPlayerPressure(playerCount);
-    const multiplier = (
-      1.01 +
-      sharedDeckPressure * 0.02 +
-      harshness.normalized * (0.015 + sharedDeckPressure * 0.035)
-    );
-    compactnessRaw = Number((compactnessRaw * multiplier).toFixed(2));
-    raw = Number((raw * multiplier).toFixed(2));
-  }
+
+  // Damage-deck variants, Cutting Floor, Flaming Oil, Set to Kill/Stun, Repair
+  // Stations, and similar physical rules are intentionally absent here: v38
+  // relies on their route/hazard/traffic consequences instead of re-multiplying
+  // total game length after those consequences have already been measured.
 
   return {
     raw,
@@ -12700,10 +14275,17 @@ function computeLengthMetrics(sequence, flagCount, playerCount, boardCount, pref
       flagAreaLoad: Number(flagAreaLoad.toFixed(2)),
       difficultyLoad: Number(difficultyLoad.toFixed(2)),
       movingTargetLoad: Number(movingTargetLoad.toFixed(2)),
+      movingTargetLegacyEstimate: Number(movingTargetLegacyEstimate.toFixed(2)),
       actFastLoad: Number(actFastLoad.toFixed(2)),
+      lessForeshadowingLoad: Number(lessForeshadowingLoad.toFixed(2)),
+      sharedDeckLoad: Number(sharedDeckLoad.toFixed(2)),
+      programmingVariantLoad: Number(programmingVariantLoad.toFixed(2)),
       routeLoad: Number(routeLoad.toFixed(2)),
       frictionLoad: Number(frictionLoad.toFixed(2))
-    }
+    },
+    variantLengthContributions,
+    programmingPressure,
+    method: "route-derived-plus-residual-variant-length-v38"
   };
 }
 
@@ -12846,6 +14428,54 @@ function getRouteDramaProfile(sequence, preferences = {}) {
   };
 }
 
+function getOpeningLegAnticlimax(sequence, preferences = {}) {
+  const actions = (sequence?.firstLeg?.starts || [])
+    .filter((entry) => entry.reachable)
+    .map((entry) => entry.selectedRoute?.actions ?? entry.bestActions)
+    .filter(Number.isFinite);
+  if (!actions.length) return { active: false, fastestActions: null, penalty: 0, routeCount: 0 };
+  const fastestActions = Math.min(...actions);
+  const shortfall = Math.max(0, 6 - fastestActions);
+  const lengthScale = preferences.length === "short" ? 0.2 : preferences.length === "long" ? 0.8 : 0.5;
+  return {
+    active: shortfall > 0,
+    fastestActions,
+    penalty: Number((shortfall * shortfall * 1.6 * lengthScale).toFixed(2)),
+    routeCount: actions.length
+  };
+}
+
+function getMeaningfulBoardUseProfile(sequence, boardPlacements = [], pieceMap = {}, usableStarts = []) {
+  if (boardPlacements.length <= 1) return { penalty: 0, boards: [] };
+  const routes = [];
+  usableStarts.forEach((entry) => { if (entry.selectedRoute) routes.push(entry.selectedRoute); });
+  sequence?.legs?.slice(1).forEach((leg) => (leg.analysis?.distinctRoutes || []).forEach((route) => routes.push(route)));
+  const boards = boardPlacements.map((placement, boardIndex) => {
+    const routeTiles = new Set();
+    let routeVisits = 0;
+    routes.forEach((route) => {
+      let touched = false;
+      (route.path || []).forEach((point) => {
+        if (!pointOnPlacement(point, placement, pieceMap)) return;
+        routeTiles.add(`${point.x},${point.y}`);
+        touched = true;
+      });
+      if (touched) routeVisits += 1;
+    });
+    return { boardIndex, uniqueRouteTiles: routeTiles.size, routeVisits };
+  });
+  // A board touched by only one or two route spaces is visually token use even
+  // when a checkpoint technically lies there. Keep it legal, but make it a worse
+  // fit than a course that traverses a meaningful part of every placed board.
+  const penalty = boards.reduce((sum, board) => {
+    if (board.uniqueRouteTiles === 0) return sum; // handled by unused-board gate
+    if (board.uniqueRouteTiles <= 2) return sum + 8;
+    if (board.uniqueRouteTiles <= 4) return sum + 3;
+    return sum;
+  }, 0);
+  return { penalty: Number(penalty.toFixed(2)), boards };
+}
+
 function getFinalLegAnticlimax(sequence, preferences = {}) {
   const finalLeg = sequence?.legs?.at(-1);
   if (!finalLeg || sequence.legs.length <= 1) {
@@ -12871,7 +14501,7 @@ function getFinalLegAnticlimax(sequence, preferences = {}) {
   }
 
   const fastestActions = Math.min(...actions);
-  const shortfall = Math.max(0, 5 - fastestActions);
+  const shortfall = Math.max(0, 6 - fastestActions);
   const lengthScale = preferences.length === "short"
     ? 0.25
     : preferences.length === "long"
@@ -12896,16 +14526,13 @@ function classifyCandidate(sequence, preferences, context = {}) {
   const reachableStarts = computeCourseReachableStarts(sequence.firstLeg);
   const usableStarts = computeUsableStarts(sequence.firstLeg, preferences);
   const boardHarshness = computeBoardHarshness(context.boardPlacements, context.pieceMap);
-  const fairnessStdDev = sequence.firstLeg.summary.scoreStdDev;
+  const pricedStartBalance = sequence.firstLeg.summary.payToWin?.residualBalance ?? null;
+  const fairnessStdDev = (preferences.payToWin || preferences.subsidizedStarts)
+    ? (pricedStartBalance?.worstStdDev ?? sequence.firstLeg.summary.scoreStdDev)
+    : sequence.firstLeg.summary.scoreStdDev;
   const skipCompetitiveBlockImpact = Boolean(context.skipCompetitiveBlockImpact);
   const competitiveBlockImpact = preferences.competitiveMode && !skipCompetitiveBlockImpact
-    ? computeCompetitiveBlockImpact(
-      sequence.firstLeg,
-      context.goalTileMap ?? context.tileMap,
-      context.checkpoints ?? sequence.firstLeg.flags ?? [],
-      preferences.playerCount,
-      preferences
-    )
+    ? (sequence.firstLeg.summary.competitiveStartBalance ?? null)
     : null;
   const checkpointPressure = computeLaterCheckpointPressure(
     context.tileMap,
@@ -12915,11 +14542,18 @@ function classifyCandidate(sequence, preferences, context = {}) {
   const movingTargetStats = preferences.movingTargets
     ? summarizeMovingTargets(context.tileMap, context.checkpoints, preferences)
     : summarizeMovingTargets(null, [], preferences);
-  let difficultyRaw = applyVariantDifficultyModifiers(computeDifficultyRaw(sequence, checkpointPressure), {
-    ...preferences,
-    movingTargetStats,
-    goalTileMap: context.goalTileMap ?? context.tileMap
-  }, boardHarshness);
+  const variantDifficultyAccounting = computeVariantDifficultyAccounting(
+    computeDifficultyRaw(sequence, checkpointPressure),
+    {
+      ...preferences,
+      competitiveStrategicDifficulty: competitiveBlockImpact?.strategicDifficulty ?? null,
+      movingTargetStats,
+      goalTileMap: context.goalTileMap ?? context.tileMap
+    },
+    boardHarshness,
+    sequence
+  );
+  let difficultyRaw = variantDifficultyAccounting.final;
   const lengthMetrics = computeLengthMetrics(
     sequence,
     preferences.flagCount,
@@ -12951,12 +14585,23 @@ function classifyCandidate(sequence, preferences, context = {}) {
   if (sequence.firstLeg.summary.normalStartBalance?.reject) {
     hardFailures.push("normal-start-balance");
   }
+  if (
+    (preferences.payToWin || preferences.subsidizedStarts) &&
+    sequence.firstLeg.summary.payToWin?.balanceValid === false
+  ) {
+    hardFailures.push("priced-start-balance");
+  }
 
   if (preferences.competitiveMode) {
     const staging = sequence.firstLeg.summary.competitiveStaging;
     const unavailableStartCount = staging?.unavailableIndices?.length
       ?? Math.max(0, (staging?.sourceStartCount ?? reachableStarts.length) - (staging?.routedStartCount ?? reachableStarts.length));
-    if (unavailableStartCount > 0) {
+    const requiredCompetitiveStarts = Math.max(1, preferences.playerCount * 2);
+    const competitiveCapacityShortfall = (
+      (staging?.sourceStartCount ?? reachableStarts.length) < requiredCompetitiveStarts ||
+      (staging?.routedStartCount ?? reachableStarts.length) < requiredCompetitiveStarts
+    );
+    if (unavailableStartCount > 0 || competitiveCapacityShortfall) {
       hardFailures.push("competitive-start-availability");
     }
     if (!skipCompetitiveBlockImpact && !competitiveBlockImpact?.acceptable) {
@@ -12965,11 +14610,14 @@ function classifyCandidate(sequence, preferences, context = {}) {
   }
 
   if (context.boardPlacements?.length > 1 && context.pieceMap && context.checkpoints) {
+    const physicalUsageStarts = preferences.competitiveMode
+      ? reachableStarts
+      : usableStarts;
     const usedBoards = collectUsedBoardIndices(
       sequence,
       context.boardPlacements,
       context.pieceMap,
-      usableStarts,
+      physicalUsageStarts,
       context.checkpoints
     );
 
@@ -13005,10 +14653,11 @@ function classifyCandidate(sequence, preferences, context = {}) {
     : fairnessStdDev >= 14 ? fairnessStdDev - 14 : 0;
   const competitiveBlockPenalty = preferences.competitiveMode && !skipCompetitiveBlockImpact
     ? (
-      Math.max(0, preferences.playerCount - (competitiveBlockImpact?.remainingStartCount ?? 0)) * 18 +
-      (competitiveBlockImpact?.remainingOutlierCount ?? 0) * 24 +
-      Math.max(0, (competitiveBlockImpact?.worstScoreZ ?? 0) - 1.5) * 4 +
-      Math.max(0, (competitiveBlockImpact?.worstActionZ ?? 0) - 1.8) * 3
+      Math.max(0, preferences.playerCount - (competitiveBlockImpact?.selectedStartCount ?? 0)) * 18 +
+      (competitiveBlockImpact?.selectedOutlierCount ?? competitiveBlockImpact?.remainingOutlierCount ?? 0) * 24 +
+      Math.max(0, (competitiveBlockImpact?.selectedStdDev ?? 0) - NORMAL_START_FAIRNESS_STDDEV_LIMIT) * 2 +
+      Math.max(0, (competitiveBlockImpact?.worstScoreZ ?? 0) - FULL_START_OUTLIER_Z) * 4 +
+      Math.max(0, (competitiveBlockImpact?.worstActionZ ?? 0) - (FULL_START_OUTLIER_Z + 0.35)) * 3
     )
     : 0;
   const movingTargetVolatilityPenalty = getMovingTargetVolatilityPenalty(
@@ -13016,7 +14665,14 @@ function classifyCandidate(sequence, preferences, context = {}) {
     fairnessStdDev,
     preferences
   );
+  const openingLegAnticlimax = getOpeningLegAnticlimax(sequence, preferences);
   const finalLegAnticlimax = getFinalLegAnticlimax(sequence, preferences);
+  const meaningfulBoardUse = getMeaningfulBoardUseProfile(
+    sequence,
+    context.boardPlacements ?? [],
+    context.pieceMap ?? {},
+    preferences.competitiveMode ? reachableStarts : usableStarts
+  );
   const routeDrama = getRouteDramaProfile(sequence, preferences);
   const fitScore = (
     difficultyFit * 1.2 +
@@ -13024,7 +14680,9 @@ function classifyCandidate(sequence, preferences, context = {}) {
     fairnessPenalty * 0.5 +
     competitiveBlockPenalty +
     movingTargetVolatilityPenalty +
+    openingLegAnticlimax.penalty +
     finalLegAnticlimax.penalty +
+    meaningfulBoardUse.penalty +
     routeDrama.penalty +
     Math.max(0, preferences.playerCount - usableStarts.length) * 20
   );
@@ -13043,9 +14701,13 @@ function classifyCandidate(sequence, preferences, context = {}) {
     fairnessStdDev,
     competitiveBlockImpact,
     checkpointPressure,
+    variantDifficultyAccounting,
+    programmingPressure: variantDifficultyAccounting.programmingPressure,
     movingTargetStats,
     movingTargetVolatilityPenalty,
+    openingLegAnticlimax,
     finalLegAnticlimax,
+    meaningfulBoardUse,
     routeDrama,
     acceptable: hardFailures.length === 0 && difficultyFit === 0 && lengthFit === 0,
     hardFailures,
@@ -13053,6 +14715,64 @@ function classifyCandidate(sequence, preferences, context = {}) {
   };
 }
 
+
+function hashScenarioFingerprintPayload(payload) {
+  const text = String(payload ?? "");
+  if (!text) return null;
+  let hash = 2166136261;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619) >>> 0;
+  }
+  return hash.toString(16).toUpperCase().padStart(8, "0");
+}
+
+function getCourseConstructionFingerprint(
+  boardPlacements = [],
+  dockPlacements = [],
+  overlayPlacements = [],
+  checkpoints = []
+) {
+  const placementKey = (placement) => [
+    placement?.pieceId ?? "?",
+    placement?.x ?? "?",
+    placement?.y ?? "?",
+    placement?.rotation ?? 0,
+    placement?.flipped ? 1 : 0,
+    placement?.overlay ? 1 : 0
+  ].join(",");
+  const checkpointKey = (checkpoint, index) => [
+    checkpoint?.id ?? index + 1,
+    checkpoint?.x ?? "?",
+    checkpoint?.y ?? "?",
+    checkpoint?.facing ?? "-"
+  ].join(",");
+  const payload = [
+    `boards:${boardPlacements.map(placementKey).join(";")}`,
+    `docks:${dockPlacements.map(placementKey).join(";")}`,
+    `overlays:${overlayPlacements.map(placementKey).join(";")}`,
+    `flags:${checkpoints.map(checkpointKey).join(";")}`
+  ].join("|");
+  return hashScenarioFingerprintPayload(payload);
+}
+
+function getScenarioSelectedRouteFingerprint(scenario) {
+  const starts = scenario?.sequence?.firstLeg?.starts ?? [];
+  const payload = starts
+    .filter((entry) => Number.isInteger(entry?.index) && entry?.fullCourseRoute)
+    .sort((left, right) => left.index - right.index)
+    .map((entry) => {
+      const route = entry.fullCourseRoute;
+      const actions = Array.isArray(route.actionHistory) ? route.actionHistory.join(",") : "";
+      const hits = Array.isArray(route.checkpointHits)
+        ? route.checkpointHits.map((hit) => `${hit.checkpointId ?? hit.checkpointIndex}:${hit.action ?? "?"}:${hit.state?.x ?? "?"},${hit.state?.y ?? "?"},${hit.state?.facing ?? "?"}`).join(";")
+        : "";
+      return `${entry.index}|${actions}|${hits}|${route.score ?? "?"}`;
+    })
+    .join("||");
+
+  return hashScenarioFingerprintPayload(payload);
+}
 
 function buildScenarioCopySummary(scenario) {
   if (!scenario) {
@@ -13065,9 +14785,12 @@ function buildScenarioCopySummary(scenario) {
   const competitive = scenario.metrics?.competitiveBlockImpact ?? null;
   const payToWin = summary.payToWin ?? null;
   const contextualCache = summary.contextualLegCache ?? null;
-  const courseEnergyEconomy = !payToWin?.energyShadow?.active
-    ? buildCourseEnergyEconomyDiagnostics(scenario)
-    : null;
+  const currentNormalEstimateModel = Boolean(
+    contextualCache?.estimatedPrimaryRouting &&
+    !scenario.payToWin &&
+    !scenario.subsidizedStarts
+  );
+  const courseEnergyEconomy = buildCourseEnergyEconomyDiagnostics(scenario);
   const profile = diagnostics?.contextualProfileTotals ?? null;
   const playableCheckpoints = getPlayableCheckpoints(
     scenario.checkpoints ?? [],
@@ -13090,25 +14813,79 @@ function buildScenarioCopySummary(scenario) {
     `Result: ${resultLabel}`
   ];
 
+  if (Number.isInteger(scenario.devTestSeed)) {
+    lines.push(`Dev test seed: ${formatDevGenerationSeed(scenario.devTestSeed)} (construction RNG frozen)`);
+    const constructionFingerprint = scenario.constructionFingerprint ?? null;
+    if (constructionFingerprint) lines.push(`Construction fingerprint: ${constructionFingerprint}`);
+    const routeFingerprint = getScenarioSelectedRouteFingerprint(scenario);
+    if (routeFingerprint) lines.push(`Selected-route fingerprint: ${routeFingerprint}`);
+    const rejectedFingerprints = [...new Set(
+      (diagnostics?.rejectionEvents ?? [])
+        .filter((entry) => entry?.constructionFingerprint)
+        .map((entry) => `e${entry.evaluation ?? "?"}:${entry.constructionFingerprint}`)
+    )];
+    if (rejectedFingerprints.length) {
+      lines.push(`Rejected construction fingerprints: ${rejectedFingerprints.join(", ")}`);
+    }
+  }
+
   if (diagnostics) {
     lines.push(
       `Generation: ${formatGenerationDuration(diagnostics.totalMs)} total, ${formatGenerationDuration(diagnostics.routeSearchMs)} route search, ${diagnostics.routeSearches ?? 0} searches, ${diagnostics.routeExpansions ?? 0} expansions, ${diagnostics.cappedRouteSearches ?? 0} capped`
     );
+    if (diagnostics.routeSearchTotalsByKind) {
+      lines.push(`Route kinds: ${formatRouteSearchKindBreakdown(diagnostics.routeSearchTotalsByKind)}`);
+    }
     if (diagnostics.searchProfile) {
       const search = diagnostics.searchProfile;
       lines.push(
-        `Search profile: ${diagnostics.generationModeLabel ?? formatGenerationModeLabel(getScenarioGenerationMode(scenario))}; attempts ${diagnostics.maxAttempts ?? scenarioMaxAttempts}, preflight ${search.preflightOpeningExpansions ?? "?"}/${search.preflightLaterExpansions ?? "?"}, full ${search.fullCourseExpansions ?? "?"}, routes ${search.openingRoutes ?? "?"}/${search.laterRoutes ?? "?"}, beam ${search.beamWidth ?? "?"}, completion ${search.completionPool ?? "?"}, traffic ${search.fullCourseTrafficPasses ?? "?"}`
+        currentNormalEstimateModel
+          ? `Search profile: ${diagnostics.generationModeLabel ?? formatGenerationModeLabel(getScenarioGenerationMode(scenario))}; attempts ${diagnostics.maxAttempts ?? scenarioMaxAttempts}${diagnostics.emergencyAttemptReserve ? ` +${diagnostics.emergencyAttemptReserve} emergency only if no fallback` : ""}, preflight audition ${Math.min(Number(search.preflightOpeningExpansions) || 700, 700)}/${Math.min(Number(search.preflightLaterExpansions) || 600, 600)}exp, primary witnesses ${search.primaryWitnessRoutes ?? "?"}, traffic ${search.trafficEnabled ? `${search.trafficEpochs ?? 0} exploration epoch(s), alternates ${search.trafficAlternatesEnabled ? "on" : "off"}, common judgement demand≥${search.trafficAlternateDemandThreshold ?? NORMAL_TRAFFIC_ALTERNATE_DEMAND_THRESHOLD}/gain≥${search.trafficAlternateMinGain ?? NORMAL_TRAFFIC_ALTERNATE_MIN_GAIN}, bounded new-search ${search.trafficAlternateMaxNewSearchesPerEpoch ?? 0}/epoch @${search.trafficAlternateExpansions ?? 0}exp/${search.trafficAlternateMaxActions ?? 0}a, explore-gap ${Math.round((search.trafficExplorationUncertaintyShare ?? 0) * 100)}% above conf ${search.trafficExplorationConfidenceFloor ?? 1}${search.devRouteModelOverrideActive ? ", Dev override" : ""}` : `off${search.devRouteModelOverrideActive ? " (Dev override)" : ""}`}`
+          : scenario.competitiveMode
+            ? `Search profile: ${diagnostics.generationModeLabel ?? formatGenerationModeLabel(getScenarioGenerationMode(scenario))}; Competitive shares the regular route foundation and replaces only Normal pruning with sequential strategic blocks; attempts ${diagnostics.maxAttempts ?? scenarioMaxAttempts}, traffic ${search.trafficEnabled ? "on" : "off"}`
+            : (scenario.payToWin || scenario.subsidizedStarts)
+              ? `Search profile: ${diagnostics.generationModeLabel ?? formatGenerationModeLabel(getScenarioGenerationMode(scenario))}; priced starts share the all-start estimate→realize route foundation, then apply card-aware Energy balancing; attempts ${diagnostics.maxAttempts ?? scenarioMaxAttempts}, traffic ${search.trafficEnabled ? "on" : "off"}`
+              : `Search profile: special-setup routing path; attempts ${diagnostics.maxAttempts ?? scenarioMaxAttempts}, traffic ${search.trafficEnabled ? "on" : "off"}`
       );
     }
     if (diagnostics.slowestRouteSearch) {
       const slowest = diagnostics.slowestRouteSearch;
       lines.push(
-        `Slowest: ${slowest.kind ?? "route"} ${formatGenerationDuration(slowest.durationMs)}, ${slowest.expansions ?? 0}/${slowest.maxExpansions ?? 0} expansions, ${slowest.returnedRoutes ?? 0} routes`
+        `Slowest: ${slowest.kind ?? "route"} ${formatGenerationDuration(slowest.durationMs)}, ${slowest.expansions ?? 0}/${slowest.maxExpansions ?? 0} expansions, ${slowest.returnedRoutes ?? 0} routes${slowest.hitActionHorizon ? `, horizon touched ${slowest.actionHorizonStops ?? 0}x (max local ${slowest.maxLocalActionsSeen ?? 0})` : ""}`
       );
     }
     if (profile) {
+      const physicalCache = diagnostics.physicalCacheTotals ?? {
+        hits: profile.physicalCacheHits ?? 0,
+        misses: profile.physicalCacheMisses ?? 0
+      };
       lines.push(
-        `Physical cache: ${profile.physicalCacheHits ?? 0}/${(profile.physicalCacheHits ?? 0) + (profile.physicalCacheMisses ?? 0)} hits`
+        `Physical cache: ${physicalCache.hits ?? 0}/${(physicalCache.hits ?? 0) + (physicalCache.misses ?? 0)} hits`
+      );
+      const contextualKind = diagnostics.routeSearchTotalsByKind?.["contextual-leg"] ?? null;
+      if (contextualKind?.searches) {
+        lines.push(
+          `Contextual timing: ${formatGenerationDuration(contextualKind.durationMs)} across ${contextualKind.searches} searches/${contextualKind.expansions} exp; ${formatContextualProfileShare(profile, contextualKind.durationMs)}`,
+          `Contextual efficiency: ${formatContextualEfficiency(profile, contextualKind.expansions)}`
+        );
+        const contextualGoalHealth = formatContextualGoalSearchHealth(profile, contextualKind.searches);
+        if (contextualGoalHealth) lines.push(`Contextual goal search: ${contextualGoalHealth}`);
+        const contextualFidelityHealth = formatContextualFidelityHealth(profile);
+        if (contextualFidelityHealth) lines.push(`Contextual horizon: ${contextualFidelityHealth}`);
+        const dominanceKeyDiagnostics = formatContextualDominanceKeyDiagnostics(profile);
+        if (dominanceKeyDiagnostics) {
+          lines.push(`Dominance key space (diagnostic only; not safe-to-prune claims): ${dominanceKeyDiagnostics}`);
+        }
+        const usageParetoDiagnostics = formatContextualUsageParetoDiagnostics(profile);
+        if (usageParetoDiagnostics) {
+          lines.push(`Program-resource Pareto (diagnostic upper bound; not a prune rule): ${usageParetoDiagnostics}`);
+        }
+      }
+    }
+    if (diagnostics.slowestRouteSearch?.contextualProfile) {
+      const slowest = diagnostics.slowestRouteSearch;
+      lines.push(
+        `Slowest contextual profile: ${formatContextualProfileShare(slowest.contextualProfile, slowest.durationMs)}; ${formatContextualEfficiency(slowest.contextualProfile, slowest.expansions)}`
       );
     }
     const rejectionSummary = diagnostics.rejectionSummary ?? summarizeGenerationRejectionEvents(
@@ -13119,6 +14896,27 @@ function buildScenarioCopySummary(scenario) {
         `Rejected evaluations: ${rejectionSummary.total}; ${rejectionSummary.categories.map((entry) => `${entry.category} ${entry.count}`).join(", ")}`,
         `Rejected route work: ${rejectionSummary.categories.map((entry) => `${entry.category} ${entry.routeExpansions} exp/${entry.cappedRouteSearches} capped`).join(", ")}`
       );
+      for (const entry of rejectionSummary.categories) {
+        if (entry.routeSearchTotalsByKind) {
+          lines.push(`Rejected kinds ${entry.category}: ${formatRouteSearchKindBreakdown(entry.routeSearchTotalsByKind)}`);
+        }
+        if (!(entry.contextualSearches > 0) || !(entry.contextualDurationMs > 0)) continue;
+        lines.push(
+          `Rejected profiler ${entry.category}: ${formatGenerationDuration(entry.contextualDurationMs)} contextual/${entry.contextualSearches} searches/${entry.contextualExpansions} exp; ${formatContextualProfileShare(entry.contextualProfile, entry.contextualDurationMs)}; ${formatContextualEfficiency(entry.contextualProfile, entry.contextualExpansions)}`
+        );
+        const rejectedGoalHealth = formatContextualGoalSearchHealth(entry.contextualProfile, entry.contextualSearches);
+        if (rejectedGoalHealth) lines.push(`Rejected goal search ${entry.category}: ${rejectedGoalHealth}`);
+        const rejectedFidelityHealth = formatContextualFidelityHealth(entry.contextualProfile);
+        if (rejectedFidelityHealth) lines.push(`Rejected horizon ${entry.category}: ${rejectedFidelityHealth}`);
+        const rejectedDominanceKeyDiagnostics = formatContextualDominanceKeyDiagnostics(entry.contextualProfile);
+        if (rejectedDominanceKeyDiagnostics) {
+          lines.push(`Rejected dominance keys ${entry.category} (diagnostic only): ${rejectedDominanceKeyDiagnostics}`);
+        }
+        const rejectedUsageParetoDiagnostics = formatContextualUsageParetoDiagnostics(entry.contextualProfile);
+        if (rejectedUsageParetoDiagnostics) {
+          lines.push(`Rejected program-resource Pareto ${entry.category} (diagnostic upper bound): ${rejectedUsageParetoDiagnostics}`);
+        }
+      }
     }
 
     const preflightFailureEvents = (diagnostics.rejectionEvents ?? []).filter(
@@ -13150,29 +14948,15 @@ function buildScenarioCopySummary(scenario) {
     );
     for (const event of targetGateFailureEvents.slice(0, 8)) {
       const detail = event.diagnostics.targetGate;
-      lines.push(
-        `Target-gate rejection e${event.evaluation ?? "?"}: difficulty ${detail.difficultyRaw ?? "?"}, length ${detail.lengthRaw ?? "?"}, fit-length ${detail.lengthFitRaw ?? "?"}, pool ${detail.routePoolSurvivors ?? 0}/${detail.routePoolRequired ?? "?"}, ${detail.work?.expansions ?? event.routeExpansions ?? 0} pool exp/${detail.work?.capped ?? event.cappedRouteSearches ?? 0} capped`
-      );
-    }
-
-    const anyAnyFailureEvents = (diagnostics.rejectionEvents ?? []).filter(
-      (event) => event.diagnostics?.anyAny
-    );
-    for (const event of anyAnyFailureEvents.slice(0, 8)) {
-      const detail = event.diagnostics.anyAny;
-      const fastHealth = detail.fastFailureHealth;
-      const escalationHealth = detail.escalationFailureHealth;
-      const fastHistory = formatSurvivorHistory(
-        fastHealth?.survivorHistory?.length
-          ? fastHealth.survivorHistory
-          : detail.fastSurvivorHistory
-      );
-      const escalationHistory = formatSurvivorHistory(
-        escalationHealth?.survivorHistory ?? []
-      );
-      lines.push(
-        `Any/Any failure e${event.evaluation ?? "?"}: fast ${detail.fastWork?.expansions ?? 0} exp/${detail.fastWork?.capped ?? 0} capped, survival ${fastHistory}, zero-route caps/leg ${formatCappedContextHistory(fastHealth?.survivorHistory?.length ? fastHealth.survivorHistory : detail.fastSurvivorHistory)}${fastHealth?.legNumber ? `, failed after leg ${fastHealth.legNumber}` : detail.fastBalanceRejected ? ", balance rejected" : ""}; escalation ${detail.escalated ? `${detail.escalationWork?.expansions ?? 0} exp/${detail.escalationWork?.capped ?? 0} capped${escalationHealth ? `, survival ${escalationHistory}, zero-route caps/leg ${formatCappedContextHistory(escalationHealth.survivorHistory)}, failed after leg ${escalationHealth.legNumber ?? "?"}` : ""}` : "none"}`
-      );
+      if (detail.method === "calibrated-cheap-geometry") {
+        lines.push(
+          `Target-gate rejection e${event.evaluation ?? "?"}: geometry length ${detail.predictedLengthRaw ?? "?"}, RMSE ${detail.rmse ?? "?"}, safety ±${Number.isFinite(Number(detail.safetyMargin)) ? Number(Number(detail.safetyMargin).toFixed(1)) : "?"}, preflight difficulty ${detail.preflightDifficultyRaw ?? "?"}, preflight length ${detail.preflightLengthRaw ?? "?"}, coherent pool skipped`
+        );
+      } else {
+        lines.push(
+          `Target-gate rejection e${event.evaluation ?? "?"}: difficulty ${detail.difficultyRaw ?? "?"}, length ${detail.lengthRaw ?? "?"}, fit-length ${detail.lengthFitRaw ?? "?"}, pool ${detail.routePoolSurvivors ?? 0}/${detail.routePoolRequired ?? "?"}, ${detail.work?.expansions ?? event.routeExpansions ?? 0} pool exp/${detail.work?.capped ?? event.cappedRouteSearches ?? 0} capped`
+        );
+      }
     }
   }
 
@@ -13188,36 +14972,33 @@ function buildScenarioCopySummary(scenario) {
       );
     }
   }
-
-  const anyAnyAcceptedDiagnostics = summary.anyAnyDiagnostics ?? null;
-  if (anyAnyAcceptedDiagnostics) {
-    const fastHistory = formatSurvivorHistory(
-      anyAnyAcceptedDiagnostics.fastFailureHealth?.survivorHistory?.length
-        ? anyAnyAcceptedDiagnostics.fastFailureHealth.survivorHistory
-        : anyAnyAcceptedDiagnostics.fastSurvivorHistory
-    );
-    const escalationHistory = formatSurvivorHistory(
-      anyAnyAcceptedDiagnostics.escalationSurvivorHistory ?? []
-    );
-    lines.push(
-      `Any/Any work: fast ${anyAnyAcceptedDiagnostics.fastWork?.expansions ?? 0} exp/${anyAnyAcceptedDiagnostics.fastWork?.capped ?? 0} capped, survival ${fastHistory}, zero-route caps/leg ${formatCappedContextHistory(anyAnyAcceptedDiagnostics.fastFailureHealth?.survivorHistory?.length ? anyAnyAcceptedDiagnostics.fastFailureHealth.survivorHistory : anyAnyAcceptedDiagnostics.fastSurvivorHistory)}; escalation ${anyAnyAcceptedDiagnostics.escalated ? `${anyAnyAcceptedDiagnostics.escalationWork?.expansions ?? 0} exp/${anyAnyAcceptedDiagnostics.escalationWork?.capped ?? 0} capped, survival ${escalationHistory}, zero-route caps/leg ${formatCappedContextHistory(anyAnyAcceptedDiagnostics.escalationSurvivorHistory)}` : "none"}`
-    );
-  }
-
   lines.push(
     `Course: ${scenario.boardCount ?? scenario.mainBoardIds?.length ?? 0} board(s), ${playableCheckpoints.length} flag(s)`,
     ...(scenario.lengthConstructionPrior
-      ? [`Length construction prior: ${scenario.lengthConstructionPrior.boardCount} board(s) + ${scenario.lengthConstructionPrior.flagCount} flag(s) -> predicted ${scenario.lengthConstructionPrior.predictedLength} raw, approx target-band probability ${Math.round((scenario.lengthConstructionPrior.bandProbability ?? 0) * 100)}%, RMSE ${Number(scenario.lengthConstructionPrior.rmse ?? 0).toFixed(2)}, n ${scenario.lengthConstructionPrior.sampleSize ?? "?"}`]
+      ? [`Length construction prior: planned ${scenario.lengthConstructionPrior.boardCount} board(s) + ${scenario.lengthConstructionPrior.flagCount} flag(s) -> predicted ${scenario.lengthConstructionPrior.predictedLength} raw vs target ${scenario.lengthConstructionPrior.targetLength ?? "?"}, desirability ${Math.round((scenario.lengthConstructionPrior.targetDesirability ?? 0) * 100)}%, feasibility ${Number.isFinite(scenario.lengthConstructionPrior.feasibilityProbability) ? `${Math.round(scenario.lengthConstructionPrior.feasibilityProbability * 100)}%` : "n/a"}, RMSE ${Number(scenario.lengthConstructionPrior.rmse ?? 0).toFixed(2)}, n ${scenario.lengthConstructionPrior.sampleSize ?? "?"}`]
       : []),
     `Boards: ${(scenario.mainBoardIds ?? []).map((pieceId, index) => `${pieceId}@${scenario.mainRotations?.[index] ?? 0}`).join(", ") || "none"}`,
     scenario.competitiveMode && summary.competitiveStaging?.active
-      ? `Starts: ${summary.competitiveStaging.routedStartCount ?? scenario.metrics?.reachableStarts ?? "?"} routed -> ${scenario.metrics?.usableStarts?.length ?? "?"} available / ${summary.competitiveStaging.sourceStartCount ?? scenario.activeStarts?.length ?? "?"} total`
-      : `Starts: ${scenario.metrics?.reachableStarts ?? summary.reachableStarts ?? "?"} reachable -> ${scenario.metrics?.usableStarts?.length ?? "?"} usable / ${scenario.activeStarts?.length ?? summary.coursePreflight?.sourceStartCount ?? summary.contextualStaging?.sourceStartCount ?? scenario.sequence?.starts?.length ?? "?"} total`
+      ? `Starts: physical ${summary.competitiveStaging.sourceStartCount ?? scenario.activeStarts?.length ?? "?"} -> exact ${summary.competitiveStaging.routedStartCount ?? scenario.metrics?.reachableStarts ?? "?"} -> simulated best-${scenario.playerCount ?? scenario.preferences?.playerCount ?? "P"} ${scenario.metrics?.usableStarts?.length ?? "?"}; all validated physical starts remain user-visible`
+      : contextualCache?.estimatedPrimaryRouting
+        ? `Starts: structural ${scenario.activeStarts?.length ?? "?"} -> estimated ${contextualCache.estimatedMilestoneRoutes ?? "?"} -> exact ${contextualCache.survivingStarts ?? scenario.validatedStartIndices?.length ?? "?"} -> usable ${scenario.metrics?.usableStarts?.length ?? "?"}`
+        : `Starts: ${scenario.metrics?.reachableStarts ?? summary.reachableStarts ?? "?"} reachable -> ${scenario.metrics?.usableStarts?.length ?? "?"} usable / ${scenario.activeStarts?.length ?? summary.coursePreflight?.sourceStartCount ?? summary.contextualStaging?.sourceStartCount ?? scenario.sequence?.starts?.length ?? "?"} total`
   );
   if (!scenario.virtualBots) {
-    lines.push(
-      `Start disposition: physical ${scenario.activeStarts?.length ?? 0}, validated ${(scenario.validatedStartIndices ?? []).length}, blocked ${(scenario.blockedStartIndices ?? []).length}${scenario.startDisposition ? `; outside-pool ${scenario.startDisposition.outsidePoolIndices?.length ?? 0}, route-failed ${scenario.startDisposition.routeFailedIndices?.length ?? 0}, normal-pruned ${scenario.startDisposition.normalPrunedIndices?.length ?? 0}, price-pruned ${(scenario.startDisposition.pricePrunedIndices ?? scenario.startDisposition.legacyPricePrunedIndices)?.length ?? 0}, selector-unavailable ${scenario.startDisposition.selectorUnavailableIndices?.length ?? 0}, other ${scenario.startDisposition.otherBlockedIndices?.length ?? 0}` : ""}`
-    );
+    if (contextualCache?.estimatedPrimaryRouting) {
+      const structuralCount = scenario.activeStarts?.length ?? 0;
+      const estimatedCount = contextualCache.estimatedMilestoneRoutes ?? 0;
+      const realizedCount = contextualCache.survivingStarts ?? (scenario.validatedStartIndices ?? []).length;
+      const physicalImpossible = contextualCache.estimatedPhysicalFailureStarts ?? Math.max(0, structuralCount - estimatedCount);
+      const routingUnresolved = Math.max(0, estimatedCount - realizedCount);
+      lines.push(
+        `Start disposition: structural ${structuralCount}, estimated ${estimatedCount}, realized ${realizedCount}, physical-impossible ${physicalImpossible}, routing-unresolved ${routingUnresolved}${scenario.startDisposition ? `; normal-pruned ${scenario.startDisposition.normalPrunedIndices?.length ?? 0}, competitive-sim-blocked ${scenario.startDisposition.competitiveStrategicBlockIndices?.length ?? 0}, competitive-sim-selected ${scenario.startDisposition.competitiveSelectedIndices?.length ?? 0}, price-pruned ${(scenario.startDisposition.pricePrunedIndices ?? scenario.startDisposition.legacyPricePrunedIndices)?.length ?? 0}, selector-unavailable ${scenario.startDisposition.selectorUnavailableIndices?.length ?? 0}, other ${scenario.startDisposition.otherBlockedIndices?.length ?? 0}` : ""}`
+      );
+    } else {
+      lines.push(
+        `Start disposition: physical ${scenario.activeStarts?.length ?? 0}, validated ${(scenario.validatedStartIndices ?? []).length}, generator-unavailable ${(scenario.blockedStartIndices ?? []).length}${scenario.startDisposition ? `; outside-pool ${scenario.startDisposition.outsidePoolIndices?.length ?? 0}, route-failed ${scenario.startDisposition.routeFailedIndices?.length ?? 0}, normal-pruned ${scenario.startDisposition.normalPrunedIndices?.length ?? 0}, competitive-sim-blocked ${scenario.startDisposition.competitiveStrategicBlockIndices?.length ?? 0}, competitive-sim-selected ${scenario.startDisposition.competitiveSelectedIndices?.length ?? 0}, price-pruned ${(scenario.startDisposition.pricePrunedIndices ?? scenario.startDisposition.legacyPricePrunedIndices)?.length ?? 0}, selector-unavailable ${scenario.startDisposition.selectorUnavailableIndices?.length ?? 0}, other ${scenario.startDisposition.otherBlockedIndices?.length ?? 0}` : ""}`
+      );
+    }
   }
 
   if (balance?.active) {
@@ -13234,11 +15015,12 @@ function buildScenarioCopySummary(scenario) {
       : "none";
     lines.push(
       `Normal balance: ${balance.iterative ? "iterative" : (balance.staged ? "staged" : "legacy")}, pruned ${prunedText}`,
-      `Balance stddev: ${balance.balanceStdDevBefore ?? "n/a"} -> ${balance.balanceStdDevAfter ?? scenario.metrics?.fairnessStdDev ?? "n/a"} / ${balance.balanceStdDevLimit ?? NORMAL_START_FAIRNESS_STDDEV_LIMIT}, traffic recomputations ${balance.trafficRecomputations ?? 0}, remainingBad ${(balance.remainingBadStarts ?? []).length}, reject ${balance.reject ? "yes" : "no"}`
+      `Balance stddev: ${balance.balanceStdDevBefore ?? "n/a"} -> ${balance.balanceStdDevAfter ?? scenario.metrics?.fairnessStdDev ?? "n/a"} / ${balance.balanceStdDevLimit ?? NORMAL_START_FAIRNESS_STDDEV_LIMIT}, traffic recomputations ${balance.trafficRecomputations ?? 0}, fullTraffic iterations ${balance.fullTrafficIterations ?? 0}, fullTraffic pruned ${(balance.fullTrafficPruned ?? []).length}, remainingBad ${(balance.remainingBadStarts ?? []).length}, reject ${balance.reject ? "yes" : "no"}`,
+      `Normal retained field: ${balance.retainedCount ?? scenario.metrics?.usableStarts?.length ?? "n/a"} start(s), balanceScore ${balance.retainedScoreMin ?? "n/a"}..${balance.retainedScoreMax ?? "n/a"} (range ${balance.retainedScoreRange ?? "n/a"}), worst remaining scoreZ ${balance.worstRemainingScoreZ ?? "n/a"}${Number.isInteger(balance.worstRemainingScoreIndex) ? ` (#${balance.worstRemainingScoreIndex + 1})` : ""}, actionZ ${balance.worstRemainingActionZ ?? "n/a"}${Number.isInteger(balance.worstRemainingActionIndex) ? ` (#${balance.worstRemainingActionIndex + 1})` : ""}; metric ${balance.fairnessMetric ?? "full-course-balanceScore"}`
     );
   } else if (scenario.competitiveMode && competitive) {
     lines.push(
-      `Competitive balance: blocked ${competitive.blockedStartCount ?? 0}, remaining choices ${competitive.remainingStartCount ?? 0}, selected ${competitive.selectedStartCount ?? scenario.metrics?.usableStarts?.length ?? 0}, selectedOutliers ${competitive.remainingOutlierCount ?? "n/a"}, acceptable ${competitive.acceptable ? "yes" : "no"}, method ${competitive.method ?? "n/a"}`
+      `Competitive balance: sequential blocks ${competitive.blockedStartCount ?? 0}/${scenario.playerCount ?? scenario.preferences?.playerCount ?? "?"} [${(competitive.blockedIndices ?? []).map((index) => `#${index + 1}`).join(", ") || "none"}], remaining choices ${competitive.remainingStartCount ?? 0}, best-${scenario.playerCount ?? scenario.preferences?.playerCount ?? "P"} selected [${(competitive.selectedIndices ?? []).map((index) => `#${index + 1}`).join(", ") || "none"}], stddev ${competitive.selectedStdDev ?? "n/a"}/${competitive.balanceStdDevLimit ?? NORMAL_START_FAIRNESS_STDDEV_LIMIT}, strategic difficulty +${competitive.strategicDifficulty ?? "n/a"} (block challenge ${competitive.strategicDifficultyEvidence?.meanBlockChallenge ?? "n/a"}, selection ambiguity ${competitive.strategicDifficultyEvidence?.selectionAmbiguity ?? "n/a"}), block traffic ${competitive.blockTrafficScope ?? "n/a"}, selectedOutliers ${competitive.selectedOutlierCount ?? competitive.remainingOutlierCount ?? "n/a"}, traffic recomputations ${competitive.trafficRecomputations ?? 0}, acceptable ${competitive.acceptable ? "yes" : "no"}, method ${competitive.method ?? "n/a"}`
     );
   } else if ((scenario.payToWin || scenario.subsidizedStarts) && payToWin?.active) {
     const subsidyMode = Boolean(scenario.subsidizedStarts);
@@ -13247,7 +15029,7 @@ function buildScenarioCopySummary(scenario) {
     const pricingModel = payToWin.pricingModel ?? {};
     const selectorSplit = payToWin.selectorSplit ?? null;
     lines.push(
-      `${pricingLabel}: model ${pricingModel.method ?? "n/a"}, baseline ${Number.isInteger(pricingModel.baselineIndex) ? `#${pricingModel.baselineIndex + 1}` : "n/a"}, startingEnergy ${payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY}, startingUpgradeCards ${payToWin.startingUpgradeCards ?? DEFAULT_STARTING_UPGRADE_CARDS} (unknown at start choice), priced ${payToWin.pricedStartCount ?? "n/a"}, pruned ${(payToWin.pruned ?? []).length}, fullyUnavailable ${payToWin.fullyUnavailableCount ?? 0}, earlyUnavailable ${payToWin.earlyUnavailableCount ?? 0}/${payToWin.maxEarlyUnavailable ?? 0}, lateUnavailable ${payToWin.lateUnavailableCount ?? 0}/${payToWin.maxLateUnavailable ?? 0}, surplusStarts ${payToWin.surplusStarts ?? 0}, latePricing ${payToWin.latePricingActive ? "active" : "inactive"}, slashPrices ${payToWin.hasLatePriceDifference ? "yes" : "no"}`
+      `${pricingLabel}: model ${pricingModel.method ?? "n/a"}, economy ${payToWin.pricingEconomyMethod ?? "n/a"}, pruning ${payToWin.pruningPolicy ?? "legacy"}, baseline ${Number.isInteger(pricingModel.baselineIndex) ? `#${pricingModel.baselineIndex + 1}` : "n/a"}, startingEnergy ${payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY}/${payToWin.maxEnergy ?? ROUTE_ENERGY_ECONOMY_DEFAULTS.maxEnergy}, startingUpgradeCards ${payToWin.startingUpgradeCards ?? DEFAULT_STARTING_UPGRADE_CARDS} (unknown at start choice), priced ${payToWin.pricedStartCount ?? "n/a"}, pruned ${(payToWin.pruned ?? []).length}, fullyUnavailable ${payToWin.fullyUnavailableCount ?? 0}, earlyUnavailable ${payToWin.earlyUnavailableCount ?? 0}/${payToWin.maxEarlyUnavailable ?? 0}, lateUnavailable ${payToWin.lateUnavailableCount ?? 0}/${payToWin.maxLateUnavailable ?? 0}, residualStdDev ${payToWin.residualBalance?.worstStdDev ?? "n/a"}/${payToWin.residualBalance?.early?.limit ?? NORMAL_START_FAIRNESS_STDDEV_LIMIT}, residualOutliers ${payToWin.residualBalance?.worstOutlierCount ?? "n/a"}, balance ${payToWin.balanceValid === false ? "FAIL" : "pass"}, surplusStarts ${payToWin.surplusStarts ?? 0}, latePricing ${payToWin.latePricingActive ? "active" : "inactive"}, slashPrices ${payToWin.hasLatePriceDifference ? "yes" : "no"}`
     );
     if (payToWin.selectorPricingEvaluated && selectorSplit) {
       if (selectorSplit.selected) {
@@ -13279,76 +15061,26 @@ function buildScenarioCopySummary(scenario) {
     }
     if ((payToWin.pruned ?? []).length) {
       lines.push(
-        `${pricingShortLabel} pruning passes: ${payToWin.pruned.map((item) => `p${item.pass} base ${Number.isInteger(item.pricingModel?.baselineIndex) ? `#${item.pricingModel.baselineIndex + 1}` : "n/a"} max ${item.pricingModel?.maxRegisterAdvantage ?? "n/a"}R -> #${item.index + 1} (${item.reason})`).join("; ")}; final base ${Number.isInteger(pricingModel.baselineIndex) ? `#${pricingModel.baselineIndex + 1}` : "n/a"}`
+        `${pricingShortLabel} pruning passes: ${payToWin.pruned.map((item) => `p${item.pass} base ${Number.isInteger(item.pricingModel?.baselineIndex) ? `#${item.pricingModel.baselineIndex + 1}` : "n/a"} max ${item.pricingModel?.maxRegisterAdvantage ?? "n/a"}R -> #${item.index + 1} (${item.reason}${item.selectorAwarePreview ? `; verified offered ${item.offerableBefore}->${item.offerableAfterPreview}, early/late ${item.earlyOfferableBefore}/${item.lateOfferableBefore}->${item.earlyOfferableAfterPreview}/${item.lateOfferableAfterPreview}` : ""})`).join("; ")}; final base ${Number.isInteger(pricingModel.baselineIndex) ? `#${pricingModel.baselineIndex + 1}` : "n/a"}`
       );
     }
-    const energyShadow = payToWin.energyShadow;
-    if (energyShadow?.active) {
-      const benchmark = energyShadow.benchmark ?? {};
-      const upgradeEconomy = energyShadow.upgradeEconomy ?? {};
-      const featureWeights = energyShadow.upgradeFeatureWeights ?? {};
-      const routeEconomy = energyShadow.routeEconomy ?? {};
-      const formatFeatureWeights = (entry) => entry
-        ? `current ${entry.current ?? "n/a"}, base ${entry.base ?? "n/a"}, UpgradeWorld ${entry.upgradeWorld ?? "n/a"}`
-        : "n/a";
-      const p2wEconomyText = (pricingModel.paymentPenalties ?? []).map((item) => (
-        subsidyMode
-          ? `+${item.payment}E improves median ${item.medianScore ?? "n/a"} score/${item.medianRegisters ?? "n/a"}R, max ${item.maxScore ?? "n/a"}/${item.maxRegisters ?? "n/a"}R`
-          : `${item.payment}E costs median ${item.medianScore ?? "n/a"} score/${item.medianRegisters ?? "n/a"}R, max ${item.maxScore ?? "n/a"}/${item.maxRegisters ?? "n/a"}R`
-      )).join(" | ") || "n/a";
-      const formatEnergySensitivity = (samples) => (samples ?? [])
-        .map((sample) => `E${sample.energy}:${sample.valueR}R`)
-        .join("/") || "n/a";
-      const batteryText = (routeEconomy.battery ?? []).map((item) => {
-        const programText = `PU ${item.powerUpLegal ? `legal, pressure ${item.powerUpCardPressureR ?? "n/a"}R` : `unavailable (${item.powerUpReason ?? "literal program supply"})`}; PU+Again ${item.powerUpAgainLegal ? `legal, pressure ${item.powerUpAgainCardPressureR ?? "n/a"}R` : `unavailable (${item.powerUpAgainReason ?? "literal program supply"})`}`;
-        const sensitivity = (item.reserveSensitivity ?? []).map((sample) => `E${sample.energy} arrive+1 ${sample.arrivalValueR}R / PU ${sample.powerUpLegal ? `+2 ${sample.powerUpEnergyR}R net ${sample.powerUpNetBeforePositionR ?? "n/a"}R` : "—"} / PU+Again ${sample.powerUpAgainLegal ? `+4 ${sample.powerUpAgainEnergyR}R net ${sample.powerUpAgainNetBeforePositionR ?? "n/a"}R` : "—"}`).join(" ; ") || "n/a";
-        return `@${item.turn}t, ${item.remainingTurns}t left, H${item.initialUpgradeOpportunities}, next R${item.nextRegister ?? "?"}, ${programText}: ${sensitivity}, tempo ${item.waitTempoCostR ?? "n/a"}R/register, static ${item.staticRouteWeight}`;
-      }).join(" | ") || "none on representative route";
-      const powerUpText = (routeEconomy.powerUp ?? []).map((item) =>
-        `@${item.turn}t, ${item.remainingTurns}t left, H${item.initialUpgradeOpportunities}: +1E ${formatEnergySensitivity(item.reserveSensitivity)}, WAIT ${item.waitTempoCostR ?? "n/a"}R, strategic ${item.strategicDeltaR ?? "n/a"}R`
-      ).join(" | ") || "n/a";
-      const chopShopText = (routeEconomy.chopShop ?? []).map((item) =>
-        `@${item.turn}t, ${item.remainingTurns}t left, H${item.initialUpgradeOpportunities}: ${(item.reserveSensitivity ?? []).map((sample) => `E${sample.energy} energy ${sample.energyOptionR}R/card ${sample.cardOptionR}R->${sample.choice}`).join(" / ") || "n/a"}, static ${item.staticRouteWeight}`
-      ).join(" | ") || "none on representative route";
+    if ((payToWin.pricingEntries ?? []).length) {
+      const formatAdjustment = (value) => Number.isFinite(Number(value))
+        ? `${subsidyMode ? "+" : ""}${Number(value)}E`
+        : "—";
       lines.push(
-        `${pricingShortLabel} validated-field shadow: validated ${energyShadow.validatedStartCount ?? "n/a"}, final-offered ${energyShadow.offeredStartCount ?? "n/a"}, tempo-register ${benchmark.registerScoreMedian ?? "n/a"} score (${benchmark.registerSamples ?? 0} samples), Power Up strategic delta ${benchmark.powerUpStrategicDeltaMedian ?? benchmark.powerUpOpportunityMedian ?? "n/a"} score (${benchmark.powerUpStrategicDeltaSamples ?? benchmark.powerUpOpportunitySamples ?? 0} samples), validated-field horizon ${benchmark.medianFullCourseActions ?? "n/a"} registers/${benchmark.medianFullCourseTurns ?? "n/a"} turns`,
-        `Energy economy: start ${upgradeEconomy.startingEnergy ?? "n/a"}E, max ${upgradeEconomy.maxEnergy ?? "n/a"}E, starting hand ${upgradeEconomy.startingUpgradeCards ?? "n/a"}, horizon ${routeEconomy.horizonTurns ?? "n/a"}t, draw/install ${upgradeEconomy.drawsPerTurn ?? "n/a"}/${upgradeEconomy.installsPerTurn ?? "n/a"} per turn, ${upgradeEconomy.registersPerTurn ?? "n/a"} registers/turn, draw cost ${upgradeEconomy.drawEnergyCost ?? "n/a"}E, useful deployment budget up to ${upgradeEconomy.usefulEnergyPerInstall ?? "n/a"}E/install (partial Energy valued), surplus-card option uplift above ${upgradeEconomy.referenceStartingEnergy ?? upgradeEconomy.startingEnergy ?? "n/a"}E (diminishing; time-limited)`,
-        `${pricingShortLabel} economic shadow: ${p2wEconomyText}`,
-        `Battery shadow: ${batteryText}`,
-        `Power Up shadow: ${powerUpText}`,
-        `Chop Shop shadow: ${chopShopText}`,
-        `Upgrade feature weights (legacy static audit only; production v45 bypasses Battery/Chop Shop weights): battery ${formatFeatureWeights(featureWeights.battery)}; chopShop ${formatFeatureWeights(featureWeights.chopShop)}`,
-        `${pricingShortLabel} start repricing: ${(energyShadow.starts ?? []).map((entry) => {
-          const formatAdjustment = (value) => Number.isFinite(value) ? `${subsidyMode ? "+" : ""}${value}E` : "n/a";
-          const initialPrice = formatAdjustment(entry.initialEnergyCost);
-          const legacyPrice = Number.isFinite(entry.legacyInitialCost) ? `${entry.legacyInitialCost}E` : "n/a";
-          const initialState = `${entry.registerEquivalent ?? "n/a"}R/${initialPrice}`;
-          if (entry.pruned) {
-            return `#${entry.index + 1} initial ${initialState} -> pruned${subsidyMode ? "" : ` (legacy ${legacyPrice})`}`;
-          }
-          const finalPrice = entry.finalEarlyUnavailable
-            ? "—"
-            : Number.isFinite(entry.finalEnergyCost)
-              ? formatAdjustment(entry.finalEnergyCost)
-              : (entry.fullyUnavailable ? "—" : "n/a");
-          const finalState = `${entry.finalRegisterEquivalent ?? "n/a"}R/${finalPrice}`;
-          const curveText = Array.isArray(entry.finalPaymentScores)
-            ? ` curve ${entry.finalPaymentScores.map((score, payment) => `${subsidyMode ? "+" : ""}${payment}E:${score ?? "—"}`).join("/")}`
+        `${pricingShortLabel} post-adjustment starts: ${(payToWin.pricingEntries ?? []).map((entry) => {
+          const early = entry.unavailable
+            ? "unavailable"
+            : `${formatAdjustment(entry.energyCost)} -> ${entry.postPaymentFullScore ?? "n/a"} (${entry.postAdjustmentDeltaRegisters ?? "n/a"}R vs baseline)`;
+          const late = payToWin.latePricingActive
+            ? `; late ${entry.lateUnavailable ? "unavailable" : `${formatAdjustment(entry.lateEnergyCost)} -> ${entry.latePostPaymentFullScore ?? "n/a"} (${entry.latePostAdjustmentDeltaRegisters ?? "n/a"}R)`}`
             : "";
-          const residualText = subsidyMode && Number.isFinite(entry.finalPostAdjustmentDeltaRegisters)
-            ? entry.finalPostAdjustmentDeltaRegisters > 0.0005
-              ? ` residual ${entry.finalPostAdjustmentDeltaRegisters}R weaker`
-              : entry.finalPostAdjustmentDeltaRegisters < -0.0005
-                ? ` residual ${Math.abs(entry.finalPostAdjustmentDeltaRegisters)}R stronger`
-                : " residual balanced"
-            : "";
-          const lateText = payToWin.latePricingActive && Number.isFinite(entry.finalLateRegisterEquivalent)
-            ? `, late ${entry.finalLateRegisterEquivalent}R/${entry.finalLateUnavailable ? "—" : formatAdjustment(entry.finalLateEnergyCost)}`
-            : "";
-          return `#${entry.index + 1} initial ${initialState} -> final ${finalState}${residualText}${curveText}${lateText}${subsidyMode ? "" : ` (legacy ${legacyPrice})`}`;
-        }).join(", ") || "none"}`
+          return `#${entry.index + 1} raw ${entry.fullScore ?? "n/a"}, ${early}${late}`;
+        }).join(" | ")}`
       );
     }
+
   }
 
   if (courseEnergyEconomy?.active) {
@@ -13365,18 +15097,22 @@ function buildScenarioCopySummary(scenario) {
       ? `current ${entry.current ?? "n/a"}, base ${entry.base ?? "n/a"}, UpgradeWorld ${entry.upgradeWorld ?? "n/a"}`
       : "n/a";
     const production = economy.productionEnergyScoring ?? null;
+    // v33 copied diagnostics foreground the production economy only. The older
+    // reserve/card shadow and static Battery sensitivity calculations remain in
+    // code for targeted regression work, but no longer appear as if authoritative.
     lines.push(
-      `Legacy reserve shadow (diagnostic only; production uses v45 cards+energy): start ${economy.config?.startingEnergy ?? "n/a"}E, max ${economy.config?.maxEnergy ?? "n/a"}E, starting hand ${economy.config?.startingUpgradeCards ?? "n/a"}, median horizon ${economy.horizonTurns ?? "n/a"}t, reserve samples ${(economy.reserveSamples ?? []).map((energy) => `E${energy}`).join("/") || "n/a"}, routes ${economy.routeCount ?? 0}`,
       production?.active
-        ? `Route upgrade economy v45: start E${production.startingReserve ?? production.referenceReserve ?? "?"} + ${economy.config?.startingUpgradeCards ?? "?"} cards, useful-card rate ${production.usefulUpgradeCardRate ?? economy.config?.usefulUpgradeCardRate ?? "n/a"}, draw/install ${economy.config?.drawsPerTurn ?? "n/a"}/${economy.config?.installsPerTurn ?? "n/a"} per turn, draw ${production.drawEnergyCost ?? economy.config?.drawEnergyCost ?? "n/a"}E, useful install budget ${production.usefulEnergyPerInstall ?? economy.config?.usefulEnergyPerInstall ?? "n/a"}E; post-opening reserve median E${production.selectedRouteOpeningReserveMedian ?? "?"}, selected-route reward median/max ${production.selectedRouteRewardMedian ?? 0}/${production.selectedRouteRewardMax ?? 0} score (Battery ${production.selectedRouteBatteryRewardMedian ?? 0}/${production.selectedRouteBatteryRewardMax ?? 0}, Power Up ${production.selectedRoutePowerUpRewardMedian ?? 0}/${production.selectedRoutePowerUpRewardMax ?? 0}, Chop Shop ${production.selectedRouteChopShopRewardMedian ?? 0}/${production.selectedRouteChopShopRewardMax ?? 0}), Power Up uses median/max ${production.selectedRoutePowerUpUsesMedian ?? 0}/${production.selectedRoutePowerUpUsesMax ?? 0}, end reserve median/max E${production.selectedRouteEndingReserveMedian ?? "?"}/E${production.selectedRouteEndingReserveMax ?? "?"}, end useful-card shadow median/max ${production.selectedRouteEndingUsefulCardsMedian ?? "?"}/${production.selectedRouteEndingUsefulCardsMax ?? "?"}`
-        : "Route upgrade economy v45: inactive",
-      `Legacy Battery sensitivity (diagnostic only): ${economy.batteryEncounterCount ?? 0} encounter(s) on ${economy.batteryRouteCount ?? 0}/${economy.routeCount ?? 0} routes; representatives ${(economy.representativeBatteryEncounters ?? []).map(formatBatteryEncounter).join(" | ") || "none"}`,
-      `Upgrade feature weights (diagnostic reference; legacy Battery / current Chop Shop, route score negative = benefit): battery ${formatFeatureWeights(featureWeights.battery)}; chopShop ${formatFeatureWeights(featureWeights.chopShop)}`
+        ? `Route Energy economy (flattened reserve+progress): start E${production.startingReserve ?? production.referenceReserve ?? "?"}, useful-card expectation ${production.usefulUpgradeCardRate ?? economy.config?.usefulUpgradeCardRate ?? "n/a"} applied immediately, install tranche ${production.usefulEnergyPerInstall ?? economy.config?.usefulEnergyPerInstall ?? "n/a"}E; no persistent upgrade-card shadow; post-opening reserve median E${production.selectedRouteOpeningReserveMedian ?? "?"}, selected-route reward median/max ${production.selectedRouteRewardMedian ?? 0}/${production.selectedRouteRewardMax ?? 0} score (Battery ${production.selectedRouteBatteryRewardMedian ?? 0}/${production.selectedRouteBatteryRewardMax ?? 0}, Power Up ${production.selectedRoutePowerUpRewardMedian ?? 0}/${production.selectedRoutePowerUpRewardMax ?? 0}, Chop Shop ${production.selectedRouteChopShopRewardMedian ?? 0}/${production.selectedRouteChopShopRewardMax ?? 0}), Power Up uses median/max ${production.selectedRoutePowerUpUsesMedian ?? 0}/${production.selectedRoutePowerUpUsesMax ?? 0}, end reserve median/max E${production.selectedRouteEndingReserveMedian ?? "?"}/E${production.selectedRouteEndingReserveMax ?? "?"}`
+        : "Route Energy economy: inactive"
     );
   }
 
   lines.push(
-    `Fairness: stddev ${scenario.metrics?.fairnessStdDev ?? "n/a"}, score ${summary.fairnessScore ?? "n/a"}`,
+    balance?.active
+      ? `Fairness (retained full-course balance): stddev ${scenario.metrics?.fairnessStdDev ?? balance.balanceStdDevAfter ?? "n/a"}, score ${summary.fairnessScore ?? "n/a"}`
+      : scenario.competitiveMode
+        ? `Fairness (Competitive simulated selected field): stddev ${scenario.metrics?.fairnessStdDev ?? "n/a"}, score ${summary.fairnessScore ?? "n/a"}`
+        : `Fairness: stddev ${scenario.metrics?.fairnessStdDev ?? "n/a"}, score ${summary.fairnessScore ?? "n/a"}`,
     `Difficulty raw: ${scenario.metrics?.difficultyRaw ?? "n/a"}`,
     `Length raw: ${scenario.metrics?.lengthRaw ?? "n/a"}`,
     `Course scores: difficulty ${summary.difficultyScore ?? "n/a"}, length ${summary.lengthScore ?? "n/a"}, actions ${summary.actionScore ?? "n/a"}, overall ${summary.overallScore ?? "n/a"}`
@@ -13385,18 +15121,87 @@ function buildScenarioCopySummary(scenario) {
   if (contextualCache) {
     const routeStrategy = summary.fullCourseTraffic ?? null;
     const contextualProfile = summary.contextualSearchProfile ?? null;
-    lines.push(
-      `Contextual cache: cappedContexts ${contextualCache.zeroRouteCapFailures ?? 0} across ${contextualCache.zeroRouteFailureStarts ?? 0} starts, survivors ${contextualCache.survivingStarts ?? summary.reachableStarts ?? "?"}/${contextualCache.requiredSurvivingStarts ?? scenario.preferences?.playerCount ?? "?"}, exactHits ${contextualCache.exactHits ?? 0}, templateHits ${contextualCache.templateHits ?? 0}, misses ${contextualCache.misses ?? 0}`
-    );
+    if (!contextualCache.estimatedPrimaryRouting) {
+      lines.push(
+        `Contextual cache: cappedContexts ${contextualCache.zeroRouteCapFailures ?? 0} across ${contextualCache.zeroRouteFailureStarts ?? 0} starts, survivors ${contextualCache.survivingStarts ?? summary.reachableStarts ?? "?"}/${contextualCache.requiredSurvivingStarts ?? scenario.preferences?.playerCount ?? "?"}, exactHits ${contextualCache.exactHits ?? 0}, templateHits ${contextualCache.templateHits ?? 0}, catalogue ${contextualCache.catalogueEntries ?? 0} classes/${contextualCache.catalogueSearches ?? 0} searches, finalVerifyFail ${contextualCache.finalProgrammingValidationFailures ?? 0}`
+      );
+    }
+    if (contextualCache.estimatedPrimaryRouting) {
+      const estimatedSourceStarts = contextualCache.survivorHistory?.find((entry) => entry.stage === "estimated")?.sourceStarts
+        ?? contextualCache.survivorHistory?.find((entry) => entry.stage === "realized")?.sourceStarts
+        ?? summary.totalStarts
+        ?? "?";
+      lines.push(
+        `Estimate→realize: milestone-1 ${contextualCache.estimatedMilestoneRoutes ?? 0}/${estimatedSourceStarts} complete physical routes, forecast-card-intact ${contextualCache.estimatedForecastIntactRoutes ?? 0}/${contextualCache.estimatedMilestoneRoutes ?? 0}, physical failures ${contextualCache.estimatedPhysicalFailures ?? 0}; estimate cache ${contextualCache.estimatedLegCacheHits ?? 0} hits/${contextualCache.estimatedLegSearches ?? 0} searches/${contextualCache.estimatedLegWitnessesGenerated ?? 0} witnesses (${contextualCache.estimatedLegWidenedSearches ?? 0} exhaustive widenings), Energy guidance ${contextualCache.estimatedEnergyGuidance ? "on" : "off"}; exact realization direct/repaired/failed ${contextualCache.exactRealizationDirectSuccesses ?? 0}/${contextualCache.exactRealizationRepairedSuccesses ?? 0}/${contextualCache.exactRealizationFailures ?? 0} across ${contextualCache.exactRealizationAttempts ?? 0} checks; failure-point replans ${contextualCache.cardRepairReplans ?? 0}/${contextualCache.cardRepairFailurePoints ?? 0}, prefix backtracks ${contextualCache.cardRepairPrefixBacktracks ?? 0}, no-suffix ${contextualCache.cardRepairNoSuffix ?? 0}, downstream rebuild failures ${contextualCache.cardRepairDownstreamRebuildFailures ?? 0}, repeated candidates ${contextualCache.cardRepairRepeatedCandidates ?? 0}`
+      );
+      if ((contextualProfile?.trafficFeedbackLoopEnabled || contextualCache.trafficEpochsExecuted > 0) && routeStrategy) {
+        lines.push(
+          `Traffic feedback v35: epochs ${contextualCache.trafficEpochsExecuted ?? 0}/${contextualProfile?.trafficEpochs ?? 0}, demand ${contextualCache.trafficAlternateDemandStarts ?? 0} start-visits/${contextualCache.trafficAlternateDemandLegs ?? 0} legs (${contextualCache.trafficAlternateEffectiveDemandLegs ?? 0} effective/${contextualCache.trafficAlternateExploratoryDemandLegs ?? 0} exploratory), cached divergence checks ${contextualCache.trafficAlternateCachedWitnessChecks ?? 0}, probe-stops ${contextualCache.trafficAlternateCachedProbeStops ?? 0}, escalations ${contextualCache.trafficAlternateEscalations ?? 0}, new bounded searches ${contextualCache.trafficAlternateNewSearches ?? 0} (${contextualCache.trafficAlternateSearchNoRoutes ?? 0} no-route), exact alt checks/rejects ${contextualCache.trafficAlternateExactChecks ?? 0}/${contextualCache.trafficAlternateExactRejects ?? 0} [card ${contextualCache.trafficAlternateCardRejects ?? 0}, validation ${contextualCache.trafficAlternateValidationRejects ?? 0}], duplicates ${contextualCache.trafficAlternateDuplicateRejects ?? 0}, low-gain ${contextualCache.trafficAlternateLowGainRejects ?? 0}, downstream-miss ${contextualCache.trafficAlternateDownstreamRebuildFailures ?? 0}, candidates added ${contextualCache.trafficAlternateCandidatesAdded ?? 0}, best combined gain ${contextualCache.trafficAlternateBestGain ?? 0}; exploration gap ${(contextualCache.trafficExplorationUncertaintyShare ?? 0) * 100}% above conf ${contextualCache.trafficExplorationConfidenceFloor ?? 1}; traffic raw/effective avg ${routeStrategy.averageRawPenalty ?? 0}/${routeStrategy.averagePenalty ?? 0}, forecast confidence mean/min ${routeStrategy.averageForecastConfidence ?? 1}/${routeStrategy.minimumForecastConfidence ?? 1}`
+        );
+        const trafficHorizonText = (routeStrategy.averageTrafficByLeg ?? [])
+          .map((entry) => {
+            const label = entry.leg === 1 ? "S→F1" : `F${entry.leg - 1}→F${entry.leg}`;
+            return `${label} raw ${entry.raw ?? 0} / effective ${entry.effective ?? 0} / conf ${entry.confidence ?? 1}`;
+          })
+          .join("; ");
+        if (trafficHorizonText) {
+          lines.push(`Traffic horizon by leg: ${trafficHorizonText}`);
+          lines.push(scenario.virtualBots
+            ? "Virtual Bots traffic confidence v38: full strategic traffic from R1; elapsed-time and traffic-interaction uncertainty are held through R5, then use the normal confidence curve from R6 onward; hazard uncertainty still applies immediately"
+            : "Forecast time-only anchors v35: R5 0.990, R10 0.928, R15 0.827, R20 0.660, R25 0.472; hazards/interactions can move the horizon earlier");
+        }
+        const demandByLeg = new Map(
+          (contextualCache.trafficAlternateDemandByLeg ?? [])
+            .map((entry) => [entry.leg, entry.count ?? 0])
+        );
+        const candidatesByLeg = new Map(
+          (contextualCache.trafficAlternateCandidatesByLeg ?? [])
+            .map((entry) => [entry.leg, entry.count ?? 0])
+        );
+        const trafficAlternateLegText = [...new Set([
+          ...demandByLeg.keys(),
+          ...candidatesByLeg.keys()
+        ])]
+          .sort((left, right) => left - right)
+          .map((leg) => {
+            const label = leg === 1 ? "S→F1" : `F${leg - 1}→F${leg}`;
+            return `${label} ${demandByLeg.get(leg) ?? 0}d/${candidatesByLeg.get(leg) ?? 0}c`;
+          })
+          .join("; ");
+        if (trafficAlternateLegText) {
+          lines.push(`Traffic alternate demand by leg: ${trafficAlternateLegText}`);
+        }
+      }
+    }
+    const arrivalClassText = (contextualCache.arrivalClassesByLeg ?? [])
+      .filter((entry) => entry.leg > 1 && (entry.lineages > 0 || entry.classes > 0))
+      .map((entry) => `F${entry.leg - 1}→F${entry.leg} ${entry.lineages}L/${entry.classes}C`)
+      .join("; ");
+    const witnessRankText = (contextualCache.catalogueWitnessRankSuccesses ?? [])
+      .map((entry) => `#${entry.witness}:${entry.successes}`)
+      .join("/");
+    if (arrivalClassText || witnessRankText) {
+      lines.push(
+        contextualCache.estimatedPrimaryRouting
+          ? `Milestone-1 arrival classes: ${arrivalClassText || "no later-leg classes"}`
+          : `Arrival-class routing: ${arrivalClassText || "no later-leg classes"}; internal witnesses ${contextualCache.catalogueWitnessesGenerated ?? 0} generated, ${contextualCache.catalogueWitnessResolvedLineages ?? 0} lineages resolved directly, success by witness ${witnessRankText || "none"}`
+      );
+    }
     if (summary.contextualSearchMode || routeStrategy) {
       lines.push(
-        `Contextual strategy: ${summary.contextualSearchMode ?? "standard"}, opening ${routeStrategy?.openingRoutesPerStart ?? contextualProfile?.openingRoutes ?? "?"}, later ${routeStrategy?.laterRoutesPerContext ?? contextualProfile?.laterRoutes ?? "?"}, beam ${routeStrategy?.stitchedBeamWidth ?? contextualProfile?.beamWidth ?? "?"}, completion ${routeStrategy?.completionPool ?? contextualProfile?.completionPool ?? "?"}, caps ${contextualProfile?.openingExpansions ?? "?"}/${contextualProfile?.laterExpansions ?? "?"}, mode ${contextualProfile?.generationModeLabel ?? "?"}`
+        contextualProfile?.estimatedPrimaryRouting
+          ? `Contextual strategy: ${summary.contextualSearchMode ?? "standard"}, estimate-first cards soft rolling+frontier-guided + Energy-guided, realization exact rolling-count/economy replay, hotKeys numeric, traffic ${contextualProfile?.trafficEnabled ? "on" : "off"}${contextualProfile?.trafficFeedbackLoopEnabled ? ` (${contextualProfile.trafficEpochs ?? 0} exploration epoch max, ${contextualProfile?.trafficAlternatesEnabled ? `bounded alts @${contextualProfile?.trafficAlternateExpansions ?? "?"}exp/${contextualProfile?.trafficAlternateMaxActions ?? "?"}a, explore-gap ${Math.round((contextualProfile?.trafficExplorationUncertaintyShare ?? 0) * 100)}% above conf ${contextualProfile?.trafficExplorationConfidenceFloor ?? 1}` : "scoring-only"})` : ""}, shared judgement demand≥${contextualProfile?.trafficAlternateDemandThreshold ?? NORMAL_TRAFFIC_ALTERNATE_DEMAND_THRESHOLD}/gain≥${contextualProfile?.trafficAlternateMinGain ?? NORMAL_TRAFFIC_ALTERNATE_MIN_GAIN}, primary estimate ${contextualProfile?.physicalTemplateExpansions ?? "?"}exp/${contextualProfile?.physicalTemplateMaxActions ?? "?"}a then exhaustive-on-miss, exact failure repair by physical suffix, arrival classes ${contextualProfile?.arrivalClassRouting ? "yes" : "no"}, ${scenario.competitiveMode ? `Competitive all-start floor ${contextualCache.requiredSurvivingStarts ?? scenario.activeStarts?.length ?? "?"} physical (minimum ${Math.max(1, (scenario.playerCount ?? scenario.preferences?.playerCount ?? 1) * 2)})` : `acceptance floor ${contextualCache.requiredSurvivingStarts ?? scenario.preferences?.playerCount ?? "?"}`}, mode ${contextualProfile?.generationModeLabel ?? "?"}`
+          : scenario.competitiveMode
+            ? `Contextual strategy: regular route foundation with Competitive sequential one-at-a-time strategic blocking; final fairness is evaluated on the best ${scenario.playerCount ?? scenario.preferences?.playerCount ?? "P"} remaining starts`
+            : (scenario.payToWin || scenario.subsidizedStarts)
+              ? `Contextual strategy: all-start shared route foundation; priced-start semantics run afterward with card-aware Energy repricing and selector-position occupancy`
+              : `Contextual strategy: regular contextual route analysis`
       );
     }
     if (summary.programmingScarcity) {
       const scarcity = summary.programmingScarcity;
       lines.push(
-        `Programming scarcity v43: selected ${scarcity.selectedRoutes ?? 0} routes, Again used on ${scarcity.routesUsingAgain ?? 0} route(s)/${scarcity.totalAgainTurns ?? 0} turn(s), consecutive-turn Again reuse ${scarcity.consecutiveTurnAgainReuse ?? 0} across ${scarcity.routesWithConsecutiveAgain ?? 0} route(s), literal program violations ${scarcity.literalProgramViolations ?? 0}; penalties use ${scarcity.againUsePenalty ?? "?"}, recycle ${scarcity.consecutiveTurnPenalty ?? "?"}, same-program overuse ${scarcity.sameProgramOverusePenalty ?? "?"}`
+        `Programming supply: selected ${scarcity.selectedRoutes ?? 0} routes, Again used on ${scarcity.routesUsingAgain ?? 0} route(s)/${scarcity.totalAgainTurns ?? 0} turn(s), consecutive required-Again turns ${scarcity.consecutiveTurnAgainReuse ?? 0}, literal program violations ${scarcity.literalProgramViolations ?? 0}, rolling two-turn violations ${scarcity.rollingWindowViolations ?? 0}; scarcity/card copies 4+=0, 3=${scarcity.scarcityCostByCopies?.[3] ?? "?"}, 2=${scarcity.scarcityCostByCopies?.[2] ?? "?"}, 1=${scarcity.scarcityCostByCopies?.[1] ?? "?"}, Again repeat factor ${scarcity.againRepeatScarcityFactor ?? "?"}`
       );
     }
     if (routeStrategy) {
@@ -13420,11 +15225,11 @@ function buildScenarioCopySummary(scenario) {
         entry.trafficSwitched &&
         Number.isFinite(Number(entry.intrinsicCostSelectedVsBest)) &&
         Number.isFinite(Number(entry.trafficAdvantageSelectedVsBest)) &&
-        Number.isFinite(Number(entry.combinedGainSelectedVsBest))
+        Number.isFinite(Number(entry.strategicGainSelectedVsBest))
       ));
       const switchedIntrinsicCosts = switchedDiagnostics.map((entry) => Number(entry.intrinsicCostSelectedVsBest));
       const switchedTrafficAdvantages = switchedDiagnostics.map((entry) => Number(entry.trafficAdvantageSelectedVsBest));
-      const switchedCombinedGains = switchedDiagnostics.map((entry) => Number(entry.combinedGainSelectedVsBest));
+      const switchedStrategicGains = switchedDiagnostics.map((entry) => Number(entry.strategicGainSelectedVsBest));
       const candidateMedian = candidateCounts.length
         ? Number(medianValue(candidateCounts).toFixed(2))
         : 0;
@@ -13447,7 +15252,7 @@ function buildScenarioCopySummary(scenario) {
         ? Number(Math.max(...selectedTrafficPenalties).toFixed(2))
         : (routeStrategy.maxPenalty ?? 0);
       lines.push(
-        `Traffic candidates: ${candidateDiagnostics.length} starts, candidates median/range ${candidateMedian}/${candidateRange}, final alternate selections ${finalAltCount}, pass route-switches ${routeStrategy.routeSwitches ?? 0}, selected penalty avg/max ${selectedTrafficAverage}/${selectedTrafficMax}, opening/later avg ${routeStrategy.averageOpeningPenalty ?? 0}/${routeStrategy.averageLaterPenalty ?? 0}; most-different similarity median whole/later ${wholeMedian ?? "n/a"}/${laterMedian ?? "n/a"} (0=different, 1=same)`
+        `Traffic candidates: ${candidateDiagnostics.length} starts, candidates median/range ${candidateMedian}/${candidateRange}, final alternate selections ${finalAltCount}, pass route-switches ${routeStrategy.routeSwitches ?? 0}, effective penalty avg/max ${selectedTrafficAverage}/${selectedTrafficMax}, raw avg ${routeStrategy.averageRawPenalty ?? selectedTrafficAverage}, confidence mean/min ${routeStrategy.averageForecastConfidence ?? 1}/${routeStrategy.minimumForecastConfidence ?? 1}, opening/later effective avg ${routeStrategy.averageOpeningPenalty ?? 0}/${routeStrategy.averageLaterPenalty ?? 0}; most-different similarity median whole/later ${wholeMedian ?? "n/a"}/${laterMedian ?? "n/a"} (0=different, 1=same)`
       );
       if (switchedDiagnostics.length) {
         const medianOrZero = (values) => values.length
@@ -13457,13 +15262,13 @@ function buildScenarioCopySummary(scenario) {
           ? Number(Math.max(...values).toFixed(2))
           : 0;
         lines.push(
-          `Traffic choice deltas: ${switchedDiagnostics.length} switched start(s), intrinsic cost median/max ${medianOrZero(switchedIntrinsicCosts)}/${maxOrZero(switchedIntrinsicCosts)}, traffic advantage median/max ${medianOrZero(switchedTrafficAdvantages)}/${maxOrZero(switchedTrafficAdvantages)}, final combined gain median/max ${medianOrZero(switchedCombinedGains)}/${maxOrZero(switchedCombinedGains)} (positive advantage/gain favors selected alternate)`
+          `Traffic choice deltas: ${switchedDiagnostics.length} switched start(s), intrinsic cost median/max ${medianOrZero(switchedIntrinsicCosts)}/${maxOrZero(switchedIntrinsicCosts)}, traffic advantage median/max ${medianOrZero(switchedTrafficAdvantages)}/${maxOrZero(switchedTrafficAdvantages)}, final strategic gain median/max ${medianOrZero(switchedStrategicGains)}/${maxOrZero(switchedStrategicGains)} (intrinsic + confidence-weighted traffic; must remain ≥${NORMAL_TRAFFIC_ALTERNATE_MIN_GAIN})`
         );
       }
       if (candidateDiagnostics.length) {
         lines.push(
           `Traffic diversity by start: ${candidateDiagnostics.map((entry) => (
-            `#${entry.startIndex + 1} ${entry.candidateCount ?? 0}c whole ${entry.wholeMostDifferentSimilarity ?? "n/a"} later ${entry.laterMostDifferentSimilarity ?? "n/a"} selected ${Number.isInteger(entry.selectedRouteIndex) ? entry.selectedRouteIndex + 1 : "?"}${entry.trafficSwitched ? "*" : ""} spread ${entry.scoreSpread ?? 0}${Number.isFinite(Number(entry.intrinsicCostSelectedVsBest)) && Number.isFinite(Number(entry.trafficAdvantageSelectedVsBest)) && Number.isFinite(Number(entry.combinedGainSelectedVsBest)) ? ` Δintr ${entry.intrinsicCostSelectedVsBest} Δtraffic ${entry.trafficAdvantageSelectedVsBest} gain ${entry.combinedGainSelectedVsBest}` : ""}`
+            `#${entry.startIndex + 1} ${entry.candidateCount ?? 0}c whole ${entry.wholeMostDifferentSimilarity ?? "n/a"} later ${entry.laterMostDifferentSimilarity ?? "n/a"} selected ${Number.isInteger(entry.selectedRouteIndex) ? entry.selectedRouteIndex + 1 : "?"}${entry.trafficSwitched ? "*" : ""} spread ${entry.scoreSpread ?? 0}${Number.isFinite(Number(entry.intrinsicCostSelectedVsBest)) && Number.isFinite(Number(entry.trafficAdvantageSelectedVsBest)) && Number.isFinite(Number(entry.strategicGainSelectedVsBest)) ? ` Δintr ${entry.intrinsicCostSelectedVsBest} Δtraffic ${entry.trafficAdvantageSelectedVsBest} gain ${entry.strategicGainSelectedVsBest}` : ""}`
           )).join(" | ")}`
         );
       }
@@ -13472,13 +15277,27 @@ function buildScenarioCopySummary(scenario) {
       const staging = summary.contextualStaging;
       const stagedSourceLabel = staging.method === "coherent-preflight-pool+target-fit-gate"
         ? "coherent"
-        : "first-leg-routed";
+        : staging.method === "cheap-leg-sketch+geometry-target-gate"
+          ? "opening-routed"
+          : "first-leg-routed";
       lines.push(
         `Start staging: ${staging.sourceStartCount ?? "?"} source -> ${staging.preliminaryRoutedCount ?? "?"} ${stagedSourceLabel} -> ${staging.selectedStartCount ?? "?"} rich, target ${staging.targetPoolSize ?? "?"}, reserve-fill ${staging.unresolvedFillCount ?? 0}, escalated ${staging.escalated ? "yes" : "no"}${staging.escalationReason ? ` (${staging.escalationReason})` : ""}`
       );
       if (staging.method === "coherent-preflight-pool+target-fit-gate") {
         lines.push(
           `Target gate: difficulty ${staging.targetGateDifficultyRaw ?? "?"}, length ${staging.targetGateLengthRaw ?? "?"}, fit-length ${staging.targetGateLengthFitRaw ?? "?"}, routes reused/no traffic`
+        );
+      } else if (staging.method === "cheap-leg-sketch+geometry-target-gate") {
+        lines.push(
+          staging.targetGateMethod === "calibrated-cheap-geometry"
+            ? `Target gate: geometry length ${staging.targetGateLengthRaw ?? "?"} (RMSE ${staging.targetGateRmse ?? "?"}, safety ±${Number.isFinite(Number(staging.targetGateSafetyMargin)) ? Number(Number(staging.targetGateSafetyMargin).toFixed(1)) : "?"}), preflight difficulty ${staging.targetGateDifficultyRaw ?? "?"}, coherent pool skipped`
+            : `Target gate: geometry unavailable/ineligible, preflight difficulty ${staging.targetGateDifficultyRaw ?? "?"}, preflight length ${staging.targetGateLengthRaw ?? "?"}, coherent pool skipped`
+        );
+      }
+      if (staging.coherentCapacityGate?.active) {
+        const gate = staging.coherentCapacityGate;
+        lines.push(
+          `Coherent capacity gate: ${gate.survivingStarts ?? "?"}/${gate.requiredStarts ?? "?"} starts survived, cap ${gate.maxExpansions ?? "?"}/leg, ${gate.work?.searches ?? 0} searches/${gate.work?.expansions ?? 0} exp/${gate.work?.capped ?? 0} capped`
         );
       }
     }
@@ -13502,6 +15321,16 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     ? playableCheckpoints.at(-1) ?? playableCheckpoints[0]
     : playableCheckpoints[selectedLegIndex] ?? playableCheckpoints[0];
   const outlierReasonByIndex = new Map((summary.outliers || []).map((item) => [item.index, item.reasons ?? null]));
+  // Keep report-only route-model state local to this builder. v37 accidentally
+  // referenced these names before declaring them (one was only declared inside
+  // the later per-start loop), causing a runtime ReferenceError after the board
+  // had already rendered and leaving the Dev Course Evaluation visibly blank.
+  const contextualCache = summary.contextualLegCache ?? null;
+  const currentNormalRouteModel = Boolean(
+    contextualCache?.estimatedPrimaryRouting &&
+    !scenario.payToWin &&
+    !scenario.subsidizedStarts
+  );
 
   function formatOutlierReasons(reasons) {
     if (!reasons) {
@@ -13623,11 +15452,14 @@ function buildScenarioReport(scenario, selectedLegIndex) {
       ? `Generation timing: total ${formatGenerationDuration(scenario.generationDiagnostics.totalMs)}, routeSearch ${formatGenerationDuration(scenario.generationDiagnostics.routeSearchMs)}, searches ${scenario.generationDiagnostics.routeSearches}, expansions ${scenario.generationDiagnostics.routeExpansions}, capped ${scenario.generationDiagnostics.cappedRouteSearches}, mode ${scenario.generationDiagnostics.generationModeLabel ?? formatGenerationModeLabel(getScenarioGenerationMode(scenario))}, softBudget ${scenario.generationDiagnostics.softExpansionBudget ?? getGenerationModeProfile({ generationMode: getScenarioGenerationMode(scenario) }).softExpansionBudget}`
       : "Generation timing: n/a",
     scenario.generationDiagnostics?.searchProfile
-      ? `Generation search profile: attempts ${scenario.generationDiagnostics.maxAttempts ?? getScenarioGenerationMaxAttempts(scenario)}, preflight ${scenario.generationDiagnostics.searchProfile.preflightOpeningExpansions}/${scenario.generationDiagnostics.searchProfile.preflightLaterExpansions}, light ${scenario.generationDiagnostics.searchProfile.lightStartExpansions}, full ${scenario.generationDiagnostics.searchProfile.fullCourseExpansions}, routes ${scenario.generationDiagnostics.searchProfile.openingRoutes}/${scenario.generationDiagnostics.searchProfile.laterRoutes}, beam ${scenario.generationDiagnostics.searchProfile.beamWidth}, completion ${scenario.generationDiagnostics.searchProfile.completionPool}, traffic passes ${scenario.generationDiagnostics.searchProfile.fullCourseTrafficPasses}`
-      : "Generation search profile: legacy/n/a",
+      ? `Generation search profile: attempts ${scenario.generationDiagnostics.maxAttempts ?? getScenarioGenerationMaxAttempts(scenario)}, preflight ${scenario.generationDiagnostics.searchProfile.preflightOpeningExpansions}/${scenario.generationDiagnostics.searchProfile.preflightLaterExpansions}, witnesses ${scenario.generationDiagnostics.searchProfile.primaryWitnessRoutes ?? "?"}, traffic ${scenario.generationDiagnostics.searchProfile.trafficEnabled ? `${scenario.generationDiagnostics.searchProfile.trafficEpochs ?? 0} exploration epoch(s), new-search cap ${scenario.generationDiagnostics.searchProfile.trafficAlternateMaxNewSearchesPerEpoch ?? 0}/epoch, uncertainty exploration ${Math.round((scenario.generationDiagnostics.searchProfile.trafficExplorationUncertaintyShare ?? 0) * 100)}% above confidence ${scenario.generationDiagnostics.searchProfile.trafficExplorationConfidenceFloor ?? 1}` : "off"}`
+      : "Generation search profile: n/a",
     scenario.generationDiagnostics?.slowestRouteSearch
       ? `Slowest route search: ${scenario.generationDiagnostics.slowestRouteSearch.kind} ${formatGenerationDuration(scenario.generationDiagnostics.slowestRouteSearch.durationMs)}, expansions ${scenario.generationDiagnostics.slowestRouteSearch.expansions}/${scenario.generationDiagnostics.slowestRouteSearch.maxExpansions}, returned ${scenario.generationDiagnostics.slowestRouteSearch.returnedRoutes}`
       : "Slowest route search: n/a",
+    scenario.generationDiagnostics?.routeSearchTotalsByKind?.["contextual-leg"]
+      ? `Contextual profiler timing: ${formatGenerationDuration(scenario.generationDiagnostics.routeSearchTotalsByKind["contextual-leg"].durationMs)} across ${scenario.generationDiagnostics.routeSearchTotalsByKind["contextual-leg"].searches} searches/${scenario.generationDiagnostics.routeSearchTotalsByKind["contextual-leg"].expansions} expansions; ${formatContextualProfileShare(scenario.generationDiagnostics.contextualProfileTotals, scenario.generationDiagnostics.routeSearchTotalsByKind["contextual-leg"].durationMs)}`
+      : "Contextual profiler timing: n/a",
     scenario.generationDiagnostics?.contextualProfileTotals
       ? `Contextual profiler totals: ${formatContextualProfile(scenario.generationDiagnostics.contextualProfileTotals)}`
       : "Contextual profiler totals: n/a",
@@ -13675,56 +15507,53 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     `Usable starts: ${scenario.metrics.usableStarts.length}/${scenario.activeStarts?.length ?? scenario.sequence.firstLeg?.summary?.contextualStaging?.sourceStartCount ?? scenario.sequence.starts.length}`,
     scenario.virtualBots
       ? "Start disposition: virtual entry"
-      : `Start disposition: physical ${scenario.activeStarts?.length ?? 0}, validated ${(scenario.validatedStartIndices ?? []).length}, blocked ${(scenario.blockedStartIndices ?? []).length} [${(scenario.blockedStartIndices ?? []).map((index) => index + 1).join(", ") || "none"}]${scenario.startDisposition ? `; outside-pool [${(scenario.startDisposition.outsidePoolIndices ?? []).map((index) => index + 1).join(", ") || "none"}], route-failed [${(scenario.startDisposition.routeFailedIndices ?? []).map((index) => index + 1).join(", ") || "none"}], normal-pruned [${(scenario.startDisposition.normalPrunedIndices ?? []).map((index) => index + 1).join(", ") || "none"}], price-pruned [${(scenario.startDisposition.pricePrunedIndices ?? scenario.startDisposition.legacyPricePrunedIndices ?? []).map((index) => index + 1).join(", ") || "none"}], selector-unavailable [${(scenario.startDisposition.selectorUnavailableIndices ?? []).map((index) => index + 1).join(", ") || "none"}], other [${(scenario.startDisposition.otherBlockedIndices ?? []).map((index) => index + 1).join(", ") || "none"}]` : ""}`,
+      : contextualCache?.estimatedPrimaryRouting
+        ? `Start disposition: structural ${scenario.activeStarts?.length ?? 0}, estimated ${contextualCache.estimatedMilestoneRoutes ?? 0}, realized ${contextualCache.survivingStarts ?? (scenario.validatedStartIndices ?? []).length}, physical-impossible ${contextualCache.estimatedPhysicalFailureStarts ?? 0}, routing-unresolved ${Math.max(0, (contextualCache.estimatedMilestoneRoutes ?? 0) - (contextualCache.survivingStarts ?? (scenario.validatedStartIndices ?? []).length))}${scenario.startDisposition ? `; normal-pruned [${(scenario.startDisposition.normalPrunedIndices ?? []).map((index) => index + 1).join(", ") || "none"}], price-pruned [${(scenario.startDisposition.pricePrunedIndices ?? scenario.startDisposition.legacyPricePrunedIndices ?? []).map((index) => index + 1).join(", ") || "none"}], selector-unavailable [${(scenario.startDisposition.selectorUnavailableIndices ?? []).map((index) => index + 1).join(", ") || "none"}], other [${(scenario.startDisposition.otherBlockedIndices ?? []).map((index) => index + 1).join(", ") || "none"}]` : ""}`
+        : `Start disposition: physical ${scenario.activeStarts?.length ?? 0}, validated ${(scenario.validatedStartIndices ?? []).length}, blocked ${(scenario.blockedStartIndices ?? []).length} [${(scenario.blockedStartIndices ?? []).map((index) => index + 1).join(", ") || "none"}]${scenario.startDisposition ? `; outside-pool [${(scenario.startDisposition.outsidePoolIndices ?? []).map((index) => index + 1).join(", ") || "none"}], route-failed [${(scenario.startDisposition.routeFailedIndices ?? []).map((index) => index + 1).join(", ") || "none"}], normal-pruned [${(scenario.startDisposition.normalPrunedIndices ?? []).map((index) => index + 1).join(", ") || "none"}], price-pruned [${(scenario.startDisposition.pricePrunedIndices ?? scenario.startDisposition.legacyPricePrunedIndices ?? []).map((index) => index + 1).join(", ") || "none"}], selector-unavailable [${(scenario.startDisposition.selectorUnavailableIndices ?? []).map((index) => index + 1).join(", ") || "none"}], other [${(scenario.startDisposition.otherBlockedIndices ?? []).map((index) => index + 1).join(", ") || "none"}]` : ""}`,
     `Difficulty raw: ${scenario.metrics.difficultyRaw}`,
+    scenario.metrics.variantDifficultyAccounting
+      ? `Variant difficulty accounting v38: route/base ${scenario.metrics.variantDifficultyAccounting.base} -> final ${scenario.metrics.variantDifficultyAccounting.final} (residual delta ${scenario.metrics.variantDifficultyAccounting.delta}); residuals ${(scenario.metrics.variantDifficultyAccounting.contributions ?? []).map((entry) => `${entry.id} ${entry.delta >= 0 ? "+" : ""}${entry.delta} [${entry.kind}]`).join(", ") || "none"}; mechanically represented ${(scenario.metrics.variantDifficultyAccounting.mechanicalRules ?? []).map((entry) => `${entry.id} (${entry.note})`).join(", ") || "none"}`
+      : "Variant difficulty accounting v38: n/a",
+    scenario.metrics.programmingPressure
+      ? `Programming pressure v38: combined ${scenario.metrics.programmingPressure.planningPressure}, timed ${scenario.metrics.programmingPressure.timedPressure}; hazard ${scenario.metrics.programmingPressure.hazardPressure} (${scenario.metrics.programmingPressure.hazardPerRegister}/reg), traffic ${scenario.metrics.programmingPressure.trafficPressure} (${scenario.metrics.programmingPressure.trafficPerRegister}/reg), control ${scenario.metrics.programmingPressure.controlPressure} (${scenario.metrics.programmingPressure.controlPerRegister}/reg), cards ${scenario.metrics.programmingPressure.cardPressure}; avg gears ${scenario.metrics.programmingPressure.averageGearTurns ?? 0}, conveyor turns ${scenario.metrics.programmingPressure.averageConveyorTurns ?? 0}, forced spaces ${scenario.metrics.programmingPressure.averageForcedSpaces ?? 0}`
+      : "Programming pressure v38: n/a",
     `Length raw: ${scenario.metrics.lengthRaw}`,
     `Length inputs: flags ${scenario.metrics.lengthMetrics.inputs.flagCount}, players ${scenario.metrics.lengthMetrics.inputs.playerCount}, actionScore ${scenario.metrics.lengthMetrics.inputs.totalActionLoad}, distanceScore ${scenario.metrics.lengthMetrics.inputs.totalRouteDistance}, congestion ${scenario.metrics.lengthMetrics.inputs.totalCongestion}, flagArea ${scenario.metrics.lengthMetrics.inputs.flagAreaScore}, totalDifficulty ${scenario.metrics.lengthMetrics.inputs.totalDifficulty}`,
-    `Length contributions: flags ${scenario.metrics.lengthMetrics.contributions.checkpointLoad}, players ${scenario.metrics.lengthMetrics.contributions.playerLoad}, actions ${scenario.metrics.lengthMetrics.contributions.actionLoad}, distance ${scenario.metrics.lengthMetrics.contributions.distanceLoad}, congestion ${scenario.metrics.lengthMetrics.contributions.congestionLoad} (weight ${scenario.metrics.lengthMetrics.contributions.congestionWeight}; harshness ${scenario.metrics.lengthMetrics.contributions.boardHarshness}), flagArea ${scenario.metrics.lengthMetrics.contributions.flagAreaLoad}, difficulty ${scenario.metrics.lengthMetrics.contributions.difficultyLoad}, moving-targets ${scenario.metrics.lengthMetrics.contributions.movingTargetLoad}, act-fast ${scenario.metrics.lengthMetrics.contributions.actFastLoad}`,
+    `Length contributions: flags ${scenario.metrics.lengthMetrics.contributions.checkpointLoad}, players ${scenario.metrics.lengthMetrics.contributions.playerLoad}, actions ${scenario.metrics.lengthMetrics.contributions.actionLoad}, distance ${scenario.metrics.lengthMetrics.contributions.distanceLoad}, congestion ${scenario.metrics.lengthMetrics.contributions.congestionLoad} (weight ${scenario.metrics.lengthMetrics.contributions.congestionWeight}; harshness ${scenario.metrics.lengthMetrics.contributions.boardHarshness}), flagArea ${scenario.metrics.lengthMetrics.contributions.flagAreaLoad}, difficulty ${scenario.metrics.lengthMetrics.contributions.difficultyLoad}, moving-target residual ${scenario.metrics.lengthMetrics.contributions.movingTargetLoad} (legacy estimate ${scenario.metrics.lengthMetrics.contributions.movingTargetLegacyEstimate ?? 0}), act-fast ${scenario.metrics.lengthMetrics.contributions.actFastLoad}, reshuffle ${scenario.metrics.lengthMetrics.contributions.lessForeshadowingLoad ?? 0}, shared-deck ${scenario.metrics.lengthMetrics.contributions.sharedDeckLoad ?? 0}`,
+    `Variant length accounting v38: ${(scenario.metrics.lengthMetrics.variantLengthContributions ?? []).map((entry) => `${entry.id} ${entry.delta >= 0 ? "+" : ""}${entry.delta} [${entry.kind}]`).join(", ") || "none"}; method ${scenario.metrics.lengthMetrics.method ?? "n/a"}`,
     `Moving target profile: active ${scenario.movingTargetStats?.activeCount ?? 0}, pathTiles ${scenario.movingTargetStats?.totalPathLength ?? 0}, uniqueCoverage ${scenario.movingTargetStats?.coverageTiles ?? 0}, turns ${scenario.movingTargetStats?.totalTurns ?? 0}, fastSegments ${scenario.movingTargetStats?.fastSegments ?? 0}, difficultyBonus ${scenario.movingTargetStats?.difficultyBonus ?? 0}, lengthBonus ${scenario.movingTargetStats?.lengthBonus ?? 0}`,
     `Moving target volatility penalty: ${scenario.metrics.movingTargetVolatilityPenalty ?? 0}`,
+    scenario.metrics.openingLegAnticlimax?.active
+      ? `Opening leg pacing penalty: ${scenario.metrics.openingLegAnticlimax.penalty} (fastest expected route ${scenario.metrics.openingLegAnticlimax.fastestActions} registers)`
+      : "Opening leg pacing penalty: 0",
     scenario.metrics.finalLegAnticlimax?.active
       ? `Final leg anticlimax penalty: ${scenario.metrics.finalLegAnticlimax.penalty} (fastest expected route ${scenario.metrics.finalLegAnticlimax.fastestActions} registers)`
       : "Final leg anticlimax penalty: none",
+    scenario.metrics.meaningfulBoardUse
+      ? `Meaningful board use penalty: ${scenario.metrics.meaningfulBoardUse.penalty}; route tiles by board ${scenario.metrics.meaningfulBoardUse.boards.map((board) => `#${board.boardIndex + 1}:${board.uniqueRouteTiles}`).join(", ")}`
+      : "Meaningful board use penalty: n/a",
     scenario.metrics.routeDrama
       ? `Route drama: ${scenario.metrics.routeDrama.level}, score ${scenario.metrics.routeDrama.score}, penalty ${scenario.metrics.routeDrama.penalty}, sharedTiles ${scenario.metrics.routeDrama.sharedTiles}, crossings ${scenario.metrics.routeDrama.crossings}, reverseEdges ${scenario.metrics.routeDrama.reverseEdges}`
       : "Route drama: n/a",    scenario.metrics.competitiveBlockImpact
-      ? `Competitive balance simulation: blocked ${scenario.metrics.competitiveBlockImpact.blockedStartCount} [${scenario.metrics.competitiveBlockImpact.blockedIndices.join(", ")}], remaining ${scenario.metrics.competitiveBlockImpact.remainingStartCount}, selected ${scenario.metrics.competitiveBlockImpact.selectedStartCount ?? "n/a"} [${(scenario.metrics.competitiveBlockImpact.selectedIndices ?? []).join(", ")}], outliers ${scenario.metrics.competitiveBlockImpact.remainingOutlierCount}, scoreRange ${scenario.metrics.competitiveBlockImpact.scoreRange}, actionRange ${scenario.metrics.competitiveBlockImpact.actionRange}, worstZ ${scenario.metrics.competitiveBlockImpact.worstScoreZ}/${scenario.metrics.competitiveBlockImpact.worstActionZ}, acceptable ${scenario.metrics.competitiveBlockImpact.acceptable ? "yes" : "no"}, method ${scenario.metrics.competitiveBlockImpact.method}, trafficSubsets ${scenario.metrics.competitiveBlockImpact.trafficSubsetsTested ?? 0}`
+      ? `Competitive balance simulation: sequential optimal blocks ${(scenario.metrics.competitiveBlockImpact.blockSequence ?? []).map((entry) => `p${entry.order}:#${entry.index + 1}@${entry.score}${Number.isFinite(entry.advantageVsMedian) ? ` (adv ${entry.advantageVsMedian}` : ""}${Number.isFinite(entry.decisionMargin) ? `, gap ${entry.decisionMargin}` : ""}${Number.isFinite(entry.strategicChallenge) ? `, challenge ${entry.strategicChallenge}` : ""}${Number.isFinite(entry.advantageVsMedian) ? ")" : ""}`).join(" -> ") || "none"}; remaining ${scenario.metrics.competitiveBlockImpact.remainingStartCount}, best-${scenario.playerCount ?? scenario.preferences?.playerCount ?? "P"} selected ${scenario.metrics.competitiveBlockImpact.selectedStartCount ?? "n/a"} [${(scenario.metrics.competitiveBlockImpact.selectedIndices ?? []).map((index) => index + 1).join(", ")}], stddev ${scenario.metrics.competitiveBlockImpact.selectedStdDev ?? "n/a"}/${scenario.metrics.competitiveBlockImpact.balanceStdDevLimit ?? NORMAL_START_FAIRNESS_STDDEV_LIMIT}, strategicDifficulty +${scenario.metrics.competitiveBlockImpact.strategicDifficulty ?? "n/a"} (center ${scenario.metrics.competitiveBlockImpact.strategicDifficultyEvidence?.calibrationCenter ?? 1.8}, blockChallenge ${scenario.metrics.competitiveBlockImpact.strategicDifficultyEvidence?.meanBlockChallenge ?? "n/a"}, selectionAmbiguity ${scenario.metrics.competitiveBlockImpact.strategicDifficultyEvidence?.selectionAmbiguity ?? "n/a"}, provisional ${scenario.metrics.competitiveBlockImpact.strategicDifficultyEvidence?.provisional ? "yes" : "no"}), outliers ${scenario.metrics.competitiveBlockImpact.selectedOutlierCount ?? scenario.metrics.competitiveBlockImpact.remainingOutlierCount}, scoreRange ${scenario.metrics.competitiveBlockImpact.scoreRange}, worstZ ${scenario.metrics.competitiveBlockImpact.worstScoreZ}/${scenario.metrics.competitiveBlockImpact.worstActionZ}, blockTraffic ${scenario.metrics.competitiveBlockImpact.blockTrafficScope ?? "n/a"}, trafficRecomputations ${scenario.metrics.competitiveBlockImpact.trafficRecomputations ?? 0}, acceptable ${scenario.metrics.competitiveBlockImpact.acceptable ? "yes" : "no"}, method ${scenario.metrics.competitiveBlockImpact.method}`
       : "Competitive balance simulation: n/a",
     summary.payToWin?.active
-      ? `Pay to Win costs: model ${summary.payToWin.pricingModel?.method ?? "n/a"}, baseline ${Number.isInteger(summary.payToWin.pricingModel?.baselineIndex) ? `#${summary.payToWin.pricingModel.baselineIndex + 1}` : "n/a"}, startingEnergy ${summary.payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY}, startingUpgradeCards ${summary.payToWin.startingUpgradeCards ?? DEFAULT_STARTING_UPGRADE_CARDS} unseen-at-selection, denialCost ${summary.payToWin.denialCost ?? ((summary.payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY) + 1)}, registerUnit ${summary.payToWin.costUnit}, horizon ${summary.payToWin.pricingModel?.horizonTurns ?? "n/a"}t x${summary.payToWin.pricingModel?.horizonScale ?? "n/a"}, thresholds ${(summary.payToWin.pricingModel?.thresholds ?? []).map((threshold) => `${threshold.energy <= (summary.payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY) ? `${threshold.energy}E` : "deny"}@${threshold.cumulativeRegisters}R`).join("/") || "n/a"}, priced ${summary.payToWin.pricedStartCount ?? "n/a"}, trafficScale ${summary.payToWin.trafficScaleMultiplier}, latePricing ${summary.payToWin.latePricingActive ? "active" : "inactive"}, latePlayers ${summary.payToWin.lateSelectorStart ?? "n/a"}-${summary.payToWin.lateSelectorEnd ?? "n/a"}, surplusStarts ${summary.payToWin.surplusStarts ?? 0}, lateModel ${summary.payToWin.lateTrafficModel ?? "n/a"}, selectorSplit ${summary.payToWin.selectorSplit?.selected ? `after-p${summary.payToWin.selectorSplit.cutoffAfter}` : "none"} (${summary.payToWin.selectorSplit?.noSplitErrorR ?? "n/a"}R->${summary.payToWin.selectorSplit?.splitErrorR ?? "n/a"}R; gain ${summary.payToWin.selectorSplit?.gainR ?? "n/a"}R; separation ${summary.payToWin.selectorSplit?.separationR ?? "n/a"}R), lateSamples ${summary.payToWin.lateScenarioSamples ?? 0}, shadowLate ${summary.payToWin.shadowLatePricingActive ? "active" : "inactive"}/${summary.payToWin.shadowLateScenarioSamples ?? 0} samples, earlyUnavailable ${summary.payToWin.earlyUnavailableCount ?? 0}/${summary.payToWin.maxEarlyUnavailable ?? 0}, lateUnavailable ${summary.payToWin.lateUnavailableCount ?? 0}/${summary.payToWin.maxLateUnavailable ?? 0}, fullyUnavailable ${summary.payToWin.fullyUnavailableCount ?? 0}, availabilityValid ${summary.payToWin.availabilityValid === false ? "no" : "yes"}, lateHigher ${summary.payToWin.latePriceHigherCount ?? 0}, lateLower ${summary.payToWin.latePriceLowerCount ?? 0}, slashPrices ${summary.payToWin.hasLatePriceDifference ? "yes" : "no"}, pruned ${summary.payToWin.pruned.length ? summary.payToWin.pruned.map((item) => `#${item.index + 1}(${item.energyCost}E/${item.registerEquivalent ?? "n/a"}R; base ${Number.isInteger(item.pricingModel?.baselineIndex) ? `#${item.pricingModel.baselineIndex + 1}` : "n/a"}; pass ${item.pass})`).join(", ") : "none"}`
-      : "Pay to Win costs: n/a",
-    summary.payToWin?.energyShadow?.active
-      ? `P2W validated-field shadow: validated ${summary.payToWin.energyShadow.validatedStartCount ?? "n/a"}, final-offered ${summary.payToWin.energyShadow.offeredStartCount ?? "n/a"}; tempo-register median ${summary.payToWin.energyShadow.benchmark?.registerScoreMedian ?? "n/a"} (p25 ${summary.payToWin.energyShadow.benchmark?.registerScoreP25 ?? "n/a"}, p75 ${summary.payToWin.energyShadow.benchmark?.registerScoreP75 ?? "n/a"}, n ${summary.payToWin.energyShadow.benchmark?.registerSamples ?? 0}); Power Up strategic delta median ${summary.payToWin.energyShadow.benchmark?.powerUpStrategicDeltaMedian ?? summary.payToWin.energyShadow.benchmark?.powerUpOpportunityMedian ?? "n/a"} (p25 ${summary.payToWin.energyShadow.benchmark?.powerUpStrategicDeltaP25 ?? summary.payToWin.energyShadow.benchmark?.powerUpOpportunityP25 ?? "n/a"}, p75 ${summary.payToWin.energyShadow.benchmark?.powerUpStrategicDeltaP75 ?? summary.payToWin.energyShadow.benchmark?.powerUpOpportunityP75 ?? "n/a"}, n ${summary.payToWin.energyShadow.benchmark?.powerUpStrategicDeltaSamples ?? summary.payToWin.energyShadow.benchmark?.powerUpOpportunitySamples ?? 0}); validated-field horizon ${summary.payToWin.energyShadow.benchmark?.medianFullCourseActions ?? "n/a"} registers / ${summary.payToWin.energyShadow.benchmark?.medianFullCourseTurns ?? "n/a"} turns; final-field pricing horizon ${summary.payToWin.pricingModel?.horizonTurns ?? "n/a"} turns; current Power Up base ${summary.payToWin.energyShadow.benchmark?.powerUpWaitActionPenalty ?? "n/a"} vs tempo ${summary.payToWin.energyShadow.benchmark?.registerTempoCost ?? "n/a"} (discount ${summary.payToWin.energyShadow.benchmark?.powerUpBaseDiscount ?? "n/a"}); battery reward ${summary.payToWin.energyShadow.benchmark?.batteryEnergyRewardScore ?? "n/a"}`
-      : "P2W validated-field shadow: n/a",
-    summary.payToWin?.energyShadow?.routeEconomy?.active
-      ? `Energy economy shadow: start ${summary.payToWin.energyShadow.routeEconomy.config?.startingEnergy ?? "n/a"}E/max ${summary.payToWin.energyShadow.routeEconomy.config?.maxEnergy ?? "n/a"}E, hand ${summary.payToWin.energyShadow.routeEconomy.config?.startingUpgradeCards ?? "n/a"}, horizon ${summary.payToWin.energyShadow.routeEconomy.horizonTurns ?? "n/a"}t, reserve samples ${(summary.payToWin.energyShadow.routeEconomy.reserveSamples ?? []).map((energy) => `E${energy}`).join("/") || "n/a"}; P2W ${(summary.payToWin.pricingModel?.paymentPenalties ?? []).map((item) => `${item.payment}E +${item.medianScore ?? "n/a"} score/${item.medianRegisters ?? "n/a"}R`).join(" | ")}; batteries ${(summary.payToWin.energyShadow.routeEconomy.battery ?? []).map((item) => `@${item.turn}t ${(item.reserveSensitivity ?? []).map((sample) => `E${sample.energy}:arr${sample.arrivalValueR}R/PU${sample.powerUpEnergyR}R(${sample.powerUpNetBeforePositionR ?? "n/a"}net)/Again${sample.powerUpAgainLegal ? `${sample.powerUpAgainEnergyR}R(${sample.powerUpAgainNetBeforePositionR ?? "n/a"}net)` : "—"}`).join(" ; ")}`).join(" | ") || "none"}; Power Up ${(summary.payToWin.energyShadow.routeEconomy.powerUp ?? []).map((item) => `@${item.turn}t ${(item.reserveSensitivity ?? []).map((sample) => `E${sample.energy}:${sample.valueR}R`).join("/")} WAIT${item.waitTempoCostR ?? "n/a"}R strat${item.strategicDeltaR ?? "n/a"}R`).join(" | ") || "none"}; Chop Shop ${(summary.payToWin.energyShadow.routeEconomy.chopShop ?? []).map((item) => `@${item.turn}t ${(item.reserveSensitivity ?? []).map((sample) => `E${sample.energy}:${sample.energyOptionR}/${sample.cardOptionR}R->${sample.choice}`).join("/")}`).join(" | ") || "none"}`
-      : "Energy economy shadow: n/a",
-    summary.payToWin?.energyShadow?.upgradeFeatureWeights?.active
-      ? `Upgrade feature-weight audit (legacy Battery reference / current Chop Shop; route score negative = benefit): battery current/base/UW ${summary.payToWin.energyShadow.upgradeFeatureWeights.battery?.current ?? "n/a"}/${summary.payToWin.energyShadow.upgradeFeatureWeights.battery?.base ?? "n/a"}/${summary.payToWin.energyShadow.upgradeFeatureWeights.battery?.upgradeWorld ?? "n/a"}; chopShop current/base/UW ${summary.payToWin.energyShadow.upgradeFeatureWeights.chopShop?.current ?? "n/a"}/${summary.payToWin.energyShadow.upgradeFeatureWeights.chopShop?.base ?? "n/a"}/${summary.payToWin.energyShadow.upgradeFeatureWeights.chopShop?.upgradeWorld ?? "n/a"}`
-      : "Upgrade feature-weight audit: n/a",
-    summary.payToWin?.energyShadow?.routeEconomy?.selectedPoints?.length
-      ? `Energy U(E) detail: ${(summary.payToWin.energyShadow.routeEconomy.selectedPoints ?? []).map((point) => `@${point.turn}t rem${point.remainingTurns} H${point.initialUpgradeOpportunities} slots${point.installCapacity}(${point.initialInstallCapacity}+${point.futureInstallCapacity}) U[0..10]=${point.levels.join("/")}`).join(" | ")}`
-      : "Energy U(E) detail: n/a",
-    summary.payToWin?.energyShadow?.active
-      ? `P2W initial/final start repricing: ${(summary.payToWin.energyShadow.starts ?? []).map((entry) => {
-        const initialPrice = Number.isFinite(entry.initialEnergyCost) ? `${entry.initialEnergyCost}E` : "n/a";
-        const legacyPrice = Number.isFinite(entry.legacyInitialCost) ? `${entry.legacyInitialCost}E` : "n/a";
-        if (entry.pruned) {
-          return `#${entry.index + 1}: initial full ${entry.fullScore}, ${entry.advantage} advantage = ${entry.registerEquivalent ?? "n/a"}R/${initialPrice}; pruned; legacyInitial ${legacyPrice}`;
-        }
-        const finalPrice = entry.finalEarlyUnavailable
-          ? "—"
-          : Number.isFinite(entry.finalEnergyCost)
-            ? `${entry.finalEnergyCost}E`
-            : "n/a";
-        const latePart = summary.payToWin.latePricingActive && Number.isFinite(entry.finalLateRegisterEquivalent)
-          ? `; final late ${entry.finalLateFullScore ?? "n/a"}, ${entry.finalLateAdvantage ?? "n/a"} advantage = ${entry.finalLateRegisterEquivalent}R/${entry.finalLateUnavailable ? "—" : `${entry.finalLateEnergyCost ?? "n/a"}E`}`
+      ? `${summary.payToWin.subsidizedStarts ? "Subsidized Starts" : "Pay to Win"}: model ${summary.payToWin.pricingModel?.method ?? "n/a"}, economy ${summary.payToWin.pricingEconomyMethod ?? "n/a"}, baseline ${Number.isInteger(summary.payToWin.pricingModel?.baselineIndex) ? `#${summary.payToWin.pricingModel.baselineIndex + 1}` : "n/a"}, start ${summary.payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY}E/max ${summary.payToWin.maxEnergy ?? ROUTE_ENERGY_ECONOMY_DEFAULTS.maxEnergy}E, startingCards ${summary.payToWin.startingUpgradeCards ?? DEFAULT_STARTING_UPGRADE_CARDS}, priced ${summary.payToWin.pricedStartCount ?? "n/a"}, pruned ${(summary.payToWin.pruned ?? []).length}, residualStdDev ${summary.payToWin.residualBalance?.worstStdDev ?? "n/a"}/${summary.payToWin.residualBalance?.early?.limit ?? NORMAL_START_FAIRNESS_STDDEV_LIMIT}, residualOutliers ${summary.payToWin.residualBalance?.worstOutlierCount ?? "n/a"}, availability ${summary.payToWin.availabilityValid === false ? "FAIL" : "pass"}, balance ${summary.payToWin.balanceValid === false ? "FAIL" : "pass"}, latePricing ${summary.payToWin.latePricingActive ? "active" : "inactive"}, selectorSplit ${summary.payToWin.selectorSplit?.selected ? `after-p${summary.payToWin.selectorSplit.cutoffAfter}` : "none"}`
+      : "Priced starts: n/a",
+    summary.payToWin?.pricingEntries?.length
+      ? `Priced start residuals: ${summary.payToWin.pricingEntries.map((entry) => {
+        const prefix = summary.payToWin.subsidizedStarts ? "+" : "";
+        const early = entry.unavailable
+          ? "unavailable"
+          : `${prefix}${entry.energyCost}E -> ${entry.postPaymentFullScore ?? "n/a"} (${entry.postAdjustmentDeltaRegisters ?? "n/a"}R)`;
+        const late = summary.payToWin.latePricingActive
+          ? ` / late ${entry.lateUnavailable ? "unavailable" : `${prefix}${entry.lateEnergyCost}E -> ${entry.latePostPaymentFullScore ?? "n/a"} (${entry.latePostAdjustmentDeltaRegisters ?? "n/a"}R)`}`
           : "";
-        return `#${entry.index + 1}: initial full ${entry.fullScore}, ${entry.advantage} advantage = ${entry.registerEquivalent ?? "n/a"}R/${initialPrice}; final full ${entry.finalFullScore ?? "n/a"}, ${entry.finalAdvantage ?? "n/a"} advantage = ${entry.finalRegisterEquivalent ?? "n/a"}R/${finalPrice}${latePart}; legacyInitial ${legacyPrice}`;
-      }).join(" | ") || "none"}`
-      : "P2W initial/final start repricing: n/a",
+        return `#${entry.index + 1} raw ${entry.fullScore ?? "n/a"}: ${early}${late}`;
+      }).join(" | ")}`
+      : "Priced start residuals: n/a",
     summary.normalStartBalance?.active
-      ? `Normal start balance: ${summary.normalStartBalance.iterative ? "iterative" : (summary.normalStartBalance.staged ? "staged" : "legacy")}, intrinsicPrePrune ${summary.normalStartBalance.intrinsicPrePruning ? "yes" : "no"}, lightweightPruned ${(summary.normalStartBalance.lightweightPruned ?? []).length ? (summary.normalStartBalance.lightweightPruned ?? []).map((index) => `#${index + 1}`).join(", ") : "none"}, pressurePruned ${(summary.normalStartBalance.pressurePruned ?? []).length ? (summary.normalStartBalance.pressurePruned ?? []).map((item) => `#${item.index + 1}(${item.diagnostics?.balanceDispersionPruned ? "balance; " : ""}scoreZ ${item.diagnostics?.scoreZ ?? "n/a"}; actionZ ${item.diagnostics?.actionZ ?? "n/a"}; pass ${item.pass ?? "n/a"})`).join(", ") : "none"}, stddev ${summary.normalStartBalance.balanceStdDevBefore ?? "n/a"}->${summary.normalStartBalance.balanceStdDevAfter ?? "n/a"}/${summary.normalStartBalance.balanceStdDevLimit ?? NORMAL_START_FAIRNESS_STDDEV_LIMIT}, trafficRecomputations ${summary.normalStartBalance.trafficRecomputations ?? 0}, remainingBad ${(summary.normalStartBalance.remainingBadStarts ?? []).length}, reject ${summary.normalStartBalance.reject ? "yes" : "no"}`
+      ? `Normal start balance: iterative, pruned ${(summary.normalStartBalance.pressurePruned ?? []).length ? (summary.normalStartBalance.pressurePruned ?? []).map((item) => `#${item.index + 1}(${item.diagnostics?.balanceDispersionPruned ? "dispersion; " : "outlier; "}scoreZ ${item.diagnostics?.scoreZ ?? "n/a"}; actionZ ${item.diagnostics?.actionZ ?? "n/a"}; pass ${item.pass ?? "n/a"})`).join(", ") : "none"}, retained ${summary.normalStartBalance.retainedCount ?? scenario.metrics?.usableStarts?.length ?? "n/a"}, balanceScore ${summary.normalStartBalance.retainedScoreMin ?? "n/a"}..${summary.normalStartBalance.retainedScoreMax ?? "n/a"}, stddev ${summary.normalStartBalance.balanceStdDevBefore ?? "n/a"}->${summary.normalStartBalance.balanceStdDevAfter ?? "n/a"}/${summary.normalStartBalance.balanceStdDevLimit ?? NORMAL_START_FAIRNESS_STDDEV_LIMIT}, worst remaining z ${summary.normalStartBalance.worstRemainingScoreZ ?? "n/a"}/${summary.normalStartBalance.worstRemainingActionZ ?? "n/a"}, traffic recomputations ${summary.normalStartBalance.trafficRecomputations ?? 0}, remainingBad ${(summary.normalStartBalance.remainingBadStarts ?? []).length}, reject ${summary.normalStartBalance.reject ? "yes" : "no"}`
       : "Normal start balance: n/a",
     scenario.movingTargetReentryMarkers?.length
       ? `Moving target re-entry: ${scenario.movingTargetReentryMarkers.map((marker) => `${marker.label}(${marker.x},${marker.y})`).join(", ")}`
@@ -13732,25 +15561,29 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     movingTargetHitLines.length
       ? `Moving target hits: ${movingTargetHitLines.join("; ")}`
       : "Moving target hits: none",
-    `Fairness stddev: ${scenario.metrics.fairnessStdDev}`,
+    `Fairness stddev (retained full-course balance when Normal): ${scenario.metrics.fairnessStdDev}`,
     `Course difficulty score: ${summary.difficultyScore}`,
     `Course length score: ${summary.lengthScore}`,
     `Course action score: ${summary.actionScore}`,
     `Flag area score: ${summary.flagAreaScore}`,
-    `Average traffic penalty: ${summary.averageTrafficPenalty}`,
-    `Average overlap penalty: ${summary.averageOverlapPenalty ?? 0}`,
-    `Average lateral threat: ${summary.averageLateralThreat ?? 0}`,
-    `Average rear threat: ${summary.averageRearThreat ?? 0}`,
-    summary.courseContinuationWeighted
-      ? `Start full-course continuation: mean ${summary.courseContinuationMean}, weighted into start scores`
-      : "Start full-course continuation: n/a",
-    summary.fullCourseTraffic
-      ? `Full-course route pressure: passes ${summary.fullCourseTraffic.passes}, switches ${summary.fullCourseTraffic.routeSwitches}, avgPenalty ${summary.fullCourseTraffic.averagePenalty}`
-      : "Full-course route pressure: n/a",
-    summary.contextualLegCache
-      ? `Contextual leg cache: exactEntries ${summary.contextualLegCache.entries ?? 0}, templateEntries ${summary.contextualLegCache.templateEntries ?? 0}, exactHits ${summary.contextualLegCache.exactHits ?? 0}, templateHits ${summary.contextualLegCache.templateHits ?? 0}, misses ${summary.contextualLegCache.misses ?? 0}, templateFallbacks ${summary.contextualLegCache.templateFallbacks ?? 0}, cappedContexts ${summary.contextualLegCache.zeroRouteCapFailures ?? 0} across ${summary.contextualLegCache.zeroRouteFailureStarts ?? 0} starts, survivors ${summary.contextualLegCache.survivingStarts ?? "n/a"}/${summary.contextualLegCache.requiredSurvivingStarts ?? "n/a"}`
-      : "Contextual leg cache: n/a",
-    `Route overlap score: ${summary.overlapScore}`,
+    currentNormalRouteModel
+      ? "Traffic scoring: confidence-weighted full-course occupancy/laser/proximity model"
+      : `Average traffic penalty: ${summary.averageTrafficPenalty}`,
+    currentNormalRouteModel
+      ? ""
+      : (summary.courseContinuationWeighted
+        ? `Start full-course continuation: mean ${summary.courseContinuationMean}, weighted into start scores`
+        : "Start full-course continuation: n/a"),
+    currentNormalRouteModel
+      ? `Traffic feedback: epochs ${contextualCache?.trafficEpochsExecuted ?? 0}, demand ${contextualCache?.trafficAlternateDemandStarts ?? 0} starts/${contextualCache?.trafficAlternateDemandLegs ?? 0} legs (${contextualCache?.trafficAlternateEffectiveDemandLegs ?? 0} effective/${contextualCache?.trafficAlternateExploratoryDemandLegs ?? 0} exploratory), probe-stops ${contextualCache?.trafficAlternateCachedProbeStops ?? 0}, escalations ${contextualCache?.trafficAlternateEscalations ?? 0}, bounded searches ${contextualCache?.trafficAlternateNewSearches ?? 0}, candidates ${contextualCache?.trafficAlternateCandidatesAdded ?? 0}, route switches ${summary.fullCourseTraffic?.routeSwitches ?? 0}, effective/raw avg ${summary.fullCourseTraffic?.averagePenalty ?? 0}/${summary.fullCourseTraffic?.averageRawPenalty ?? 0}, confidence mean/min ${summary.fullCourseTraffic?.averageForecastConfidence ?? 1}/${summary.fullCourseTraffic?.minimumForecastConfidence ?? 1}`
+      : (summary.fullCourseTraffic
+        ? `Full-course route pressure: passes ${summary.fullCourseTraffic.passes}, switches ${summary.fullCourseTraffic.routeSwitches}, avgPenalty ${summary.fullCourseTraffic.averagePenalty}`
+        : "Full-course route pressure: n/a"),
+    currentNormalRouteModel
+      ? `Estimate route cache: ${contextualCache?.estimatedLegCacheHits ?? 0} hits/${contextualCache?.estimatedLegSearches ?? 0} searches/${contextualCache?.estimatedLegWitnessesGenerated ?? 0} witnesses, exhaustive primary widenings ${contextualCache?.estimatedLegWidenedSearches ?? 0}, exact realization direct/repaired/failed ${contextualCache?.exactRealizationDirectSuccesses ?? 0}/${contextualCache?.exactRealizationRepairedSuccesses ?? 0}/${contextualCache?.exactRealizationFailures ?? 0}`
+      : (summary.contextualLegCache
+        ? `Contextual leg cache: exactEntries ${summary.contextualLegCache.entries ?? 0}, templateEntries ${summary.contextualLegCache.templateEntries ?? 0}, exactHits ${summary.contextualLegCache.exactHits ?? 0}, templateHits ${summary.contextualLegCache.templateHits ?? 0}, misses ${summary.contextualLegCache.misses ?? 0}, templateFallbacks ${summary.contextualLegCache.templateFallbacks ?? 0}, cappedContexts ${summary.contextualLegCache.zeroRouteCapFailures ?? 0} across ${summary.contextualLegCache.zeroRouteFailureStarts ?? 0} starts, survivors ${summary.contextualLegCache.survivingStarts ?? "n/a"}/${summary.contextualLegCache.requiredSurvivingStarts ?? "n/a"}`
+        : "Contextual leg cache: n/a"),
     `Fairness score: ${summary.fairnessScore}`,
     `Overall course score: ${summary.overallScore}`,
     `Sequence total difficulty: ${scenario.sequence.summary.totalDifficulty}`,
@@ -13758,9 +15591,6 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     summary.outliers.length
       ? `Pruned starts: ${summary.outliers.map((item) => `#${item.index + 1} (${item.delta > 0 ? "+" : ""}${item.delta}; ${formatOutlierReasons(item.reasons)})`).join(", ")}`
       : "Pruned starts: none",
-    summary.outliers.length
-      ? "Pruned adjusted scores are pass-context estimates from the pruning pass where the start was dropped; compare final adjusted scores only between usable starts."
-      : "",
     "",
     "Leg summaries:",
     ...scenario.sequence.legs.map((leg) => {
@@ -13785,8 +15615,17 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     }
 
     const selected = startAnalysis.selectedRoute;
-    const usable = scenario.metrics.usableStarts.some((item) => item.index === startAnalysis.index) ? "usable" : "outlier";
-    const outlierReason = usable === "outlier"
+    const competitiveBalance = scenario.metrics?.competitiveBlockImpact ?? null;
+    const simulatedBlock = (competitiveBalance?.blockSequence ?? []).find((entry) => entry.index === startAnalysis.index) ?? null;
+    const simulatedSelected = (competitiveBalance?.selectedIndices ?? []).includes(startAnalysis.index);
+    const usable = scenario.competitiveMode
+      ? simulatedBlock
+        ? `sim-block-p${simulatedBlock.order}`
+        : simulatedSelected
+          ? "sim-selected"
+          : "available-unselected"
+      : scenario.metrics.usableStarts.some((item) => item.index === startAnalysis.index) ? "usable" : "outlier";
+    const outlierReason = !scenario.competitiveMode && usable === "outlier"
       ? ` reason ${formatOutlierReasons(outlierReasonByIndex.get(startAnalysis.index))}`
       : "";
     const adjustedLabel = usable === "outlier" ? "outlierEstimate" : "finalAdjusted";
@@ -13800,7 +15639,9 @@ function buildScenarioReport(scenario, selectedLegIndex) {
       ? ` courseAdj ${startAnalysis.courseScoreAdjustment ?? 0} courseScore ${startAnalysis.courseEstimate.totalScore} courseActions ${startAnalysis.courseEstimate.totalActions} courseTraffic ${startAnalysis.courseEstimate.fullCourseTrafficPenalty ?? 0} courseRoute ${(startAnalysis.courseEstimate.selectedRouteIndex ?? 0) + 1}/${startAnalysis.courseEstimate.candidateCount ?? 1}`
       : "";
     lines.push(
-      `Start #${startAnalysis.index + 1} ${usable} at (${startAnalysis.start.x}, ${startAnalysis.start.y}) route ${startAnalysis.selectedRouteIndex + 1}/${startAnalysis.routes.length} ${adjustedLabel} ${startAnalysis.adjustedScore}${energyCost}${courseEstimate} raw ${selected.score} traffic ${startAnalysis.trafficPenalty} ranged ${startAnalysis.trafficRanged ?? startAnalysis.rearThreat ?? 0} nearby ${startAnalysis.trafficNearby ?? startAnalysis.lateralThreat ?? 0} competition ${startAnalysis.trafficCompetition ?? startAnalysis.overlapPenalty ?? 0} occupancy-scale ${startAnalysis.trafficScale ?? 0} distance ${selected.distance} actions ${selected.actions} forced ${selected.forcedDistance} hazard ${selected.hazard}${selected.movingTarget ? ` hit flag ${selected.movingTarget.checkpointId} space ${selected.movingTarget.space ?? "?"}` : ""}${outlierReason}`
+      currentNormalRouteModel
+        ? `Start #${startAnalysis.index + 1} ${usable} at (${startAnalysis.start.x}, ${startAnalysis.start.y}) fullCourse intrinsic ${startAnalysis.fullCourseRoute?.score ?? selected.score}, traffic ${startAnalysis.fullCourseTrafficPenalty ?? 0}, balance ${startAnalysis.balanceScore ?? "n/a"}${energyCost}${courseEstimate}, distance ${startAnalysis.fullCourseRoute?.distance ?? selected.distance}, actions ${startAnalysis.fullCourseRoute?.actions ?? selected.actions}, hazard ${startAnalysis.fullCourseRoute?.hazard ?? selected.hazard}${outlierReason}`
+        : `Start #${startAnalysis.index + 1} ${usable} at (${startAnalysis.start.x}, ${startAnalysis.start.y}) route ${startAnalysis.selectedRouteIndex + 1}/${startAnalysis.routes.length} ${adjustedLabel} ${startAnalysis.adjustedScore}${energyCost}${courseEstimate} raw ${selected.score} traffic ${startAnalysis.trafficPenalty} ranged ${startAnalysis.trafficRanged ?? startAnalysis.rearThreat ?? 0} nearby ${startAnalysis.trafficNearby ?? startAnalysis.lateralThreat ?? 0} competition ${startAnalysis.trafficCompetition ?? startAnalysis.overlapPenalty ?? 0} occupancy-scale ${startAnalysis.trafficScale ?? 0} distance ${selected.distance} actions ${selected.actions} forced ${selected.forcedDistance} hazard ${selected.hazard}${selected.movingTarget ? ` hit flag ${selected.movingTarget.checkpointId} space ${selected.movingTarget.space ?? "?"}` : ""}${outlierReason}`
     );
   }
 
@@ -13809,84 +15650,175 @@ function buildScenarioReport(scenario, selectedLegIndex) {
 
 let generationOverlayState = {
   attempt: 1,
+  maxAttempts: 1,
   stage: "",
-  preferences: null
+  preferences: null,
+  stageContext: null,
+  semanticKey: "general",
+  semanticStartedAt: 0,
+  slowTimerId: null
 };
 
-function getGenerationUserFacingState(stage = "", attempt = 1) {
+// UI-only provisional thresholds. Later calibration can replace these with observed
+// stage percentiles without changing the wording/state architecture.
+const GENERATION_SLOW_STAGE_MS = Object.freeze({
+  building: 4200,
+  checkpoints: 3200,
+  routes: 3200,
+  alternatives: 2800,
+  balance: 2800,
+  economy: 2600,
+  competitive: 2800,
+  movingTargets: 2800,
+  retry: 4200,
+  finishing: 3000,
+  general: 4200
+});
+
+function classifyGenerationStage(stage = "", stageContext = null) {
   const raw = String(stage || "").toLowerCase();
-
-  if (raw.includes("competitive")) {
-    return {
-      heading: "Evaluating competitive starts",
-      activity: "Checking extra starts for blocking and selection."
-    };
-  }
-
   if (
-    raw.includes("another course") ||
-    raw.includes("another checkpoint") ||
-    raw.includes("no exact fit")
-  ) {
-    return {
-      heading: "Trying another course",
-      activity: "The previous layout did not meet the course checks, so the app is trying another setup."
-    };
-  }
-
+    raw.includes("another course") || raw.includes("another checkpoint") ||
+    raw.includes("no exact fit") || raw.includes("fallback") ||
+    raw.includes("rejecting") || raw.includes("inconclusive")
+  ) return "retry";
+  if (raw.includes("loading") || raw.includes("setting up") || raw.includes("building") || raw.includes("layout")) return "building";
+  if (raw.includes("checkpoint")) return stageContext?.movingTargets ? "movingTargets" : "checkpoints";
+  if (raw.includes("subsid") || raw.includes("pricing") || raw.includes("pay to win")) return "economy";
+  if (raw.includes("competitive")) return "competitive";
+  if (raw.includes("alternate")) return "alternatives";
+  if (raw.includes("fairness") || raw.includes("balanc") || raw.includes("removable")) return "balance";
   if (
-    raw.includes("loading") ||
-    raw.includes("setting up") ||
-    raw.includes("choosing checkpoint") ||
-    raw.includes("building") ||
-    raw.includes("layout")
-  ) {
-    return {
-      heading: "Building the course",
-      activity: "Placing boards, checkpoints, and setup elements."
-    };
-  }
+    raw.includes("routing") || raw.includes("route") || raw.includes("starting spaces") ||
+    raw.includes("preflight") || raw.includes("refining") || raw.includes("evaluating starting")
+  ) return "routes";
+  if (raw.includes("traffic")) return "alternatives";
+  if (raw.includes("difficulty") || raw.includes("length") || raw.includes("final fit") || raw.includes("finishing") || raw.includes("candidate complete")) return "finishing";
+  return "general";
+}
 
-  if (
-    raw.includes("routing") ||
-    raw.includes("route") ||
-    raw.includes("starting spaces") ||
-    raw.includes("contextual")
-  ) {
-    return {
-      heading: "Finding good routes",
-      activity: "Exploring different ways through the course from the available starts."
-    };
+function getGenerationSlowHint(key, stageContext = null) {
+  if (stageContext?.movingTargets && (key === "movingTargets" || key === "routes" || key === "alternatives")) {
+    return "Moving checkpoints give this layout a few more possibilities to check.";
   }
-
-  if (
-    raw.includes("fairness") ||
-    raw.includes("balanc") ||
-    raw.includes("competitive") ||
-    raw.includes("traffic")
-  ) {
-    return {
-      heading: "Balancing the starts",
-      activity: "Comparing route interactions and checking that the starting choices are reasonable."
-    };
+  if (stageContext?.competitiveMode && (key === "competitive" || key === "balance" || key === "routes")) {
+    return "The extra starting choices are taking a little longer to compare.";
   }
+  if ((stageContext?.payToWin || stageContext?.subsidizedStarts) && (key === "economy" || key === "balance" || key === "routes")) {
+    return "The starting choices are taking a little longer to balance.";
+  }
+  if (stageContext?.recoveryRule === "dynamic_archiving" && key === "routes") {
+    return "Flexible reboot choices give this layout a little more to check.";
+  }
+  if ((stageContext?.extraDocks || stageContext?.sandwichedDock) && (key === "routes" || key === "balance")) {
+    return "Multiple starting areas give this layout more opening choices to compare.";
+  }
+  if (key === "alternatives") return "This layout has several plausible ways through the busy parts.";
+  if (key === "routes") return "This layout has some tricky routes to check.";
+  if (key === "balance" || key === "economy" || key === "competitive") return "This setup has several starting choices to compare.";
+  if (key === "checkpoints" || key === "movingTargets") return "This layout has several checkpoint arrangements to consider.";
+  if (key === "retry") return "Finding a close match is taking a few tries.";
+  return "This course is taking a little longer to check.";
+}
 
-  if (
-    raw.includes("pricing") ||
-    raw.includes("pay to win") ||
-    raw.includes("finishing") ||
-    raw.includes("candidate complete")
-  ) {
-    return {
-      heading: "Finishing up",
-      activity: "Checking the final course details and optional-rule effects."
-    };
+function getGenerationUserFacingState(stage = "", attempt = 1, options = {}) {
+  const stageContext = options.stageContext ?? null;
+  const key = options.key ?? classifyGenerationStage(stage, stageContext);
+  const elapsedMs = Math.max(0, Number(options.elapsedMs) || 0);
+  const slowThreshold = GENERATION_SLOW_STAGE_MS[key] ?? GENERATION_SLOW_STAGE_MS.general;
+  const slow = elapsedMs >= slowThreshold;
+
+  let heading = "Generating course";
+  let activity = "Trying a course setup and checking that it plays well.";
+  if (key === "retry") {
+    heading = "Trying another layout";
+    activity = "The previous layout was not a close enough match, so another one is being tried.";
+  } else if (key === "building") {
+    heading = "Building the course";
+    activity = "Choosing boards and arranging the course.";
+  } else if (key === "checkpoints") {
+    heading = "Placing checkpoints";
+    activity = "Choosing checkpoint positions that make a playable race.";
+  } else if (key === "movingTargets") {
+    heading = "Placing moving checkpoints";
+    activity = "Checking where the moving checkpoints work well on this layout.";
+  } else if (key === "routes") {
+    heading = slow ? "Checking some tricky routes" : "Checking the routes";
+    activity = "Making sure the course works well from the available starts.";
+  } else if (key === "alternatives") {
+    heading = "Comparing route options";
+    activity = "Looking for useful alternatives where the racing lines may get busy.";
+  } else if (key === "balance") {
+    heading = "Balancing the starts";
+    activity = "Checking that the available starting choices make sense together.";
+  } else if (key === "economy") {
+    heading = "Balancing the starting choices";
+    activity = "Checking the Energy adjustments for the available starts.";
+  } else if (key === "competitive") {
+    heading = "Checking competitive starts";
+    activity = "Comparing the extra starting choices used for blocking and selection.";
+  } else if (key === "finishing") {
+    heading = "Finishing the course";
+    activity = "Checking the final difficulty, length, and setup.";
   }
 
   return {
-    heading: "Generating Course",
-    activity: "Trying a course setup and checking that it works."
+    key,
+    heading,
+    activity,
+    slow,
+    slowHint: slow ? getGenerationSlowHint(key, stageContext) : ""
   };
+}
+
+function renderGeneratingOverlayState() {
+  const overlay = document.getElementById("generating-overlay");
+  if (!overlay?.classList.contains("visible")) return;
+
+  const now = generationNow();
+  const elapsedMs = Math.max(0, now - (generationOverlayState.semanticStartedAt || now));
+  const userState = getGenerationUserFacingState(
+    generationOverlayState.stage,
+    generationOverlayState.attempt,
+    {
+      key: generationOverlayState.semanticKey,
+      elapsedMs,
+      stageContext: generationOverlayState.stageContext
+    }
+  );
+  const headingEl = document.getElementById("overlay-heading");
+  const attemptEl = document.getElementById("overlay-attempt");
+  const activityEl = document.getElementById("overlay-text");
+  const hintEl = document.getElementById("overlay-hint");
+
+  if (headingEl) headingEl.textContent = userState.heading;
+  if (attemptEl) {
+    attemptEl.textContent = `Course attempt ${Math.max(1, generationOverlayState.attempt)} / ${generationOverlayState.maxAttempts}`;
+  }
+  if (activityEl) activityEl.textContent = userState.activity;
+  if (hintEl) {
+    const hint = userState.slowHint || getGenerationConstraintHint(generationOverlayState.preferences ?? {});
+    hintEl.textContent = hint;
+    hintEl.classList.toggle("hidden", !hint);
+  }
+}
+
+function scheduleGeneratingOverlaySlowRefresh() {
+  if (generationOverlayState.slowTimerId !== null) {
+    window.clearTimeout(generationOverlayState.slowTimerId);
+    generationOverlayState.slowTimerId = null;
+  }
+  const key = generationOverlayState.semanticKey;
+  const threshold = GENERATION_SLOW_STAGE_MS[key] ?? GENERATION_SLOW_STAGE_MS.general;
+  const startedAt = generationOverlayState.semanticStartedAt;
+  generationOverlayState.slowTimerId = window.setTimeout(() => {
+    if (
+      generationOverlayState.semanticKey === key &&
+      generationOverlayState.semanticStartedAt === startedAt
+    ) {
+      renderGeneratingOverlayState();
+    }
+  }, threshold + 40);
 }
 
 function setGeneratingOverlay(visible, text = "", details = {}) {
@@ -13895,39 +15827,40 @@ function setGeneratingOverlay(visible, text = "", details = {}) {
 
   overlay.classList.toggle("visible", visible);
   if (!visible) {
+    if (generationOverlayState.slowTimerId !== null) {
+      window.clearTimeout(generationOverlayState.slowTimerId);
+    }
+    generationOverlayState.slowTimerId = null;
     return;
   }
 
-  generationOverlayState = {
-    ...generationOverlayState,
-    ...details
-  };
-
+  const now = generationNow();
   const attempt = details.attempt ?? generationOverlayState.attempt ?? 1;
   const stage = details.stage ?? generationOverlayState.stage ?? text;
-  const preferences = details.preferences ?? generationOverlayState.preferences ?? {};
-  const maxAttempts = details.maxAttempts ?? generationOverlayState.maxAttempts ?? getGenerationModeProfile(preferences).maxAttempts;
-  const userState = getGenerationUserFacingState(stage, attempt);
+  const stageContext = details.stageContext !== undefined
+    ? details.stageContext
+    : generationOverlayState.stageContext ?? null;
+  const semanticKey = classifyGenerationStage(stage, stageContext);
+  const attemptChanged = attempt !== generationOverlayState.attempt;
+  const semanticChanged = semanticKey !== generationOverlayState.semanticKey;
 
-  const headingEl = document.getElementById("overlay-heading");
-  const attemptEl = document.getElementById("overlay-attempt");
-  const activityEl = document.getElementById("overlay-text");
-  const hintEl = document.getElementById("overlay-hint");
+  generationOverlayState = {
+    ...generationOverlayState,
+    ...details,
+    attempt,
+    maxAttempts: details.maxAttempts ?? generationOverlayState.maxAttempts ?? getGenerationModeProfile(details.preferences ?? generationOverlayState.preferences ?? {}).maxAttempts,
+    stage,
+    preferences: details.preferences ?? generationOverlayState.preferences ?? {},
+    stageContext,
+    semanticKey,
+    semanticStartedAt: attemptChanged || semanticChanged || !generationOverlayState.semanticStartedAt
+      ? now
+      : generationOverlayState.semanticStartedAt,
+    slowTimerId: generationOverlayState.slowTimerId
+  };
 
-  if (headingEl) {
-    headingEl.textContent = userState.heading;
-  }
-  if (attemptEl) {
-    attemptEl.textContent = `Course attempt ${Math.max(1, attempt)} / ${maxAttempts}`;
-  }
-  if (activityEl) {
-    activityEl.textContent = userState.activity;
-  }
-  if (hintEl) {
-    const hint = getGenerationConstraintHint(preferences);
-    hintEl.textContent = hint;
-    hintEl.classList.toggle("hidden", !hint);
-  }
+  renderGeneratingOverlayState();
+  scheduleGeneratingOverlaySlowRefresh();
 }
 
 function openAboutDialog() {
@@ -13970,7 +15903,14 @@ function getFocusedRouteEntry(scenario, legIndex) {
   const route = legIndex === null ? fullRoute : fullRoute.legRoutes?.[legIndex];
   if (!route) return null;
   const outlierInfo = (scenario.sequence.firstLeg.summary.outliers || []).find((item) => item.index === startIndex) ?? null;
-  const prunedStatus = getRouteInspectionPrunedStatus(outlierInfo);
+  const competitive = scenario.metrics?.competitiveBlockImpact ?? scenario.sequence.firstLeg.summary.competitiveStartBalance ?? null;
+  const competitiveBlock = (competitive?.blockSequence ?? []).find((entry) => entry.index === startIndex) ?? null;
+  const competitiveSelected = (competitive?.selectedIndices ?? []).includes(startIndex);
+  const prunedStatus = competitiveBlock
+    ? `simulated block p${competitiveBlock.order}`
+    : competitiveSelected
+      ? "simulated selected start"
+      : getRouteInspectionPrunedStatus(outlierInfo);
   const statusText = prunedStatus ? ` (${prunedStatus})` : "";
   return {
     id: `start:${startIndex}`,
@@ -14252,6 +16192,12 @@ function formatRouteDetail(scenario, entry) {
     `${entry.label}: ${route.actions} register${route.actions === 1 ? "" : "s"}, distance ${route.distance}, forced ${route.forcedDistance}, raw score ${route.score}`,
     ...formatChronologicalRouteTrace(route, traceTileMap)
   ];
+  const literalProgramCards = (route.transitions || [])
+    .map((transition) => transition?.programCard)
+    .filter((cardId) => typeof cardId === "string");
+  if (literalProgramCards.length === (route.transitions || []).length && literalProgramCards.length) {
+    lines.push(`Program cards: ${literalProgramCards.join(" → ")}`);
+  }
 
   if (route.hazard || route.rebootCount || route.conveyorComplexity) {
     lines.push(`Pressure: hazard ${route.hazard}, conveyor ${route.conveyorComplexity}, reboots ${route.rebootCount}`);
@@ -14270,8 +16216,15 @@ function formatRouteDetail(scenario, entry) {
       : "Final adjusted score";
     lines.push(`${adjustedLabel}: ${entry.startAnalysis.adjustedScore} (${startStatus}; raw ${route.score} + traffic ${trafficPenalty})`);
     if (entry.startAnalysis.energyCost !== null && entry.startAnalysis.energyCost !== undefined) {
-      const formattedCost = formatPayToWinEnergyCost(entry.startAnalysis);
+      const subsidyMode = Boolean(scenario.subsidizedStarts);
+      const pricingLabel = subsidyMode ? "Subsidized Starts" : "Pay to Win";
+      const formattedCost = formatPayToWinEnergyCost(entry.startAnalysis, {
+        subsidizedStarts: subsidyMode
+      });
       const payToWinPricing = scenario.sequence.firstLeg.summary.payToWin;
+      const describeAdjustment = (value) => subsidyMode
+        ? `grants +${value} starting Energy`
+        : `costs ${value} starting Energy`;
       if (payToWinPricing?.hasLatePriceDifference && formattedCost?.includes("/")) {
         const firstLatePlayer = payToWinPricing.lateSelectorStart
           ?? scenario.playerCount;
@@ -14281,16 +16234,16 @@ function formatRouteDetail(scenario, entry) {
           ? `player ${firstLatePlayer}`
           : `players ${firstLatePlayer}–${lastLatePlayer}`;
         if (entry.startAnalysis.earlyUnavailable && entry.startAnalysis.lateUnavailable) {
-          lines.push(`Pay to Win: unavailable to both earlier selectors and ${latePlayerText}`);
+          lines.push(`${pricingLabel}: unavailable to both earlier selectors and ${latePlayerText}`);
         } else if (entry.startAnalysis.earlyUnavailable) {
-          lines.push(`Pay to Win: unavailable to earlier selectors; costs ${entry.startAnalysis.lateEnergyCost} starting energy for ${latePlayerText}`);
+          lines.push(`${pricingLabel}: unavailable to earlier selectors; ${describeAdjustment(entry.startAnalysis.lateEnergyCost)} for ${latePlayerText}`);
         } else if (entry.startAnalysis.lateUnavailable) {
-          lines.push(`Pay to Win: costs ${entry.startAnalysis.energyCost} starting energy for earlier selectors; unavailable to ${latePlayerText}`);
+          lines.push(`${pricingLabel}: ${describeAdjustment(entry.startAnalysis.energyCost)} for earlier selectors; unavailable to ${latePlayerText}`);
         } else {
-          lines.push(`Pay to Win: costs ${formattedCost} starting energy; ${latePlayerText} ${singleLatePlayer ? "uses" : "use"} the second cost`);
+          lines.push(`${pricingLabel}: ${subsidyMode ? "grants" : "costs"} ${formattedCost} starting Energy; ${latePlayerText} ${singleLatePlayer ? "uses" : "use"} the second value`);
         }
       } else {
-        lines.push(`Pay to Win: costs ${formattedCost} starting energy`);
+        lines.push(`${pricingLabel}: ${subsidyMode ? "grants" : "costs"} ${formattedCost} starting Energy`);
       }
     }
     if (entry.startAnalysis.courseEstimate) {
@@ -14405,11 +16358,249 @@ function getBoardViewMode() {
   return document.getElementById("board-view-mode")?.value ?? BOARD_VIEW_MODES.photos;
 }
 
+function updateDevGenerationSeedControls(message = "") {
+  const wrapper = document.getElementById("dev-generation-seed-controls");
+  const toggle = document.getElementById("dev-generation-seed-toggle");
+  const renew = document.getElementById("dev-generation-seed-renew");
+  const input = document.getElementById("dev-generation-seed-input");
+  const status = document.getElementById("dev-generation-seed-status");
+  if (!wrapper || !toggle || !renew || !input || !status) {
+    return;
+  }
+
+  const frozen = Number.isInteger(devFrozenGenerationSeed);
+  toggle.textContent = frozen ? "Unfreeze test seed" : "Freeze test seed";
+  renew.classList.toggle("hidden", !frozen);
+  if (frozen && document.activeElement !== input) {
+    input.value = formatDevGenerationSeed(devFrozenGenerationSeed);
+  }
+  status.textContent = message || (frozen
+    ? `Construction RNG frozen at ${formatDevGenerationSeed(devFrozenGenerationSeed)}. Rerolls repeat the same random construction sequence while settings and analyzer code remain editable.`
+    : "Enter an 8-digit hex seed (for example 56BAC99D) and apply it, or freeze a new random seed.");
+}
+
+function ensureDevGenerationSeedControls() {
+  if (document.getElementById("dev-generation-seed-controls")) {
+    return;
+  }
+
+  const anchor = document.getElementById("run-diagnostics");
+  const parent = anchor?.parentElement;
+  if (!parent) {
+    return;
+  }
+
+  const wrapper = document.createElement("div");
+  wrapper.id = "dev-generation-seed-controls";
+  wrapper.className = "hidden";
+  wrapper.style.margin = "0.5rem 0";
+
+  const toggle = document.createElement("button");
+  toggle.id = "dev-generation-seed-toggle";
+  toggle.type = "button";
+
+  const input = document.createElement("input");
+  input.id = "dev-generation-seed-input";
+  input.type = "text";
+  input.inputMode = "text";
+  input.autocomplete = "off";
+  input.spellcheck = false;
+  input.maxLength = 10;
+  input.placeholder = "Seed, e.g. 56BAC99D";
+  input.value = "56BAC99D";
+  input.setAttribute("aria-label", "Dev generation test seed");
+  input.style.marginLeft = "0.4rem";
+  input.style.width = "10.5rem";
+
+  const apply = document.createElement("button");
+  apply.id = "dev-generation-seed-apply";
+  apply.type = "button";
+  apply.textContent = "Apply seed";
+  apply.style.marginLeft = "0.4rem";
+
+  const renew = document.createElement("button");
+  renew.id = "dev-generation-seed-renew";
+  renew.type = "button";
+  renew.textContent = "New test seed";
+  renew.style.marginLeft = "0.4rem";
+
+  const status = document.createElement("div");
+  status.id = "dev-generation-seed-status";
+  status.style.marginTop = "0.35rem";
+  status.style.fontSize = "0.9em";
+
+  const applyTypedSeed = () => {
+    const parsed = parseDevGenerationSeed(input.value);
+    if (!Number.isInteger(parsed)) {
+      updateDevGenerationSeedControls("Invalid seed. Enter up to 8 hexadecimal digits, for example 56BAC99D.");
+      return;
+    }
+    devFrozenGenerationSeed = parsed;
+    input.value = formatDevGenerationSeed(parsed);
+    updateDevGenerationSeedControls();
+  };
+
+  toggle.addEventListener("click", () => {
+    if (Number.isInteger(devFrozenGenerationSeed)) {
+      devFrozenGenerationSeed = null;
+      updateDevGenerationSeedControls();
+      return;
+    }
+
+    const typed = parseDevGenerationSeed(input.value);
+    devFrozenGenerationSeed = Number.isInteger(typed)
+      ? typed
+      : createDevGenerationSeed();
+    input.value = formatDevGenerationSeed(devFrozenGenerationSeed);
+    updateDevGenerationSeedControls();
+  });
+
+  apply.addEventListener("click", applyTypedSeed);
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      applyTypedSeed();
+    }
+  });
+
+  renew.addEventListener("click", () => {
+    devFrozenGenerationSeed = createDevGenerationSeed();
+    input.value = formatDevGenerationSeed(devFrozenGenerationSeed);
+    updateDevGenerationSeedControls();
+  });
+
+  wrapper.append(toggle, input, apply, renew, status);
+  parent.insertBefore(wrapper, anchor);
+  updateDevGenerationSeedControls();
+}
+
+function isDevRouteModelOverrideActive() {
+  return Boolean(document.getElementById("dev-route-model-override-toggle")?.checked);
+}
+
+function isDevFastTrafficEnabled() {
+  return Boolean(document.getElementById("dev-fast-traffic-toggle")?.checked);
+}
+
+function isDevFastAlternatesEnabled() {
+  return Boolean(document.getElementById("dev-fast-alternates-toggle")?.checked);
+}
+
+function ensureDevFastBaselineControls() {
+  if (document.getElementById("dev-fast-baseline-controls")) return;
+
+  const anchor = document.getElementById("dev-generation-seed-controls") ??
+    document.getElementById("run-diagnostics");
+  const parent = anchor?.parentElement;
+  if (!parent) return;
+
+  const wrapper = document.createElement("div");
+  wrapper.id = "dev-fast-baseline-controls";
+  wrapper.className = "hidden";
+  wrapper.style.margin = "0.5rem 0";
+  wrapper.style.padding = "0.45rem 0";
+
+  const title = document.createElement("strong");
+  title.textContent = "Current-mode traffic override";
+
+  const purpose = document.createElement("div");
+  purpose.style.fontSize = "0.9em";
+  purpose.style.margin = "0.2rem 0 0.35rem";
+  purpose.textContent = "Diagnostic experiment controls. Leave override off to use the selected generation mode exactly as designed.";
+
+  const overrideLabel = document.createElement("label");
+  overrideLabel.style.display = "block";
+  overrideLabel.style.marginBottom = "0.25rem";
+  const overrideToggle = document.createElement("input");
+  overrideToggle.id = "dev-route-model-override-toggle";
+  overrideToggle.type = "checkbox";
+  overrideToggle.checked = false;
+  overrideLabel.append(overrideToggle, document.createTextNode(" Override selected mode's traffic behavior for next generation"));
+
+  const forcedControls = document.createElement("div");
+  forcedControls.style.marginLeft = "1.1rem";
+
+  const trafficLabel = document.createElement("label");
+  trafficLabel.style.marginRight = "0.8rem";
+  const traffic = document.createElement("input");
+  traffic.id = "dev-fast-traffic-toggle";
+  traffic.type = "checkbox";
+  trafficLabel.append(traffic, document.createTextNode(" Traffic scoring enabled"));
+
+  const alternatesLabel = document.createElement("label");
+  const alternates = document.createElement("input");
+  alternates.id = "dev-fast-alternates-toggle";
+  alternates.type = "checkbox";
+  alternatesLabel.append(alternates, document.createTextNode(" Traffic-driven alternate discovery enabled"));
+  forcedControls.append(trafficLabel, alternatesLabel);
+
+  const note = document.createElement("div");
+  note.id = "dev-fast-baseline-status";
+  note.style.fontSize = "0.9em";
+  note.style.marginTop = "0.25rem";
+
+  const getSelectedModeState = () => {
+    const mode = normalizeGenerationMode(document.getElementById("generation-mode")?.value);
+    const profile = getGenerationModeProfile({ generationMode: mode });
+    return {
+      mode,
+      label: formatGenerationModeLabel(mode),
+      profile,
+      trafficEnabled: Boolean(profile.trafficEnabled),
+      alternatesEnabled: Boolean(profile.trafficEnabled && profile.trafficEpochs > 0)
+    };
+  };
+  const syncForcedControlsToMode = () => {
+    const state = getSelectedModeState();
+    traffic.checked = state.trafficEnabled;
+    alternates.checked = state.alternatesEnabled;
+  };
+  const updateNote = () => {
+    const state = getSelectedModeState();
+    const overrideActive = overrideToggle.checked;
+    traffic.disabled = !overrideActive;
+    alternates.disabled = !overrideActive;
+    forcedControls.style.opacity = overrideActive ? "1" : "0.6";
+    if (!overrideActive) {
+      const newSearchText = state.alternatesEnabled
+        ? `${state.profile.trafficAlternateMaxNewSearchesPerEpoch ?? 0} bounded new search(es)/epoch`
+        : "no alternate discovery";
+      note.textContent = `${state.label} controls generation: traffic ${state.trafficEnabled ? "on" : "off"}, traffic-driven alternatives ${state.alternatesEnabled ? "on" : "off"} (${newSearchText}). Dev View is observational.`;
+      return;
+    }
+    const effectiveAlternates = traffic.checked && alternates.checked;
+    note.textContent = `Override active for ${state.label}: force traffic ${traffic.checked ? "on" : "off"}, force traffic-driven alternates ${effectiveAlternates ? "on" : "off"}${alternates.checked && !traffic.checked ? " (alternate discovery requires traffic)" : ""}. Other ${state.label} budgets remain unchanged.`;
+  };
+
+  syncForcedControlsToMode();
+  overrideToggle.addEventListener("change", () => {
+    if (overrideToggle.checked) syncForcedControlsToMode();
+    updateNote();
+  });
+  traffic.addEventListener("change", updateNote);
+  alternates.addEventListener("change", updateNote);
+  document.getElementById("generation-mode")?.addEventListener("change", () => {
+    if (!overrideToggle.checked) syncForcedControlsToMode();
+    updateNote();
+  });
+
+  wrapper.append(title, purpose, overrideLabel, forcedControls, note);
+  parent.insertBefore(wrapper, anchor);
+  updateNote();
+}
+
 function updateDevView() {
+  ensureDevGenerationSeedControls();
+  ensureDevFastBaselineControls();
   const enabled = isDevViewEnabled();
+  if (enabled) {
+    ensureCourseEvaluationReportElement();
+  }
   document.getElementById("trace-leg-label")?.classList.toggle("hidden", !enabled);
   document.getElementById("report-panel")?.classList.toggle("hidden", !enabled);
   document.getElementById("board-audit-toggle-label")?.classList.toggle("hidden", !enabled);
+  document.getElementById("dev-generation-seed-controls")?.classList.toggle("hidden", !enabled);
+  document.getElementById("dev-fast-baseline-controls")?.classList.toggle("hidden", !enabled);
   document.getElementById("run-diagnostics")?.classList.add("hidden");
   updateBoardAuditVisibility();
 }
@@ -14610,11 +16801,20 @@ function getScenarioRenderState(scenario) {
   const renderAnalysis = devViewEnabled ? { routes: getSelectedTraceRoutes(scenario, selectedLegIndex) } : null;
   const boardViewMode = getBoardViewMode();
   const iconBoardView = boardViewMode === BOARD_VIEW_MODES.icons;
+  const metricUnusableStartIndices = scenario.competitiveMode
+    ? []
+    : scenario.sequence.firstLeg.starts
+      .filter((startAnalysis) => !scenario.metrics.usableStarts.some((item) => item.index === startAnalysis.index))
+      .map((startAnalysis) => startAnalysis.index);
+  const competitiveDevBlockIndices = (
+    devViewEnabled && scenario.competitiveMode
+      ? (scenario.startDisposition?.competitiveStrategicBlockIndices ?? [])
+      : []
+  );
   const unusableStartIndices = [...new Set([
     ...(scenario.blockedStartIndices ?? []),
-    ...scenario.sequence.firstLeg.starts
-      .filter((startAnalysis) => !scenario.metrics.usableStarts.some((item) => item.index === startAnalysis.index))
-      .map((startAnalysis) => startAnalysis.index)
+    ...metricUnusableStartIndices,
+    ...competitiveDevBlockIndices
   ])].sort((left, right) => left - right);
   // Number the physical start field, not merely the analyzed subset. Accepted
   // courses resolve every physical start to available or blocked, so Dev View
@@ -14770,13 +16970,68 @@ function ensureScenarioAnimationLoop() {
   scenarioAnimationFrameId = requestAnimationFrame(tick);
 }
 
+function ensureCourseEvaluationReportElement() {
+  const panel = document.getElementById("report-panel");
+  const exact = document.getElementById("report");
+  if (exact && (!panel || panel.contains(exact))) return exact;
+  if (!panel) return exact ?? null;
+
+  // Host markup has changed over time. Reuse a plausible existing report surface
+  // inside the Dev panel if one exists; otherwise create the Course Summary body
+  // ourselves. Do not accidentally write into an unrelated legacy #report node.
+  const existing = panel.querySelector(
+    "[data-course-evaluation-report], #course-evaluation-report, #course-summary-report, .course-evaluation-report, .course-summary-report, textarea, pre"
+  );
+  if (existing) {
+    if (!existing.id) {
+      existing.id = exact ? "course-evaluation-report" : "report";
+    }
+    existing.dataset.courseEvaluationReport = "true";
+    return existing;
+  }
+
+  const reportEl = document.createElement("pre");
+  reportEl.id = exact ? "course-evaluation-report" : "report";
+  reportEl.dataset.courseEvaluationReport = "true";
+  reportEl.className = "course-evaluation-report";
+  reportEl.style.whiteSpace = "pre-wrap";
+  reportEl.style.overflowWrap = "anywhere";
+  reportEl.style.maxHeight = "32rem";
+  reportEl.style.overflow = "auto";
+  reportEl.style.margin = "0.75rem 0";
+  panel.appendChild(reportEl);
+  return reportEl;
+}
+
+function setCourseEvaluationReportText(text) {
+  const reportEl = ensureCourseEvaluationReportElement();
+  if (!reportEl) return;
+  const value = String(text ?? "");
+  // Some host versions render the report as a textarea/form control. Updating only
+  // textContent changes the DOM child text but leaves the visible control value
+  // blank. Keep both representations synchronized so the on-screen summary and
+  // copy controls always see the same report.
+  if ("value" in reportEl) {
+    reportEl.value = value;
+  }
+  reportEl.textContent = value;
+}
+
+function getCourseEvaluationReportText() {
+  const reportEl = ensureCourseEvaluationReportElement();
+  if (!reportEl) return "";
+  if ("value" in reportEl && typeof reportEl.value === "string" && reportEl.value) {
+    return reportEl.value;
+  }
+  return reportEl.textContent ?? "";
+}
+
 function renderScenario(scenario) {
   updateDevView();
   updateSetupSummary(scenario);
   updateRulesNote(scenario);
   updateLegend(scenario);
   const legSelect = document.getElementById("leg-select");
-  const devViewEnabled = isDevViewEnabled();
   const legOptions = scenario.sequence.legs.map((leg, index) => ({
     value: String(index),
     label: index === 0 ? (scenario.virtualBots ? "Entry → 1" : "Start → 1") : `${leg.from} → ${leg.to}`
@@ -14800,9 +17055,9 @@ function renderScenario(scenario) {
   }
   const renderState = drawScenarioCanvas(scenario);
   updateInspectionDetail(scenario, renderState.selectedLegIndex);
-  if (devViewEnabled) {
-    document.getElementById("report").textContent = buildScenarioReport(scenario, renderState.selectedLegIndex);
-  }
+  setCourseEvaluationReportText(
+    buildScenarioReport(scenario, renderState.selectedLegIndex)
+  );
 }
 
 function validateSelectedInventory(assets, preferences) {
@@ -14939,9 +17194,22 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     sandwichedDock,
     virtualBots
   }, variantBundle);
+  const generationStageContext = {
+    movingTargets: Boolean(movingTargets),
+    virtualBots: Boolean(virtualBots),
+    competitiveMode: Boolean(competitiveMode),
+    payToWin: Boolean(payToWin),
+    subsidizedStarts: Boolean(subsidizedStarts),
+    extraDocks: Boolean(extraDocks),
+    sandwichedDock: Boolean(sandwichedDock),
+    recoveryRule: recoveryRule ?? null,
+    classicSharedDeck: Boolean(classicSharedDeck),
+    lessForeshadowing: Boolean(lessForeshadowing),
+    factoryRejects: Boolean(factoryRejects)
+  };
   const reportStage = async (message, localEvaluation = 1) => {
     if (onStage) {
-      await onStage(message, localEvaluation);
+      await onStage(message, localEvaluation, generationStageContext);
     }
   };
 
@@ -14967,7 +17235,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     const layoutAnchors = orderedDockIds.length ? orderedDockIds : [null];
     for (const candidateDockId of layoutAnchors) {
       const candidateBoardLayout = createBoardPlacements(
-        pieceMap, generationPreferences.length, generationPreferences, guidanceLevel, expansionIds, candidateDockId, attempt, assets.lengthCalibration
+        pieceMap, generationPreferences.length, generationPreferences, guidanceLevel, expansionIds, candidateDockId, attempt, assets.lengthCalibration, assets.constructionFeasibilityCalibration
       );
       if (candidateBoardLayout) {
         boardLayout = candidateBoardLayout;
@@ -14992,7 +17260,8 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
           expansionIds,
           candidateDockId,
           attempt,
-          assets.lengthCalibration
+          assets.lengthCalibration,
+          assets.constructionFeasibilityCalibration
         );
         if (!candidateBoardLayout) continue;
 
@@ -15119,6 +17388,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
   let bestScenario = null;
   let staleRetries = 0;
   const rejectionEvents = [];
+  let currentConstructionFingerprint = null;
   const recordRejectionEvent = (telemetryBefore, category, reason, details = null) => {
     const routeDelta = summarizeRouteSearchDelta(
       telemetryBefore,
@@ -15132,6 +17402,12 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       routeExpansions: routeDelta.expansions,
       routeSearchMs: routeDelta.durationMs,
       cappedRouteSearches: routeDelta.capped,
+      contextualSearches: routeDelta.contextualSearches,
+      contextualExpansions: routeDelta.contextualExpansions,
+      contextualDurationMs: routeDelta.contextualDurationMs,
+      contextualProfile: routeDelta.contextualProfile,
+      routeSearchTotalsByKind: routeDelta.totalsByKind,
+      constructionFingerprint: currentConstructionFingerprint,
       ...(details ? { diagnostics: details } : {})
     });
   };
@@ -15150,6 +17426,12 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     }
 
     evaluationsUsed += 1;
+    currentConstructionFingerprint = getCourseConstructionFingerprint(
+      boardLayout.placements,
+      courseDockPlacements,
+      overlayPlacements,
+      []
+    );
     if (onEvaluation) {
       await onEvaluation(evaluationsUsed, retryBudget);
     }
@@ -15160,20 +17442,31 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       evaluationsUsed
     );
     const retryTelemetryBefore = getAnalysisTelemetrySnapshotSafe();
+    const checkpointPreferences = {
+      ...generationPreferences,
+      hazardousFlags,
+      movingTargets,
+      noDocks: effectiveNoDocks,
+      extraDocksState: getVariantPreferenceState(preferences, "extraDocks")
+    };
+    const virtualEntryCandidate = virtualBots
+      ? pickVirtualBotEntry(flagCandidates, tileMap, boardLayout.placements, pieceMap, checkpointPreferences)
+      : null;
+    if (virtualBots && !virtualEntryCandidate) {
+      staleRetries += 1;
+      continue;
+    }
+    const checkpointCandidatePool = virtualEntryCandidate
+      ? flagCandidates.filter((candidate) => candidate.x !== virtualEntryCandidate.x || candidate.y !== virtualEntryCandidate.y)
+      : flagCandidates;
     const pickedCheckpoints = pickFlags(
-      flagCandidates,
-      flagCount + (virtualBots ? 1 : 0),
+      checkpointCandidatePool,
+      flagCount,
       boardLayout.placements,
       courseDockPlacements,
       pieceMap,
-      virtualBots ? [] : setupStarts,
-      {
-        ...generationPreferences,
-        hazardousFlags,
-        movingTargets,
-        noDocks: effectiveNoDocks,
-        extraDocksState: getVariantPreferenceState(preferences, "extraDocks")
-      },
+      virtualBots ? [virtualEntryCandidate] : setupStarts,
+      checkpointPreferences,
       guidanceLevel
     );
 
@@ -15190,22 +17483,15 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       continue;
     }
 
-    const virtualEntryCandidate = virtualBots ? pickedCheckpoints[0] : null;
     const virtualEntryDirections = virtualEntryCandidate
       ? getVirtualBotEntryDirections(tileMap, virtualEntryCandidate)
       : [];
-    if (virtualBots && !virtualEntryDirections.length) {
-      continue;
-    }
+    if (virtualBots && !virtualEntryDirections.length) continue;
     const flagZero = virtualBots
-      ? {
-        ...virtualEntryCandidate,
-        id: 0,
-        facing: sample(virtualEntryDirections)
-      }
+      ? { ...virtualEntryCandidate, id: 0, facing: sample(virtualEntryDirections) }
       : null;
     const checkpoints = virtualBots
-      ? [flagZero, ...pickedCheckpoints.slice(1)]
+      ? [flagZero, ...pickedCheckpoints]
       : pickedCheckpoints;
     const playableCheckpoints = getPlayableCheckpoints(checkpoints, virtualBots);
 
@@ -15213,6 +17499,12 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     let scenarioDockPlacements = courseDockPlacements;
     let scenarioOverlayPlacements = overlayPlacements;
     let scenarioPlacements = placements;
+    currentConstructionFingerprint = getCourseConstructionFingerprint(
+      scenarioBoardPlacements,
+      scenarioDockPlacements,
+      scenarioOverlayPlacements,
+      checkpoints
+    );
     let scenarioBoardRects = boardRects;
     let scenarioTileMap = tileMap;
     let goalTileMap = scenarioTileMap;
@@ -15226,7 +17518,6 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     let sequenceFailureReason = "course analysis did not produce a sequence";
     let sequenceFailureDiagnostics = null;
     let coursePreflight = null;
-    let reusableRoutePool = null;
 
     for (let pass = 0; pass < 4; pass += 1) {
       scenarioPlacements = [
@@ -15234,6 +17525,12 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         ...scenarioDockPlacements,
         ...scenarioOverlayPlacements
       ];
+      currentConstructionFingerprint = getCourseConstructionFingerprint(
+        scenarioBoardPlacements,
+        scenarioDockPlacements,
+        scenarioOverlayPlacements,
+        checkpoints
+      );
       scenarioBoardRects = buildBoardRects(scenarioBoardPlacements, pieceMap);
       const resolved = buildResolvedMap(scenarioPlacements, pieceMap);
       scenarioTileMap = resolved.tileMap;
@@ -15286,14 +17583,21 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         evaluationsUsed
       );
       try {
-        const unconstrainedNormalRouting = (
-          generationPreferences.difficulty === "any" &&
-          generationPreferences.length === "any" &&
-          !competitiveMode &&
+        // Shared estimate→realize predicate. Route semantics never depend on
+        // whether difficulty/length are constrained: Any/Any uses the same Normal
+        // physical-estimate -> exact-program realization foundation. The cheap
+        // preflight is an audition only and never decides start eligibility here.
+        const estimateThenRealizeSharedCandidate = (
           !startEnergyPricing &&
-          !virtualBots
+          !virtualBots &&
+          !effectiveNoDocks &&
+          !sandwichedDock &&
+          scenarioDockPlacements.length === 1
         );
         const baseAnalysisOptions = applyVariantAnalysisOptions({
+          // Keep resource-economy inputs explicit so future optional rules can
+          // vary starting Energy/cards without adding another pricing-only path.
+          ...getRouteAnalysisVariantOptions(generationPreferences),
           rebootTokens,
           boardRects: scenarioBoardRects,
           difficulty: generationPreferences.difficulty,
@@ -15309,7 +17613,6 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         // Universal cheap audition: Flag 1 establishes intrinsic start quality,
         // while later legs use only a representative no-traffic sketch. Virtual
         // Bots share one entry, so one representative start is enough here.
-        reusableRoutePool = null;
         if (playableCheckpoints.length) {
           const preflightStarts = virtualBots
             ? indexedActiveStarts.slice(0, 1)
@@ -15339,7 +17642,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
             getAnalysisTelemetrySnapshotSafe()
           ));
 
-          if (!coursePreflight.valid) {
+          if (!coursePreflight.valid && !estimateThenRealizeSharedCandidate && !competitiveMode && !startEnergyPricing) {
             const reason = `preflight route sketch inconclusive: ${coursePreflight.reason}`;
             console.debug(`Early course retry: ${reason}`);
             await reportStage(`Trying another checkpoint layout — ${reason}`, evaluationsUsed);
@@ -15382,7 +17685,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
             coursePreflight.metrics,
             generationPreferences
           );
-          if (preflightMismatch.abort) {
+          if (preflightMismatch.abort && !estimateThenRealizeSharedCandidate && !competitiveMode && !startEnergyPricing) {
             const mismatchText = formatGrossCourseMismatch(preflightMismatch);
             const reason = `preflight gross mismatch: ${mismatchText}`;
             console.debug(`Early course retry: ${reason}`);
@@ -15408,118 +17711,124 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
           coursePreflight = null;
         }
 
-        const preflightExcludedIndices = coursePreflight?.excludedIndices ?? new Set();
+        const preflightExcludedIndices = (estimateThenRealizeSharedCandidate || competitiveMode || startEnergyPricing)
+          ? new Set()
+          : (coursePreflight?.excludedIndices ?? new Set());
+        // Normal, Competitive, and priced starts never consume preflight outliers
+        // as eligibility. Competitive must preserve every physical start for blocking;
+        // priced starts must preserve the full field until downstream pricing.
         const openingSeedAnalyses = (coursePreflight?.opening?.starts ?? []).filter((entry) => (
-          entry.reachable &&
-          entry.selectedRoute &&
-          !preflightExcludedIndices.has(entry.index)
+          entry.reachable && entry.selectedRoute
         ));
         const routeAwareBatteryScoringOptions = buildRouteAwareBatteryScoringOptions(
           coursePreflight,
           { ...baseAnalysisOptions, ...effectiveVariantBundle }
         );
-        const productionAnalysisOptions = {
-          ...baseAnalysisOptions,
-          ...routeAwareBatteryScoringOptions
-        };
-
-        const targetedNormalRouting = (
-          !unconstrainedNormalRouting &&
-          !competitiveMode &&
-          !startEnergyPricing &&
-          !virtualBots &&
-          !effectiveNoDocks &&
-          !sandwichedDock &&
-          scenarioDockPlacements.length === 1 &&
-          (
-            generationPreferences.difficulty !== "any" ||
-            generationPreferences.length !== "any"
+        const detailedSearchProfiling = Boolean(
+          isDevViewEnabled() && Number.isInteger(devFrozenGenerationSeed)
+        );
+        const generationMode = normalizeGenerationMode(baseAnalysisOptions.generationMode);
+        const generationModeProfile = getGenerationModeProfile({ generationMode });
+        const devRouteModelOverrideActive = isDevRouteModelOverrideActive();
+        const devTrafficEnabled = isDevFastTrafficEnabled();
+        const devAlternatesEnabled = isDevFastAlternatesEnabled();
+        const modeTrafficEnabled = Boolean(generationModeProfile.trafficEnabled);
+        // v35a Dev semantics: Dev View is observational. Only the explicit
+        // current-mode override changes traffic behavior for the next generation.
+        // The two subordinate controls override traffic scoring and traffic-driven
+        // alternate discovery while all other selected-mode budgets remain intact.
+        const effectiveTrafficEnabled = devRouteModelOverrideActive
+          ? devTrafficEnabled
+          : modeTrafficEnabled;
+        const effectiveTrafficFeedbackEnabled = Boolean(
+          effectiveTrafficEnabled && generationModeProfile.trafficEpochs > 0
+        );
+        const effectiveTrafficDrivenAlternates = Boolean(
+          effectiveTrafficFeedbackEnabled && (
+            devRouteModelOverrideActive ? devAlternatesEnabled : true
           )
         );
+        // The old up-front alternate breadth model is intentionally not controlled
+        // by the Dev checkbox anymore. Gameplay alternatives now come from traffic
+        // demand; keeping legacy breadth off gives the three clean benchmark states.
+        const productionAnalysisOptions = {
+          ...baseAnalysisOptions,
+          ...routeAwareBatteryScoringOptions,
+          // v35 mode contract. All modes share one exact Normal model. Modes vary
+          // only the optional evidence/search effort around it. Balanced/Thorough
+          // may explore some high raw congestion beyond Standard's confidence
+          // horizon, but final traffic scoring remains identical.
+          contextualFastCardState: true,
+          contextualEstimatedEnergyGuidance: true,
+          fastBaselineTrafficEnabled: effectiveTrafficEnabled,
+          modeTrafficEnabled,
+          trafficEnabledOverride: effectiveTrafficEnabled,
+          contextualTrafficFeedbackEnabled: effectiveTrafficFeedbackEnabled,
+          contextualTrafficDrivenAlternates: effectiveTrafficDrivenAlternates,
+          contextualTrafficEpochs: effectiveTrafficFeedbackEnabled
+            ? generationModeProfile.trafficEpochs
+            : 0,
+          contextualTrafficAlternateDemandThreshold:
+            NORMAL_TRAFFIC_ALTERNATE_DEMAND_THRESHOLD,
+          contextualTrafficAlternateMinGain:
+            NORMAL_TRAFFIC_ALTERNATE_MIN_GAIN,
+          contextualTrafficAlternateMaxNewSearchesPerEpoch:
+            generationModeProfile.trafficAlternateMaxNewSearchesPerEpoch,
+          contextualTrafficAlternateExpansions:
+            generationModeProfile.trafficAlternateExpansions,
+          contextualTrafficAlternateMaxActions:
+            generationModeProfile.trafficAlternateMaxActions,
+          contextualTrafficAlternateCachedProbeMargin:
+            generationModeProfile.trafficAlternateCachedProbeMargin,
+          contextualTrafficAlternateCachedProbeMaxSimilarity:
+            generationModeProfile.trafficAlternateCachedProbeMaxSimilarity,
+          contextualTrafficAlternateLegsPerStart:
+            generationModeProfile.trafficAlternateLegsPerStart,
+          contextualTrafficExplorationUncertaintyShare:
+            generationModeProfile.trafficExplorationUncertaintyShare,
+          contextualTrafficExplorationConfidenceFloor:
+            generationModeProfile.trafficExplorationConfidenceFloor,
+          skipTraffic: !effectiveTrafficEnabled,
+          skipFullCourseTraffic: !effectiveTrafficEnabled,
+          // Legacy up-front retention stays disabled. Traffic-driven alternates use
+          // the arrival-class witness cache and bounded on-demand leg searches.
+          contextualTrafficAlternativeRetention: false,
+          contextualOpeningExpansions: 650,
+          contextualLaterExpansions: 550,
+          contextualLegMaxActions: 30,
+          // The uncertainty horizon only controls optional breadth. Literal
+          // programming-card depletion stays exact; the fast baseline deliberately
+          // keeps Energy as route scoring rather than another dominance dimension.
+          contextualUncertaintyBreadth: true,
+          // Detailed per-block performance.now() timing is useful for a frozen
+          // diagnostic run but should not tax ordinary generation.
+          contextualDetailedProfiling: detailedSearchProfiling,
+          // The full dominance projection walks every retained search key again
+          // after each search. We already established the physical/program split;
+          // keep it off in routine frozen-seed performance tests so diagnostics do
+          // not distort generation time. It can still be enabled explicitly by a
+          // dedicated diagnostic caller.
+          contextualDominanceKeyProfiling: false
+        };
 
-        // Any/Any Normal, targeted Normal, Competitive, Pay to Win, and
-        // Subsidized Starts all
-        // benefit from the same cheap coherent route pool. Targeted Normal uses
-        // it as a target-fit gate before any rich multi-route refinement.
-        const needsReusableRoutePool = Boolean(
-          coursePreflight &&
-          !virtualBots &&
-          (unconstrainedNormalRouting || targetedNormalRouting || competitiveMode || startEnergyPricing)
-        );
-        if (needsReusableRoutePool) {
-          const routePoolTelemetryBefore = getAnalysisTelemetrySnapshotSafe();
-          reusableRoutePool = buildReusableRoutePool(
-            goalTileMap,
-            indexedActiveStarts,
-            playableCheckpoints,
-            preferences.playerCount,
-            coursePreflight,
-            {
-              ...productionAnalysisOptions,
-              ...effectiveVariantBundle,
-              competitiveMode,
-              payToWin: startEnergyPricing,
-              subsidizedStarts,
-              virtualBots: false,
-              movingTargets,
-              // v46.2: retain the same cheap plausible alternate capability for
-              // Normal, Competitive, and Pay to Win. This only keeps an
-              // alternate already found inside the existing bounded search; it
-              // does not raise route-search expansion caps. Targeted Normal
-              // already gets its richer refinement after the target-fit gate.
-              preservePlausibleAlternatives: Boolean(
-                unconstrainedNormalRouting || competitiveMode || startEnergyPricing
-              )
-            }
-          );
-          reusableRoutePool.work = compactRouteWork(summarizeRouteSearchDelta(
-            routePoolTelemetryBefore,
-            getAnalysisTelemetrySnapshotSafe()
-          ));
+        const sharedEstimateThenRealizeRouting = estimateThenRealizeSharedCandidate;
 
-          if (!reusableRoutePool.valid) {
-            const reason = `reusable route pool inconclusive: ${reusableRoutePool.reason}`;
-            console.debug(`Early course retry: ${reason}`);
-            await reportStage(`Trying another checkpoint layout — ${reason}`, evaluationsUsed);
-            sequenceFailureCategory = "preflight-pool";
-            sequenceFailureReason = reason;
-            sequenceFailureDiagnostics = {
-              routePool: {
-                mode: reusableRoutePool.mode,
-                sourceOpeningCount: reusableRoutePool.sourceOpeningCount,
-                candidateCount: reusableRoutePool.candidateCount,
-                requiredCount: reusableRoutePool.requiredCount,
-                coherentRoutedCount: reusableRoutePool.coherentRoutedCount,
-                failureHealth: reusableRoutePool.failureHealth ?? null,
-                work: reusableRoutePool.work
-              }
-            };
-            sequence = null;
-            break;
-          }
-        }
+        // v37 priced-start semantics: Pay to Win and Subsidized Starts now use the
+        // same all-start route foundation as Normal/Competitive. The universal
+        // preflight remains an audition only; no bounded shortlist may silently
+        // remove a physical starting space before authoritative full-course routing.
+        const analysisStarts = indexedActiveStarts;
 
-        const analysisStarts = reusableRoutePool
-          ? reusableRoutePool.survivorStarts
-          : indexedActiveStarts.filter((start) => (
-            !preflightExcludedIndices.has(start.analysisIndex)
-          ));
-        const fastAnyAnalysisOptions = unconstrainedNormalRouting
-          ? {
-            ...productionAnalysisOptions,
-            contextualOpeningRoutes: 1,
-            contextualLaterRoutes: 1,
-            contextualBeamWidth: 1,
-            contextualCompletionPool: 1,
-            contextualRequiredStarts: reusableRoutePool?.requiredCount ?? preferences.playerCount,
-            contextualSeedStartAnalyses: reusableRoutePool?.seedStartAnalyses ?? null,
-            contextualSeedRouteStrategy: reusableRoutePool?.routeStrategy ?? null
-          }
-          : productionAnalysisOptions;
+        // Shared route foundation: do not quality-prune Normal or Competitive from
+        // the cheap Flag-1 sketch. On the estimate→realize path every structural
+        // start first receives a complete physical course estimate; only afterward
+        // is that route subjected to exact rolling-card realization. Setup-specific
+        // balance/pricing interpretation happens after those milestones.
+        const detailedStarts = analysisStarts;
+        const openingSeedAnalysesForDetailedRouting = openingSeedAnalyses;
         if (
           pass === 0 &&
           sandwichedDock &&
-          !competitiveMode &&
           !virtualBots &&
           scenarioDockPlacements.length > 1 &&
           playableCheckpoints.length
@@ -15550,195 +17859,9 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         }
 
 
-        if (competitiveMode && !virtualBots) {
+        if (startEnergyPricing && !virtualBots) {
           await reportStage(
-            `Competitive Mode — validating the full physical start pool`,
-            evaluationsUsed
-          );
-          const requiredCompetitivePool = preferences.playerCount * 2;
-          const offeredSequence = reusableRoutePool
-            ? analyzeFlagSequence(
-              goalTileMap,
-              reusableRoutePool.survivorStarts,
-              playableCheckpoints,
-              preferences.playerCount,
-              {
-                ...productionAnalysisOptions,
-                contextualSeedStartAnalyses: reusableRoutePool.seedStartAnalyses,
-                contextualSeedRouteStrategy: reusableRoutePool.routeStrategy,
-                contextualRequiredStarts: requiredCompetitivePool
-              }
-            )
-            : null;
-          const preliminaryFirstLeg = offeredSequence?.firstLeg ?? null;
-          const routedStarts = preliminaryFirstLeg?.starts?.filter((entry) => (
-            entry.reachable && entry.fullCourseRoute
-          )) ?? [];
-          if (!preliminaryFirstLeg || routedStarts.length < requiredCompetitivePool) {
-            const reason = `competitive start pool has only ${routedStarts.length}/${requiredCompetitivePool} validated starts`;
-            console.debug(`Early course abort: ${reason}`);
-            await reportStage(`Trying another course — ${reason}`, evaluationsUsed);
-            sequenceFailureCategory = "competitive-start-capacity";
-            sequenceFailureReason = reason;
-            sequence = null;
-            break;
-          }
-
-          // Competitive never generator-prunes a merely weak start. Keep the full
-          // routed physical field and let classifyCandidate simulate the players'
-          // own optimal blocking choices. Exact acceptance additionally requires
-          // every physical start to have survived this route validation; a closest
-          // match may retain generator-unavailable starts with an explicit warning.
-          sequence = offeredSequence;
-          const routedIndexSet = new Set(routedStarts.map((entry) => entry.index));
-          const unavailableIndices = indexedActiveStarts
-            .map((start, index) => (
-              Number.isInteger(start.analysisIndex) ? start.analysisIndex : index
-            ))
-            .filter((index) => !routedIndexSet.has(index))
-            .sort((left, right) => left - right);
-          const preliminaryCache = preliminaryFirstLeg.summary.contextualLegCache ?? {};
-          sequence.firstLeg.summary.contextualSearchMode = "competitive-full-offered-pool";
-          sequence.firstLeg.summary.competitiveStaging = {
-            active: true,
-            sourceStartCount: indexedActiveStarts.length,
-            routedStartCount: routedStarts.length,
-            offeredStartCount: routedStarts.length,
-            requiredOfferedStarts: requiredCompetitivePool,
-            unavailableIndices,
-            remainingAfterBlocks: Math.max(0, routedStarts.length - preferences.playerCount),
-            preliminaryCache,
-            preliminaryScoreStdDev: preliminaryFirstLeg.summary.scoreStdDev ?? 0,
-            routePoolCandidateCount: reusableRoutePool.candidateCount,
-            method: "all-available+optimal-human-blocks"
-          };
-        } else if (unconstrainedNormalRouting) {
-          let fastAnyFailed = false;
-          let fastAnyEscalated = false;
-          let fastAnyCapacityError = null;
-          let fastFailureHealth = null;
-          let escalationFailureHealth = null;
-          let escalationWork = null;
-          const fastTelemetryBefore = getAnalysisTelemetrySnapshotSafe();
-
-          try {
-            sequence = analyzeFlagSequence(
-              goalTileMap,
-              analysisStarts,
-              playableCheckpoints,
-              preferences.playerCount,
-              fastAnyAnalysisOptions
-            );
-          } catch (error) {
-            if (error?.code !== "CONTEXTUAL_START_CAPACITY_LOST") {
-              throw error;
-            }
-            fastAnyFailed = true;
-            fastAnyCapacityError = error;
-            fastFailureHealth = cloneContextualSearchHealth(error.contextualSearchHealth);
-          }
-
-          const fastWork = compactRouteWork(summarizeRouteSearchDelta(
-            fastTelemetryBefore,
-            getAnalysisTelemetrySnapshotSafe()
-          ));
-          const fastBalanceRejected = Boolean(
-            sequence?.firstLeg?.summary?.normalStartBalance?.reject
-          );
-          const fastSurvivorHistory = fastFailureHealth?.survivorHistory?.length
-            ? fastFailureHealth.survivorHistory
-            : (sequence?.firstLeg?.summary?.contextualLegCache?.survivorHistory ?? []);
-
-          // Any/Any has an effectively unlimited supply of alternative checkpoint
-          // layouts. If the cheap contextual proof loses start capacity, do not
-          // spend a second rich pass trying to rescue this particular layout.
-          // Preserve the diagnostics and immediately let the outer retry loop pick
-          // another checkpoint sequence. A Normal balance rejection is different:
-          // the fast beam may simply have chosen an unrepresentative single route,
-          // so that case may still justify one richer comparison.
-          if (fastAnyFailed) {
-            fastAnyCapacityError.anyAnyDiagnostics = {
-              fastFailed: true,
-              fastBalanceRejected: false,
-              fastWork,
-              fastFailureHealth,
-              fastSurvivorHistory: fastSurvivorHistory.map((entry) => ({ ...entry })),
-              escalated: false,
-              escalationWork: null,
-              escalationFailureHealth: null
-            };
-            throw fastAnyCapacityError;
-          }
-
-          if (fastBalanceRejected) {
-            fastAnyEscalated = true;
-            await reportStage(
-              "Escalating Any/Any balance analysis — quick single-route balance was inconclusive",
-              evaluationsUsed
-            );
-            const escalationTelemetryBefore = getAnalysisTelemetrySnapshotSafe();
-            try {
-              sequence = analyzeFlagSequence(
-                goalTileMap,
-                analysisStarts,
-                playableCheckpoints,
-                preferences.playerCount,
-                {
-                  ...productionAnalysisOptions,
-                  contextualOpeningSeedAnalyses: openingSeedAnalyses,
-                  contextualRequiredStarts: preferences.playerCount
-                }
-              );
-            } catch (error) {
-              escalationWork = compactRouteWork(summarizeRouteSearchDelta(
-                escalationTelemetryBefore,
-                getAnalysisTelemetrySnapshotSafe()
-              ));
-              if (error?.code === "CONTEXTUAL_START_CAPACITY_LOST") {
-                escalationFailureHealth = cloneContextualSearchHealth(error.contextualSearchHealth);
-                error.anyAnyDiagnostics = {
-                  fastFailed: false,
-                  fastBalanceRejected,
-                  fastWork,
-                  fastFailureHealth,
-                  fastSurvivorHistory: fastSurvivorHistory.map((entry) => ({ ...entry })),
-                  escalated: true,
-                  escalationWork,
-                  escalationFailureHealth
-                };
-              }
-              throw error;
-            }
-            escalationWork = compactRouteWork(summarizeRouteSearchDelta(
-              escalationTelemetryBefore,
-              getAnalysisTelemetrySnapshotSafe()
-            ));
-          }
-
-          if (sequence?.firstLeg?.summary) {
-            const reusedPreflightRoutes = Boolean(
-              sequence.firstLeg.summary.contextualLegCache?.seededRoutes
-            );
-            sequence.firstLeg.summary.contextualSearchMode = fastAnyEscalated
-              ? "any-any-balance-escalated"
-              : reusedPreflightRoutes
-                ? "any-any-preflight-reused"
-                : "any-any-fast";
-            sequence.firstLeg.summary.anyAnyDiagnostics = {
-              fastFailed: fastAnyFailed,
-              fastBalanceRejected,
-              fastWork,
-              fastFailureHealth,
-              fastSurvivorHistory: fastSurvivorHistory.map((entry) => ({ ...entry })),
-              escalated: fastAnyEscalated,
-              escalationWork,
-              escalationFailureHealth,
-              escalationSurvivorHistory: sequence.firstLeg.summary.contextualLegCache?.survivorHistory ?? []
-            };
-          }
-        } else if (startEnergyPricing && !virtualBots) {
-          await reportStage(
-            `${subsidizedStarts ? "Subsidizing" : "Pricing Pay to Win"} starts — ${analysisStarts.length} validated choices`,
+            `${subsidizedStarts ? "Subsidizing" : "Pricing Pay to Win"} starts — routing all ${analysisStarts.length} physical choices`,
             evaluationsUsed
           );
           sequence = analyzeFlagSequence(
@@ -15748,102 +17871,109 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
             preferences.playerCount,
             {
               ...productionAnalysisOptions,
-              contextualSeedStartAnalyses: reusableRoutePool?.seedStartAnalyses ?? null,
-              contextualSeedRouteStrategy: reusableRoutePool?.routeStrategy ?? null,
+              // Share Normal's physical-estimate -> exact-program realization
+              // foundation. Player count remains the survival floor, but every
+              // physical start receives authoritative primary routing evidence.
+              contextualSharedLaterLegCatalogue: true,
+              contextualEstimatedPrimaryRouting: true,
+              contextualPhysicalTemplateRoutes: generationModeProfile.primaryWitnessRoutes,
+              contextualPrimaryWitnessRoutes: generationModeProfile.primaryWitnessRoutes,
+              contextualPhysicalTemplateExpansions: 700,
+              contextualPhysicalTemplateMaxActions: 36,
+              contextualExactRepairExpansions: 380,
+              contextualOpeningSeedAnalyses: null,
+              contextualSeedStartAnalyses: null,
+              contextualSeedRouteStrategy: null,
               contextualRequiredStarts: preferences.playerCount
             }
           );
           if (sequence?.firstLeg?.summary) {
+            const validatedCount = sequence.firstLeg.starts.filter((entry) => (
+              entry.reachable && entry.fullCourseRoute
+            )).length;
             sequence.firstLeg.summary.contextualSearchMode = subsidizedStarts
-              ? "subsidized-starts-shared-route-pool"
-              : "pay-to-win-shared-route-pool";
+              ? "subsidized-starts-all-start-estimate-then-realize"
+              : "pay-to-win-all-start-estimate-then-realize";
             sequence.firstLeg.summary.payToWinStaging = {
               active: true,
               sourceStartCount: indexedActiveStarts.length,
-              candidateCount: reusableRoutePool?.candidateCount ?? analysisStarts.length,
-              validatedStartCount: reusableRoutePool?.coherentRoutedCount ?? analysisStarts.length,
-              requiredStartCount: reusableRoutePool?.requiredCount ?? preferences.playerCount,
-              method: "bounded-priced-pool"
+              candidateCount: indexedActiveStarts.length,
+              validatedStartCount: validatedCount,
+              requiredStartCount: preferences.playerCount,
+              method: "all-start-normal-foundation"
             };
           }
-        } else if (targetedNormalRouting) {
-          const selectedStarts = reusableRoutePool?.survivorStarts ?? analysisStarts;
-          const selectedSeedAnalyses = reusableRoutePool?.seedStartAnalyses ?? [];
+        } else if (sharedEstimateThenRealizeRouting) {
+          // v36 shared-foundation invariant: Normal and Competitive never use a hidden
+          // pre-analysis shortlist. Every structurally available start is sent through primary
+          // full-course route discovery. Traffic and alternate-route discovery are
+          // independent optional layers; disabling them must not reduce the start
+          // field being evaluated.
+          const selectedStarts = detailedStarts;
           const selectedIndices = selectedStarts
             .map((start, index) => Number.isInteger(start.analysisIndex) ? start.analysisIndex : index)
             .sort((left, right) => left - right);
-          const targetPoolSize = reusableRoutePool?.targetCount ?? selectedStarts.length;
-
-          await reportStage(
-            `Checking targeted fit — ${selectedStarts.length} cheap coherent starts before rich refinement`,
-            evaluationsUsed
-          );
-
-          // Build a provisional sequence entirely from the reusable one-route
-          // full-course pool. This performs no route rediscovery and gives the
-          // requested difficulty/length bands a much better signal than the
-          // representative leg sketch alone.
-          const targetGateSequence = analyzeFlagSequence(
-            goalTileMap,
-            selectedStarts,
-            playableCheckpoints,
-            preferences.playerCount,
-            {
-              ...productionAnalysisOptions,
-              contextualOpeningRoutes: 1,
-              contextualLaterRoutes: 1,
-              contextualBeamWidth: 1,
-              contextualCompletionPool: 1,
-              contextualSeedStartAnalyses: selectedSeedAnalyses,
-              contextualRequiredStarts: reusableRoutePool?.requiredCount ?? preferences.playerCount,
-              skipFullCourseTraffic: true,
-              skipNormalStartBalancing: true
-            }
-          );
-          const targetGateMetrics = classifyCandidate(targetGateSequence, {
+          const preferredPoolSize = selectedStarts.length;
+          const geometryPreferences = {
             ...generationPreferences,
             ...effectiveVariantBundle,
             actFast,
             actFastMode,
-            flagCount,
-            classicSharedDeck,
-            movingTargets
-          }, {
-            boardPlacements: scenarioBoardPlacements,
-            pieceMap,
-            checkpoints: playableCheckpoints,
-            tileMap: scenarioTileMap,
-            goalTileMap,
-            skipCompetitiveBlockImpact: true
-          });
-          const targetGateMismatch = getGrossCourseMismatch(
-            targetGateMetrics,
-            generationPreferences
+            playerCount: preferences.playerCount,
+            extraDocks: scenarioDockPlacements.length > 1,
+            noDocks: effectiveNoDocks,
+            sandwichedDock
+          };
+          const geometryLengthPrediction = generationPreferences.length === "any"
+            ? null
+            : predictConstructionGeometryLength(
+              assets.constructionLengthGeometryCalibration,
+              scenarioBoardPlacements,
+              indexedActiveStarts,
+              playableCheckpoints,
+              pieceMap,
+              geometryPreferences,
+              scenarioOverlayPlacements
+            );
+          const geometryLengthMismatch = getGeometryLengthGateMismatch(
+            geometryLengthPrediction,
+            generationPreferences.length
           );
-          if (targetGateMismatch.abort) {
-            const mismatchText = formatGrossCourseMismatch(targetGateMismatch);
-            const reason = `targeted route-pool mismatch: ${mismatchText}`;
+
+          if (geometryLengthMismatch.abort) {
+            const direction = geometryLengthMismatch.reason === "geometry-length-too-low"
+              ? "too short"
+              : "too long";
+            const reason = `geometry length estimate ${geometryLengthPrediction.predictedLengthRaw} is ${direction} for ${generationPreferences.length} even with ±${Number(geometryLengthMismatch.margin.toFixed(1))} safety margin`;
             console.debug(`Early course retry: ${reason}`);
             await reportStage(`Trying another checkpoint layout — ${reason}`, evaluationsUsed);
             sequenceFailureCategory = "preflight-target";
             sequenceFailureReason = reason;
             sequenceFailureDiagnostics = {
               targetGate: {
-                difficultyRaw: targetGateMetrics?.difficultyRaw ?? null,
-                lengthRaw: targetGateMetrics?.lengthRaw ?? null,
-                lengthFitRaw: targetGateMetrics?.lengthFitRaw ?? null,
-                routePoolCandidates: reusableRoutePool?.candidateCount ?? selectedStarts.length,
-                routePoolSurvivors: reusableRoutePool?.coherentRoutedCount ?? selectedStarts.length,
-                routePoolRequired: reusableRoutePool?.requiredCount ?? preferences.playerCount,
-                work: reusableRoutePool?.work ?? null
+                method: "calibrated-cheap-geometry",
+                predictedLengthRaw: geometryLengthPrediction.predictedLengthRaw,
+                rmse: geometryLengthPrediction.rmse,
+                safetyMargin: geometryLengthMismatch.margin,
+                preflightDifficultyRaw: coursePreflight.metrics?.difficultyRaw ?? null,
+                preflightLengthRaw: coursePreflight.metrics?.lengthRaw ?? null,
+                routePoolSkipped: true
               }
             };
             sequence = null;
             break;
           }
 
+          // v29: there is deliberately no coherent-capacity gate here. Primary
+          // Normal routing resolves every structural start through the two explicit
+          // estimate/realize milestones. The player-count floor is consulted only
+          // after those milestones have finished for the whole start field.
+          let coherentCapacityGate = null;
+
           await reportStage(
-            `Refining targeted Normal starts — ${selectedStarts.length} promising starts with rich route choice`,
+            geometryLengthPrediction
+              ? `${competitiveMode ? "Refining Competitive" : "Refining Normal"} — geometry predicts ${geometryLengthPrediction.predictedLengthRaw} raw, ${selectedStarts.length} opening candidates`
+              : `${competitiveMode ? "Refining Competitive" : "Refining Normal"} — ${selectedStarts.length} opening candidates after cheap preflight`,
             evaluationsUsed
           );
           sequence = analyzeFlagSequence(
@@ -15853,27 +17983,72 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
             preferences.playerCount,
             {
               ...productionAnalysisOptions,
-              contextualOpeningSeedAnalyses: selectedSeedAnalyses,
-              contextualRequiredStarts: preferences.playerCount
+              // v33: all Normal starts receive primary full-course discovery.
+              // After Flag 1, shared discovery is physical/facing/register-phase
+              // only. Card and Energy forecasts guide witness ordering without
+              // entering dominance; exact card/Energy replay remains per lineage.
+              contextualSharedLaterLegCatalogue: true,
+              // v29 Normal no longer uses the old exact/capacity primary solver.
+              // Every structural start first receives an uncapped-on-miss physical
+              // full-course estimate, one cached leg at a time. Exact rolling cards
+              // are realized afterward; failure replans from the impossible register.
+              contextualEstimatedPrimaryRouting: true,
+              contextualPhysicalTemplateRoutes: generationModeProfile.primaryWitnessRoutes,
+              contextualPrimaryWitnessRoutes: generationModeProfile.primaryWitnessRoutes,
+              contextualPhysicalTemplateExpansions: 700,
+              contextualPhysicalTemplateMaxActions: 36,
+              contextualExactRepairExpansions: 380,
+              // Preflight remains an audition/diagnostic only. Milestone 1 estimates
+              // every opening independently and does not consume a preflight seed.
+              contextualOpeningSeedAnalyses: null,
+              contextualRequiredStarts: competitiveMode
+                ? selectedStarts.length
+                : preferences.playerCount
             }
           );
 
           if (sequence?.firstLeg?.summary) {
-            sequence.firstLeg.summary.contextualSearchMode = "targeted-normal-route-pool-gated";
+            const richRoutedStarts = sequence.firstLeg.starts.filter((entry) => (
+              entry.reachable && entry.fullCourseRoute
+            ));
+            sequence.firstLeg.summary.contextualSearchMode = competitiveMode
+              ? "competitive-normal-foundation-estimate-then-realize"
+              : "normal-estimate-then-realize";
             sequence.firstLeg.summary.contextualStaging = {
-              active: true,
-              method: "coherent-preflight-pool+target-fit-gate",
+              active: false,
+              method: "all-start-physical-estimate+whole-route-card-realization+failure-point-replan",
               sourceStartCount: indexedActiveStarts.length,
-              preliminaryRoutedCount: reusableRoutePool?.coherentRoutedCount ?? selectedStarts.length,
-              targetPoolSize,
-              selectedStartCount: selectedStarts.length,
+              preliminaryRoutedCount: coursePreflight.openingRoutedCount,
+              targetPoolSize: preferredPoolSize,
+              selectedStartCount: richRoutedStarts.length,
               selectedIndices,
-              unresolvedFillCount: 0,
+              unresolvedFillCount: Math.max(0, selectedStarts.length - richRoutedStarts.length),
               escalated: true,
-              escalationReason: "target-fit-passed",
-              targetGateDifficultyRaw: targetGateMetrics?.difficultyRaw ?? null,
-              targetGateLengthRaw: targetGateMetrics?.lengthRaw ?? null,
-              targetGateLengthFitRaw: targetGateMetrics?.lengthFitRaw ?? null
+              escalationReason: geometryLengthPrediction
+                ? "geometry-fit-passed"
+                : generationPreferences.length === "any" && generationPreferences.difficulty === "any"
+                  ? "unconstrained-fit-no-route-semantic-bypass"
+                  : "preflight-fit-passed",
+              targetGateMethod: geometryLengthPrediction
+                ? "calibrated-cheap-geometry"
+                : generationPreferences.length === "any" && generationPreferences.difficulty === "any"
+                  ? "none-any-any"
+                  : "preflight-only",
+              targetGateDifficultyRaw: coursePreflight.metrics?.difficultyRaw ?? null,
+              targetGateLengthRaw: geometryLengthPrediction?.predictedLengthRaw ?? coursePreflight.metrics?.lengthRaw ?? null,
+              targetGateLengthFitRaw: geometryLengthPrediction?.predictedLengthRaw ?? coursePreflight.metrics?.lengthFitRaw ?? null,
+              targetGateRmse: geometryLengthPrediction?.rmse ?? null,
+              targetGateSafetyMargin: geometryLengthMismatch.margin ?? null,
+              coherentCapacityGate: coherentCapacityGate
+                ? {
+                  active: !coherentCapacityGate.skipped,
+                  survivingStarts: coherentCapacityGate.survivingStarts,
+                  requiredStarts: coherentCapacityGate.requiredStarts,
+                  maxExpansions: coherentCapacityGate.maxExpansions,
+                  work: coherentCapacityGate.work ?? null
+                }
+                : null,
+              preselectionSkipped: true
             };
           }
         } else {
@@ -15887,7 +18062,9 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
               : {
                 ...productionAnalysisOptions,
                 contextualOpeningSeedAnalyses: openingSeedAnalyses,
-                contextualRequiredStarts: preferences.playerCount
+                contextualRequiredStarts: competitiveMode
+                  ? analysisStarts.length
+                  : preferences.playerCount
               }
           );
         }
@@ -15925,7 +18102,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
             cappedRouteSearches: coursePreflight.work?.capped ?? 0,
             routeAwareBatteryScoring: {
               active: Boolean(productionAnalysisOptions.routeAwareBatteryScoring),
-              method: "route-upgrade-economy-production-v45-cards-energy",
+              method: "route-upgrade-economy-production-v18-flat-reserve-progress",
               horizonTurns: productionAnalysisOptions.routeEnergyHorizonTurns ?? null,
               registerScore: productionAnalysisOptions.routeEnergyRegisterScore ?? null,
               startingReserve: productionAnalysisOptions.startingEnergy ?? null,
@@ -15934,32 +18111,26 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
               drawEnergyCost: productionAnalysisOptions.upgradeDrawEnergyCost ?? null,
               usefulEnergyPerInstall: productionAnalysisOptions.upgradeUsefulEnergyPerInstall ?? null
             },
-            routePool: reusableRoutePool
-              ? {
-                mode: reusableRoutePool.mode,
-                sourceOpeningCount: reusableRoutePool.sourceOpeningCount,
-                candidateCount: reusableRoutePool.candidateCount,
-                requiredCount: reusableRoutePool.requiredCount,
-                coherentRoutedCount: reusableRoutePool.coherentRoutedCount,
-                routeSearches: reusableRoutePool.work?.searches ?? 0,
-                routeExpansions: reusableRoutePool.work?.expansions ?? 0,
-                cappedRouteSearches: reusableRoutePool.work?.capped ?? 0,
-                openingReused: reusableRoutePool.openingReused !== false
-              }
-              : null
+            routePool: null
           };
         }
       } catch (error) {
         if (error?.code === "CONTEXTUAL_START_CAPACITY_LOST") {
           const health = error.contextualSearchHealth ?? {};
-          const reason = `route capacity lost after leg ${health.legNumber ?? "?"}: ${health.survivingStarts ?? 0}/${health.requiredStarts ?? preferences.playerCount} required starts remain; ${health.cappedContextsThisLeg ?? 0} capped route contexts this leg (${health.zeroRouteCapFailures ?? 0} total across ${health.distinctStarts ?? 0} starts)`;
+          const rescueText = (health.capacityRescueSearches ?? 0) > 0
+            ? `; capacity rescue ${health.capacityRescueSuccesses ?? 0}/${health.capacityRescueSearches ?? 0} (physical ${health.capacityPhysicalRescueSuccesses ?? 0}/${health.capacityPhysicalRescueSearches ?? 0}, horizon ${health.capacityHorizonRescueSuccesses ?? 0}/${health.capacityHorizonRescueSearches ?? 0}, expansion ${health.capacityExpansionRescueSuccesses ?? 0}/${health.capacityExpansionRescueSearches ?? 0})`
+            : "";
+          const sharedText = (health.catalogueLookups ?? 0) > 0
+            ? `; catalogue ${health.catalogueEntries ?? 0} classes/${health.catalogueSearches ?? 0} searches, reuse ${health.catalogueCacheHits ?? 0}/${health.catalogueLookups ?? 0}, capped ${health.catalogueCappedSearches ?? 0} (+${health.catalogueSuppressedCappedLookups ?? 0} repeats suppressed), replay ${health.catalogueCompatibleLineages ?? 0}/${health.catalogueIncompatibleLineages ?? 0}`
+            : "";
+          const reason = `route capacity lost after leg ${health.legNumber ?? "?"}: ${health.survivingStarts ?? 0}/${health.requiredStarts ?? preferences.playerCount} required starts remain; ${health.cappedContextsThisLeg ?? 0} capped route contexts this leg (${health.zeroRouteCapFailures ?? 0} total across ${health.distinctStarts ?? 0} starts)${rescueText}${sharedText}`;
           console.debug(`Early course retry: ${reason}`);
           await reportStage(`Trying another checkpoint layout — ${reason}`, evaluationsUsed);
           sequenceFailureCategory = "route-capacity";
           sequenceFailureReason = reason;
-          sequenceFailureDiagnostics = error.anyAnyDiagnostics
-            ? { anyAny: error.anyAnyDiagnostics }
-            : { contextualFailure: cloneContextualSearchHealth(health) };
+          sequenceFailureDiagnostics = {
+            contextualFailure: cloneContextualSearchHealth(health)
+          };
           sequence = null;
           break;
         }
@@ -16017,20 +18188,20 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         }
       }
 
-      // Competitive Mode keeps every legal starting space on the rendered board,
-      // but evaluates the course using the player-selected staged shortlist.
-      // There is no dock/board/overlay pruning pass after this analysis.
-      if (competitiveMode) {
-        break;
-      }
-
+      // v36 Competitive now follows the ordinary physical cleanup loop too. Its
+      // simulated strategic blocks are analysis-only, so removable docks/boards/
+      // overlays are judged against the full validated physical start field, not
+      // against the P starts used for Competitive fairness. If cleanup changes the
+      // course, routing and the sequential block simulation are both rerun.
       await reportStage(`Checking route fairness and removable pieces — pass ${pass + 1} / 4`, evaluationsUsed);
-      const usableStarts = computeUsableStarts(sequence.firstLeg, {
-        competitiveMode,
-        virtualBots,
-        payToWin: Boolean(effectiveVariantBundle.payToWin || effectiveVariantBundle.subsidizedStarts),
-        subsidizedStarts: effectiveVariantBundle.subsidizedStarts
-      });
+      const usableStarts = competitiveMode
+        ? computeCourseReachableStarts(sequence.firstLeg)
+        : computeUsableStarts(sequence.firstLeg, {
+          competitiveMode,
+          virtualBots,
+          payToWin: Boolean(effectiveVariantBundle.payToWin || effectiveVariantBundle.subsidizedStarts),
+          subsidizedStarts: effectiveVariantBundle.subsidizedStarts
+        });
       let pruningChanged = false;
       const prunedDocks = pruneUnusedDockPlacements(
         scenarioDockPlacements,
@@ -16111,19 +18282,29 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       staleRetries += 1;
       continue;
     }
-    if (
-      (effectiveVariantBundle.payToWin || effectiveVariantBundle.subsidizedStarts) &&
-      sequence.firstLeg.summary.payToWin?.availabilityValid === false
-    ) {
-      recordRejectionEvent(
-        retryTelemetryBefore,
-        effectiveVariantBundle.subsidizedStarts ? "subsidized-starts" : "pay-to-win",
-        effectiveVariantBundle.subsidizedStarts
-          ? "Subsidized Starts pricing left insufficient compensable starting-space availability"
-          : "Pay to Win pricing left insufficient affordable starting-space availability"
-      );
-      staleRetries += 1;
-      continue;
+    if (effectiveVariantBundle.payToWin || effectiveVariantBundle.subsidizedStarts) {
+      const pricedStartSummary = sequence.firstLeg.summary.payToWin ?? null;
+      if (pricedStartSummary?.availabilityValid === false) {
+        recordRejectionEvent(
+          retryTelemetryBefore,
+          effectiveVariantBundle.subsidizedStarts ? "subsidized-starts" : "pay-to-win",
+          effectiveVariantBundle.subsidizedStarts
+            ? "Subsidized Starts pricing left insufficient compensable starting-space availability"
+            : "Pay to Win pricing left insufficient affordable starting-space availability"
+        );
+        staleRetries += 1;
+        continue;
+      }
+      if (pricedStartSummary?.balanceValid === false) {
+        const residual = pricedStartSummary.residualBalance ?? {};
+        recordRejectionEvent(
+          retryTelemetryBefore,
+          effectiveVariantBundle.subsidizedStarts ? "subsidized-starts" : "pay-to-win",
+          `${effectiveVariantBundle.subsidizedStarts ? "Subsidized Starts" : "Pay to Win"} residual balance remained too wide after pricing (stddev ${residual.worstStdDev ?? "n/a"}/${NORMAL_START_FAIRNESS_STDDEV_LIMIT}, outliers ${residual.worstOutlierCount ?? "n/a"})`
+        );
+        staleRetries += 1;
+        continue;
+      }
     }
     const finalUsableStarts = computeUsableStarts(sequence.firstLeg, {
       competitiveMode,
@@ -16184,11 +18365,14 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
           ? !validatedStartSet.has(index)
           : !usableStartSet.has(index)
         );
-    const analysisStartIndices = [...usableStartSet].sort((left, right) => left - right);
+    const analysisStartIndices = competitiveMode
+      ? [...validatedStartSet].sort((left, right) => left - right)
+      : [...usableStartSet].sort((left, right) => left - right);
     const allPhysicalStartIndices = activeStarts.map((_, index) => index);
+    const targetedStagingIndices = sequence.firstLeg?.summary?.contextualStaging?.selectedIndices;
     const routePoolCandidateIndices = new Set(
-      Array.isArray(reusableRoutePool?.selectedIndices) && reusableRoutePool.selectedIndices.length
-        ? reusableRoutePool.selectedIndices
+      Array.isArray(targetedStagingIndices) && targetedStagingIndices.length
+        ? targetedStagingIndices
         : allPhysicalStartIndices
     );
     const outsidePoolIndices = virtualBots
@@ -16219,6 +18403,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       ...normalPrunedIndices
     ]);
     const otherBlockedIndices = blockedStartIndices.filter((index) => !classifiedBlockedIndices.has(index));
+    const competitiveBalance = sequence.firstLeg?.summary?.competitiveStartBalance ?? null;
     const startDisposition = {
       physicalCount: activeStarts.length,
       validatedCount: validatedStartSet.size,
@@ -16226,6 +18411,12 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       outsidePoolIndices: [...outsidePoolIndices].sort((left, right) => left - right),
       routeFailedIndices: [...routeFailedIndices].sort((left, right) => left - right),
       normalPrunedIndices: [...normalPrunedIndices].sort((left, right) => left - right),
+      competitiveStrategicBlockIndices: competitiveMode
+        ? [...(competitiveBalance?.blockedIndices ?? [])].sort((left, right) => left - right)
+        : [],
+      competitiveSelectedIndices: competitiveMode
+        ? [...(competitiveBalance?.selectedIndices ?? [])].sort((left, right) => left - right)
+        : [],
       pricePrunedIndices: [...payToWinPrunedIndices].sort((left, right) => left - right),
       selectorUnavailableIndices: [...selectorUnavailableIndices].sort((left, right) => left - right),
       otherBlockedIndices: [...otherBlockedIndices].sort((left, right) => left - right)
@@ -16237,6 +18428,12 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       ...scenarioOverlayPlacements
     ];
     const finalOverlayPlacements = scenarioPlacements.filter((placement) => placement.overlay);
+    currentConstructionFingerprint = getCourseConstructionFingerprint(
+      scenarioBoardPlacements,
+      scenarioDockPlacements,
+      finalOverlayPlacements,
+      checkpoints
+    );
     const movingTargetTimelines = sequence.movingTargetTimelines ?? [];
     const movingTargetReentryMarkers = collectMovingTargetReentryMarkers(scenarioTileMap, playableCheckpoints, effectiveVariantBundle.movingTargets);
     const scenario = applyVariantScenarioState({
@@ -16274,6 +18471,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       mainBoardIds: scenarioBoardPlacements.map((placement) => placement.pieceId),
       mainRotations: scenarioBoardPlacements.map((placement) => placement.rotation),
       boardCount: scenarioBoardPlacements.length,
+      constructionFingerprint: currentConstructionFingerprint,
       boardRects: scenarioBoardRects,
       lengthConstructionPrior,
       guidanceLevel,
@@ -16391,6 +18589,7 @@ function serializeScenario(scenario) {
     checkpoints: scenario.checkpoints,
     rebootTokens: scenario.rebootTokens,
     activeStarts: scenario.activeStarts ?? [],
+    constructionFingerprint: scenario.constructionFingerprint ?? null,
     blockedStartIndices: scenario.blockedStartIndices ?? [],
     validatedStartIndices: scenario.validatedStartIndices ?? [],
     analysisStartIndices: scenario.analysisStartIndices ?? (scenario.metrics?.usableStarts ?? []).map((entry) => entry.index),
@@ -16515,7 +18714,10 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     ? activeStarts
     : activeStarts
       .map((start, index) => ({ ...start, analysisIndex: index }))
-      .filter((start) => savedAnalysisIndices.has(start.analysisIndex));
+      // Current Competitive semantics always reconstruct the full physical field.
+      // Older saves may have persisted only a legacy analyzed subset; do not let
+      // that historical shortlist re-enter the new sequential-blocking model.
+      .filter((start) => competitiveMode || savedAnalysisIndices.has(start.analysisIndex));
   const sequence = analyzeFlagSequence(goalTileMap, analysisStarts, playableCheckpoints, snapshot.preferences.playerCount, applyVariantAnalysisOptions({
     rebootTokens,
     boardRects,
@@ -16598,6 +18800,10 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
   });
   const movingTargetTimelines = sequence.movingTargetTimelines ?? [];
   const movingTargetReentryMarkers = collectMovingTargetReentryMarkers(tileMap, playableCheckpoints, movingTargets);
+  const hydratedCompetitiveBalance = sequence.firstLeg?.summary?.competitiveStartBalance ?? null;
+  const hydratedAnalysisStartIndices = competitiveMode
+    ? activeStarts.map((_, index) => index)
+    : [...savedAnalysisIndices].sort((left, right) => left - right);
 
   return {
     pieceMap,
@@ -16612,8 +18818,10 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     goalTileMap,
     activeStarts,
     blockedStartIndices: Array.isArray(snapshot.blockedStartIndices) ? snapshot.blockedStartIndices : [],
-    validatedStartIndices: Array.isArray(snapshot.validatedStartIndices) ? snapshot.validatedStartIndices : [...savedAnalysisIndices],
-    analysisStartIndices: [...savedAnalysisIndices].sort((left, right) => left - right),
+    validatedStartIndices: competitiveMode
+      ? computeCourseReachableStarts(sequence.firstLeg).map((entry) => entry.index)
+      : (Array.isArray(snapshot.validatedStartIndices) ? snapshot.validatedStartIndices : [...savedAnalysisIndices]),
+    analysisStartIndices: hydratedAnalysisStartIndices,
     startDisposition: snapshot.startDisposition
       ? {
         ...snapshot.startDisposition,
@@ -16621,15 +18829,29 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
         // that field on hydration, but use the neutral name now that v36's
         // register-equivalent model owns the same endpoint-pruning mechanism.
         pricePrunedIndices: snapshot.startDisposition.pricePrunedIndices ??
-          snapshot.startDisposition.legacyPricePrunedIndices ?? []
+          snapshot.startDisposition.legacyPricePrunedIndices ?? [],
+        competitiveStrategicBlockIndices: competitiveMode
+          ? [...(hydratedCompetitiveBalance?.blockedIndices ?? [])].sort((left, right) => left - right)
+          : (snapshot.startDisposition.competitiveStrategicBlockIndices ?? []),
+        competitiveSelectedIndices: competitiveMode
+          ? [...(hydratedCompetitiveBalance?.selectedIndices ?? [])].sort((left, right) => left - right)
+          : (snapshot.startDisposition.competitiveSelectedIndices ?? [])
       }
       : {
         physicalCount: activeStarts.length,
-        validatedCount: Array.isArray(snapshot.validatedStartIndices) ? snapshot.validatedStartIndices.length : savedAnalysisIndices.size,
+        validatedCount: competitiveMode
+          ? computeCourseReachableStarts(sequence.firstLeg).length
+          : (Array.isArray(snapshot.validatedStartIndices) ? snapshot.validatedStartIndices.length : savedAnalysisIndices.size),
         blockedCount: Array.isArray(snapshot.blockedStartIndices) ? snapshot.blockedStartIndices.length : 0,
         outsidePoolIndices: [],
         routeFailedIndices: [],
         normalPrunedIndices: [],
+        competitiveStrategicBlockIndices: competitiveMode
+          ? [...(hydratedCompetitiveBalance?.blockedIndices ?? [])].sort((left, right) => left - right)
+          : [],
+        competitiveSelectedIndices: competitiveMode
+          ? [...(hydratedCompetitiveBalance?.selectedIndices ?? [])].sort((left, right) => left - right)
+          : [],
         pricePrunedIndices: [],
         selectorUnavailableIndices: [],
         otherBlockedIndices: Array.isArray(snapshot.blockedStartIndices) ? [...snapshot.blockedStartIndices] : []
@@ -16718,6 +18940,10 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
   const generationMode = normalizeGenerationMode(preferences.generationMode);
   const generationProfile = getGenerationModeProfile({ generationMode });
   const maxAttempts = options.maxAttempts ?? generationProfile.maxAttempts;
+  const emergencyAttemptReserve = Math.max(0, Math.floor(
+    Number(options.emergencyAttemptReserve) || 0
+  ));
+  const effectiveMaxAttempts = maxAttempts + emergencyAttemptReserve;
   const softExpansionBudget = options.softExpansionBudget ?? generationProfile.softExpansionBudget;
   const softBudgetMinAttempts = options.softBudgetMinAttempts ?? generationProfile.softBudgetMinAttempts;
   const onProgress = options.onProgress ?? null;
@@ -16732,6 +18958,8 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
     routeSearchMs: 0,
     cappedRouteSearches: 0,
     slowestRouteSearch: null,
+    routeSearchTotalsByKind: null,
+    physicalCacheTotals: null,
     contextualProfileTotals: null,
     terminationReason: null,
     rejectionEvents: [],
@@ -16739,6 +18967,9 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
     generationMode,
     generationModeLabel: formatGenerationModeLabel(generationMode),
     maxAttempts,
+    emergencyAttemptReserve,
+    emergencyActivated: false,
+    emergencyAttemptsUsed: 0,
     softExpansionBudget,
     softBudgetMinAttempts,
     searchProfile: {
@@ -16746,29 +18977,88 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
       preflightLaterExpansions: generationProfile.preflightLaterExpansions,
       lightStartExpansions: generationProfile.lightStartExpansions,
       fullCourseExpansions: generationProfile.fullCourseExpansions,
-      openingRoutes: generationProfile.openingRoutes,
-      laterRoutes: generationProfile.laterRoutes,
-      beamWidth: generationProfile.beamWidth,
-      completionPool: generationProfile.completionPool,
-      fullCourseTrafficPasses: generationProfile.fullCourseTrafficPasses
+      primaryWitnessRoutes: generationProfile.primaryWitnessRoutes,
+      trafficEnabled: generationProfile.trafficEnabled,
+      trafficEpochs: generationProfile.trafficEpochs,
+      trafficAlternateDemandThreshold: NORMAL_TRAFFIC_ALTERNATE_DEMAND_THRESHOLD,
+      trafficAlternateMinGain: NORMAL_TRAFFIC_ALTERNATE_MIN_GAIN,
+      trafficAlternateMaxNewSearchesPerEpoch:
+        generationProfile.trafficAlternateMaxNewSearchesPerEpoch,
+      trafficAlternateExpansions: generationProfile.trafficAlternateExpansions,
+      trafficAlternateMaxActions: generationProfile.trafficAlternateMaxActions,
+      trafficAlternateCachedProbeMargin: generationProfile.trafficAlternateCachedProbeMargin,
+      trafficAlternateCachedProbeMaxSimilarity: generationProfile.trafficAlternateCachedProbeMaxSimilarity,
+      trafficAlternateLegsPerStart: generationProfile.trafficAlternateLegsPerStart,
+      trafficExplorationUncertaintyShare: generationProfile.trafficExplorationUncertaintyShare,
+      trafficExplorationConfidenceFloor: generationProfile.trafficExplorationConfidenceFloor,
+      normalPruneBatchSize: NORMAL_PRUNE_BATCH_SIZE,
+      fullCourseTrafficPasses: NORMAL_FULL_COURSE_TRAFFIC_PASSES
     }
   };
+  // v35a: diagnostics live in this owning scope. Dev View itself is observational;
+  // only the explicit current-mode override changes route-model behavior. Snapshot
+  // that override here so copied summaries describe the experiment actually run.
+  const diagnosticsDevRouteModelOverrideActive = isDevRouteModelOverrideActive();
+  const diagnosticsEffectiveTrafficEnabled = diagnosticsDevRouteModelOverrideActive
+    ? isDevFastTrafficEnabled()
+    : Boolean(generationProfile.trafficEnabled);
+  const diagnosticsEffectiveTrafficFeedbackEnabled = Boolean(
+    diagnosticsEffectiveTrafficEnabled && generationProfile.trafficEpochs > 0
+  );
+  const diagnosticsEffectiveTrafficDrivenAlternates = Boolean(
+    diagnosticsEffectiveTrafficFeedbackEnabled && (
+      diagnosticsDevRouteModelOverrideActive ? isDevFastAlternatesEnabled() : true
+    )
+  );
+  generationDiagnostics.searchProfile.trafficEnabled = diagnosticsEffectiveTrafficEnabled;
+  generationDiagnostics.searchProfile.trafficEpochs = diagnosticsEffectiveTrafficFeedbackEnabled
+    ? generationProfile.trafficEpochs
+    : 0;
+  generationDiagnostics.searchProfile.trafficAlternatesEnabled =
+    diagnosticsEffectiveTrafficDrivenAlternates;
+  generationDiagnostics.searchProfile.trafficAlternateMaxNewSearchesPerEpoch =
+    diagnosticsEffectiveTrafficDrivenAlternates
+      ? generationProfile.trafficAlternateMaxNewSearchesPerEpoch
+      : 0;
+  generationDiagnostics.searchProfile.trafficAlternateExpansions =
+    diagnosticsEffectiveTrafficDrivenAlternates ? generationProfile.trafficAlternateExpansions : 0;
+  generationDiagnostics.searchProfile.trafficAlternateMaxActions =
+    diagnosticsEffectiveTrafficDrivenAlternates ? generationProfile.trafficAlternateMaxActions : 0;
+  generationDiagnostics.searchProfile.trafficAlternateCachedProbeMargin =
+    diagnosticsEffectiveTrafficDrivenAlternates ? generationProfile.trafficAlternateCachedProbeMargin : 0;
+  generationDiagnostics.searchProfile.trafficAlternateCachedProbeMaxSimilarity =
+    generationProfile.trafficAlternateCachedProbeMaxSimilarity;
+  generationDiagnostics.searchProfile.trafficExplorationUncertaintyShare =
+    diagnosticsEffectiveTrafficDrivenAlternates
+      ? generationProfile.trafficExplorationUncertaintyShare
+      : 0;
+  generationDiagnostics.searchProfile.trafficExplorationConfidenceFloor =
+    diagnosticsEffectiveTrafficDrivenAlternates
+      ? generationProfile.trafficExplorationConfidenceFloor
+      : 1;
+  generationDiagnostics.searchProfile.devRouteModelOverrideActive =
+    diagnosticsDevRouteModelOverrideActive;
   let bestScenario = null;
   let crashedAttempts = 0;
   let lastAttemptError = null;
   let attempt = 0;
   let terminationReason = null;
+  let emergencyActivated = false;
 
   const attachDiagnostics = (scenario) => {
     if (!scenario) return scenario;
     const telemetry = getAnalysisTelemetrySnapshotSafe();
     generationDiagnostics.totalMs = Number((generationNow() - generationStartedAt).toFixed(2));
     generationDiagnostics.totalEvaluations = attempt;
+    generationDiagnostics.emergencyActivated = emergencyActivated;
+    generationDiagnostics.emergencyAttemptsUsed = Math.max(0, attempt - maxAttempts);
     generationDiagnostics.routeSearches = telemetry.routeSearchCount ?? 0;
     generationDiagnostics.routeExpansions = telemetry.totalExpansions ?? 0;
     generationDiagnostics.routeSearchMs = telemetry.totalDurationMs ?? 0;
     generationDiagnostics.cappedRouteSearches = telemetry.cappedSearches ?? 0;
     generationDiagnostics.slowestRouteSearch = telemetry.slowestSearch ?? null;
+    generationDiagnostics.routeSearchTotalsByKind = telemetry.totalsByKind ?? null;
+    generationDiagnostics.physicalCacheTotals = telemetry.physicalCacheTotals ?? null;
     generationDiagnostics.contextualProfileTotals = telemetry.contextualProfileTotals ?? null;
     generationDiagnostics.terminationReason = terminationReason;
     generationDiagnostics.rejectionSummary = summarizeGenerationRejectionEvents(
@@ -16781,20 +19071,44 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
         stages: (entry.stages || []).map((stage) => ({ ...stage })),
         slowestRouteSearch: entry.slowestRouteSearch
           ? { ...entry.slowestRouteSearch }
+          : null,
+        routeSearchTotalsByKind: entry.routeSearchTotalsByKind
+          ? Object.fromEntries(Object.entries(entry.routeSearchTotalsByKind).map(([kind, bucket]) => [kind, { ...bucket }]))
+          : null,
+        contextualProfile: entry.contextualProfile ? { ...entry.contextualProfile } : null
+      })),
+      rejectionEvents: generationDiagnostics.rejectionEvents.map((entry) => ({
+        ...entry,
+        contextualProfile: entry.contextualProfile ? { ...entry.contextualProfile } : null,
+        routeSearchTotalsByKind: entry.routeSearchTotalsByKind
+          ? Object.fromEntries(Object.entries(entry.routeSearchTotalsByKind).map(([kind, bucket]) => [kind, { ...bucket }]))
           : null
       })),
-      rejectionEvents: generationDiagnostics.rejectionEvents.map((entry) => ({ ...entry })),
       rejectionSummary: generationDiagnostics.rejectionSummary
         ? {
           ...generationDiagnostics.rejectionSummary,
-          categories: generationDiagnostics.rejectionSummary.categories.map((entry) => ({ ...entry }))
+          categories: generationDiagnostics.rejectionSummary.categories.map((entry) => ({
+            ...entry,
+            contextualProfile: entry.contextualProfile ? { ...entry.contextualProfile } : null
+          }))
         }
         : null
     };
     return scenario;
   };
 
-  while (attempt < maxAttempts) {
+  while (attempt < effectiveMaxAttempts) {
+    if (attempt >= maxAttempts) {
+      if (bestScenario || emergencyAttemptReserve <= 0) {
+        terminationReason = "attempt-limit";
+        break;
+      }
+      emergencyActivated = true;
+      generationDiagnostics.emergencyActivated = true;
+      generationDiagnostics.emergencyAttemptsUsed = Math.max(0, attempt - maxAttempts);
+    }
+
+    const progressMaxAttempts = emergencyActivated ? effectiveMaxAttempts : maxAttempts;
     const workSnapshot = getAnalysisTelemetrySnapshotSafe();
     const softBudgetReached = (
       attempt >= softBudgetMinAttempts &&
@@ -16806,12 +19120,14 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
       break;
     }
 
-    const remainingAttempts = maxAttempts - attempt;
+    const remainingAttempts = progressMaxAttempts - attempt;
     const attemptLabel = attempt + 1;
     const candidateStartedAt = generationNow();
     const telemetryBefore = getAnalysisTelemetrySnapshotSafe();
     const stageTimings = [];
-    let lastStage = "Setting up a new candidate";
+    let lastStage = emergencyActivated
+      ? "Finding a fallback course — no playable candidate yet"
+      : "Setting up a new candidate";
     let stageStartedAt = candidateStartedAt;
 
     const recordStageBoundary = (nextStage) => {
@@ -16827,7 +19143,7 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
     };
 
     if (onProgress) {
-      await onProgress(attemptLabel, maxAttempts, lastStage);
+      await onProgress(attemptLabel, progressMaxAttempts, lastStage);
     }
 
     let result;
@@ -16841,20 +19157,22 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
           if (!onProgress || localEvaluations <= 1) {
             return;
           }
-          const visibleAttempt = Math.min(maxAttempts, attempt + localEvaluations);
+          const visibleAttempt = Math.min(progressMaxAttempts, attempt + localEvaluations);
           await onProgress(
             visibleAttempt,
-            maxAttempts,
-            "Trying another checkpoint layout on this board"
+            progressMaxAttempts,
+            emergencyActivated
+              ? "Finding a fallback course — trying another checkpoint layout"
+              : "Trying another checkpoint layout on this board"
           );
         },
-        async (stage, localEvaluations = 1) => {
+        async (stage, localEvaluations = 1, stageContext = null) => {
           recordStageBoundary(stage);
           if (!onProgress) {
             return;
           }
-          const visibleAttempt = Math.min(maxAttempts, attempt + Math.max(1, localEvaluations));
-          await onProgress(visibleAttempt, maxAttempts, stage);
+          const visibleAttempt = Math.min(progressMaxAttempts, attempt + Math.max(1, localEvaluations));
+          await onProgress(visibleAttempt, progressMaxAttempts, stage, stageContext);
         },
         ({ evaluationsUsed: localEvaluations, bestScenario: candidateBestScenario }) => {
           const completedEvaluations = attempt + Math.max(0, localEvaluations);
@@ -16873,6 +19191,9 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
       crashedAttempts += 1;
       lastAttemptError = error;
       attempt += 1;
+      if (emergencyActivated) {
+        generationDiagnostics.emergencyAttemptsUsed = Math.max(0, attempt - maxAttempts);
+      }
       const telemetryAfter = getAnalysisTelemetrySnapshotSafe();
       const routeDelta = summarizeRouteSearchDelta(telemetryBefore, telemetryAfter);
       generationDiagnostics.attempts.push({
@@ -16887,7 +19208,13 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
         routeExpansions: routeDelta.expansions,
         routeSearchMs: routeDelta.durationMs,
         cappedRouteSearches: routeDelta.capped,
-        slowestRouteSearch: routeDelta.slowest
+        slowestRouteSearch: routeDelta.slowest,
+        routeSearchTotalsByKind: routeDelta.totalsByKind,
+        contextualSearches: routeDelta.contextualSearches,
+        contextualExpansions: routeDelta.contextualExpansions,
+        contextualDurationMs: routeDelta.contextualDurationMs,
+        contextualProfile: routeDelta.contextualProfile,
+        routeSearchTotalsByKind: routeDelta.totalsByKind
       });
       generationDiagnostics.rejectionEvents.push({
         evaluation: attemptLabel,
@@ -16896,7 +19223,11 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
         routeSearches: routeDelta.searches,
         routeExpansions: routeDelta.expansions,
         routeSearchMs: routeDelta.durationMs,
-        cappedRouteSearches: routeDelta.capped
+        cappedRouteSearches: routeDelta.capped,
+        contextualSearches: routeDelta.contextualSearches,
+        contextualExpansions: routeDelta.contextualExpansions,
+        contextualDurationMs: routeDelta.contextualDurationMs,
+        contextualProfile: routeDelta.contextualProfile
       });
       console.warn(`Attempt ${attemptLabel} failed during generation`, error);
       continue;
@@ -16904,6 +19235,9 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
 
     const evaluationsUsed = Math.max(1, result.evaluationsUsed ?? 1);
     attempt += evaluationsUsed;
+    if (emergencyActivated) {
+      generationDiagnostics.emergencyAttemptsUsed = Math.max(0, attempt - maxAttempts);
+    }
     if (Array.isArray(result.rejectionEvents) && result.rejectionEvents.length) {
       generationDiagnostics.rejectionEvents.push(...result.rejectionEvents.map((entry) => ({
         ...entry,
@@ -16918,7 +19252,7 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
     const routeDelta = summarizeRouteSearchDelta(telemetryBefore, telemetryAfter);
     const attemptRecord = {
       startAttempt: attemptLabel,
-      endAttempt: Math.min(maxAttempts, attemptLabel + evaluationsUsed - 1),
+      endAttempt: attemptLabel + evaluationsUsed - 1,
       evaluationsUsed,
       elapsedMs: Number((generationNow() - candidateStartedAt).toFixed(2)),
       outcome: scenario?.metrics?.acceptable ? "accepted" : "rejected",
@@ -16930,7 +19264,12 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
       routeExpansions: routeDelta.expansions,
       routeSearchMs: routeDelta.durationMs,
       cappedRouteSearches: routeDelta.capped,
-      slowestRouteSearch: routeDelta.slowest
+      slowestRouteSearch: routeDelta.slowest,
+      routeSearchTotalsByKind: routeDelta.totalsByKind,
+      contextualSearches: routeDelta.contextualSearches,
+      contextualExpansions: routeDelta.contextualExpansions,
+      contextualDurationMs: routeDelta.contextualDurationMs,
+      contextualProfile: routeDelta.contextualProfile
     };
     generationDiagnostics.attempts.push(attemptRecord);
 
@@ -16962,14 +19301,25 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
       };
     }
 
+    if (emergencyActivated && attempt > maxAttempts && bestScenario) {
+      terminationReason = "emergency-fallback-found";
+      break;
+    }
+
     if (onProgress && attempt % OVERLAY_UPDATE_INTERVAL === 0) {
-      await onProgress(attempt, maxAttempts, "No exact fit yet — continuing the search");
+      await onProgress(
+        attempt,
+        progressMaxAttempts,
+        emergencyActivated
+          ? "Finding a fallback course — continuing the search"
+          : "No exact fit yet — continuing the search"
+      );
     }
   }
 
   if (!terminationReason) {
-    terminationReason = attempt >= maxAttempts
-      ? "attempt-limit"
+    terminationReason = attempt >= effectiveMaxAttempts
+      ? (emergencyActivated ? "emergency-attempt-limit" : "attempt-limit")
       : "search-ended";
   }
 
@@ -17068,10 +19418,10 @@ async function runDiagnostics() {
   button.disabled = true;
   document.getElementById("dev-view").checked = true;
   updateDevView();
-  reportEl.textContent = `Running diagnostics across ${cases.length} cases...\n`;
+  setCourseEvaluationReportText(`Running diagnostics across ${cases.length} cases...\n`);
 
   for (const [index, testCase] of cases.entries()) {
-    reportEl.textContent = `Running diagnostics: case ${index + 1} of ${cases.length}\nCurrent: ${testCase.label}\n`;
+    setCourseEvaluationReportText(`Running diagnostics: case ${index + 1} of ${cases.length}\nCurrent: ${testCase.label}\n`);
     const inventoryError = validateSelectedInventory(assets, testCase.preferences);
     if (inventoryError) {
       results.push({
@@ -17136,7 +19486,7 @@ async function runDiagnostics() {
     summaryLines.push("No diagnostic issues detected in the sampled matrix.");
   }
 
-  reportEl.textContent = summaryLines.join("\n");
+  setCourseEvaluationReportText(summaryLines.join("\n"));
   button.disabled = false;
 }
 
@@ -17221,8 +19571,58 @@ export async function generateCalibrationScenario(assets, options = {}) {
   };
 }
 
-export function reanalyzeCalibrationScenario(assets, sourceScenario, options = {}) {
-  if (!sourceScenario?.placements?.length || !sourceScenario?.checkpoints?.length) {
+function summarizeCalibrationResolvedFeatures(placements, pieceMap) {
+  const resolved = buildResolvedMap(placements, pieceMap);
+  const totals = {
+    hazardWeight: 0,
+    congestionWeight: 0,
+    complexityWeight: 0,
+    swingWeight: 0,
+    pitCount: 0,
+    beltCount: 0,
+    portalCount: 0,
+    teleporterCount: 0,
+    randomizerCount: 0,
+    crusherCount: 0,
+    pushCount: 0,
+    hazardCount: 0
+  };
+
+  for (const tile of resolved.tileMap.values()) {
+    for (const feature of tile?.features ?? []) {
+      const delta = getBoardProfileDelta(feature);
+      totals.hazardWeight += delta.hazardWeight;
+      totals.congestionWeight += delta.congestionWeight;
+      totals.complexityWeight += delta.complexityWeight;
+      totals.swingWeight += delta.swingWeight;
+      totals.pitCount += delta.pitCount;
+      totals.beltCount += delta.beltCount;
+      totals.portalCount += delta.portalCount;
+      totals.teleporterCount += delta.teleporterCount;
+      totals.randomizerCount += delta.randomizerCount;
+      totals.crusherCount += delta.crusherCount;
+      totals.pushCount += delta.pushCount;
+      totals.hazardCount += delta.hazardCount;
+    }
+  }
+
+  return Object.fromEntries(
+    Object.entries(totals).map(([key, value]) => [key, Number(Number(value).toFixed(3))])
+  );
+}
+
+function subtractCalibrationFeatureSummaries(after = {}, before = {}) {
+  const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+  return Object.fromEntries(
+    [...keys].map((key) => [
+      key,
+      Number(((Number(after[key]) || 0) - (Number(before[key]) || 0)).toFixed(3))
+    ])
+  );
+}
+
+function analyzeCalibrationPlacements(assets, sourceScenario, placements, options = {}) {
+  if (!placements?.length || !sourceScenario?.checkpoints?.length) {
     return null;
   }
 
@@ -17232,7 +19632,6 @@ export function reanalyzeCalibrationScenario(assets, sourceScenario, options = {
   const generationMode = normalizeGenerationMode(
     options.generationMode ?? sourceScenario.preferences?.generationMode ?? "balanced"
   );
-  const placements = sourceScenario.placements;
   const checkpoints = sourceScenario.checkpoints;
   const boardPlacements = placements.filter((placement) => {
     const kind = pieceMap[placement.pieceId]?.kind;
@@ -17338,6 +19737,144 @@ export function reanalyzeCalibrationScenario(assets, sourceScenario, options = {
   };
 }
 
+export function reanalyzeCalibrationScenario(assets, sourceScenario, options = {}) {
+  if (!sourceScenario?.placements?.length || !sourceScenario?.checkpoints?.length) {
+    return null;
+  }
+  return analyzeCalibrationPlacements(
+    assets,
+    sourceScenario,
+    sourceScenario.placements,
+    options
+  );
+}
+
+export function createCalibrationOverlayTreatment(assets, sourceScenario, options = {}) {
+  if (!sourceScenario?.placements?.length || !sourceScenario?.checkpoints?.length) {
+    return {
+      status: "invalid-source",
+      checkpointCompatible: false,
+      overlayPlacements: [],
+      featureDelta: {}
+    };
+  }
+
+  const { pieceMap } = assets;
+  const basePlacements = sourceScenario.placements.filter((placement) => !placement.overlay);
+  const boardPlacements = basePlacements.filter((placement) => {
+    const kind = pieceMap[placement.pieceId]?.kind;
+    return kind !== "dock";
+  });
+  const dockPlacements = getDockPlacementsFromScenarioPlacements(basePlacements, pieceMap);
+  const selectedExpansions = sourceScenario.preferences?.selectedExpansions ?? {};
+  const selectedExpansionIds = Object.keys(selectedExpansions).filter((id) => selectedExpansions[id]);
+  const expansionIds = new Set(
+    selectedExpansionIds.length
+      ? selectedExpansionIds
+      : getCalibrationExpansionIds(pieceMap)
+  );
+  const overlayMode = normalizeOverlayMode(options.overlayMode ?? OVERLAY_MODES.yes);
+  const overlayPreferences = {
+    ...(sourceScenario.preferences ?? {}),
+    playerCount: Math.max(2, Math.floor(Number(options.playerCount ?? sourceScenario.playerCount) || 4)),
+    difficulty: "any",
+    length: "any",
+    overlayMode
+  };
+  const overlayPlacements = chooseOverlayPlacements(
+    boardPlacements,
+    dockPlacements,
+    pieceMap,
+    overlayPreferences,
+    expansionIds
+  );
+  const baseFeatureSummary = summarizeCalibrationResolvedFeatures(basePlacements, pieceMap);
+
+  if (!overlayPlacements.length) {
+    return {
+      status: "no-overlay",
+      overlayMode,
+      checkpointCompatible: true,
+      overlayPlacements: [],
+      baseFeatureSummary,
+      overlayFeatureSummary: baseFeatureSummary,
+      featureDelta: subtractCalibrationFeatureSummaries(baseFeatureSummary, baseFeatureSummary),
+      scenario: null
+    };
+  }
+
+  const placements = [...basePlacements, ...overlayPlacements];
+  const overlayFeatureSummary = summarizeCalibrationResolvedFeatures(placements, pieceMap);
+  const featureDelta = subtractCalibrationFeatureSummaries(
+    overlayFeatureSummary,
+    baseFeatureSummary
+  );
+  const candidateKeys = new Set(
+    getFlagCandidates(placements, pieceMap).map((candidate) => `${candidate.x},${candidate.y}`)
+  );
+  const incompatibleCheckpoints = sourceScenario.checkpoints.filter(
+    (checkpoint) => !candidateKeys.has(`${checkpoint.x},${checkpoint.y}`)
+  );
+
+  if (incompatibleCheckpoints.length) {
+    return {
+      status: "checkpoint-incompatible",
+      overlayMode,
+      checkpointCompatible: false,
+      incompatibleCheckpointCount: incompatibleCheckpoints.length,
+      overlayPlacements,
+      placements,
+      baseFeatureSummary,
+      overlayFeatureSummary,
+      featureDelta,
+      scenario: null
+    };
+  }
+
+  let scenario = null;
+  try {
+    scenario = analyzeCalibrationPlacements(
+      assets,
+      sourceScenario,
+      placements,
+      {
+        ...options,
+        dynamicArchiving: false
+      }
+    );
+  } catch (error) {
+    if (error?.code !== "CONTEXTUAL_START_CAPACITY_LOST") {
+      throw error;
+    }
+    return {
+      status: "route-incompatible",
+      overlayMode,
+      checkpointCompatible: true,
+      incompatibleCheckpointCount: 0,
+      overlayPlacements,
+      placements,
+      baseFeatureSummary,
+      overlayFeatureSummary,
+      featureDelta,
+      analysisError: error?.message ?? String(error),
+      scenario: null
+    };
+  }
+
+  return {
+    status: scenario ? "ok" : "no-scenario",
+    overlayMode,
+    checkpointCompatible: true,
+    incompatibleCheckpointCount: 0,
+    overlayPlacements,
+    placements,
+    baseFeatureSummary,
+    overlayFeatureSummary,
+    featureDelta,
+    scenario
+  };
+}
+
 async function start() {
   const preferences = getPreferencesFromControls();
   const generationProfile = getGenerationModeProfile(preferences);
@@ -17366,9 +19903,14 @@ async function start() {
     }
 
     clearAnalysisCachesSafe();
-    const generation = await generateScenarioForPreferences(assets, preferences, {
+    const frozenTestSeed = Number.isInteger(devFrozenGenerationSeed)
+      ? devFrozenGenerationSeed
+      : null;
+    let lastGenerationUiYieldAt = 0;
+    const runGeneration = () => generateScenarioForPreferences(assets, preferences, {
       maxAttempts,
-      onProgress: async (attempt, maxAttempts, stage = "") => {
+      emergencyAttemptReserve: GENERATION_EMERGENCY_ATTEMPT_RESERVE,
+      onProgress: async (attempt, maxAttempts, stage = "", stageContext = null) => {
         setGeneratingOverlay(
           true,
           "",
@@ -17376,22 +19918,36 @@ async function start() {
             attempt,
             maxAttempts,
             stage,
-            preferences
+            preferences,
+            stageContext
           }
         );
-        await nextFrame();
+        // v12: stage messages can arrive much faster than the display can use
+        // them. Keep the DOM text current, but only force a render/yield at a
+        // bounded cadence instead of pausing the CPU search for every message.
+        const now = generationNow();
+        if (now - lastGenerationUiYieldAt >= 75) {
+          lastGenerationUiYieldAt = now;
+          await nextFrame();
+        }
       }
     });
+    const generation = frozenTestSeed === null
+      ? await runGeneration()
+      : await withGenerationRandomSeed(frozenTestSeed, runGeneration);
 
     if (!generation.scenario) {
       window.alert(
         generation.crashedAttempts > 0 && generation.lastAttemptError
-          ? `No playable course was found after ${maxAttempts} attempts. Last error: ${generation.lastAttemptError.message}`
-          : `No playable course was found after ${maxAttempts} attempts.`
+          ? `No playable course was found after ${generation.attemptsUsed} attempts. Last error: ${generation.lastAttemptError.message}`
+          : `No playable course was found after ${generation.attemptsUsed} attempts.`
       );
       return;
     }
 
+    if (frozenTestSeed !== null) {
+      generation.scenario.devTestSeed = frozenTestSeed;
+    }
     currentScenario = generation.scenario;
     clearTraceStarts();
     clearRouteInspection();
@@ -17443,7 +19999,7 @@ if (typeof document !== "undefined") {
 
   document.getElementById("run-diagnostics").addEventListener("click", () => {
     runDiagnostics().catch((error) => {
-      document.getElementById("report").textContent = `Diagnostics failed: ${error.message}`;
+      setCourseEvaluationReportText(`Diagnostics failed: ${error.message}`);
       document.getElementById("run-diagnostics").disabled = false;
       console.error(error);
     });
@@ -17513,9 +20069,8 @@ if (typeof document !== "undefined") {
   }
 
   async function copyCourseEvaluationAll() {
-    const reportEl = document.getElementById("report");
     const button = document.getElementById("copy-course-evaluation-all");
-    const text = reportEl?.textContent ?? "";
+    const text = getCourseEvaluationReportText();
     await copyTextToClipboard(text, button, "Copy all", "Course Evaluation");
   }
 

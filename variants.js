@@ -51,6 +51,13 @@ function applyBooleanField(field) {
   };
 }
 
+export const VARIANT_EXCLUSIVE_GROUPS = Object.freeze({
+  startingSpaceSetup: Object.freeze({
+    label: "starting-space setup",
+    description: "Virtual Bots, Competitive Mode, Pay to Win, and Subsidized Starts are mutually exclusive starting-space setups; only one can be active on a generated course."
+  })
+});
+
 const VARIANT_DEFINITION_ROWS = [
   {
     id: "actFast",
@@ -350,9 +357,24 @@ const VARIANT_DEFINITION_ROWS = [
     category: VARIANT_CATEGORIES.setup,
     controlId: "variant-virtual-bots",
     defaultState: "off",
-    description: "Removes docking bays and starts every robot from one shared entry point. The first five registers do not create robot traffic pressure.",
+    description: "Removes docking bays and starts every robot as a Virtual Bot from one shared entry point. Virtual Bots move normally but do not interact with robots or other Virtual Bots until they become physical robots at the end of a turn.",
     cost: VARIANT_COMPLEXITY.virtualBots,
-    incompatibleWith: ["competitiveMode", "payToWin", "subsidizedStarts", "extraDocks", "homeReboot", "noDocks", "sandwichedDock"],
+    exclusiveGroups: ["startingSpaceSetup"],
+    incompatibleWith: ["extraDocks", "homeReboot", "noDocks", "sandwichedDock"],
+    guidance: [
+      {
+        kind: "suggest",
+        targetId: "startupSpinUp",
+        sourceActivation: "forced",
+        text: "Startup Spin-Up pairs well with the shared-entry setup by giving each robot more freedom in how it leaves the start."
+      },
+      {
+        kind: "suggest",
+        targetId: "dynamicArchiving",
+        sourceActivation: "forced",
+        text: "Dynamic Archiving pairs well with the shared-entry setup by letting recovery points develop naturally during the race."
+      }
+    ],
     applyBundle: applyBooleanField("virtualBots")
   },
   {
@@ -385,7 +407,15 @@ const VARIANT_DEFINITION_ROWS = [
     defaultState: "off",
     description: "Before the game, players block starting spaces with energy cubes, then choose strategically from the remaining starts. Generation evaluates roughly twice as many starting choices as players and can take longer.",
     cost: VARIANT_COMPLEXITY.competitiveMode,
-    incompatibleWith: ["payToWin", "subsidizedStarts", "virtualBots"],
+    exclusiveGroups: ["startingSpaceSetup"],
+    guidance: [
+      {
+        kind: "suggest",
+        targetId: "lighterGame",
+        sourceActivation: "forced",
+        text: "Energy Crisis / A Lighter Game pairs well with Competitive Mode when you want the starting-space contest to be less affected by upgrades and Energy."
+      }
+    ],
     applyBundle: applyBooleanField("competitiveMode")
   },
   {
@@ -396,7 +426,8 @@ const VARIANT_DEFINITION_ROWS = [
     defaultState: "off",
     description: "Better starting spaces cost starting energy instead of being automatically pruned as outliers.",
     cost: VARIANT_COMPLEXITY.payToWin,
-    incompatibleWith: ["competitiveMode", "subsidizedStarts", "lighterGame", "virtualBots"],
+    exclusiveGroups: ["startingSpaceSetup"],
+    incompatibleWith: ["lighterGame"],
     applyBundle: applyBooleanField("payToWin")
   },
   {
@@ -407,7 +438,8 @@ const VARIANT_DEFINITION_ROWS = [
     defaultState: "off",
     description: "Weaker starting spaces grant extra starting energy instead of being automatically pruned as outliers. Starting energy cannot exceed 10.",
     cost: VARIANT_COMPLEXITY.subsidizedStarts,
-    incompatibleWith: ["competitiveMode", "payToWin", "lighterGame", "virtualBots"],
+    exclusiveGroups: ["startingSpaceSetup"],
+    incompatibleWith: ["lighterGame"],
     applyBundle: applyBooleanField("subsidizedStarts")
   },
   {
@@ -446,8 +478,40 @@ export function getVariantRequirementIds(variantId) {
   return getVariantDefinition(variantId)?.requiresAnyOf ?? [];
 }
 
+export function getVariantExclusiveGroupIds(variantId) {
+  return getVariantDefinition(variantId)?.exclusiveGroups ?? [];
+}
+
+export function getVariantExclusiveGroupDefinition(groupId) {
+  return VARIANT_EXCLUSIVE_GROUPS[groupId] ?? null;
+}
+
+export function getVariantExclusiveGroupConflict(leftVariantId, rightVariantId) {
+  if (!leftVariantId || !rightVariantId || leftVariantId === rightVariantId) {
+    return null;
+  }
+  const rightGroups = new Set(getVariantExclusiveGroupIds(rightVariantId));
+  const sharedGroupId = getVariantExclusiveGroupIds(leftVariantId)
+    .find((groupId) => rightGroups.has(groupId));
+  if (!sharedGroupId) {
+    return null;
+  }
+  return {
+    id: sharedGroupId,
+    ...(getVariantExclusiveGroupDefinition(sharedGroupId) ?? {})
+  };
+}
+
 export function getVariantAvailabilityRule(variantId) {
   return getVariantDefinition(variantId)?.availability ?? null;
+}
+
+// Soft rule relationships are deliberately separate from hard incompatibilities,
+// prerequisites, and collection availability. Main evaluates these against the
+// current selection/collection so suggestions and warnings can react to context
+// without changing whether a rule is legal.
+export function getVariantGuidanceRules(variantId) {
+  return getVariantDefinition(variantId)?.guidance ?? [];
 }
 
 export function getVariantDefinitionsByCategory() {
@@ -479,8 +543,12 @@ export function buildVariantBundle(activeVariants = {}, options = {}) {
 }
 
 export function applyVariantGenerationOptions(baseOptions = {}, variantBundle = {}) {
+  // v38: generation and analysis share one authoritative variant projection.
+  // Main may add construction-only fields, but it should not maintain a second
+  // hand-written list of route-analysis variant flags.
   return {
     ...baseOptions,
+    ...applyVariantAnalysisOptions(baseOptions, variantBundle),
     alignedLayout: variantBundle.alignedLayout ?? baseOptions.alignedLayout,
     actFast: Boolean(variantBundle.actFast),
     competitiveMode: Boolean(variantBundle.competitiveMode),
@@ -489,30 +557,53 @@ export function applyVariantGenerationOptions(baseOptions = {}, variantBundle = 
     extraDocks: Boolean(variantBundle.extraDocks),
     noDocks: Boolean(variantBundle.noDocks),
     sandwichedDock: Boolean(variantBundle.sandwichedDock),
-    startingEnergy: Number.isFinite(variantBundle.startingEnergy)
-      ? Number(variantBundle.startingEnergy)
-      : baseOptions.startingEnergy,
-    startingEnergyDelta: Number.isFinite(variantBundle.startingEnergyDelta)
-      ? Number(variantBundle.startingEnergyDelta)
-      : baseOptions.startingEnergyDelta,
     virtualBots: Boolean(variantBundle.virtualBots),
     recoveryRule: variantBundle.recoveryRule ?? baseOptions.recoveryRule
   };
 }
 
 export function applyVariantAnalysisOptions(baseOptions = {}, variantBundle = {}) {
+  const virtualBots = Boolean(variantBundle.virtualBots);
+  const numeric = (key) => {
+    const raw = variantBundle[key];
+    return raw !== null && raw !== undefined && Number.isFinite(Number(raw))
+      ? Number(raw)
+      : baseOptions[key];
+  };
+
   return {
     ...baseOptions,
+    // Preserve the complete registry bundle first. Analyze ignores construction-
+    // only fields it does not understand, while future route-relevant variants no
+    // longer disappear merely because this normalizing function was not edited.
+    ...variantBundle,
+    // Programming / information rules are projected too even when a particular
+    // Analyze revision only uses them for uncertainty or diagnostics. This keeps
+    // the registry as the single route-analysis boundary.
+    actFast: Boolean(variantBundle.actFast),
+    factoryRejects: Boolean(variantBundle.factoryRejects),
+    classicSharedDeck: Boolean(variantBundle.classicSharedDeck),
+    lessForeshadowing: Boolean(variantBundle.lessForeshadowing),
     competitiveMode: Boolean(variantBundle.competitiveMode),
     payToWin: Boolean(variantBundle.payToWin || variantBundle.subsidizedStarts),
     subsidizedStarts: Boolean(variantBundle.subsidizedStarts),
-    startingEnergy: Number.isFinite(variantBundle.startingEnergy)
-      ? Number(variantBundle.startingEnergy)
-      : baseOptions.startingEnergy,
-    startingEnergyDelta: Number.isFinite(variantBundle.startingEnergyDelta)
-      ? Number(variantBundle.startingEnergyDelta)
-      : baseOptions.startingEnergyDelta,
     recoveryRule: variantBundle.recoveryRule ?? baseOptions.recoveryRule,
+
+    // Resource knobs stay open for optional rules that alter starting Energy or
+    // starting upgrade cards. Undefined values simply preserve the caller base.
+    startingEnergy: numeric("startingEnergy"),
+    startingEnergyDelta: numeric("startingEnergyDelta"),
+    startingUpgradeCards: numeric("startingUpgradeCards"),
+    startingUpgradeCardDelta: numeric("startingUpgradeCardDelta"),
+    maxEnergy: numeric("maxEnergy"),
+    upgradeDrawsPerTurn: numeric("upgradeDrawsPerTurn"),
+    upgradeInstallsPerTurn: numeric("upgradeInstallsPerTurn"),
+    upgradeDrawEnergyCost: numeric("upgradeDrawEnergyCost"),
+    upgradeUsefulCardRate: numeric("upgradeUsefulCardRate"),
+    upgradeUsefulEnergyPerInstall: numeric("upgradeUsefulEnergyPerInstall"),
+    upgradePowerRegistersPerEnergy: numeric("upgradePowerRegistersPerEnergy"),
+    routeRegistersPerTurn: numeric("routeRegistersPerTurn"),
+
     lessDeadlyGame: Boolean(variantBundle.lessDeadlyGame),
     lessSpammyGame: Boolean(variantBundle.lessSpammyGame),
     criticalSpam: Boolean(variantBundle.criticalSpam),
@@ -527,12 +618,14 @@ export function applyVariantAnalysisOptions(baseOptions = {}, variantBundle = {}
     upgradeWorld: Boolean(variantBundle.upgradeWorld),
     lighterGame: Boolean(variantBundle.lighterGame),
     startupSpinUp: Boolean(variantBundle.startupSpinUp),
-    virtualBots: Boolean(variantBundle.virtualBots),
-    trafficGraceRegisters: variantBundle.virtualBots ? 5 : 0,
+    virtualBots,
+    // Virtual Bots still create full strategic traffic from register 1. Only the
+    // *uncertainty* clock is held for the first turn; Analyze interprets this as
+    // five known-traffic registers before normal time/interaction decay begins.
+    trafficGraceRegisters: virtualBots ? 5 : 0,
     hazardousFlags: Boolean(variantBundle.hazardousFlags),
     repairStations: Boolean(variantBundle.repairStations),
-    movingTargets: Boolean(variantBundle.movingTargets),
-    lessForeshadowing: Boolean(variantBundle.lessForeshadowing)
+    movingTargets: Boolean(variantBundle.movingTargets)
   };
 }
 
