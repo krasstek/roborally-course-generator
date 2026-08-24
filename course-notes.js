@@ -186,7 +186,25 @@ export function buildCourseNoteEvidence(scenario, fitNotes = []) {
         scoreRange: normalBalance.retainedScoreRange ?? null,
         worstScoreZ: normalBalance.worstRemainingScoreZ ?? null,
         worstActionZ: normalBalance.worstRemainingActionZ ?? null,
-        reject: Boolean(normalBalance.reject)
+        reject: Boolean(normalBalance.reject),
+        startResiduals: normalBalance.startResiduals?.active
+          ? {
+            active: true,
+            retainedCount: normalBalance.startResiduals.retainedCount ?? null,
+            notableCount: normalBalance.startResiduals.notableCount ?? 0,
+            courseNoteCandidate: normalBalance.startResiduals.courseNoteCandidate?.active
+              ? {
+                active: true,
+                kind: normalBalance.startResiduals.courseNoteCandidate.kind ?? null,
+                strength: Number(normalBalance.startResiduals.courseNoteCandidate.strength) || 0,
+                severity: normalBalance.startResiduals.courseNoteCandidate.severity ?? "minor",
+                reasonId: normalBalance.startResiduals.courseNoteCandidate.reasonId ?? "overall",
+                reasonLabel: normalBalance.startResiduals.courseNoteCandidate.reasonLabel ?? "overall route burden",
+                notableCount: normalBalance.startResiduals.courseNoteCandidate.notableCount ?? 1
+              }
+              : { active: false }
+          }
+          : null
       }
       : null,
     competitiveBalance: competitiveBalance?.active
@@ -303,15 +321,43 @@ export function buildCourseNoteConcepts(evidence) {
     }
   }
 
-  // STARTING SPACES: mention unavailable dock spaces only as setup context.
-  if (evidence.normalBalance?.active && evidence.normalBalance.pruned > 0) {
+  // STARTING SPACES: detailed residuals stay in Dev. Player-facing notes must
+  // never identify or recommend a numbered start. They may only mention a small
+  // remaining field-level imbalance and its broad character.
+  if (evidence.normalBalance?.active) {
     const balance = evidence.normalBalance;
-    concepts.push(concept(
-      "start-balance",
-      5.8 + Math.min(1.6, balance.pruned * 0.35),
-      "Starting Spaces",
-      `${balance.pruned} dock space${balance.pruned === 1 ? " is" : "s are"} left unused so the available starts are closer in strength.`
-    ));
+    const residual = balance.startResiduals?.courseNoteCandidate?.active
+      ? balance.startResiduals.courseNoteCandidate
+      : null;
+    if (balance.pruned > 0 || residual) {
+      const parts = [];
+      if (balance.pruned > 0) {
+        parts.push(`${balance.pruned} dock space${balance.pruned === 1 ? " is" : "s are"} left unused so the available starts are closer in strength.`);
+      }
+      if (residual) {
+        const severity = residual.severity === "trivial" ? "A trivial" : "A minor";
+        const reasonText = {
+          traffic: "some starting spaces may see a little more robot traffic than others",
+          actions: "some starting spaces may require a little more programmed route work than others",
+          hazard: "some starting spaces may face slightly more hazard exposure than others",
+          conveyor: "some starting spaces may have to work a little harder through conveyors and forced movement than others",
+          forced: "some starting spaces may have to work a little harder around forced movement than others",
+          distance: "some starting spaces may have a slightly longer line through the course than others",
+          overall: "some starting spaces may require a little more effort through the course than others"
+        }[residual.reasonId] ?? "some starting spaces may require a little more effort through the course than others";
+        parts.push(`${severity} imbalance may remain: ${reasonText}.`);
+      }
+      const residualScore = residual ? Math.min(1.2, (Number(residual.strength) || 0) * 0.8) : 0;
+      const score = balance.pruned > 0
+        ? 5.8 + Math.min(1.6, balance.pruned * 0.35) + residualScore * 0.35
+        : 4.9 + residualScore;
+      concepts.push(concept(
+        "start-balance",
+        score,
+        "Starting Spaces",
+        parts.join(" ")
+      ));
+    }
   }
 
   // COMPETITIVE: Special Rules explains the procedure; Course Notes only gives a
@@ -464,7 +510,7 @@ export function renderCourseNotes(concepts, evidence, options = {}) {
 export function buildCourseNotesHtml(scenario, fitNotes = [], options = {}) {
   if (!scenario) return "";
 
-  const cacheKey = "player-facing-v39";
+  const cacheKey = "player-facing-v41-start-residuals-generic";
   let scenarioCache = notesCache.get(scenario);
   if (!scenarioCache) {
     scenarioCache = new Map();

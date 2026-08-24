@@ -1,4 +1,4 @@
-// Robo Rally Course Randomizer - analyze v38 variant traffic/uncertainty pipeline
+// Robo Rally Course Randomizer - analyze v42o programming plausibility + intrinsic forecast length profile
 const ASSET_VERSION = new URL(import.meta.url).searchParams.get("v") ?? "";
 const VERSION_SUFFIX = ASSET_VERSION ? `?v=${encodeURIComponent(ASSET_VERSION)}` : "";
 const versionedPath = (path) => `${path}${VERSION_SUFFIX}`;
@@ -117,6 +117,21 @@ const PROGRAM_CARD_SCARCITY_COST_BY_COPIES = Object.freeze({
   3: 0.4
 });
 const AGAIN_REPEAT_SCARCITY_FACTOR = 0.65;
+
+// v42k route-level program plausibility:
+// Individual low-copy cards already carry linear scarcity cost. A program that
+// concentrates several scarce resources into the same five-register turn is
+// less likely to be practically available than the same rare demands spread
+// across separate turns. This is preference only: it changes route ranking,
+// never literal card legality. The scale is expressed through copy-count
+// scarcity rather than named cards so future card sets inherit the behavior.
+const PROGRAM_COMBINATION_PLAUSIBILITY = Object.freeze({
+  freeScarcityLoad: 4.0,
+  scarceUseThreshold: 1.6,
+  excessLoadWeight: 0.25,
+  extraScarceUseWeight: 1.15,
+  extraScarceUseQuadraticWeight: 0.35
+});
 
 // Nine actions are retained only as a witness window: previous complete turn
 // (5) + at most four already-programmed registers of the current turn. This is
@@ -3607,6 +3622,57 @@ function getProgramCardScarcityUnitCost(cardCount) {
     ?? PROGRAM_CARD_SCARCITY_COST_BY_COPIES[1];
 }
 
+function getProgramCombinationPlausibilityPenaltyFromUses(getUses, options = {}) {
+  let scarcityLoad = 0;
+  let scarceUses = 0;
+
+  for (const resourceId of COMPACT_PROGRAM_RESOURCE_IDS) {
+    const uses = Math.max(0, Math.floor(Number(getUses(resourceId)) || 0));
+    if (!uses) continue;
+    const copies = resourceId === "AGAIN"
+      ? AGAIN_CARD_COUNT
+      : (PROGRAM_CARD_COUNTS.get(resourceId) || 0);
+    const unit = getProgramCardScarcityUnitCost(copies);
+    if (!Number.isFinite(unit) || unit <= 0) continue;
+    scarcityLoad += uses * unit;
+    if (unit >= PROGRAM_COMBINATION_PLAUSIBILITY.scarceUseThreshold) {
+      scarceUses += uses;
+    }
+  }
+
+  const excessLoad = Math.max(
+    0,
+    scarcityLoad - PROGRAM_COMBINATION_PLAUSIBILITY.freeScarcityLoad
+  );
+  const extraScarceUses = Math.max(0, scarceUses - 1);
+  const raw =
+    excessLoad * PROGRAM_COMBINATION_PLAUSIBILITY.excessLoadWeight +
+    extraScarceUses * PROGRAM_COMBINATION_PLAUSIBILITY.extraScarceUseWeight +
+    extraScarceUses * extraScarceUses *
+      PROGRAM_COMBINATION_PLAUSIBILITY.extraScarceUseQuadraticWeight;
+  const lessForeshadowingFactor = options.lessForeshadowing ? 0.72 : 1;
+  return Number((raw * lessForeshadowingFactor).toFixed(3));
+}
+
+function getCompactProgramCombinationPlausibilityPenalty(currentCode, options = {}) {
+  return getProgramCombinationPlausibilityPenaltyFromUses(
+    (resourceId) => getCompactProgramResourceCount(currentCode, resourceId),
+    options
+  );
+}
+
+function getCompactProgramCombinationPlausibilityDelta(
+  currentCode,
+  nextCurrentCode,
+  options = {}
+) {
+  return Number(Math.max(
+    0,
+    getCompactProgramCombinationPlausibilityPenalty(nextCurrentCode, options) -
+      getCompactProgramCombinationPlausibilityPenalty(currentCode, options)
+  ).toFixed(3));
+}
+
 function getProgramResourceStateSignature(state) {
   const naturalSignature = PROGRAM_CARD_IDS
     .map((id) => state?.naturalUses?.get(id) || 0)
@@ -3804,12 +3870,23 @@ function getCompactProgramCardOptions(
     if (used < naturalLimit) {
       const nextCurrent = addCompactProgramResourceUse(currentCode, actionId);
       if (nextCurrent !== null) {
+        const scarcityPenalty = Number((
+          getProgramCardScarcityUnitCost(naturalLimit) *
+          lessForeshadowingFactor
+        ).toFixed(3));
+        const programPlausibilityPenalty =
+          getCompactProgramCombinationPlausibilityDelta(
+            currentCode,
+            nextCurrent,
+            options
+          );
         optionsOut.push({
           programCardId: actionId,
+          scarcityPenalty,
+          programPlausibilityPenalty,
           penalty: Number((
-            getProgramCardScarcityUnitCost(naturalLimit) *
-            lessForeshadowingFactor
-          ).toFixed(2)),
+            scarcityPenalty + programPlausibilityPenalty
+          ).toFixed(3)),
           currentCode: nextCurrent
         });
       }
@@ -3828,16 +3905,27 @@ function getCompactProgramCardOptions(
     const nextCurrent = addCompactProgramResourceUse(currentCode, "AGAIN");
     if (nextCurrent !== null) {
       const repeatedCopies = PROGRAM_CARD_COUNTS.get(actionId) || 1;
+      const scarcityPenalty = Number((
+        (
+          getProgramCardScarcityUnitCost(AGAIN_CARD_COUNT) +
+          getProgramCardScarcityUnitCost(repeatedCopies) *
+            AGAIN_REPEAT_SCARCITY_FACTOR
+        ) *
+        lessForeshadowingFactor
+      ).toFixed(3));
+      const programPlausibilityPenalty =
+        getCompactProgramCombinationPlausibilityDelta(
+          currentCode,
+          nextCurrent,
+          options
+        );
       optionsOut.push({
         programCardId: "AGAIN",
+        scarcityPenalty,
+        programPlausibilityPenalty,
         penalty: Number((
-          (
-            getProgramCardScarcityUnitCost(AGAIN_CARD_COUNT) +
-            getProgramCardScarcityUnitCost(repeatedCopies) *
-              AGAIN_REPEAT_SCARCITY_FACTOR
-          ) *
-          lessForeshadowingFactor
-        ).toFixed(2)),
+          scarcityPenalty + programPlausibilityPenalty
+        ).toFixed(3)),
         currentCode: nextCurrent
       });
     }
@@ -4007,6 +4095,10 @@ function scoreCompactProgramCardSequenceUntilFailure(
       cardState: null,
       programCardIds: [],
       actionPenalties: [],
+      actionScarcityPenalties: [],
+      actionPlausibilityPenalties: [],
+      scarcityPenalty: Infinity,
+      programPlausibilityPenalty: Infinity,
       cardStates: [],
       frontier: []
     };
@@ -4017,8 +4109,12 @@ function scoreCompactProgramCardSequenceUntilFailure(
     {
       state: initial,
       penalty: 0,
+      scarcityPenalty: 0,
+      programPlausibilityPenalty: 0,
       programCardIds: [],
       actionPenalties: [],
+      actionScarcityPenalties: [],
+      actionPlausibilityPenalties: [],
       cardStates: []
     }
   ]]);
@@ -4043,6 +4139,12 @@ function scoreCompactProgramCardSequenceUntilFailure(
           next.set(key, {
             state: cardOption.state,
             penalty,
+            scarcityPenalty:
+              (entry.scarcityPenalty || 0) +
+              (Number(cardOption.scarcityPenalty) || 0),
+            programPlausibilityPenalty:
+              (entry.programPlausibilityPenalty || 0) +
+              (Number(cardOption.programPlausibilityPenalty) || 0),
             programCardIds: [
               ...entry.programCardIds,
               cardOption.programCardId
@@ -4050,6 +4152,14 @@ function scoreCompactProgramCardSequenceUntilFailure(
             actionPenalties: [
               ...entry.actionPenalties,
               cardOption.penalty
+            ],
+            actionScarcityPenalties: [
+              ...entry.actionScarcityPenalties,
+              Number(cardOption.scarcityPenalty) || 0
+            ],
+            actionPlausibilityPenalties: [
+              ...entry.actionPlausibilityPenalties,
+              Number(cardOption.programPlausibilityPenalty) || 0
             ],
             cardStates: [
               ...entry.cardStates,
@@ -4073,6 +4183,12 @@ function scoreCompactProgramCardSequenceUntilFailure(
         cardState: bestPrefix?.state ? { ...bestPrefix.state } : null,
         programCardIds: bestPrefix?.programCardIds ?? [],
         actionPenalties: bestPrefix?.actionPenalties ?? [],
+        actionScarcityPenalties: bestPrefix?.actionScarcityPenalties ?? [],
+        actionPlausibilityPenalties: bestPrefix?.actionPlausibilityPenalties ?? [],
+        scarcityPenalty: Number((bestPrefix?.scarcityPenalty ?? Infinity).toFixed(3)),
+        programPlausibilityPenalty: Number((
+          bestPrefix?.programPlausibilityPenalty ?? Infinity
+        ).toFixed(3)),
         cardStates: bestPrefix?.cardStates ?? [],
         frontier: survivingPrefix
       };
@@ -4093,6 +4209,12 @@ function scoreCompactProgramCardSequenceUntilFailure(
     cardState: best?.state ? { ...best.state } : null,
     programCardIds: best?.programCardIds ?? [],
     actionPenalties: best?.actionPenalties ?? [],
+    actionScarcityPenalties: best?.actionScarcityPenalties ?? [],
+    actionPlausibilityPenalties: best?.actionPlausibilityPenalties ?? [],
+    scarcityPenalty: Number((best?.scarcityPenalty ?? Infinity).toFixed(3)),
+    programPlausibilityPenalty: Number((
+      best?.programPlausibilityPenalty ?? Infinity
+    ).toFixed(3)),
     cardStates: best?.cardStates ?? [],
     frontier: best ? [best] : []
   };
@@ -4113,9 +4235,19 @@ function scoreCompactProgramCardSequence(
   return {
     feasible: result.feasible,
     penalty: result.feasible ? result.penalty : Infinity,
+    scarcityPenalty: result.feasible ? result.scarcityPenalty : Infinity,
+    programPlausibilityPenalty: result.feasible
+      ? result.programPlausibilityPenalty
+      : Infinity,
     absoluteActions: result.absoluteActions,
     cardState: result.feasible ? result.cardState : null,
-    programCardIds: result.feasible ? result.programCardIds : []
+    programCardIds: result.feasible ? result.programCardIds : [],
+    actionScarcityPenalties: result.feasible
+      ? result.actionScarcityPenalties
+      : [],
+    actionPlausibilityPenalties: result.feasible
+      ? result.actionPlausibilityPenalties
+      : []
   };
 }
 
@@ -7932,9 +8064,63 @@ function getTrafficPairProfile(tileMap, route, otherRoute, options = {}) {
 // discounted.
 const TRAFFIC_FORECAST_HAZARD_DECAY = 0.014;
 const TRAFFIC_FORECAST_INTERACTION_DECAY = 0.016;
+const TRAFFIC_FORECAST_BOARD_CHAOS_DECAY = 0.020;
 const TRAFFIC_FORECAST_CONFIDENCE_FLOOR = 0.06;
 const FORECAST_SOLID_CONFIDENCE = 0.84;
 const FORECAST_SPECULATIVE_CONFIDENCE = 0.50;
+const TRAFFIC_ALTERNATE_MIN_EXPANSIONS = 48;
+
+function getForecastBoardChaosPressure(transition = {}) {
+  // Forced movement and board machinery make later robot-position forecasts
+  // diverge even when they are not intrinsically hazardous. Hazard itself is
+  // handled separately below so this is a confidence term, never a difficulty
+  // discount. The logarithm keeps repeated machinery from collapsing the entire
+  // horizon after one busy register.
+  const forcedDistance = Math.max(0, Number(transition?.forcedDistance) || 0);
+  const conveyorSteps = Array.isArray(transition?.conveyorSteps)
+    ? transition.conveyorSteps.length
+    : 0;
+  const nonConveyorEvents = Array.isArray(transition?.boardEvents)
+    ? transition.boardEvents.filter((event) => event?.type !== "conveyor").length
+    : 0;
+  const gearTurn = transition?.gearTurned ? 1 : 0;
+  const raw = (
+    forcedDistance * 0.40 +
+    conveyorSteps * 0.32 +
+    nonConveyorEvents * 0.16 +
+    gearTurn * 0.28
+  );
+  return Math.min(2.2, Math.log1p(raw));
+}
+
+function getTrafficAlternateEffortScale(confidence, options = {}) {
+  const floor = clamp(
+    Number.isFinite(Number(options.contextualTrafficAlternateUncertaintyEffortFloor))
+      ? Number(options.contextualTrafficAlternateUncertaintyEffortFloor)
+      : 0.18,
+    0.05,
+    1
+  );
+  const exponent = clamp(
+    Number.isFinite(Number(options.contextualTrafficAlternateUncertaintyEffortExponent))
+      ? Number(options.contextualTrafficAlternateUncertaintyEffortExponent)
+      : 1.15,
+    0.35,
+    2.5
+  );
+  const normalized = clamp(
+    (Math.max(TRAFFIC_FORECAST_CONFIDENCE_FLOOR, Number(confidence) || 0) -
+      TRAFFIC_FORECAST_CONFIDENCE_FLOOR) /
+      (1 - TRAFFIC_FORECAST_CONFIDENCE_FLOOR),
+    0,
+    1
+  );
+  return clamp(
+    floor + (1 - floor) * Math.pow(normalized, exponent),
+    floor,
+    1
+  );
+}
 
 function getForecastTimeExponent(absoluteRegisters = 0) {
   const registers = Math.max(0, Number(absoluteRegisters) || 0);
@@ -8012,10 +8198,12 @@ function advanceTrafficForecastConfidence(
   transitionHazard,
   rawInteraction,
   damageUnit,
+  transition = null,
   absoluteRegister = 0,
   options = {}
 ) {
   const hazardPressure = getForecastHazardPressure(transitionHazard);
+  const boardChaosPressure = getForecastBoardChaosPressure(transition);
   const register = Math.max(0, Number(absoluteRegister) || 0);
   const graceRegisters = getTrafficForecastGraceRegisters(options);
   // Virtual Bots still exert traffic pressure from register 1. What is known
@@ -8032,13 +8220,54 @@ function advanceTrafficForecastConfidence(
   const decay = Math.exp(
     -timeExponentDelta -
     TRAFFIC_FORECAST_HAZARD_DECAY * hazardPressure -
-    TRAFFIC_FORECAST_INTERACTION_DECAY * interactionPressure
+    TRAFFIC_FORECAST_INTERACTION_DECAY * interactionPressure -
+    TRAFFIC_FORECAST_BOARD_CHAOS_DECAY * boardChaosPressure
   );
   return clamp(
     confidence * decay,
     TRAFFIC_FORECAST_CONFIDENCE_FLOOR,
     1
   );
+}
+
+export function summarizeIntrinsicRouteForecastConfidence(route, options = {}) {
+  const transitions = Array.isArray(route?.transitions) ? route.transitions : [];
+  if (!transitions.length) {
+    return {
+      registerCount: 0,
+      averageConfidence: 1,
+      minimumConfidence: 1,
+      endConfidence: 1,
+      confidenceByRegister: []
+    };
+  }
+
+  const damageUnit = getStandardRobotLaserCost();
+  const absoluteStartAction = Math.max(0, Number(route?.absoluteStartAction) || 0);
+  let confidence = getTrafficInitialForecastConfidence(route, options);
+  const confidenceByRegister = [];
+
+  for (let index = 0; index < transitions.length; index += 1) {
+    confidenceByRegister.push(confidence);
+    const transition = transitions[index] ?? null;
+    confidence = advanceTrafficForecastConfidence(
+      confidence,
+      transition?.hazard,
+      0,
+      damageUnit,
+      transition,
+      absoluteStartAction + index,
+      options
+    );
+  }
+
+  return {
+    registerCount: confidenceByRegister.length,
+    averageConfidence: Number(average(confidenceByRegister).toFixed(3)),
+    minimumConfidence: Number(Math.min(...confidenceByRegister, confidence).toFixed(3)),
+    endConfidence: Number(confidence.toFixed(3)),
+    confidenceByRegister: confidenceByRegister.map((value) => Number(value.toFixed(4)))
+  };
 }
 
 function getExpectedTrafficBreakdownForLeg(
@@ -8143,6 +8372,7 @@ function getExpectedTrafficBreakdownForLeg(
       route.transitions?.[index]?.hazard,
       registerRaw,
       damageUnit,
+      route.transitions?.[index] ?? null,
       Math.max(0, Number(route?.absoluteStartAction) || 0) + index,
       options
     );
@@ -9235,6 +9465,18 @@ function getApproxProgramDemandPenalty(actionId, ordinalUse) {
   return 4;
 }
 
+function getApproxProgramCombinationPlausibilityPenalty(
+  demandCode,
+  currentAgainUsed = 0
+) {
+  return getProgramCombinationPlausibilityPenaltyFromUses((resourceId) => {
+    if (resourceId === "AGAIN") {
+      return Math.max(0, Math.floor(Number(currentAgainUsed) || 0));
+    }
+    return getApproxProgramDemandCount(demandCode, resourceId);
+  });
+}
+
 function getEstimatedRollingDemandPenalty(actionId, rollingNaturalUses) {
   const copies = PROGRAM_CARD_COUNTS.get(actionId) || 0;
   const uses = Math.max(1, Math.floor(Number(rollingNaturalUses) || 1));
@@ -9295,7 +9537,31 @@ function getEstimatedProgramDemandStep(
   // Again is useful but not free: a small cost keeps the estimator from spending
   // its one rolling copy frivolously when a natural card is equally plausible.
   const againPenalty = canApproximateAgain ? 0.22 : Infinity;
-  const useAgain = againPenalty + 0.001 < naturalPenalty;
+  const currentCombinationPenalty = getApproxProgramCombinationPlausibilityPenalty(
+    currentDemandCode,
+    currentAgainUsed
+  );
+  const naturalCombinationPenalty = nextCurrentDemandCode === null
+    ? Infinity
+    : Math.max(
+      0,
+      getApproxProgramCombinationPlausibilityPenalty(
+        nextCurrentDemandCode,
+        currentAgainUsed
+      ) - currentCombinationPenalty
+    );
+  const againCombinationPenalty = canApproximateAgain
+    ? Math.max(
+      0,
+      getApproxProgramCombinationPlausibilityPenalty(
+        currentDemandCode,
+        1
+      ) - currentCombinationPenalty
+    )
+    : Infinity;
+  const naturalTotalPenalty = naturalPenalty + naturalCombinationPenalty;
+  const againTotalPenalty = againPenalty + againCombinationPenalty;
+  const useAgain = againTotalPenalty + 0.001 < naturalTotalPenalty;
 
   let nextPreviousDemandCode = Math.max(0, Number(previousDemandCode) || 0);
   let nextDemandCode = useAgain
@@ -9322,7 +9588,7 @@ function getEstimatedProgramDemandStep(
     previousActionId: nextPreviousActionId,
     previousScarceCode: 0,
     currentScarceCode: 0,
-    penalty: Number((Math.min(naturalPenalty, againPenalty) || 0).toFixed(3)),
+    penalty: Number((Math.min(naturalTotalPenalty, againTotalPenalty) || 0).toFixed(3)),
     approximateProgramCard: useAgain ? "AGAIN" : actionId
   };
 }
@@ -10184,6 +10450,7 @@ function enumeratePhysicalTimingLegTemplates(
         chopShopCardChoices: 0,
         chopShopEnergyChoices: 0,
         cardAvailabilityPenalty: 0,
+        programPlausibilityPenalty: 0,
         approximateCardPlausibilityPenalty: Number(
           (current.approximateCardPlausibilityPenalty || 0).toFixed(2)
         ),
@@ -10696,6 +10963,7 @@ function enumerateContextualLegRoutes(
       chopShopEnergyChoices: 0,
       baseCost: 0,
       cardAvailabilityPenalty: 0,
+      programPlausibilityPenalty: 0,
       programCardState: initialProgramCardState,
       hazardExposure: Math.max(0, Number(context.hazardExposure) || 0),
     };
@@ -10852,6 +11120,9 @@ function enumerateContextualLegRoutes(
         chopShopEnergyChoices: current.chopShopEnergyChoices || 0,
         cardAvailabilityPenalty: Number(
           (current.cardAvailabilityPenalty || 0).toFixed(2)
+        ),
+        programPlausibilityPenalty: Number(
+          (current.programPlausibilityPenalty || 0).toFixed(2)
         ),
         goalReached: true,
         fullCourseLeg: true,
@@ -11015,6 +11286,9 @@ function enumerateContextualLegRoutes(
 
       for (const cardOption of cardOptions) {
         const scarceReusePenalty = cardOption.penalty;
+        const scarcityPenalty = Number(cardOption.scarcityPenalty) || 0;
+        const programPlausibilityPenalty =
+          Number(cardOption.programPlausibilityPenalty) || 0;
         for (const destination of destinations) {
           profile.destinationCandidates += 1;
 
@@ -11122,7 +11396,10 @@ function enumerateContextualLegRoutes(
             baseCost: nextBaseCost,
             cardAvailabilityPenalty:
               (current.cardAvailabilityPenalty || 0) +
-              scarceReusePenalty,
+              scarcityPenalty,
+            programPlausibilityPenalty:
+              (current.programPlausibilityPenalty || 0) +
+              programPlausibilityPenalty,
             programCardState: cardOption.state,
             hazardExposure: nextHazardExposure
           };
@@ -11289,6 +11566,10 @@ function scoreContextualCardSequence(
   return {
     feasible: compact.feasible,
     penalty: compact.penalty,
+    scarcityPenalty: compact.scarcityPenalty,
+    programPlausibilityPenalty: compact.programPlausibilityPenalty,
+    actionScarcityPenalties: compact.actionScarcityPenalties,
+    actionPlausibilityPenalties: compact.actionPlausibilityPenalties,
     history: compact.feasible
       ? getProgramHistoryWindow([
         ...workingHistory,
@@ -11315,6 +11596,9 @@ export function summarizeProgramSequencePressure(
   return {
     feasible: result.feasible,
     penalty: result.penalty,
+    scarcityPenalty: result.scarcityPenalty,
+    programPlausibilityPenalty: result.programPlausibilityPenalty,
+    programCardIds: result.programCardIds,
     absoluteActions: result.absoluteActions,
     registerPhase: absoluteActions % REGISTER_COUNT,
     endingRegisterPhase: result.absoluteActions % REGISTER_COUNT
@@ -11414,13 +11698,16 @@ function rebaseContextualCachedRoute(
     options
   );
   const oldCardPenalty = route.cardAvailabilityPenalty || 0;
+  const oldProgramPlausibilityPenalty = route.programPlausibilityPenalty || 0;
   const oldApproximateCardPenalty = route.approximateCardPlausibilityPenalty || 0;
   const oldEconomyReward = route.routeEnergyEconomyRewardScore || 0;
   const score = Number((
     route.score -
     oldCardPenalty -
+    oldProgramPlausibilityPenalty -
     oldApproximateCardPenalty +
-    cardState.penalty +
+    cardState.scarcityPenalty +
+    cardState.programPlausibilityPenalty +
     oldEconomyReward -
     economy.routeEnergyEconomyRewardScore
   ).toFixed(2));
@@ -11448,7 +11735,8 @@ function rebaseContextualCachedRoute(
     absoluteActions: cardState.absoluteActions,
     movingTarget,
     score,
-    cardAvailabilityPenalty: cardState.penalty,
+    cardAvailabilityPenalty: cardState.scarcityPenalty,
+    programPlausibilityPenalty: cardState.programPlausibilityPenalty,
     approximateCardPlausibilityPenalty: 0,
     programHistoryEnd: cardState.history,
     programCardStateEnd: cardState.programCardState
@@ -11574,6 +11862,7 @@ function buildEstimatedPhysicalRouteFromTransitions(
     chopShopCardChoices: 0,
     chopShopEnergyChoices: 0,
     cardAvailabilityPenalty: 0,
+    programPlausibilityPenalty: 0,
     approximateCardPlausibilityPenalty,
     localActionIds,
     programHistoryEnd: [],
@@ -11678,13 +11967,28 @@ function realizeEstimatedLegsWithCardSolution(
       actionOffset,
       actionOffset + actionCount
     );
+    const actionScarcityPenalties = (
+      cardSolution.actionScarcityPenalties || []
+    ).slice(actionOffset, actionOffset + actionCount);
+    const actionPlausibilityPenalties = (
+      cardSolution.actionPlausibilityPenalties || []
+    ).slice(actionOffset, actionOffset + actionCount);
     if (programCardIds.length !== actionCount) return null;
 
     const transitions = (estimatedLeg?.transitions || []).map((transition, index) => ({
       ...transition,
       programCard: programCardIds[index] ?? transition?.action
     }));
-    const cardAvailabilityPenalty = actionPenalties.reduce(
+    const cardAvailabilityPenalty = actionScarcityPenalties.length === actionCount
+      ? actionScarcityPenalties.reduce(
+        (sum, value) => sum + (Number(value) || 0),
+        0
+      )
+      : actionPenalties.reduce(
+        (sum, value) => sum + (Number(value) || 0),
+        0
+      );
+    const programPlausibilityPenalty = actionPlausibilityPenalties.reduce(
       (sum, value) => sum + (Number(value) || 0),
       0
     );
@@ -11692,13 +11996,17 @@ function realizeEstimatedLegsWithCardSolution(
       estimatedLeg?.approximateCardPlausibilityPenalty
     ) || 0;
     const oldCardPenalty = Number(estimatedLeg?.cardAvailabilityPenalty) || 0;
+    const oldProgramPlausibilityPenalty = Number(
+      estimatedLeg?.programPlausibilityPenalty
+    ) || 0;
     const oldEconomyReward = Number(
       estimatedLeg?.routeEnergyEconomyRewardScore
     ) || 0;
     const physicalScore = (
       (Number(estimatedLeg?.score) || 0) -
       oldApproximateCardPenalty -
-      oldCardPenalty +
+      oldCardPenalty -
+      oldProgramPlausibilityPenalty +
       oldEconomyReward
     );
     const absoluteStartAction = context.absoluteActions;
@@ -11726,8 +12034,13 @@ function realizeEstimatedLegsWithCardSolution(
       absoluteStartAction,
       absoluteActions,
       movingTarget,
-      score: Number((physicalScore + cardAvailabilityPenalty).toFixed(2)),
+      score: Number((
+        physicalScore +
+        cardAvailabilityPenalty +
+        programPlausibilityPenalty
+      ).toFixed(2)),
       cardAvailabilityPenalty: Number(cardAvailabilityPenalty.toFixed(2)),
+      programPlausibilityPenalty: Number(programPlausibilityPenalty.toFixed(2)),
       approximateCardPlausibilityPenalty: 0,
       programHistoryEnd,
       programCardStateEnd: endCardState ? { ...endCardState } : null,
@@ -11746,7 +12059,8 @@ function realizeEstimatedLegsWithCardSolution(
       ...economy,
       score: Number((
         physicalScore +
-        cardAvailabilityPenalty -
+        cardAvailabilityPenalty +
+        programPlausibilityPenalty -
         economy.routeEnergyEconomyRewardScore
       ).toFixed(2)),
       contextualForecastBand: getContextualForecastBand(
@@ -11904,6 +12218,8 @@ function stitchContextualLegs(legs, flags) {
   let cumulativeHazard = 0;
   let cumulativeRebootPenalty = 0;
   let cumulativeBaseCost = 0;
+  let cumulativeCardAvailabilityPenalty = 0;
+  let cumulativeProgramPlausibilityPenalty = 0;
   let cumulativeRouteEnergyEconomyRewardScore = 0;
   let cumulativeBatteryEconomyRewardScore = 0;
   let cumulativePowerUpEconomyRewardScore = 0;
@@ -11917,6 +12233,8 @@ function stitchContextualLegs(legs, flags) {
     cumulativeHazard += leg.hazard ?? 0;
     cumulativeRebootPenalty += leg.rebootPenalty ?? 0;
     cumulativeBaseCost += leg.score ?? 0;
+    cumulativeCardAvailabilityPenalty += leg.cardAvailabilityPenalty ?? 0;
+    cumulativeProgramPlausibilityPenalty += leg.programPlausibilityPenalty ?? 0;
     cumulativeRouteEnergyEconomyRewardScore += leg.routeEnergyEconomyRewardScore ?? 0;
     cumulativeBatteryEconomyRewardScore += leg.batteryEconomyRewardScore ?? 0;
     cumulativePowerUpEconomyRewardScore += leg.powerUpEconomyRewardScore ?? 0;
@@ -11972,6 +12290,8 @@ function stitchContextualLegs(legs, flags) {
       0
     ),
     score: Number(cumulativeBaseCost.toFixed(2)),
+    cardAvailabilityPenalty: Number(cumulativeCardAvailabilityPenalty.toFixed(2)),
+    programPlausibilityPenalty: Number(cumulativeProgramPlausibilityPenalty.toFixed(2)),
     routeEnergyEconomyRewardScore: Number(cumulativeRouteEnergyEconomyRewardScore.toFixed(2)),
     batteryEconomyRewardScore: Number(cumulativeBatteryEconomyRewardScore.toFixed(2)),
     powerUpEconomyRewardScore: Number(cumulativePowerUpEconomyRewardScore.toFixed(2)),
@@ -12092,6 +12412,9 @@ function summarizeSelectedProgrammingScarcity(startAnalyses = []) {
   const routesWithConsecutiveAgain = routeSummaries.filter(
     (entry) => entry.consecutiveTurnAgainReuse > 0
   ).length;
+  const selectedRoutePlausibilityPenalties = (startAnalyses || [])
+    .map((analysis) => Number(analysis?.fullCourseRoute?.programPlausibilityPenalty))
+    .filter(Number.isFinite);
   return {
     selectedRoutes: routeSummaries.length,
     routesUsingAgain,
@@ -12101,6 +12424,18 @@ function summarizeSelectedProgrammingScarcity(startAnalyses = []) {
       0
     ),
     routesWithConsecutiveAgain,
+    meanProgramPlausibilityPenalty: selectedRoutePlausibilityPenalties.length
+      ? Number((
+        selectedRoutePlausibilityPenalties.reduce((sum, value) => sum + value, 0) /
+        selectedRoutePlausibilityPenalties.length
+      ).toFixed(2))
+      : 0,
+    maxProgramPlausibilityPenalty: selectedRoutePlausibilityPenalties.length
+      ? Number(Math.max(...selectedRoutePlausibilityPenalties).toFixed(2))
+      : 0,
+    routesWithCombinationPressure: selectedRoutePlausibilityPenalties.filter(
+      (value) => value > 0.01
+    ).length,
     literalProgramViolations: routeSummaries.reduce(
       (sum, entry) => sum + entry.literalProgramViolations,
       0
@@ -12487,6 +12822,9 @@ function analyzeFullCourseContextual(
   let trafficAlternateDownstreamRebuildFailures = 0;
   let trafficAlternateEffectiveDemandLegs = 0;
   let trafficAlternateExploratoryDemandLegs = 0;
+  let trafficAlternateEffortScaleSum = 0;
+  let trafficAlternateEffortScaleCount = 0;
+  let trafficAlternateMinimumEffortScale = 1;
   let trafficExplorationUncertaintyShare = 0;
   let trafficExplorationConfidenceFloor = 1;
   const trafficAlternateDemandByLeg = flags.map(() => 0);
@@ -12687,7 +13025,8 @@ function analyzeFullCourseContextual(
     startupSpinUp = false,
     forbiddenFirstActions = [],
     excludedPathKeys = [],
-    searchPurpose = "primary"
+    searchPurpose = "primary",
+    searchEffortScale = 1
   ) => {
     const dynamicGoal = dynamicGoals[legIndex] ?? null;
     const namespace = options.recoveryRule === "home_reboot"
@@ -12702,6 +13041,9 @@ function analyzeFullCourseContextual(
       forbiddenFirstActions,
       excludedPathKeys
     );
+    const trafficEffortScale = searchPurpose === "traffic"
+      ? clamp(Number(searchEffortScale) || 1, 0.05, 1)
+      : 1;
 
     const excluded = new Set(excludedPathKeys);
     const chooseBestCachedEstimate = (routes) => (
@@ -12791,8 +13133,11 @@ function analyzeFullCourseContextual(
     // intrinsically unreachable.
     const nominalEstimateExpansions = searchPurpose === "traffic"
       ? Math.max(
-        120,
-        Math.floor(Number(options.contextualTrafficAlternateExpansions) || 320)
+        TRAFFIC_ALTERNATE_MIN_EXPANSIONS,
+        Math.floor(
+          (Number(options.contextualTrafficAlternateExpansions) || 320) *
+          trafficEffortScale
+        )
       )
       : Math.max(
         120,
@@ -12845,7 +13190,14 @@ function analyzeFullCourseContextual(
       .filter(Boolean)
       .slice(0, requestedRoutes);
     estimatedLegWitnessesGenerated += retainedRoutes.length;
-    estimatedLegCache.set(cacheKey, retainedRoutes);
+    // A low-confidence optional traffic miss is not evidence that a future
+    // higher-confidence traffic probe should also decline this physical state.
+    // Cache successful optional witnesses, but never let a deliberately shallow
+    // traffic miss poison the shared estimate cache. Primary misses retain their
+    // existing semantics.
+    if (searchPurpose !== "traffic" || retainedRoutes.length) {
+      estimatedLegCache.set(cacheKey, retainedRoutes);
+    }
     return route;
   };
 
@@ -13495,8 +13847,14 @@ function analyzeFullCourseContextual(
           return {
             route: rebased,
             cardDelta: Math.abs(
-              (rebased.cardAvailabilityPenalty || 0) -
-              (route.cardAvailabilityPenalty || 0)
+              (
+                (rebased.cardAvailabilityPenalty || 0) +
+                (rebased.programPlausibilityPenalty || 0)
+              ) -
+              (
+                (route.cardAvailabilityPenalty || 0) +
+                (route.programPlausibilityPenalty || 0)
+              )
             )
           };
         })
@@ -14510,11 +14868,20 @@ function analyzeFullCourseContextual(
           0,
           Number(exactLeg.cardAvailabilityPenalty) || 0
         );
+        const oldProgramPlausibilityPenalty = Math.max(
+          0,
+          Number(exactLeg.programPlausibilityPenalty) || 0
+        );
         return rebaseEstimatedRouteSoftGuidance(
           {
             ...exactLeg,
-            score: Number(((Number(exactLeg.score) || 0) - oldCardPenalty).toFixed(2)),
+            score: Number((
+              (Number(exactLeg.score) || 0) -
+              oldCardPenalty -
+              oldProgramPlausibilityPenalty
+            ).toFixed(2)),
             cardAvailabilityPenalty: 0,
+            programPlausibilityPenalty: 0,
             approximateCardPlausibilityPenalty: 0,
             estimatedCardForecastPenalty: 0
           },
@@ -14616,7 +14983,8 @@ function analyzeFullCourseContextual(
           start,
           startIndex,
           startupSpinUp = false,
-          excludedPathKeys = []
+          excludedPathKeys = [],
+          effortScale = 1
         ) => {
           const dynamicGoal = dynamicGoals[legIndex] ?? null;
           const namespace = options.recoveryRule === "home_reboot"
@@ -14647,7 +15015,8 @@ function analyzeFullCourseContextual(
             startupSpinUp,
             [],
             excludedPathKeys,
-            "traffic"
+            "traffic",
+            effortScale
           );
           const spent = Math.max(0, estimatedLegSearches - searchesBefore);
           epochNewSearches += spent;
@@ -14661,7 +15030,8 @@ function analyzeFullCourseContextual(
           replacementLeg,
           replacementLegIndex,
           start,
-          startIndex
+          startIndex,
+          parentEffortScale = 1
         ) => {
           const baselineLegs = baselineRoute?.legRoutes || [];
           if (baselineLegs.length !== flags.length) return null;
@@ -14693,13 +15063,23 @@ function analyzeFullCourseContextual(
               ? makeEstimatedReplayLeg(oldLeg, context)
               : null;
             if (!nextLeg) {
+              const downstreamConfidence = getIntrinsicForecastConfidence(
+                context.absoluteActions,
+                context.hazardExposure,
+                options
+              );
+              const downstreamEffortScale = Math.min(
+                parentEffortScale,
+                getTrafficAlternateEffortScale(downstreamConfidence, options)
+              );
               nextLeg = fetchTrafficEstimatedLeg(
                 context,
                 legIndex,
                 start,
                 startIndex,
                 false,
-                []
+                [],
+                downstreamEffortScale
               );
             }
             if (!nextLeg) {
@@ -14763,17 +15143,21 @@ function analyzeFullCourseContextual(
                 : explorationTraffic >= trafficDemandThreshold
                   ? "exploratory"
                   : null;
+              const effortScale = getTrafficAlternateEffortScale(confidence, options);
               return {
                 legIndex,
                 breakdown,
                 weightedTraffic,
                 weightedRawTraffic,
                 explorationTraffic,
-                demandKind
+                demandKind,
+                effortScale,
+                effortPriority: explorationTraffic * effortScale
               };
             })
             .filter((entry) => entry.demandKind)
             .sort((left, right) => (
+              right.effortPriority - left.effortPriority ||
               right.explorationTraffic - left.explorationTraffic ||
               right.weightedTraffic - left.weightedTraffic
             ))
@@ -14783,6 +15167,12 @@ function analyzeFullCourseContextual(
           trafficAlternateDemandLegs += demandedLegs.length;
           demandedLegs.forEach((entry) => {
             trafficAlternateDemandByLeg[entry.legIndex] += 1;
+            trafficAlternateEffortScaleSum += entry.effortScale;
+            trafficAlternateEffortScaleCount += 1;
+            trafficAlternateMinimumEffortScale = Math.min(
+              trafficAlternateMinimumEffortScale,
+              entry.effortScale
+            );
             if (entry.demandKind === "exploratory") {
               trafficAlternateExploratoryDemandLegs += 1;
             } else {
@@ -14854,7 +15244,8 @@ function analyzeFullCourseContextual(
                 replacementLeg,
                 legIndex,
                 startEntry.start,
-                analysis.index
+                analysis.index,
+                demanded.effortScale
               );
               if (!realized?.route) return null;
               const fullIdentity = getTrafficFullRouteIdentity(realized.route);
@@ -14908,7 +15299,8 @@ function analyzeFullCourseContextual(
                 startEntry.start,
                 analysis.index,
                 Boolean(legIndex === 0 && options.startupSpinUp),
-                [...attemptedLegIds]
+                [...attemptedLegIds],
+                demanded.effortScale
               );
               evaluateReplacement(alternate);
             }
@@ -15518,6 +15910,12 @@ function analyzeFullCourseContextual(
         trafficAlternateDownstreamRebuildFailures,
         trafficAlternateEffectiveDemandLegs,
         trafficAlternateExploratoryDemandLegs,
+        trafficAlternateAverageEffortScale: trafficAlternateEffortScaleCount
+          ? Number((trafficAlternateEffortScaleSum / trafficAlternateEffortScaleCount).toFixed(3))
+          : 1,
+        trafficAlternateMinimumEffortScale: trafficAlternateEffortScaleCount
+          ? Number(trafficAlternateMinimumEffortScale.toFixed(3))
+          : 1,
         trafficExplorationUncertaintyShare,
         trafficExplorationConfidenceFloor,
         trafficAlternateDemandByLeg: trafficAlternateDemandByLeg.map((count, legIndex) => ({
@@ -15588,6 +15986,12 @@ function analyzeFullCourseContextual(
         alternateBestGain: Number(trafficAlternateBestGain.toFixed(2)),
         alternateEffectiveDemandLegs: trafficAlternateEffectiveDemandLegs,
         alternateExploratoryDemandLegs: trafficAlternateExploratoryDemandLegs,
+        alternateAverageEffortScale: trafficAlternateEffortScaleCount
+          ? Number((trafficAlternateEffortScaleSum / trafficAlternateEffortScaleCount).toFixed(3))
+          : 1,
+        alternateMinimumEffortScale: trafficAlternateEffortScaleCount
+          ? Number(trafficAlternateMinimumEffortScale.toFixed(3))
+          : 1,
         explorationUncertaintyShare: trafficExplorationUncertaintyShare,
         explorationConfidenceFloor: trafficExplorationConfidenceFloor,
         candidateDiagnostics: selection.candidateDiagnostics ?? [],
