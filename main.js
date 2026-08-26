@@ -684,7 +684,7 @@ function setOverlayModeControl(mode, buttonEl = null) {
         ? "forced"
         : "allowed";
     button.textContent = formatOverlayMode(normalized);
-    button.title = `Overlays: ${formatOverlayMode(normalized)}. Click to cycle No, Tokens, Boards, Yes.`;
+    button.title = `Overlays: ${formatOverlayMode(normalized)}. Click to cycle No, Tokens, Boards, Both.`;
     button.setAttribute("aria-label", button.title);
   });
 }
@@ -703,7 +703,7 @@ function updateOverlayAvailability(preferences = getPreferencesFromControls()) {
       buttonEl.classList.remove("unavailable");
       buttonEl.removeAttribute("aria-disabled");
       const mode = normalizeOverlayMode(buttonEl.value);
-      buttonEl.title = `Overlays: ${formatOverlayMode(mode)}. Click to cycle No, Tokens, Boards, Yes.`;
+      buttonEl.title = `Overlays: ${formatOverlayMode(mode)}. Click to cycle No, Tokens, Boards, Both.`;
       buttonEl.setAttribute("aria-label", buttonEl.title);
     }
   });
@@ -1977,7 +1977,7 @@ function formatOverlayMode(mode) {
     no: "No",
     tokens: "Tokens",
     boards: "Boards",
-    yes: "Yes"
+    yes: "Both"
   }[normalizeOverlayMode(mode)];
 }
 
@@ -2918,7 +2918,7 @@ function updateSetupSummary(scenario) {
   if (scenario.generationBestMatch && noteParts.length) {
     const mismatchText = ` It is ${noteParts.join(" and ")} than requested.`;
     fitNoteEl.textContent =
-      `Closest match found after ${scenario.attempts} attempt${scenario.attempts === 1 ? "" : "s"}.${mismatchText} Regenerating may find a closer match.`;
+      `Closest match found.${mismatchText} Regenerating may find a closer match.`;
     fitNoteEl.classList.remove("hidden");
   } else if (noteParts.length) {
     fitNoteEl.textContent = `Closest fit: this course is ${noteParts.join(" and ")} than requested.${shouldSuggestReroll ? " Regenerating may give a better match." : ""}`;
@@ -2970,7 +2970,7 @@ function getVariantUiCategory(variantOrCategory) {
     ? variantOrCategory
     : variantOrCategory?.category;
 
-  return category === "setup" || category === UI_SETUP_LAYOUT_CATEGORY
+  return category === "setup" || category === "board-layout" || category === UI_SETUP_LAYOUT_CATEGORY
     ? UI_SETUP_LAYOUT_CATEGORY
     : category;
 }

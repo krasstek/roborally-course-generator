@@ -335,7 +335,7 @@ export function buildCourseNoteConcepts(evidence) {
     if (balance.pruned > 0 || residual) {
       const parts = [];
       if (balance.pruned > 0) {
-        parts.push(`${balance.pruned} dock space${balance.pruned === 1 ? " is" : "s are"} left unused so the available starts are closer in strength.`);
+        parts.push("The available starting spaces are fairly close in strength.");
       }
       if (residual) {
         const severity = residual.severity === "trivial" ? "A trivial" : "A minor";
@@ -474,18 +474,12 @@ export function buildCourseNoteConcepts(evidence) {
   const paceScore = Math.max(
     Math.abs(evidence.lengthFit) / 4,
     pace.actions / 10,
-    pace.distance / 7,
-    pace.congestion / 2
+    pace.distance / 7
   );
   if (paceScore >= 5.2) {
-    let text;
-    if (pace.congestion >= 4 && trafficModel.enabled) {
-      text = "A noticeable part of the race may be spent working through other robots rather than simply covering distance. A clean run can finish much faster than a crowded one.";
-    } else if (pace.distance >= pace.actions * 0.65) {
-      text = "This is a travel-heavy course: much of its length comes from covering ground rather than from one especially complicated obstacle."
-    } else {
-      text = "The course gets much of its length from the number of programmed moves. Good use of conveyors and other forced movement can shorten the race noticeably.";
-    }
+    const text = pace.distance >= pace.actions * 0.65
+      ? "This is a travel-heavy course: much of its length comes from covering ground rather than from one especially complicated obstacle."
+      : "The course gets much of its length from the number of programmed moves. Good use of conveyors and other forced movement can shorten the race noticeably.";
     concepts.push(concept("pace", paceScore, "Pace", text));
   }
 
