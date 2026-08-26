@@ -298,25 +298,6 @@ function drawDirectionArrow(ctx, cx, cy, size, dir, color = "#ffffff") {
   ctx.restore();
 }
 
-function rotateCardinalDir(dir, rotation) {
-  const order = ["N", "E", "S", "W"];
-  const index = order.indexOf(dir);
-  if (index < 0) {
-    return dir;
-  }
-  const steps = rotation === "cw" ? 1 : rotation === "ccw" ? -1 : 0;
-  return order[(index + steps + order.length) % order.length];
-}
-
-function getDirectionVector(dir) {
-  return {
-    N: { x: 0, y: -1 },
-    E: { x: 1, y: 0 },
-    S: { x: 0, y: 1 },
-    W: { x: -1, y: 0 }
-  }[dir] ?? { x: 1, y: 0 };
-}
-
 function drawTurnConveyorIcon(ctx, cx, cy, size, exitDir, turn, color = "#eff8ff") {
   const glyph = "↳";
   const fontSize = Math.max(18, Math.round(size * (turn === "both" ? 0.5 : 0.66)));

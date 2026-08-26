@@ -77,7 +77,7 @@ const VARIANT_DEFINITION_ROWS = [
     category: VARIANT_CATEGORIES.programming,
     controlId: "variant-lighter-game",
     defaultState: "off",
-    description: "Removes upgrade cards and makes battery spaces inactive.",
+    description: "Removes upgrade cards; Battery and Chop Shop spaces provide no Energy or upgrade effects.",
     cost: VARIANT_COMPLEXITY.lighterGame,
     incompatibleWith: ["upgradeWorld", "payToWin", "subsidizedStarts"],
     applyBundle: applyBooleanField("lighterGame")
@@ -203,7 +203,7 @@ const VARIANT_DEFINITION_ROWS = [
     category: VARIANT_CATEGORIES.factoryFloor,
     controlId: "variant-repulsor-overdrive",
     defaultState: "off",
-    description: "Repulsors push robots twice the remaining movement.",
+    description: "Repulsors push robots twice the full distance of the triggering Move card.",
     cost: VARIANT_COMPLEXITY.repulsorOverdrive,
     availability: {
       type: "featureTypeAvailable",
@@ -514,15 +514,6 @@ export function getVariantGuidanceRules(variantId) {
   return getVariantDefinition(variantId)?.guidance ?? [];
 }
 
-export function getVariantDefinitionsByCategory() {
-  return VARIANT_DEFINITIONS.reduce((groups, variant) => {
-    const current = groups.get(variant.category) ?? [];
-    current.push(variant);
-    groups.set(variant.category, current);
-    return groups;
-  }, new Map());
-}
-
 export function buildVariantBundle(activeVariants = {}, options = {}) {
   const bundle = {
     alignedLayout: true,
@@ -535,7 +526,7 @@ export function buildVariantBundle(activeVariants = {}, options = {}) {
     const active = Boolean(activeVariants[variant.id]);
     bundle[variant.id] = active;
     if (active) {
-      variant.applyBundle?.(bundle, activeVariants, options);
+      variant.applyBundle?.(bundle);
     }
   });
 

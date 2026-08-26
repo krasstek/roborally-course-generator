@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 
-// Robo Rally calibration runner v5f
+// Robo Rally calibration evidence runner
 // Zero third-party Node dependencies. Designed to run fully offline.
+//
+// This harness samples evidence; it must not encode production construction
+// preferences. Production guidance is selected later by the R analysis/exporter.
 
 import { appendFile, mkdir, readFile, stat, truncate, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
@@ -13,11 +16,11 @@ const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const PROJECT_DIR = dirname(SCRIPT_DIR);
 
 const DEFAULTS = Object.freeze({
-  count: 2000,
+  count: 3200,
   seed: Date.now() >>> 0,
   analysisMode: "balanced",
   pairedRecoveryRate: 0.25,
-  modePairRate: 0.10,
+  modePairRate: 0.25,
   output: null,
   resume: false,
   pilot: false,
@@ -30,8 +33,10 @@ const DEFAULTS = Object.freeze({
 
 const PLAYERS = Object.freeze([2, 4, 6, 8]);
 const DIFFICULTIES = Object.freeze(["easy", "moderate", "hard", "brutal"]);
-const LENGTHS = Object.freeze(["short", "moderate", "long"]);
+const LENGTHS = Object.freeze(["short", "moderate", "long", "epic"]);
 const FLAG_COUNTS = Object.freeze([2, 3, 4, 5, 6]);
+const CHECKPOINT_SAMPLING_REGIMES = Object.freeze(["compact", "ordinary", "stretched"]);
+const GENERAL_DESIGN_BLOCK_SIZE = PLAYERS.length * DIFFICULTIES.length * LENGTHS.length * FLAG_COUNTS.length;
 const OVERLAY_STUDY_BLOCK_SIZE = 20;
 const BLOCK_STRATA = Object.freeze([
   "normal", "normal", "normal", "normal", "normal",
@@ -52,7 +57,7 @@ const STRUCTURAL_VARIANTS = Object.freeze([
   "extraDocks",
   "sandwichedDock"
 ]);
-const MODE_PAIR_CHOICES = Object.freeze(["fastest", "standard", "thorough"]);
+const MODE_PAIR_CHOICES = Object.freeze(["fastest", "fast", "standard", "thorough"]);
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
@@ -77,7 +82,7 @@ function parseArgs(argv) {
       options.countProvided = true;
     } else if (arg === "--pilot") {
       options.pilot = true;
-      if (!options.countProvided) options.count = 60;
+      if (!options.countProvided) options.count = 80;
     } else if (arg === "--overlay-study") {
       options.study = "overlay";
       options.studyProvided = true;
@@ -135,7 +140,7 @@ function parseArgs(argv) {
 }
 
 function printHelp() {
-  console.log(`Robo Rally calibration runner v5f\n\nUsage:\n  node tools/calibration-runner.js [options]\n\nOptions:\n  --count N                  Total observations to collect (default ${DEFAULTS.count})\n  --pilot                    Convenience mode: 60 observations unless --count is supplied\n  --overlay-study            Targeted structural-overlay study; defaults to 500 observations\n  --overlay-count N          In overlay study, force exactly N structural overlay boards; defaults to 300 observations\n  --overlay-placement-retries N  Cheap construction proposals per forced-overlay observation (default ${DEFAULTS.overlayPlacementRetries})\n  --seed N                   Deterministic master seed\n  --analysis-mode MODE       Reference route effort: fastest|fast|standard|balanced|thorough\n  --paired-recovery-rate P   Normal/DA constructions receiving same-course recovery counterfactual (default ${DEFAULTS.pairedRecoveryRate})\n  --mode-pair-rate P         Eligible courses receiving one extra route-effort counterfactual (default ${DEFAULTS.modePairRate})\n  --sets all|id,id            Restrict every observation to these expansion IDs\n  --output PATH              JSONL output path (default calibration-output/calibration-raw-<timestamp>.jsonl)\n  --timeout-seconds N        Hard wall-clock ceiling per observation (default ${DEFAULTS.timeoutSeconds}s)\n  --resume                   Continue an existing JSONL file; schedule/seed come from its header\n  --help                     Show this message\n\nThe runner uses only Node built-ins and local project files. Network access is explicitly blocked. Each primary observation runs in its own child process so pathological synchronous route searches can be terminated safely. A timeout is recorded as calibration data, not as route impossibility or a harness error. In --overlay-study mode every proposal requests a real structural board overlay (80% one overlay, 20% two unless --overlay-count is supplied) and every successful scenario receives a same-course no-overlay counterfactual. Structural overlay-board studies exclude small-board-only presets because overlay boards are not physically stacked on those layouts. When a fixed overlay count is requested, cheap construction failures are resampled up to the configured proposal limit; analyzed route failures, timeouts, and errors are never resampled. The final observation records how many construction proposals were needed. Normal console output is one updating progress line; only unexpected actionable errors are printed separately.`);
+  console.log(`Robo Rally calibration runner\n\nUsage:\n  node tools/calibration-runner.js [options]\n\nOptions:\n  --count N                  Total observations to collect (default ${DEFAULTS.count}; 320 = one full general-design block)\n  --pilot                    Convenience smoke test: 80 observations unless --count is supplied\n  --overlay-study            Targeted structural-overlay study; defaults to 500 observations\n  --overlay-count N          In overlay study, force exactly N structural overlay boards; defaults to 300 observations\n  --overlay-placement-retries N  Cheap construction proposals per forced-overlay observation (default ${DEFAULTS.overlayPlacementRetries})\n  --seed N                   Deterministic master seed\n  --analysis-mode MODE       Reference route effort: fastest|fast|standard|balanced|thorough\n  --paired-recovery-rate P   Normal/DA constructions receiving same-course recovery counterfactual (default ${DEFAULTS.pairedRecoveryRate})\n  --mode-pair-rate P         Eligible courses receiving one extra route-effort counterfactual (default ${DEFAULTS.modePairRate})\n  --sets all|id,id            Restrict every observation to these expansion IDs\n  --output PATH              JSONL output path (default calibration-output/calibration-raw-<timestamp>.jsonl)\n  --timeout-seconds N        Hard wall-clock ceiling per observation (default ${DEFAULTS.timeoutSeconds}s)\n  --resume                   Continue an existing JSONL file; schedule/seed come from its header\n  --help                     Show this message\n\nThe runner uses only Node built-ins and local project files. Network access is explicitly blocked. Each primary observation runs in its own child process so pathological synchronous route searches can be terminated safely. A timeout is recorded as calibration data, not as route impossibility or a harness error. In --overlay-study mode every proposal requests a real structural board overlay (80% one overlay, 20% two unless --overlay-count is supplied) and every successful scenario receives a same-course no-overlay counterfactual. Structural overlay-board studies exclude small-board-only presets because overlay boards are not physically stacked on those layouts. When a fixed overlay count is requested, cheap construction failures are resampled up to the configured proposal limit; analyzed route failures, timeouts, and errors are never resampled. The final observation records how many construction proposals were needed. General-study scheduling is factorial in players × difficulty × length × flag count (320 observations per complete block), with board count and inventory independently scheduled. The ordinary general run also includes both one- and two-board-overlay cases, so a separate overlay run is optional rather than required. Normal console output is one updating progress line; only unexpected actionable errors are printed separately.`);
 }
 
 function timestampId() {
@@ -307,6 +312,57 @@ function pickPreset(presets, stratum, random, playerCount = null) {
   return choose(startCompatible.length ? startCompatible : presets, random);
 }
 
+function buildGeneralDesignCells(seed, designBlockIndex) {
+  // One 320-observation block contains every Players × Difficulty × Length ×
+  // Flag-count combination exactly once. Shuffle the cells per block so the
+  // weighted stratum schedule, inventory choice, and board count cannot become
+  // deterministic proxies for any requested target dimension.
+  const cells = [];
+  for (const playerCount of PLAYERS) {
+    for (const difficulty of DIFFICULTIES) {
+      for (const length of LENGTHS) {
+        for (const flagCount of FLAG_COUNTS) {
+          cells.push({ playerCount, difficulty, length, flagCount });
+        }
+      }
+    }
+  }
+  const random = mulberry32(hash32(seed, "general-design-block", designBlockIndex));
+  for (let index = cells.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(random() * (index + 1));
+    [cells[index], cells[swapIndex]] = [cells[swapIndex], cells[index]];
+  }
+  return cells;
+}
+
+function checkpointSamplingRegimeForDesignSlot(seed, designBlockIndex, designSlotIndex) {
+  // Balance checkpoint geometry independently from Players × Difficulty × Length ×
+  // Flag-count cells. Repeated blocks therefore expose the same target cell to
+  // compact / ordinary / stretched geometry rather than encoding target length
+  // directly into checkpoint placement.
+  const regimes = Array.from({ length: GENERAL_DESIGN_BLOCK_SIZE }, (_, index) => (
+    CHECKPOINT_SAMPLING_REGIMES[index % CHECKPOINT_SAMPLING_REGIMES.length]
+  ));
+  const random = mulberry32(hash32(seed, "checkpoint-regimes", designBlockIndex));
+  for (let index = regimes.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(random() * (index + 1));
+    [regimes[index], regimes[swapIndex]] = [regimes[swapIndex], regimes[index]];
+  }
+  return regimes[designSlotIndex] ?? "ordinary";
+}
+
+function independentBoardCount(config, index, preset, minimum = 1) {
+  const maxBoardCount = Math.max(1, preset?.maxBoardCount || 1);
+  const minBoardCount = Math.min(maxBoardCount, Math.max(1, Math.floor(Number(minimum) || 1)));
+  const span = Math.max(1, maxBoardCount - minBoardCount + 1);
+  return minBoardCount + (hash32(config.seed, "board-count", index, preset?.id ?? "unknown") % span);
+}
+
+function choosePairedMode(config, index, random) {
+  if (!(random() < config.modePairRate)) return null;
+  return MODE_PAIR_CHOICES[hash32(config.seed, "paired-mode", index) % MODE_PAIR_CHOICES.length];
+}
+
 function buildOverlayStudyPlan(index, config, presets) {
   const blockIndex = Math.floor(index / OVERLAY_STUDY_BLOCK_SIZE);
   const slotIndex = index % OVERLAY_STUDY_BLOCK_SIZE;
@@ -321,17 +377,17 @@ function buildOverlayStudyPlan(index, config, presets) {
   const difficulty = ["moderate", "hard", "brutal"][(blockIndex + slotIndex * 2) % 3];
   const length = LENGTHS[(blockIndex * 2 + slotIndex) % LENGTHS.length];
   const maxBoardCount = Math.max(1, preset.maxBoardCount || 1);
-  const forcedBoardOverlayCount = Number.isInteger(config.overlayCount) ? config.overlayCount : (slotIndex % 5 === 4 ? 2 : 1);
+  const mixedOverlayCount = preset.overlayBoardIds?.length >= 2 && (hash32(config.seed, "overlay-count", index) % 4 === 0)
+    ? 2
+    : 1;
+  const forcedBoardOverlayCount = Number.isInteger(config.overlayCount) ? config.overlayCount : mixedOverlayCount;
   const productionMinimumBoards = difficulty === "moderate"
     ? forcedBoardOverlayCount + 1
     : forcedBoardOverlayCount;
   const minimumBoardCount = Math.min(maxBoardCount, Math.max(1, productionMinimumBoards));
-  const boardSpan = Math.max(1, maxBoardCount - minimumBoardCount + 1);
-  const boardCount = minimumBoardCount + ((blockIndex * 2 + slotIndex * 3) % boardSpan);
-  const flagCount = FLAG_COUNTS[(blockIndex * 3 + slotIndex) % FLAG_COUNTS.length];
-  const pairedMode = random() < config.modePairRate
-    ? MODE_PAIR_CHOICES[(blockIndex + slotIndex) % MODE_PAIR_CHOICES.length]
-    : null;
+  const boardCount = independentBoardCount(config, index, preset, minimumBoardCount);
+  const flagCount = FLAG_COUNTS[hash32(config.seed, "overlay-flags", index) % FLAG_COUNTS.length];
+  const pairedMode = choosePairedMode(config, index, random);
 
   return {
     index,
@@ -364,12 +420,22 @@ function buildObservationPlan(index, config, presets) {
 
   const blockIndex = Math.floor(index / BLOCK_STRATA.length);
   const slotIndex = index % BLOCK_STRATA.length;
-  const stratum = BLOCK_STRATA[slotIndex];
+  const designBlockIndex = Math.floor(index / GENERAL_DESIGN_BLOCK_SIZE);
+  const designSlotIndex = index % GENERAL_DESIGN_BLOCK_SIZE;
+  const designCell = buildGeneralDesignCells(config.seed, designBlockIndex)[designSlotIndex];
+  const stratumOffset = (designBlockIndex * 7) % BLOCK_STRATA.length;
+  const stratum = BLOCK_STRATA[(slotIndex + stratumOffset) % BLOCK_STRATA.length];
   const scheduleSeed = hash32(config.seed, "plan", index);
   const random = mulberry32(scheduleSeed);
-  let difficulty = DIFFICULTIES[(blockIndex + slotIndex * 3) % DIFFICULTIES.length];
-  const length = LENGTHS[(blockIndex * 2 + slotIndex) % LENGTHS.length];
-  const playerCount = PLAYERS[(blockIndex + slotIndex) % PLAYERS.length];
+  let difficulty = designCell.difficulty;
+  const length = designCell.length;
+  const playerCount = designCell.playerCount;
+  const flagCount = designCell.flagCount;
+  const checkpointSamplingRegime = checkpointSamplingRegimeForDesignSlot(
+    config.seed,
+    designBlockIndex,
+    designSlotIndex
+  );
   const preset = pickPreset(
     presets,
     stratum,
@@ -377,8 +443,7 @@ function buildObservationPlan(index, config, presets) {
     stratum === "structural-variant" ? null : playerCount
   );
   const maxBoardCount = Math.max(1, preset.maxBoardCount || 1);
-  let boardCount = 1 + ((blockIndex * 2 + slotIndex * 3) % maxBoardCount);
-  const flagCount = FLAG_COUNTS[(blockIndex * 3 + slotIndex) % FLAG_COUNTS.length];
+  let boardCount = independentBoardCount(config, index, preset);
   const forcedVariantIds = [];
   let overlayMode = "no";
   let forcedBoardOverlayCount = null;
@@ -387,28 +452,35 @@ function buildObservationPlan(index, config, presets) {
   if (stratum === "dynamic-archiving") forcedVariantIds.push("dynamicArchiving");
   if (stratum === "board-overlay") {
     overlayMode = "boards";
-    forcedBoardOverlayCount = 1;
+    forcedBoardOverlayCount = preset.overlayBoardIds?.length >= 2 && (hash32(config.seed, "general-overlay-count", index) % 4 === 0)
+      ? 2
+      : 1;
     // Production intentionally suppresses board overlays on Easy. Keep native
     // overlay observations inside the region where board overlays can occur.
-    if (difficulty === "easy") difficulty = ["moderate", "hard", "brutal"][(blockIndex + slotIndex) % 3];
-    if (difficulty === "moderate" && maxBoardCount >= 2) boardCount = Math.max(boardCount, 2);
+    if (difficulty === "easy") difficulty = ["moderate", "hard", "brutal"][hash32(config.seed, "overlay-difficulty", index) % 3];
+    const productionMinimumBoards = difficulty === "moderate"
+      ? forcedBoardOverlayCount + 1
+      : forcedBoardOverlayCount;
+    boardCount = independentBoardCount(config, index, preset, productionMinimumBoards);
   }
   if (stratum === "structural-variant") {
-    forcedVariantIds.push(STRUCTURAL_VARIANTS[(blockIndex * 2 + slotIndex) % STRUCTURAL_VARIANTS.length]);
+    forcedVariantIds.push(STRUCTURAL_VARIANTS[hash32(config.seed, "structural-variant", index) % STRUCTURAL_VARIANTS.length]);
   }
   if (stratum === "exploratory") guidanceStrength = 0.35;
 
   const recoveryPairEligible = stratum === "normal" || stratum === "dynamic-archiving";
   const pairedRecovery = recoveryPairEligible && random() < config.pairedRecoveryRate;
   const modePairEligible = ["normal", "dynamic-archiving", "board-overlay"].includes(stratum);
-  const pairedMode = modePairEligible && random() < config.modePairRate
-    ? MODE_PAIR_CHOICES[(blockIndex + slotIndex) % MODE_PAIR_CHOICES.length]
+  const pairedMode = modePairEligible
+    ? choosePairedMode(config, index, random)
     : null;
 
   return {
     index,
     blockIndex,
     slotIndex,
+    designBlockIndex,
+    designSlotIndex,
     stratum,
     study: "general",
     observationSeed: hash32(config.seed, "observation", index),
@@ -417,6 +489,7 @@ function buildObservationPlan(index, config, presets) {
     length,
     boardCount,
     flagCount,
+    checkpointSamplingRegime,
     inventoryPreset: preset.id,
     expansionIds: preset.expansionIds,
     maxBoardCount,
@@ -445,7 +518,12 @@ function makeRunHeader(config, presets) {
       analysisMode: config.analysisMode,
       pairedRecoveryRate: config.pairedRecoveryRate,
       modePairRate: config.modePairRate,
-      blockSize: config.study === "overlay" ? OVERLAY_STUDY_BLOCK_SIZE : BLOCK_STRATA.length,
+      blockSize: config.study === "overlay" ? OVERLAY_STUDY_BLOCK_SIZE : GENERAL_DESIGN_BLOCK_SIZE,
+      generalDesign: config.study === "general" ? {
+        blockSize: GENERAL_DESIGN_BLOCK_SIZE,
+        factors: { players: PLAYERS.length, difficulties: DIFFICULTIES.length, lengths: LENGTHS.length, flagCounts: FLAG_COUNTS.length },
+        note: "Each complete block contains every Players × Difficulty × Length × Flag-count combination exactly once; board count, inventory, stratum, overlays, mode pairs, and compact/ordinary/stretched checkpoint sampling are independently scheduled."
+      } : null,
       strataPerBlock: config.study === "overlay"
         ? { "board-overlay": OVERLAY_STUDY_BLOCK_SIZE }
         : BLOCK_STRATA.reduce((counts, stratum) => {
@@ -456,6 +534,7 @@ function makeRunHeader(config, presets) {
       difficulties: config.study === "overlay" ? ["moderate", "hard", "brutal"] : DIFFICULTIES,
       lengths: LENGTHS,
       flagCounts: FLAG_COUNTS,
+      checkpointSamplingRegimes: CHECKPOINT_SAMPLING_REGIMES,
       restrictedExpansionIds: config.expansionIds,
       timeoutSeconds: config.timeoutSeconds
     },
@@ -482,7 +561,7 @@ function makeRunHeader(config, presets) {
 
 function assertResumeCompatible(header, options) {
   if (header.recordType !== "run" || header.schemaVersion !== 1) {
-    throw new Error("The existing file is not a v5 calibration JSONL run.");
+    throw new Error("The existing file is not a compatible calibration JSONL run.");
   }
   if (options.seedProvided && (options.seed >>> 0) !== (header.seed >>> 0)) {
     throw new Error(`Resume seed mismatch: file uses ${header.seed}, command requested ${options.seed}.`);
@@ -534,6 +613,7 @@ async function runObservationInWorker(request) {
     forcedVariantIds: plan.forcedVariantIds,
     guidanceStrength: plan.guidanceStrength,
     unguidedBoardSelection: true,
+    checkpointSamplingRegime: plan.checkpointSamplingRegime ?? "ordinary",
     singleCheckpointProposal: true
   }));
 
@@ -712,6 +792,7 @@ function makeTimeoutRecord(config, plan, timeoutMs) {
       length: plan.length,
       boardCount: plan.boardCount,
       flagCount: plan.flagCount,
+      checkpointSamplingRegime: plan.checkpointSamplingRegime ?? "ordinary",
       inventoryPreset: plan.inventoryPreset,
       expansionIds: plan.expansionIds,
       overlayMode: plan.overlayMode,
@@ -760,6 +841,7 @@ function makeObservationRecord(config, plan, payload) {
       length: plan.length,
       boardCount: plan.boardCount,
       flagCount: plan.flagCount,
+      checkpointSamplingRegime: plan.checkpointSamplingRegime ?? "ordinary",
       inventoryPreset: plan.inventoryPreset,
       expansionIds: plan.expansionIds,
       overlayMode: plan.overlayMode,

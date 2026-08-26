@@ -181,15 +181,6 @@ export function getSharedEdge(a, b) {
   return null;
 }
 
-export function isValidBoardConnection(a, b, minSharedEdge = 5) {
-  if (rectanglesOverlap(a, b)) {
-    return false;
-  }
-
-  const sharedEdge = getSharedEdge(a, b);
-  return Boolean(sharedEdge && sharedEdge.length >= minSharedEdge);
-}
-
 function isStructuralPiece(piece) {
   return piece.kind !== "dock" && piece.kind !== "overlay";
 }

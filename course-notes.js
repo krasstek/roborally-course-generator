@@ -1,4 +1,4 @@
-// Robo Rally Course Randomizer - course notes v39 player-facing
+// Robo Rally Course Randomizer - player-facing course notes
 const notesCache = new WeakMap();
 
 function escapeHtml(value) {
@@ -65,6 +65,9 @@ function getLegLabel(leg, scenario) {
   return `${leg?.from ?? "?"} → ${leg?.to ?? "?"}`;
 }
 
+// Detailed start residuals are diagnostics. Course Notes receives only a
+// field-level, non-advisory description of a meaningful residual pattern: no
+// numbered starting spaces, z-scores, pruning mechanics or generator internals.
 export function buildCourseNoteEvidence(scenario, fitNotes = []) {
   const first = scenario?.sequence?.firstLeg?.summary || {};
   const openingRoutes = selectedOpeningRoutes(scenario);
@@ -510,7 +513,7 @@ export function renderCourseNotes(concepts, evidence, options = {}) {
 export function buildCourseNotesHtml(scenario, fitNotes = [], options = {}) {
   if (!scenario) return "";
 
-  const cacheKey = "player-facing-v41-start-residuals-generic";
+  const cacheKey = "player-facing-start-residuals-generic";
   let scenarioCache = notesCache.get(scenario);
   if (!scenarioCache) {
     scenarioCache = new Map();
