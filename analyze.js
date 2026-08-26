@@ -11919,7 +11919,7 @@ function getContextualOpeningSeedMap(options = {}) {
   ]));
 }
 
-function analyzeFullCourseContextual(
+function* analyzeFullCourseContextualSteps(
   tileMap,
   starts,
   flags,
@@ -13644,6 +13644,10 @@ function analyzeFullCourseContextual(
         initialContext,
         estimated
       });
+      // Cooperative boundary: one start's complete physical estimate is stable.
+      // The async driver may yield to the browser here; the synchronous driver
+      // simply advances immediately, preserving existing analysis semantics.
+      yield { phase: "estimated-start", startIndex: sourceIndex };
     }
 
     survivorHistory.push({
@@ -13674,6 +13678,7 @@ function analyzeFullCourseContextual(
       } = estimatedEntry;
       if (!estimatedEntry.estimated.complete) {
         startPartials.push({ index: sourceIndex, start, partials: [] });
+        yield { phase: "realized-start", startIndex: sourceIndex };
         continue;
       }
 
@@ -13903,6 +13908,8 @@ function analyzeFullCourseContextual(
         exactRealizationFailures += 1;
         startPartials.push({ index: sourceIndex, start, partials: [] });
       }
+      // Cooperative boundary after this start's exact realization/repair work.
+      yield { phase: "realized-start", startIndex: sourceIndex };
     }
 
     const realizedStarts = startPartials.filter(
@@ -14470,6 +14477,7 @@ function analyzeFullCourseContextual(
             );
             epochCandidatesAdded += 1;
           }
+          yield { phase: "traffic-start", startIndex: analysis.index, epoch };
         }
 
         if (!epochCandidatesAdded) break;
@@ -14648,6 +14656,7 @@ function analyzeFullCourseContextual(
       preferredCapacityShortCircuits += 1;
       break;
     }
+    yield { phase: "opening-start", startIndex: sourceIndex };
   }
 
   if (startPartials.length < starts.length) {
@@ -14817,6 +14826,7 @@ function analyzeFullCourseContextual(
         preferredStopped = true;
         break;
       }
+      yield { phase: "later-leg-start", startIndex: entry.index, legIndex };
     }
 
     const legSurvivors = startPartials.filter((candidate) => candidate.partials.length).length;
@@ -15157,6 +15167,59 @@ function analyzeFullCourseContextual(
       }
     }
   };
+}
+
+function analyzeFullCourseContextual(tileMap, starts, flags, options = {}) {
+  const iterator = analyzeFullCourseContextualSteps(tileMap, starts, flags, options);
+  let step = iterator.next();
+  while (!step.done) {
+    step = iterator.next();
+  }
+  return step.value;
+}
+
+export async function analyzeFullCourseCooperative(tileMap, starts, flags, options = {}) {
+  // Only the contextual path needs cooperative browser deferral in production.
+  // Seeded/simpler paths retain their existing synchronous implementation.
+  if (!options.contextualLegSearch || Array.isArray(options.contextualSeedStartAnalyses)) {
+    return analyzeFullCourse(tileMap, starts, flags, options);
+  }
+
+  const iterator = analyzeFullCourseContextualSteps(tileMap, starts, flags, options);
+  const cooperativeYield = typeof options.cooperativeYield === "function"
+    ? options.cooperativeYield
+    : null;
+  const shouldStopRequested = typeof options.shouldStopRequested === "function"
+    ? options.shouldStopRequested
+    : () => false;
+  const requestedYieldIntervalMs = Number(options.cooperativeYieldIntervalMs);
+  const yieldIntervalMs = Number.isFinite(requestedYieldIntervalMs)
+    ? Math.max(0, requestedYieldIntervalMs)
+    : 250;
+  let lastBrowserYieldAt = analysisTelemetryNow();
+
+  if (shouldStopRequested()) {
+    const error = new Error("Analysis stopped at a cooperative boundary.");
+    error.code = "ANALYSIS_STOP_REQUESTED";
+    throw error;
+  }
+
+  let step = iterator.next();
+  while (!step.done) {
+    const now = analysisTelemetryNow();
+    if (cooperativeYield && now - lastBrowserYieldAt >= yieldIntervalMs) {
+      await cooperativeYield(step.value);
+      lastBrowserYieldAt = analysisTelemetryNow();
+    }
+    if (shouldStopRequested()) {
+      if (typeof iterator.return === "function") iterator.return();
+      const error = new Error("Analysis stopped at a cooperative boundary.");
+      error.code = "ANALYSIS_STOP_REQUESTED";
+      throw error;
+    }
+    step = iterator.next();
+  }
+  return step.value;
 }
 
 export function analyzeFullCourse(tileMap, starts, flags, options = {}) {

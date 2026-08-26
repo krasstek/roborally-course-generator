@@ -55,7 +55,7 @@ const versionedPath = (path) => `${path}${VERSION_SUFFIX}`;
 
 const [
   { render },
-  { analyzeCourse, analyzeFullCourse, analyzeFlagLeg, clearAnalysisCaches, evaluateFullCourseFocusPaymentCurveUnderOccupancy, evaluateRouteUpgradePotential, estimateInitialUpgradeOpportunitiesRemaining, getAnalysisTelemetrySnapshot, getCourseMaxEnergy, getCourseStartingEnergy, getCourseStartingUpgradeCards, getRouteEnergyEconomyConfig, getRouteEnergyGainUtility, getRouteMarginalEnergyUtility, getRouteUpgradePotential, recomputeFirstLegPressure, resetAnalysisTelemetry, ROUTE_ENERGY_ECONOMY_DEFAULTS, scoreFlagArea, summarizeIntrinsicRouteForecastConfidence, summarizePowerUpOpportunityBenchmark, summarizeProgramSequencePressure, summarizePowerUpProgramFeasibility },
+  { analyzeCourse, analyzeFullCourse, analyzeFullCourseCooperative, analyzeFlagLeg, clearAnalysisCaches, evaluateFullCourseFocusPaymentCurveUnderOccupancy, evaluateRouteUpgradePotential, estimateInitialUpgradeOpportunitiesRemaining, getAnalysisTelemetrySnapshot, getCourseMaxEnergy, getCourseStartingEnergy, getCourseStartingUpgradeCards, getRouteEnergyEconomyConfig, getRouteEnergyGainUtility, getRouteMarginalEnergyUtility, getRouteUpgradePotential, recomputeFirstLegPressure, resetAnalysisTelemetry, ROUTE_ENERGY_ECONOMY_DEFAULTS, scoreFlagArea, summarizeIntrinsicRouteForecastConfidence, summarizePowerUpOpportunityBenchmark, summarizeProgramSequencePressure, summarizePowerUpProgramFeasibility },
   {
     buildMainFootprintTiles,
     buildResolvedMap,
@@ -93,7 +93,7 @@ const [
     applyVariantScenarioState,
     buildVariantBundle
   },
-  { buildCourseNotesHtml, clearCourseNotesCache }
+  { buildCourseNotesHtml, clearCourseNotesCache, getCheckpointPlacementAdvisory }
 ] = await Promise.all([
   import(versionedPath("./render.js")),
   import(versionedPath("./analyze.js")),
@@ -118,6 +118,10 @@ const clearAnalysisCachesSafe = typeof clearAnalysisCaches === "function"
 const resetAnalysisTelemetrySafe = typeof resetAnalysisTelemetry === "function"
   ? resetAnalysisTelemetry
   : () => {};
+const analyzeFullCourseCooperativeSafe = typeof analyzeFullCourseCooperative === "function"
+  ? analyzeFullCourseCooperative
+  : async (...args) => analyzeFullCourse(...args);
+
 const getAnalysisTelemetrySnapshotSafe = typeof getAnalysisTelemetrySnapshot === "function"
   ? getAnalysisTelemetrySnapshot
   : () => ({
@@ -1584,7 +1588,6 @@ function getGenerationRejectionCategory(scenario, fallbackReason = "") {
   if (failures.includes("unused-board")) return "unused-board";
   if (failures.includes("too-short")) return "too-short";
   if (failures.some((failure) => String(failure).startsWith("leg-"))) return "later-leg";
-  if (scenario?.metrics?.checkpointSpacingExpectation?.acceptable === false) return "checkpoint-expectation";
   if ((scenario?.metrics?.difficultyFit ?? 0) > 0) return "difficulty";
   if ((scenario?.metrics?.lengthFit ?? 0) > 0) return "length";
 
@@ -1883,9 +1886,6 @@ function describeGenerationRejection(scenario, fallbackStage = "") {
   }
   if (!scenario.preferences?.targetGuidanceOnlyLength && (scenario.metrics?.lengthFit ?? 0) > 0) {
     reasons.push(`length ${scenario.metrics.lengthDirection ?? "mismatch"}`);
-  }
-  if (scenario.metrics?.checkpointSpacingExpectation?.acceptable === false) {
-    reasons.push("checkpoint spacing outside ordinary expectations");
   }
   return reasons.length ? reasons.join(", ") : "better fit still required";
 }
@@ -2914,21 +2914,34 @@ function updateSetupSummary(scenario) {
     difficultyFit >= strongDifficultyThreshold ||
     lengthFit >= 24
   );
+  const checkpointPlacementAdvisory = getCheckpointPlacementAdvisory(scenario);
+  const checkpointPlacementSentence = checkpointPlacementAdvisory?.active
+    ? ` ${checkpointPlacementAdvisory.bannerText}`
+    : "";
 
   if (scenario.generationBestMatch && noteParts.length) {
     const mismatchText = ` It is ${noteParts.join(" and ")} than requested.`;
     fitNoteEl.textContent =
-      `Closest match found.${mismatchText} Regenerating may find a closer match.`;
+      `Closest match found.${mismatchText}${checkpointPlacementSentence} Regenerating may find a closer match.`;
+    fitNoteEl.classList.remove("hidden");
+  } else if (scenario.generationBestMatch && checkpointPlacementAdvisory?.active) {
+    fitNoteEl.textContent = `Closest match found.${checkpointPlacementSentence} Regenerating may find a closer match.`;
     fitNoteEl.classList.remove("hidden");
   } else if (noteParts.length) {
-    fitNoteEl.textContent = `Closest fit: this course is ${noteParts.join(" and ")} than requested.${shouldSuggestReroll ? " Regenerating may give a better match." : ""}`;
+    const rerollText = shouldSuggestReroll || checkpointPlacementAdvisory?.active
+      ? " Regenerating may give a better match."
+      : "";
+    fitNoteEl.textContent = `Closest fit: this course is ${noteParts.join(" and ")} than requested.${checkpointPlacementSentence}${rerollText}`;
+    fitNoteEl.classList.remove("hidden");
+  } else if (checkpointPlacementAdvisory?.active) {
+    fitNoteEl.textContent = `Course generated.${checkpointPlacementSentence} Regenerate if you prefer a more conventional layout.`;
     fitNoteEl.classList.remove("hidden");
   } else {
     fitNoteEl.textContent = "";
     fitNoteEl.classList.add("hidden");
   }
 
-  const autoOpenExplanation = noteParts.length > 0;
+  const autoOpenExplanation = noteParts.length > 0 || checkpointPlacementAdvisory?.active;
   const explanationVisible = Boolean(
     courseExplanationState.userPinnedOpen ||
     (
@@ -8080,8 +8093,8 @@ function pickVirtualBotEntry(flagCandidates, tileMap, boardPlacements, pieceMap,
 
 // Checkpoint geometry has two layers. The technical floor prevents duplicate or
 // nearly identical objectives from dominating proposal sampling. The stronger
-// expectation profile below describes the ordinary player-facing course shape;
-// expectation violations remain playable fallback material, not route illegality.
+// profile is retained as construction/debug evidence only; player-facing checkpoint
+// quality is judged from routed register demand after analysis.
 const CHECKPOINT_TECHNICAL_SPACING = Object.freeze({
   consecutive: 2,
   openingNearest: 2,
@@ -8146,9 +8159,9 @@ function isValidFlagSequence(flags) {
   return true;
 }
 
-// Checkpoint spacing is a player-expectation preference, not route legality.
-// Ordinary attempts hold cramped proposals back; only the final best-match
-// fallback may use them, with a score penalty proportional to the deviation.
+// Stronger Manhattan spacing is retained for construction/debug diagnostics only.
+// It is not route legality, acceptance, fit scoring, proposal preference, or a
+// player-facing checkpoint warning.
 function getCheckpointSpacingExpectationProfile(flags = [], starts = [], preferences = {}) {
   const playableFlags = flags.filter(Boolean);
   if (!playableFlags.length) return { acceptable: true, penalty: 0, deviations: [], opening: null, legs: [] };
@@ -8216,12 +8229,12 @@ function getCheckpointSpacingExpectationProfile(flags = [], starts = [], prefere
   };
 }
 
-function sampleCheckpointProposalWithExpectations(candidates = [], preferences = {}, allowExpectationFallback = false) {
+function sampleCheckpointProposalWithExpectations(candidates = [], preferences = {}, applySpacingPreference = false) {
   if (!candidates.length) return null;
   const ranked = applyConstructionGuidanceRanking(candidates, preferences, { predictionKey: "prediction" });
   const weighted = ranked.map((candidate) => {
     const penalty = Number(candidate.spacingExpectation?.penalty) || 0;
-    const expectationComponent = allowExpectationFallback ? 1 / (1 + penalty / 12) : 1;
+    const expectationComponent = applySpacingPreference ? 1 / (1 + penalty / 12) : 1;
     return {
       ...candidate,
       weight: Math.max(1e-6, (Number(candidate.weight) || 1) * expectationComponent)
@@ -13012,7 +13025,10 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
     active: false
   };
   const lateRouteCount = contextualLaterRoutes;
-  const analyzedFirstLeg = analyzeFullCourse(
+  const fullCourseAnalyzer = typeof options.fullCourseAnalyzer === "function"
+    ? options.fullCourseAnalyzer
+    : analyzeFullCourse;
+  const analyzedFirstLeg = fullCourseAnalyzer(
     tileMap,
     prePruning.starts,
     flags,
@@ -13091,6 +13107,8 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
       contextualExactRepairExpansions: options.contextualExactRepairExpansions,
       contextualDetailedProfiling: Boolean(options.contextualDetailedProfiling),
       contextualDominanceKeyProfiling: Boolean(options.contextualDominanceKeyProfiling),
+      cooperativeYield: options.cooperativeYield,
+      shouldStopRequested: options.shouldStopRequested,
       contextualFastCardState: options.contextualFastCardState !== false,
       skipTraffic: Boolean(options.skipTraffic || !trafficEnabled),
       // The new loop evaluates full-course traffic before the stable pruning
@@ -13104,7 +13122,7 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
       diverseFullCourseSearch: false
     }, playerCount)
   );
-  const firstLeg = analyzedFirstLeg;
+  const finishSequence = (firstLeg) => {
 
   if (firstLeg?.summary) {
     // Keep the effective contextual contract beside the route diagnostics so a
@@ -13318,6 +13336,12 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
       ).toFixed(2))
     }
   };
+  };
+
+  if (analyzedFirstLeg && typeof analyzedFirstLeg.then === "function") {
+    return analyzedFirstLeg.then(finishSequence);
+  }
+  return finishSequence(analyzedFirstLeg);
 }
 
 function adjustStartOutliersForCourseLength(firstLeg, totalLength, tileMap, playerCount, options = {}) {
@@ -15099,14 +15123,28 @@ function getRouteDramaProfile(sequence, preferences = {}) {
   };
 }
 
-function getOpeningLegAnticlimax(sequence, preferences = {}) {
-  const actions = (sequence?.firstLeg?.starts || [])
-    .filter((entry) => entry.reachable)
+function getOpeningLegAnticlimax(sequence, preferences = {}, usableStarts = null) {
+  const sourceStarts = Array.isArray(usableStarts)
+    ? usableStarts
+    : (sequence?.firstLeg?.starts || []).filter((entry) => entry.reachable);
+  const actions = sourceStarts
     .map((entry) => entry.selectedRoute?.actions ?? entry.bestActions)
     .filter(Number.isFinite);
-  if (!actions.length) return { active: false, fastestActions: null, penalty: 0, routeCount: 0 };
+  if (!actions.length) {
+    return {
+      active: false,
+      fastestActions: null,
+      averageActions: null,
+      expectedFastest: 4,
+      expectedAverage: 6,
+      penalty: 0,
+      routeCount: 0
+    };
+  }
   const fastestActions = Math.min(...actions);
-  const shortfall = Math.max(0, 6 - fastestActions);
+  const averageActions = actions.reduce((sum, value) => sum + value, 0) / actions.length;
+  const fastestShortfall = Math.max(0, 4 - fastestActions);
+  const averageShortfall = Math.max(0, 6 - averageActions);
   const lengthScale = preferences.targetGuidanceOnlyLength
     ? 0.5
     : preferences.length === "short"
@@ -15116,11 +15154,58 @@ function getOpeningLegAnticlimax(sequence, preferences = {}) {
         : preferences.length === "long"
           ? 0.8
           : 0.5;
+  const penalty = (
+    fastestShortfall * fastestShortfall * 2.2 +
+    averageShortfall * averageShortfall * 1.2
+  ) * lengthScale;
   return {
-    active: shortfall > 0,
+    active: fastestShortfall > 0 || averageShortfall > 0,
     fastestActions,
-    penalty: Number((shortfall * shortfall * 1.6 * lengthScale).toFixed(2)),
+    averageActions: Number(averageActions.toFixed(2)),
+    expectedFastest: 4,
+    expectedAverage: 6,
+    penalty: Number(penalty.toFixed(2)),
     routeCount: actions.length
+  };
+}
+
+function getIntermediateCheckpointPacing(sequence) {
+  const intermediateLegs = (sequence?.legs || []).slice(1, -1);
+  const legAverages = intermediateLegs
+    .map((leg, index) => ({
+      from: leg?.from ?? index + 1,
+      to: leg?.to ?? index + 2,
+      actions: leg?.analysis?.summary?.averageRouteActions
+    }))
+    .filter((entry) => Number.isFinite(entry.actions));
+  if (!legAverages.length) {
+    return {
+      active: false,
+      shortestAverageActions: null,
+      averageActions: null,
+      expectedShortestAverage: 4,
+      expectedAverage: 6,
+      penalty: 0,
+      legs: []
+    };
+  }
+
+  const shortestAverageActions = Math.min(...legAverages.map((entry) => entry.actions));
+  const averageActions = legAverages.reduce((sum, entry) => sum + entry.actions, 0) / legAverages.length;
+  const shortestShortfall = Math.max(0, 4 - shortestAverageActions);
+  const averageShortfall = Math.max(0, 6 - averageActions);
+  const penalty = (
+    shortestShortfall * shortestShortfall * 1.4 +
+    averageShortfall * averageShortfall * 0.8
+  );
+  return {
+    active: shortestShortfall > 0 || averageShortfall > 0,
+    shortestAverageActions: Number(shortestAverageActions.toFixed(2)),
+    averageActions: Number(averageActions.toFixed(2)),
+    expectedShortestAverage: 4,
+    expectedAverage: 6,
+    penalty: Number(penalty.toFixed(2)),
+    legs: legAverages.map((entry) => ({ ...entry, actions: Number(entry.actions.toFixed(2)) }))
   };
 }
 
@@ -15207,30 +15292,67 @@ function getFinalLegAnticlimax(sequence, preferences = {}) {
   };
 }
 
-function getRoutedCheckpointPacingExpectation(openingLegAnticlimax, finalLegAnticlimax) {
-  // Routed opening/final pacing is advisory quality evidence, not an acceptance
-  // gate. Geometry handles ordinary-vs-fallback checkpoint expectations cheaply;
-  // once routing has been paid for, short routed legs retain their anticlimax
-  // score penalty without forcing an otherwise-good course into another retry.
-  const expectedMinimum = 5;
+function getRoutedCheckpointPacingExpectation(openingLegAnticlimax, intermediateCheckpointPacing, finalLegAnticlimax) {
+  // Player-facing checkpoint quality is based on routed register demand, not
+  // Manhattan distance. Opening and middle legs use field/route averages, while
+  // the final leg protects the catch-up window by requiring more than one normal
+  // five-register program for even the fastest route.
   const deviations = [];
-  for (const [type, profile] of [
-    ["opening-route", openingLegAnticlimax],
-    ["final-route", finalLegAnticlimax]
-  ]) {
-    const fastestActions = Number(profile?.fastestActions);
-    if (Number.isFinite(fastestActions) && fastestActions < expectedMinimum) {
-      deviations.push({
-        type,
-        fastestActions,
-        expectedMinimum,
-        severity: expectedMinimum - fastestActions
-      });
-    }
+  const openingFastest = openingLegAnticlimax?.fastestActions;
+  const openingAverage = openingLegAnticlimax?.averageActions;
+  if (Number.isFinite(openingFastest) && openingFastest < 4) {
+    deviations.push({
+      type: "opening-fastest",
+      actual: openingFastest,
+      expectedMinimum: 4,
+      severity: 4 - openingFastest
+    });
   }
+  if (Number.isFinite(openingAverage) && openingAverage < 6) {
+    deviations.push({
+      type: "opening-average",
+      actual: openingAverage,
+      expectedMinimum: 6,
+      severity: 6 - openingAverage
+    });
+  }
+
+  const middleShortest = intermediateCheckpointPacing?.shortestAverageActions;
+  const middleAverage = intermediateCheckpointPacing?.averageActions;
+  if (Number.isFinite(middleShortest) && middleShortest < 4) {
+    deviations.push({
+      type: "middle-shortest-average",
+      actual: middleShortest,
+      expectedMinimum: 4,
+      severity: 4 - middleShortest
+    });
+  }
+  if (Number.isFinite(middleAverage) && middleAverage < 6) {
+    deviations.push({
+      type: "middle-average",
+      actual: middleAverage,
+      expectedMinimum: 6,
+      severity: 6 - middleAverage
+    });
+  }
+
+  const finalFastest = finalLegAnticlimax?.fastestActions;
+  if (Number.isFinite(finalFastest) && finalFastest < 6) {
+    deviations.push({
+      type: "final-fastest",
+      actual: finalFastest,
+      expectedMinimum: 6,
+      severity: 6 - finalFastest
+    });
+  }
+
   return {
     acceptable: deviations.length === 0,
-    penalty: Number(((Number(openingLegAnticlimax?.penalty) || 0) + (Number(finalLegAnticlimax?.penalty) || 0)).toFixed(2)),
+    penalty: Number((
+      (Number(openingLegAnticlimax?.penalty) || 0) +
+      (Number(intermediateCheckpointPacing?.penalty) || 0) +
+      (Number(finalLegAnticlimax?.penalty) || 0)
+    ).toFixed(2)),
     deviations
   };
 }
@@ -15379,10 +15501,13 @@ function classifyCandidate(sequence, preferences, context = {}) {
     fairnessStdDev,
     preferences
   );
-  const openingLegAnticlimax = getOpeningLegAnticlimax(sequence, preferences);
+  const checkpointOpeningStarts = preferences.competitiveMode ? reachableStarts : usableStarts;
+  const openingLegAnticlimax = getOpeningLegAnticlimax(sequence, preferences, checkpointOpeningStarts);
+  const intermediateCheckpointPacing = getIntermediateCheckpointPacing(sequence);
   const finalLegAnticlimax = getFinalLegAnticlimax(sequence, preferences);
   const routedCheckpointPacingExpectation = getRoutedCheckpointPacingExpectation(
     openingLegAnticlimax,
+    intermediateCheckpointPacing,
     finalLegAnticlimax
   );
   const meaningfulBoardUse = getMeaningfulBoardUseProfile(
@@ -15407,10 +15532,10 @@ function classifyCandidate(sequence, preferences, context = {}) {
     competitiveBlockPenalty +
     movingTargetVolatilityPenalty +
     openingLegAnticlimax.penalty +
+    intermediateCheckpointPacing.penalty +
     finalLegAnticlimax.penalty +
     meaningfulBoardUse.penalty +
     routeDrama.penalty +
-    checkpointSpacingExpectation.penalty +
     Math.max(0, preferences.playerCount - usableStarts.length) * 20
   );
 
@@ -15433,6 +15558,7 @@ function classifyCandidate(sequence, preferences, context = {}) {
     movingTargetStats,
     movingTargetVolatilityPenalty,
     openingLegAnticlimax,
+    intermediateCheckpointPacing,
     finalLegAnticlimax,
     routedCheckpointPacingExpectation,
     meaningfulBoardUse,
@@ -15440,8 +15566,7 @@ function classifyCandidate(sequence, preferences, context = {}) {
     checkpointSpacingExpectation,
     acceptable: hardFailures.length === 0 &&
       difficultyFit === 0 &&
-      lengthFit === 0 &&
-      checkpointSpacingExpectation.acceptable,
+      lengthFit === 0,
     hardFailures,
     fitScore: Number(fitScore.toFixed(2))
   };
@@ -15537,6 +15662,26 @@ function buildScenarioCopySummary(scenario) {
   const resultLabel = scenario.generationBestMatch
     ? `${hasExplicitTargetMismatch ? "closest match" : "fallback course"}, ${scenario.attempts ?? "?"} / ${scenarioMaxAttempts} attempt(s), termination ${scenario.generationTerminationReason ?? diagnostics?.terminationReason ?? "attempt-limit"}`
     : `accepted, ${scenario.attempts ?? "?"} / ${scenarioMaxAttempts} attempt(s)`;
+  const openingPacing = scenario.metrics?.openingLegAnticlimax ?? null;
+  const intermediatePacing = scenario.metrics?.intermediateCheckpointPacing ?? null;
+  const finalPacing = scenario.metrics?.finalLegAnticlimax ?? null;
+  const checkpointPlacementAdvisory = getCheckpointPlacementAdvisory(scenario);
+  const checkpointPacingSummary = [
+    Number.isFinite(openingPacing?.fastestActions) && Number.isFinite(openingPacing?.averageActions)
+      ? `opening fastest/avg ${openingPacing.fastestActions}/${openingPacing.averageActions} vs 4/6 registers`
+      : "opening n/a",
+    Number.isFinite(intermediatePacing?.shortestAverageActions) && Number.isFinite(intermediatePacing?.averageActions)
+      ? `middle shortest/avg ${intermediatePacing.shortestAverageActions}/${intermediatePacing.averageActions} vs 4/6 registers`
+      : "middle n/a",
+    Number.isFinite(finalPacing?.fastestActions)
+      ? `final fastest ${finalPacing.fastestActions}/6 registers`
+      : "final n/a",
+    checkpointPlacementAdvisory?.active
+      ? `player advisory severity ${checkpointPlacementAdvisory.severity}/${checkpointPlacementAdvisory.threshold}`
+      : checkpointPlacementAdvisory?.hasDeviation
+        ? `minor deviation ${checkpointPlacementAdvisory.severity}/${checkpointPlacementAdvisory.threshold} (no player note)`
+        : "ordinary"
+  ].join("; ");
 
   const lines = [
     `Requested: ${scenario.preferences?.playerCount ?? "?"}p, ${formatDifficultyLabel(scenario.preferences?.difficulty)} / ${formatLengthLabel(scenario.preferences?.length)}`,
@@ -15864,7 +16009,8 @@ function buildScenarioCopySummary(scenario) {
         : `Fairness: stddev ${scenario.metrics?.fairnessStdDev ?? "n/a"}, score ${summary.fairnessScore ?? "n/a"}`,
     `Difficulty raw: ${scenario.metrics?.difficultyRaw ?? "n/a"}`,
     `Length raw: ${scenario.metrics?.lengthRaw ?? "n/a"}`,
-    `Course scores: difficulty ${summary.difficultyScore ?? "n/a"}, length ${summary.lengthScore ?? "n/a"}, actions ${summary.actionScore ?? "n/a"}, overall ${summary.overallScore ?? "n/a"}`
+    `Course scores: difficulty ${summary.difficultyScore ?? "n/a"}, length ${summary.lengthScore ?? "n/a"}, actions ${summary.actionScore ?? "n/a"}, overall ${summary.overallScore ?? "n/a"}`,
+    `Checkpoint pacing: ${checkpointPacingSummary}`
   );
 
   if (contextualCache) {
@@ -16064,6 +16210,7 @@ function buildScenarioCopySummary(scenario) {
 
 function buildScenarioReport(scenario, selectedLegIndex) {
   const summary = scenario.sequence.firstLeg.summary;
+  const checkpointPlacementAdvisory = getCheckpointPlacementAdvisory(scenario);
   const legOptions = scenario.sequence.legs.map((leg, index) => (
     index === 0 ? (scenario.virtualBots ? "Entry -> 1" : "Dock -> 1") : `${leg.from} -> ${leg.to}`
   ));
@@ -16277,18 +16424,28 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     `Variant length accounting v38: ${(scenario.metrics.lengthMetrics.variantLengthContributions ?? []).map((entry) => `${entry.id} ${entry.delta >= 0 ? "+" : ""}${entry.delta} [${entry.kind}]`).join(", ") || "none"}; method ${scenario.metrics.lengthMetrics.method ?? "n/a"}`,
     `Moving target profile: active ${scenario.movingTargetStats?.activeCount ?? 0}, pathTiles ${scenario.movingTargetStats?.totalPathLength ?? 0}, uniqueCoverage ${scenario.movingTargetStats?.coverageTiles ?? 0}, turns ${scenario.movingTargetStats?.totalTurns ?? 0}, fastSegments ${scenario.movingTargetStats?.fastSegments ?? 0}, difficultyBonus ${scenario.movingTargetStats?.difficultyBonus ?? 0}, lengthBonus ${scenario.movingTargetStats?.lengthBonus ?? 0}`,
     `Moving target volatility penalty: ${scenario.metrics.movingTargetVolatilityPenalty ?? 0}`,
-    scenario.metrics.openingLegAnticlimax?.active
-      ? `Opening leg pacing penalty: ${scenario.metrics.openingLegAnticlimax.penalty} (fastest expected route ${scenario.metrics.openingLegAnticlimax.fastestActions} registers)`
-      : "Opening leg pacing penalty: 0",
-    scenario.metrics.finalLegAnticlimax?.active
-      ? `Final leg anticlimax penalty: ${scenario.metrics.finalLegAnticlimax.penalty} (fastest expected route ${scenario.metrics.finalLegAnticlimax.fastestActions} registers)`
-      : "Final leg anticlimax penalty: none",
-    scenario.metrics.checkpointSpacingExpectation?.acceptable === false
-      ? `Checkpoint spacing expectation: fallback-only, penalty ${scenario.metrics.checkpointSpacingExpectation.penalty}; deviations ${scenario.metrics.checkpointSpacingExpectation.deviations.map((entry) => entry.type).join(", ")}`
-      : "Checkpoint spacing expectation: ordinary",
+    Number.isFinite(scenario.metrics.openingLegAnticlimax?.fastestActions)
+      ? `Opening checkpoint pacing: fastest/average ${scenario.metrics.openingLegAnticlimax.fastestActions}/${scenario.metrics.openingLegAnticlimax.averageActions ?? "n/a"} vs 4/6 registers; penalty ${scenario.metrics.openingLegAnticlimax.penalty ?? 0}`
+      : "Opening checkpoint pacing: n/a",
+    Number.isFinite(scenario.metrics.intermediateCheckpointPacing?.shortestAverageActions)
+      ? `Middle checkpoint pacing: shortest/average leg ${scenario.metrics.intermediateCheckpointPacing.shortestAverageActions}/${scenario.metrics.intermediateCheckpointPacing.averageActions ?? "n/a"} vs 4/6 registers; penalty ${scenario.metrics.intermediateCheckpointPacing.penalty ?? 0}`
+      : "Middle checkpoint pacing: n/a",
+    Number.isFinite(scenario.metrics.finalLegAnticlimax?.fastestActions)
+      ? `Final checkpoint pacing: fastest route ${scenario.metrics.finalLegAnticlimax.fastestActions}/6 registers; penalty ${scenario.metrics.finalLegAnticlimax.penalty ?? 0}`
+      : "Final checkpoint pacing: n/a",
+    (() => {
+      const spacing = scenario.metrics.checkpointSpacingExpectation ?? null;
+      const opening = spacing?.opening ?? null;
+      const finalLeg = (spacing?.legs ?? []).find((entry) => entry.finalLeg) ?? null;
+      const geometry = [
+        opening ? `opening nearest/avg ${opening.nearest}/${opening.average} vs ${opening.expectedNearest}/${opening.expectedAverage}` : null,
+        finalLeg ? `final ${finalLeg.distance}/${finalLeg.expectedMinimum}` : null
+      ].filter(Boolean).join("; ") || "n/a";
+      return `Checkpoint construction geometry (diagnostic only): ${geometry}`;
+    })(),
     scenario.metrics.routedCheckpointPacingExpectation?.acceptable === false
-      ? `Routed checkpoint pacing advisory: penalized; deviations ${scenario.metrics.routedCheckpointPacingExpectation.deviations.map((entry) => `${entry.type} ${entry.fastestActions}/${entry.expectedMinimum} registers`).join(", ")}`
-      : "Routed checkpoint pacing advisory: ordinary",
+      ? `Routed checkpoint pacing: deviations ${scenario.metrics.routedCheckpointPacingExpectation.deviations.map((entry) => `${entry.type} ${entry.actual}/${entry.expectedMinimum} registers`).join(", ")}; player advisory severity ${checkpointPlacementAdvisory?.severity ?? 0}/${checkpointPlacementAdvisory?.threshold ?? 6} (${checkpointPlacementAdvisory?.active ? "shown" : "suppressed"})`
+      : "Routed checkpoint pacing: ordinary; player advisory not needed",
     scenario.metrics.meaningfulBoardUse
       ? `Meaningful board use penalty: ${scenario.metrics.meaningfulBoardUse.penalty}; route tiles by board ${scenario.metrics.meaningfulBoardUse.boards.map((board) => `#${board.boardIndex + 1}:${board.uniqueRouteTiles}`).join(", ")}`
       : "Meaningful board use penalty: n/a",
@@ -18022,7 +18179,7 @@ function getFlagRetryStallLimit(preferences = {}) {
   return limitsByMode[normalizeGenerationMode(preferences.generationMode)] ?? 2;
 }
 
-async function createRandomCandidate(assets, preferences, attempt = 1, remainingEvaluations = 1, onEvaluation = null, onStage = null, shouldStopBeforeRetry = null) {
+async function createRandomCandidate(assets, preferences, attempt = 1, remainingEvaluations = 1, onEvaluation = null, onStage = null, shouldStopBeforeRetry = null, shouldStopDuringAnalysis = null) {
   if (preferences?.difficulty === "any" || preferences?.length === "any") {
     throw new Error("Generation requires concrete difficulty and length targets; resolve Any before construction.");
   }
@@ -18587,39 +18744,10 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       continue;
     }
 
-    // Ordinary generation only routes checkpoint sequences that meet the cheap
-    // player-facing spacing expectations. A cramped sequence is still valid
-    // fallback material, but we do not spend route work on it until the final
-    // normal evaluation has been reached.
-    const ordinaryCheckpointProposals = checkpointProposals.filter(
-      (proposal) => proposal.spacingExpectation?.acceptable !== false
-    );
-    const calibrationBroadCheckpointSampling = Boolean(
-      generationPreferences.calibrationCaptureEvidence &&
-      getCalibrationCheckpointSamplingRegime(generationPreferences)
-    );
-    const normalAttemptLimit = getGenerationModeProfile(generationPreferences).maxAttempts;
-    const currentGlobalEvaluation = attempt + Math.max(0, evaluationsUsed - 1);
-    const allowExpectationFallback = calibrationBroadCheckpointSampling || currentGlobalEvaluation >= normalAttemptLimit;
-    if (!ordinaryCheckpointProposals.length && !allowExpectationFallback) {
-      const bestPenalty = Math.min(...checkpointProposals.map((proposal) => (
-        Number(proposal.spacingExpectation?.penalty) || 0
-      )));
-      const reason = `checkpoint spacing outside ordinary expectations; best cheap deviation penalty ${Number(bestPenalty.toFixed(1))}`;
-      await reportStage(`Trying another checkpoint layout — ${reason}`, evaluationsUsed);
-      recordRejectionEvent(retryTelemetryBefore, "checkpoint-expectation", reason, {
-        spacingExpectation: { fallbackDeferred: true, proposalCount: checkpointProposals.length, bestPenalty }
-      });
-      staleRetries += 1;
-      if (retry > 0 && staleRetries >= stallLimit) break;
-      continue;
-    }
-
-    const expectationRankingPool = calibrationBroadCheckpointSampling
-      ? checkpointProposals
-      : ordinaryCheckpointProposals.length
-        ? ordinaryCheckpointProposals
-        : checkpointProposals;
+    // Stronger Manhattan spacing remains construction/debug evidence only.
+    // Player-facing checkpoint quality is judged later from routed register demand,
+    // so technically valid proposals are not preferred or rejected by this geometry.
+    const expectationRankingPool = checkpointProposals;
     // Prefer proposals whose full OOF interval can still hit an explicit target.
     // Hidden Any targets are guidance-only and therefore never enter this gate.
     const targetCompatibleCheckpointProposals = expectationRankingPool.filter(
@@ -18631,7 +18759,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     const selectedCheckpointProposal = sampleCheckpointProposalWithExpectations(
       checkpointRankingPool,
       generationPreferences,
-      !calibrationBroadCheckpointSampling && allowExpectationFallback && !ordinaryCheckpointProposals.length
+      false
     );
     if (!selectedCheckpointProposal) {
       staleRetries += 1;
@@ -18978,6 +19106,13 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
           // horizon, but final traffic scoring remains identical.
           contextualFastCardState: true,
           contextualEstimatedEnergyGuidance: true,
+          fullCourseAnalyzer: typeof shouldStopDuringAnalysis === "function"
+            ? analyzeFullCourseCooperativeSafe
+            : analyzeFullCourse,
+          cooperativeYield: typeof shouldStopDuringAnalysis === "function" ? nextFrame : null,
+          shouldStopRequested: typeof shouldStopDuringAnalysis === "function"
+            ? shouldStopDuringAnalysis
+            : () => false,
           fastBaselineTrafficEnabled: effectiveTrafficEnabled,
           modeTrafficEnabled,
           trafficEnabledOverride: effectiveTrafficEnabled,
@@ -19087,7 +19222,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
             `${subsidizedStarts ? "Subsidizing" : "Pricing Pay to Win"} starts — routing all ${analysisStarts.length} physical choices`,
             evaluationsUsed
           );
-          sequence = analyzeFlagSequence(
+          sequence = await analyzeFlagSequence(
             goalTileMap,
             analysisStarts,
             playableCheckpoints,
@@ -19156,7 +19291,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
               : `${competitiveMode ? "Refining Competitive" : "Refining Normal"} — ${selectedStarts.length} opening candidates after cheap preflight`,
             evaluationsUsed
           );
-          sequence = analyzeFlagSequence(
+          sequence = await analyzeFlagSequence(
             goalTileMap,
             selectedStarts,
             playableCheckpoints,
@@ -19235,7 +19370,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
             };
           }
         } else {
-          sequence = analyzeFlagSequence(
+          sequence = await analyzeFlagSequence(
             goalTileMap,
             analysisStarts,
             playableCheckpoints,
@@ -20527,9 +20662,15 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
           }
           const work = getAnalysisTelemetrySnapshotSafe();
           return (work.totalExpansions ?? 0) >= softExpansionBudget;
-        }
+        },
+        shouldStopRequested
       );
     } catch (error) {
+      if (error?.code === "ANALYSIS_STOP_REQUESTED" && shouldStopRequested()) {
+        recordStageBoundary("Stopped");
+        terminationReason = "user-best-so-far";
+        break;
+      }
       recordStageBoundary("Crashed");
       crashedAttempts += 1;
       lastAttemptError = error;

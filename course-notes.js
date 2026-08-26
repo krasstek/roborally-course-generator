@@ -65,6 +65,118 @@ function getLegLabel(leg, scenario) {
   return `${leg?.from ?? "?"} → ${leg?.to ?? "?"}`;
 }
 
+const CHECKPOINT_PLACEMENT_ADVISORY_THRESHOLD = 6;
+const CHECKPOINT_PLACEMENT_COMPONENT_NOTE_THRESHOLD = 1.5;
+
+export function getCheckpointPlacementAdvisory(scenario) {
+  const openingRoute = scenario?.metrics?.openingLegAnticlimax ?? null;
+  const middleRoute = scenario?.metrics?.intermediateCheckpointPacing ?? null;
+  const finalRoute = scenario?.metrics?.finalLegAnticlimax ?? null;
+
+  const openingFastest = Number.isFinite(openingRoute?.fastestActions)
+    ? openingRoute.fastestActions
+    : null;
+  const openingAverage = Number.isFinite(openingRoute?.averageActions)
+    ? openingRoute.averageActions
+    : null;
+  const middleShortest = Number.isFinite(middleRoute?.shortestAverageActions)
+    ? middleRoute.shortestAverageActions
+    : null;
+  const middleAverage = Number.isFinite(middleRoute?.averageActions)
+    ? middleRoute.averageActions
+    : null;
+  const finalFastest = Number.isFinite(finalRoute?.fastestActions)
+    ? finalRoute.fastestActions
+    : null;
+
+  const openingFastestShortfall = openingFastest === null ? 0 : Math.max(0, 4 - openingFastest);
+  const openingAverageShortfall = openingAverage === null ? 0 : Math.max(0, 6 - openingAverage);
+  const middleShortestShortfall = middleShortest === null ? 0 : Math.max(0, 4 - middleShortest);
+  const middleAverageShortfall = middleAverage === null ? 0 : Math.max(0, 6 - middleAverage);
+  const finalShortfall = finalFastest === null ? 0 : Math.max(0, 6 - finalFastest);
+
+  // Player-facing severity is intentionally independent of requested length and
+  // difficulty. Fit scoring keeps its existing request-sensitive penalties; this
+  // separate scale only decides whether a pacing quirk is substantial enough to
+  // bother the player with a Course Note / result-banner advisory.
+  const openingSeverity = openingFastestShortfall * 2 + openingAverageShortfall * 1.2;
+  const middleSeverity = middleShortestShortfall * 2 + middleAverageShortfall * 0.8;
+  const finalSeverity = finalShortfall * 2.5;
+  const severity = openingSeverity + middleSeverity + finalSeverity;
+  const hasDeviation = severity > 0;
+  const active = severity >= CHECKPOINT_PLACEMENT_ADVISORY_THRESHOLD;
+
+  const opening = active && openingSeverity >= CHECKPOINT_PLACEMENT_COMPONENT_NOTE_THRESHOLD;
+  const consecutive = active && middleSeverity >= CHECKPOINT_PLACEMENT_COMPONENT_NOTE_THRESHOLD;
+  const final = active && finalSeverity >= CHECKPOINT_PLACEMENT_COMPONENT_NOTE_THRESHOLD;
+
+  if (!active) {
+    return {
+      active: false,
+      hasDeviation,
+      opening: false,
+      final: false,
+      consecutive: false,
+      severity: Number(severity.toFixed(2)),
+      threshold: CHECKPOINT_PLACEMENT_ADVISORY_THRESHOLD,
+      score: 0,
+      bannerText: "",
+      text: ""
+    };
+  }
+
+  const locations = [opening ? "opening" : null, consecutive ? "middle" : null, final ? "finish" : null].filter(Boolean);
+  let noteText = "Checkpoint pacing is unusually quick.";
+  if (locations.length === 1) {
+    noteText = locations[0] === "opening"
+      ? "The opening is unusually quick."
+      : locations[0] === "middle"
+        ? (middleShortestShortfall > 0 && middleAverageShortfall <= 0
+          ? "One middle checkpoint leg is unusually quick."
+          : "The middle checkpoints come unusually quickly.")
+        : "The last leg of the course is unusually quick.";
+  } else if (locations.length === 2) {
+    noteText = locations.includes("opening") && locations.includes("middle")
+      ? "The opening and middle checkpoints come unusually quickly."
+      : locations.includes("middle") && locations.includes("finish")
+        ? "The middle checkpoints and last leg are unusually quick."
+        : "The opening and last leg are unusually quick.";
+  } else if (locations.length === 3) {
+    noteText = "Checkpoint pacing is unusually quick throughout the course.";
+  }
+
+  let bannerText = "Checkpoint pacing is tighter than usual.";
+  if (locations.length === 1) {
+    bannerText = locations[0] === "opening"
+      ? "The opening checkpoint comes up quickly."
+      : locations[0] === "middle"
+        ? "Some middle checkpoints come in quick succession."
+        : "The last leg of the course is unusually quick.";
+  } else if (locations.length === 2) {
+    bannerText = locations.includes("opening") && locations.includes("middle")
+      ? "Checkpoint pacing is compressed in the opening and middle."
+      : locations.includes("middle") && locations.includes("finish")
+        ? "Checkpoint pacing is unusually quick through the middle and last leg."
+        : "The opening and last leg are quicker than usual.";
+  } else if (locations.length === 3) {
+    bannerText = "Checkpoint pacing is unusually quick in the opening, middle, and last leg.";
+  }
+
+  const score = Math.min(9, 5.5 + severity / 4);
+  return {
+    active: true,
+    hasDeviation: true,
+    opening,
+    final,
+    consecutive,
+    severity: Number(severity.toFixed(2)),
+    threshold: CHECKPOINT_PLACEMENT_ADVISORY_THRESHOLD,
+    score: Number(score.toFixed(2)),
+    bannerText,
+    text: noteText
+  };
+}
+
 // Detailed start residuals are diagnostics. Course Notes receives only a
 // field-level, non-advisory description of a meaningful residual pattern: no
 // numbered starting spaces, z-scores, pruning mechanics or generator internals.
@@ -107,6 +219,7 @@ export function buildCourseNoteEvidence(scenario, fitNotes = []) {
     .sort((a, b) => b.pressure - a.pressure);
   const averageLegPressure = average(rankedLegs.map((entry) => entry.pressure));
   const programmingPressure = scenario?.metrics?.programmingPressure || {};
+  const checkpointPlacement = getCheckpointPlacementAdvisory(scenario);
 
   return {
     fitNotes: [...fitNotes],
@@ -124,6 +237,7 @@ export function buildCourseNoteEvidence(scenario, fitNotes = []) {
     generationMode: scenario?.generationDiagnostics?.generationMode ?? scenario?.preferences?.generationMode ?? "standard",
     generationModeLabel: scenario?.generationDiagnostics?.generationModeLabel ?? formatGenerationModeForNotes(scenario?.preferences?.generationMode),
     generationModeProfile: scenario?.generationDiagnostics?.searchProfile ?? null,
+    checkpointPlacement,
     opening: {
       traffic: first.averageTrafficPenalty ?? 0,
       overlap: first.averageOverlapPenalty ?? 0,
@@ -276,6 +390,15 @@ export function buildCourseNoteConcepts(evidence) {
   const { opening, later, drama, pace } = evidence;
   const trafficModel = evidence.trafficModel || {};
   const programming = evidence.programming || {};
+
+  if (evidence.checkpointPlacement?.active) {
+    concepts.push(concept(
+      "checkpoint-placement",
+      evidence.checkpointPlacement.score ?? 6,
+      "Checkpoint Pacing",
+      evidence.checkpointPlacement.text
+    ));
+  }
 
   // TRAFFIC: describe where robot interaction is likely to be felt, without
   // exposing forecast confidence, search effort, or route-selection internals.
@@ -507,7 +630,7 @@ export function renderCourseNotes(concepts, evidence, options = {}) {
 export function buildCourseNotesHtml(scenario, fitNotes = [], options = {}) {
   if (!scenario) return "";
 
-  const cacheKey = "player-facing-start-residuals-generic";
+  const cacheKey = "player-facing-checkpoint-advisory-deadband-v47e";
   let scenarioCache = notesCache.get(scenario);
   if (!scenarioCache) {
     scenarioCache = new Map();
