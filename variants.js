@@ -55,6 +55,14 @@ export const VARIANT_EXCLUSIVE_GROUPS = Object.freeze({
   startingSpaceSetup: Object.freeze({
     label: "starting-space setup",
     description: "Virtual Bots, Competitive Mode, Pay to Win, and Subsidized Starts are mutually exclusive starting-space setups; only one can be active on a generated course."
+  }),
+  dockLayout: Object.freeze({
+    label: "dock layout",
+    description: "Virtual Bots, Extra Docks, No Docks, and Sandwiched Dock are mutually exclusive starting-layout options; only one can be active on a generated course."
+  }),
+  recoveryRule: Object.freeze({
+    label: "recovery rule",
+    description: "Dynamic Archiving and Home Reboot are mutually exclusive recovery rules; only one can be active on a generated course."
   })
 });
 
@@ -120,6 +128,16 @@ const VARIANT_DEFINITION_ROWS = [
     description: "SPAM is discarded to player discard pile instead of damage discard pile after resolution. Shutdown removes it normally.",
     cost: VARIANT_COMPLEXITY.criticalSpam,
     incompatibleWith: ["lessSpammyGame"],
+    recommendations: [
+      {
+        targetId: "criticalHaywire",
+        text: "Critical Haywire pairs well with Critical SPAM for a harsher damage game."
+      },
+      {
+        targetId: "permanentShutdown",
+        text: "Permanent Shutdown pairs well with Critical SPAM when you want damage to carry a real risk of elimination."
+      }
+    ],
     applyBundle: applyBooleanField("criticalSpam")
   },
   {
@@ -130,6 +148,12 @@ const VARIANT_DEFINITION_ROWS = [
     defaultState: "off",
     description: "Haywires placed on registers count against hand size when drawing cards at the start of programming.",
     cost: VARIANT_COMPLEXITY.criticalHaywire,
+    recommendations: [
+      {
+        targetId: "criticalSpam",
+        text: "Critical SPAM pairs well with Critical Haywire for a harsher damage game."
+      }
+    ],
     applyBundle: applyBooleanField("criticalHaywire")
   },
   {
@@ -240,7 +264,7 @@ const VARIANT_DEFINITION_ROWS = [
     defaultState: "allowed",
     description: "Robots archive when they end a register on a checkpoint or battery space.",
     cost: VARIANT_COMPLEXITY.dynamicArchiving,
-    incompatibleWith: ["homeReboot"],
+    exclusiveGroups: ["recoveryRule"],
     applyBundle: (bundle) => {
       bundle.recoveryRule = "dynamic_archiving";
     }
@@ -253,7 +277,7 @@ const VARIANT_DEFINITION_ROWS = [
     defaultState: "off",
     description: "Robots reboot at the token on their home dock.",
     cost: 0,
-    incompatibleWith: ["dynamicArchiving"],
+    exclusiveGroups: ["recoveryRule"],
     applyBundle: (bundle) => {
       bundle.recoveryRule = "home_reboot";
     }
@@ -296,7 +320,7 @@ const VARIANT_DEFINITION_ROWS = [
     defaultState: "off",
     description: "Uses more than one physical docking bay. This is a distinct starting-layout option and cannot be combined with No Docks or Sandwiched Dock.",
     cost: VARIANT_COMPLEXITY.extraDocks,
-    incompatibleWith: ["virtualBots", "noDocks", "sandwichedDock"],
+    exclusiveGroups: ["dockLayout"],
     availability: {
       type: "physicalDockGroupsAtLeast",
       count: 2,
@@ -317,7 +341,8 @@ const VARIANT_DEFINITION_ROWS = [
     defaultState: "off",
     description: "Uses one full exposed outer board edge as the starting zone instead of a docking bay. This cannot be combined with Extra Docks or Sandwiched Dock.",
     cost: VARIANT_COMPLEXITY.noDocks,
-    incompatibleWith: ["virtualBots", "homeReboot", "extraDocks", "sandwichedDock"],
+    exclusiveGroups: ["dockLayout"],
+    incompatibleWith: ["homeReboot"],
     applyBundle: applyBooleanField("noDocks")
   },
   {
@@ -328,7 +353,7 @@ const VARIANT_DEFINITION_ROWS = [
     defaultState: "off",
     description: "Places a physical docking bay between factory boards, with factory boards adjoining both long sides. This cannot be combined with Extra Docks or No Docks.",
     cost: VARIANT_COMPLEXITY.sandwichedDock,
-    incompatibleWith: ["virtualBots", "extraDocks", "noDocks"],
+    exclusiveGroups: ["dockLayout"],
     applyBundle: applyBooleanField("sandwichedDock")
   },
   {
@@ -359,19 +384,15 @@ const VARIANT_DEFINITION_ROWS = [
     defaultState: "off",
     description: "Removes docking bays and starts every robot as a Virtual Bot from one shared entry point. Virtual Bots move normally but do not interact with robots or other Virtual Bots until they become physical robots at the end of a turn.",
     cost: VARIANT_COMPLEXITY.virtualBots,
-    exclusiveGroups: ["startingSpaceSetup"],
-    incompatibleWith: ["extraDocks", "homeReboot", "noDocks", "sandwichedDock"],
-    guidance: [
+    exclusiveGroups: ["startingSpaceSetup", "dockLayout"],
+    incompatibleWith: ["homeReboot"],
+    recommendations: [
       {
-        kind: "suggest",
         targetId: "startupSpinUp",
-        sourceActivation: "forced",
         text: "Startup Spin-Up pairs well with the shared-entry setup by giving each robot more freedom in how it leaves the start."
       },
       {
-        kind: "suggest",
         targetId: "dynamicArchiving",
-        sourceActivation: "forced",
         text: "Dynamic Archiving pairs well with the shared-entry setup by letting recovery points develop naturally during the race."
       }
     ],
@@ -408,11 +429,9 @@ const VARIANT_DEFINITION_ROWS = [
     description: "Before the game, players block starting spaces with energy cubes, then choose strategically from the remaining starts. Generation evaluates roughly twice as many starting choices as players and can take longer.",
     cost: VARIANT_COMPLEXITY.competitiveMode,
     exclusiveGroups: ["startingSpaceSetup"],
-    guidance: [
+    recommendations: [
       {
-        kind: "suggest",
         targetId: "lighterGame",
-        sourceActivation: "forced",
         text: "Energy Crisis / A Lighter Game pairs well with Competitive Mode when you want the starting-space contest to be less affected by upgrades and Energy."
       }
     ],
@@ -510,8 +529,29 @@ export function getVariantAvailabilityRule(variantId) {
 // prerequisites, and collection availability. Main evaluates these against the
 // current selection/collection so suggestions and warnings can react to context
 // without changing whether a rule is legal.
+//
+// `recommendations` is a compact UI-only shorthand for the common case where a
+// Must rule suggests one or more companion rules. Keep the returned guidance
+// shape stable so Main's existing availability/conflict filtering remains the
+// only consumer behavior. Legacy `guidance` entries remain supported for future
+// warning types or recommendation rules that need a different activation policy.
 export function getVariantGuidanceRules(variantId) {
-  return getVariantDefinition(variantId)?.guidance ?? [];
+  const variant = getVariantDefinition(variantId);
+  if (!variant) return [];
+
+  const recommendations = (variant.recommendations ?? [])
+    .filter((recommendation) => recommendation?.targetId && recommendation?.text)
+    .map((recommendation) => ({
+      kind: "suggest",
+      targetId: recommendation.targetId,
+      sourceActivation: "forced",
+      text: recommendation.text
+    }));
+
+  return [
+    ...(variant.guidance ?? []),
+    ...recommendations
+  ];
 }
 
 export function buildVariantBundle(activeVariants = {}, options = {}) {

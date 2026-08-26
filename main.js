@@ -407,7 +407,8 @@ const FALLBACK_SOFT_FAILURE_PENALTIES = new Map([
   ["priced-start-balance", 55],
   ["competitive-start-availability", 90],
   ["unused-board", 50],
-  ["too-short", 80]
+  ["too-short", 80],
+  ["extra-docks", 100]
 ]);
 const OVERLAY_UPDATE_INTERVAL = 4;
 const LIGHT_START_SURPLUS = 2;
@@ -1377,10 +1378,10 @@ function getGenerationConstraintHint(preferences = {}) {
     return "Epic courses can take substantially longer to check.";
   }
   if (mode === "fastest" || mode === "fast") {
-    return "This mode might be faster.";
+    return "This mode is usually quicker.";
   }
   if (mode === "balanced" || mode === "thorough") {
-    return "This mode might take a little longer.";
+    return "This mode usually takes a little longer.";
   }
   if (length === "long") {
     return "Long courses can take longer to check.";
@@ -1587,6 +1588,7 @@ function getGenerationRejectionCategory(scenario, fallbackReason = "") {
   if (failures.includes("usable-starts") || failures.includes("reachable-starts")) return "start-capacity";
   if (failures.includes("unused-board")) return "unused-board";
   if (failures.includes("too-short")) return "too-short";
+  if (failures.includes("extra-docks")) return "extra-docks";
   if (failures.some((failure) => String(failure).startsWith("leg-"))) return "later-leg";
   if ((scenario?.metrics?.difficultyFit ?? 0) > 0) return "difficulty";
   if ((scenario?.metrics?.lengthFit ?? 0) > 0) return "length";
@@ -2251,12 +2253,6 @@ function countFeatureTypeInSelectedSets(featureType, pieceMap = cachedAssets?.pi
   return total;
 }
 
-function isNoDocksSandwichedDockPair(leftVariantId, rightVariantId) {
-  return new Set([leftVariantId, rightVariantId]).size === 2 &&
-    [leftVariantId, rightVariantId].includes("noDocks") &&
-    [leftVariantId, rightVariantId].includes("sandwichedDock");
-}
-
 function variantsConflict(leftVariantId, rightVariantId) {
   const pair = new Set([leftVariantId, rightVariantId]);
   // Energy Crisis / A Lighter Game removes Energy and upgrades from the game, so
@@ -2279,12 +2275,11 @@ function variantsConflict(leftVariantId, rightVariantId) {
   );
 }
 
-// No Docks and Sandwiched Dock are compatible as user preferences: both may be
-// Allowed so the generator can choose either setup. They still cannot be active
-// on the same generated course, and Must + Must is an impossible request.
+// Exclusive-group conflicts describe variants that cannot be active together on
+// one generated course. Multiple members may still be Allowed as user preferences;
+// the control logic only resolves conflicts when more than one is set to Must.
 function variantsConflictInGeneratedCourse(leftVariantId, rightVariantId) {
-  return variantsConflict(leftVariantId, rightVariantId) ||
-    isNoDocksSandwichedDockPair(leftVariantId, rightVariantId);
+  return variantsConflict(leftVariantId, rightVariantId);
 }
 
 function forcedVariantPreferencesConflict(leftVariantId, rightVariantId) {
@@ -2395,17 +2390,6 @@ function getVariantUnavailabilityReason(variantId, preferences = {}, pieceMap = 
       if (potentialCapacity < requiredStarts) {
         return `Competitive Mode with ${playerCount} players needs ${requiredStarts} starting spaces. The selected sets can provide at most ${potentialCapacity} with available docking bays; allow No Docks, reduce the player count, or select sets with more starting capacity.`;
       }
-    }
-  }
-
-  if (["extraDocks", "noDocks", "sandwichedDock"].includes(variantId)) {
-    const otherStartLayoutModes = ["extraDocks", "noDocks", "sandwichedDock"]
-      .filter((id) => id !== variantId);
-    const forcedOther = otherStartLayoutModes.find((id) => (
-      getVariantPreferenceState(preferences, id) === "forced"
-    ));
-    if (forcedOther) {
-      return `Unavailable while ${getVariantDefinitionLabel(forcedOther)} is set to Must. Extra Docks, No Docks, and Sandwiched Dock are mutually exclusive starting-layout options.`;
     }
   }
 
@@ -2918,23 +2902,46 @@ function updateSetupSummary(scenario) {
   const checkpointPlacementSentence = checkpointPlacementAdvisory?.active
     ? ` ${checkpointPlacementAdvisory.bannerText}`
     : "";
+  const weakBoardCount = Number(scenario.metrics.meaningfulBoardUse?.weakBoardCount) || 0;
+  const boardUseSentence = weakBoardCount > 0
+    ? ` ${weakBoardCount === 1 ? "One board gets very little use." : "Some boards get very little use."}`
+    : "";
+  const extraDocksRequestMismatch = Boolean(
+    scenario.generationBestMatch &&
+    isVariantForced(scenario.preferences ?? {}, "extraDocks") &&
+    !scenario.extraDocks
+  );
 
-  if (scenario.generationBestMatch && noteParts.length) {
-    const mismatchText = ` It is ${noteParts.join(" and ")} than requested.`;
+  if (scenario.generationBestMatch && (extraDocksRequestMismatch || noteParts.length)) {
+    const extraDocksMismatchText = extraDocksRequestMismatch
+      ? " Extra Docks was required, but this course uses one docking bay."
+      : "";
+    const mismatchText = noteParts.length
+      ? ` It is ${noteParts.join(" and ")} than requested.`
+      : "";
+    const regenerateText = extraDocksRequestMismatch && !noteParts.length
+      ? " Regenerating may find a course with multiple docking bays."
+      : " Regenerating may find a closer match.";
     fitNoteEl.textContent =
-      `Closest match found.${mismatchText}${checkpointPlacementSentence} Regenerating may find a closer match.`;
+      `Closest match found.${extraDocksMismatchText}${mismatchText}${checkpointPlacementSentence}${boardUseSentence}${regenerateText}`;
     fitNoteEl.classList.remove("hidden");
-  } else if (scenario.generationBestMatch && checkpointPlacementAdvisory?.active) {
-    fitNoteEl.textContent = `Closest match found.${checkpointPlacementSentence} Regenerating may find a closer match.`;
+  } else if (scenario.generationBestMatch && (checkpointPlacementAdvisory?.active || weakBoardCount > 0)) {
+    const regenerateText = checkpointPlacementAdvisory?.active
+      ? " Regenerating may find a closer match."
+      : "";
+    fitNoteEl.textContent = `Closest match found.${checkpointPlacementSentence}${boardUseSentence}${regenerateText}`;
     fitNoteEl.classList.remove("hidden");
   } else if (noteParts.length) {
     const rerollText = shouldSuggestReroll || checkpointPlacementAdvisory?.active
       ? " Regenerating may give a better match."
       : "";
-    fitNoteEl.textContent = `Closest fit: this course is ${noteParts.join(" and ")} than requested.${checkpointPlacementSentence}${rerollText}`;
+    fitNoteEl.textContent = `Closest fit: this course is ${noteParts.join(" and ")} than requested.${checkpointPlacementSentence}${boardUseSentence}${rerollText}`;
     fitNoteEl.classList.remove("hidden");
-  } else if (checkpointPlacementAdvisory?.active) {
-    fitNoteEl.textContent = `Course generated.${checkpointPlacementSentence} Regenerate if you prefer a more conventional layout.`;
+  } else if (checkpointPlacementAdvisory?.active || weakBoardCount > 0) {
+    const regenerateText = checkpointPlacementAdvisory?.active
+      ? " Regenerate if you prefer a more conventional layout."
+      : "";
+    fitNoteEl.textContent = `Course generated.${checkpointPlacementSentence}${boardUseSentence}${regenerateText}`;
     fitNoteEl.classList.remove("hidden");
   } else {
     fitNoteEl.textContent = "";
@@ -15209,14 +15216,71 @@ function getIntermediateCheckpointPacing(sequence) {
   };
 }
 
-function getMeaningfulBoardUseProfile(sequence, boardPlacements = [], pieceMap = {}, usableStarts = []) {
-  if (boardPlacements.length <= 1) return { penalty: 0, boards: [] };
-  const routes = [];
-  usableStarts.forEach((entry) => { if (entry.selectedRoute) routes.push(entry.selectedRoute); });
-  sequence?.legs?.slice(1).forEach((leg) => (leg.analysis?.distinctRoutes || []).forEach((route) => routes.push(route)));
+function getMeaningfulBoardUseProfile(
+  sequence,
+  boardPlacements = [],
+  pieceMap = {},
+  usableStarts = [],
+  checkpoints = []
+) {
+  if (boardPlacements.length <= 1) return { penalty: 0, weakBoardCount: 0, boards: [] };
+
+  const routeGroups = [];
+  const openingRoutes = usableStarts
+    .map((entry) => entry.selectedRoute)
+    .filter(Boolean);
+  if (openingRoutes.length) routeGroups.push(openingRoutes);
+  sequence?.legs?.slice(1).forEach((leg) => {
+    const routes = (leg.analysis?.distinctRoutes || []).filter(Boolean);
+    if (routes.length) routeGroups.push(routes);
+  });
+  const routes = routeGroups.flat();
+
+  function routeRegisterCountOnBoard(route, placement) {
+    return (route.transitions || []).reduce((count, transition) => {
+      const points = [
+        transition?.from,
+        ...(transition?.traversed || []),
+        transition?.to
+      ].filter(Boolean);
+      return count + (points.some((point) => pointOnPlacement(point, placement, pieceMap)) ? 1 : 0);
+    }, 0);
+  }
+
+  function routeMaxBoardDepth(route, placement) {
+    const piece = pieceMap[placement.pieceId];
+    if (!piece) return 0;
+    const dims = rotatedDimensions(piece, placement.rotation ?? 0);
+    let maxDepth = 0;
+    (route.path || []).forEach((point) => {
+      if (!pointOnPlacement(point, placement, pieceMap)) return;
+      const localX = point.x - placement.x;
+      const localY = point.y - placement.y;
+      const depth = 1 + Math.min(
+        localX,
+        dims.width - 1 - localX,
+        localY,
+        dims.height - 1 - localY
+      );
+      maxDepth = Math.max(maxDepth, depth);
+    });
+    return maxDepth;
+  }
+
+  const targetRegisters = 5;
+  const largeBoardTargetDepth = 4;
+  const smallBoardTargetDepth = largeBoardTargetDepth / 2;
+  const weakUseThreshold = 0.8;
+  const efficientTransitRegisters = 3;
+
   const boards = boardPlacements.map((placement, boardIndex) => {
+    const piece = pieceMap[placement.pieceId];
     const routeTiles = new Set();
     let routeVisits = 0;
+    let maxDepth = 0;
+    let bestTransitRegisters = 0;
+    let bestTransitDepth = 0;
+
     routes.forEach((route) => {
       let touched = false;
       (route.path || []).forEach((point) => {
@@ -15224,20 +15288,92 @@ function getMeaningfulBoardUseProfile(sequence, boardPlacements = [], pieceMap =
         routeTiles.add(`${point.x},${point.y}`);
         touched = true;
       });
-      if (touched) routeVisits += 1;
+      if (!touched) return;
+      routeVisits += 1;
+      const routeDepth = routeMaxBoardDepth(route, placement);
+      maxDepth = Math.max(maxDepth, routeDepth);
+      const path = route.path || [];
+      const startsOutside = path.length > 0 && !pointOnPlacement(path[0], placement, pieceMap);
+      const endsOutside = path.length > 0 && !pointOnPlacement(path.at(-1), placement, pieceMap);
+      if (startsOutside && endsOutside) {
+        const transitRegisters = routeRegisterCountOnBoard(route, placement);
+        if (
+          transitRegisters > bestTransitRegisters ||
+          (transitRegisters === bestTransitRegisters && routeDepth > bestTransitDepth)
+        ) {
+          bestTransitRegisters = transitRegisters;
+          bestTransitDepth = routeDepth;
+        }
+      }
     });
-    return { boardIndex, uniqueRouteTiles: routeTiles.size, routeVisits };
+
+    const representativeRegisters = routeGroups.reduce((sum, group) => {
+      if (!group.length) return sum;
+      const groupRegisters = group.reduce(
+        (groupSum, route) => groupSum + routeRegisterCountOnBoard(route, placement),
+        0
+      ) / group.length;
+      return sum + groupRegisters;
+    }, 0);
+    const targetDepth = piece?.kind === "small"
+      ? smallBoardTargetDepth
+      : largeBoardTargetDepth;
+    const registerCoverage = Math.min(1, representativeRegisters / targetRegisters);
+    const depthCoverage = Math.min(1, maxDepth / targetDepth);
+    let contributionScore = registerCoverage * 0.6 + depthCoverage * 0.4;
+    const hasEfficientTransit = (
+      bestTransitRegisters >= efficientTransitRegisters &&
+      bestTransitDepth >= targetDepth
+    );
+    if (hasEfficientTransit) {
+      contributionScore = Math.max(contributionScore, 0.9);
+    }
+
+    const finalCheckpoint = checkpoints.at(-1);
+    const finalCheckpointOnBoard = Boolean(
+      finalCheckpoint && pointOnPlacement(finalCheckpoint, placement, pieceMap)
+    );
+    if (finalCheckpointOnBoard && !hasEfficientTransit && representativeRegisters < targetRegisters) {
+      contributionScore = Math.max(0, contributionScore - 0.15);
+    }
+    contributionScore = Math.min(1, contributionScore);
+
+    const used = routeTiles.size > 0;
+    const weakUse = used && contributionScore < weakUseThreshold;
+    const penalty = !used
+      ? 0 // handled by unused-board pruning/gate
+      : contributionScore < 0.5
+        ? 8
+        : contributionScore < 0.65
+          ? 6
+          : contributionScore < 0.8
+            ? 3
+            : contributionScore < 0.9
+              ? 1
+              : 0;
+
+    return {
+      boardIndex,
+      uniqueRouteTiles: routeTiles.size,
+      routeVisits,
+      representativeRegisters: Number(representativeRegisters.toFixed(2)),
+      maxDepth,
+      targetDepth,
+      bestTransitRegisters,
+      bestTransitDepth,
+      hasEfficientTransit,
+      finalCheckpointOnBoard,
+      contributionScore: Number(contributionScore.toFixed(3)),
+      weakUse,
+      penalty
+    };
   });
-  // A board touched by only one or two route spaces is visually token use even
-  // when a checkpoint technically lies there. Keep it legal, but make it a worse
-  // fit than a course that traverses a meaningful part of every placed board.
-  const penalty = boards.reduce((sum, board) => {
-    if (board.uniqueRouteTiles === 0) return sum; // handled by unused-board gate
-    if (board.uniqueRouteTiles <= 2) return sum + 8;
-    if (board.uniqueRouteTiles <= 4) return sum + 3;
-    return sum;
-  }, 0);
-  return { penalty: Number(penalty.toFixed(2)), boards };
+  const penalty = boards.reduce((sum, board) => sum + board.penalty, 0);
+  return {
+    penalty: Number(penalty.toFixed(2)),
+    weakBoardCount: boards.filter((board) => board.weakUse).length,
+    boards
+  };
 }
 
 function getFinalLegAnticlimax(sequence, preferences = {}) {
@@ -15514,7 +15650,8 @@ function classifyCandidate(sequence, preferences, context = {}) {
     sequence,
     context.boardPlacements ?? [],
     context.pieceMap ?? {},
-    preferences.competitiveMode ? reachableStarts : usableStarts
+    preferences.competitiveMode ? reachableStarts : usableStarts,
+    context.checkpoints ?? []
   );
   const routeDrama = getRouteDramaProfile(sequence, preferences);
   const spacingStarts = Array.isArray(context.activeStarts) && context.activeStarts.length
@@ -16447,8 +16584,8 @@ function buildScenarioReport(scenario, selectedLegIndex) {
       ? `Routed checkpoint pacing: deviations ${scenario.metrics.routedCheckpointPacingExpectation.deviations.map((entry) => `${entry.type} ${entry.actual}/${entry.expectedMinimum} registers`).join(", ")}; player advisory severity ${checkpointPlacementAdvisory?.severity ?? 0}/${checkpointPlacementAdvisory?.threshold ?? 6} (${checkpointPlacementAdvisory?.active ? "shown" : "suppressed"})`
       : "Routed checkpoint pacing: ordinary; player advisory not needed",
     scenario.metrics.meaningfulBoardUse
-      ? `Meaningful board use penalty: ${scenario.metrics.meaningfulBoardUse.penalty}; route tiles by board ${scenario.metrics.meaningfulBoardUse.boards.map((board) => `#${board.boardIndex + 1}:${board.uniqueRouteTiles}`).join(", ")}`
-      : "Meaningful board use penalty: n/a",
+      ? `Meaningful board use: penalty ${scenario.metrics.meaningfulBoardUse.penalty}, weak ${scenario.metrics.meaningfulBoardUse.weakBoardCount ?? 0}; ${scenario.metrics.meaningfulBoardUse.boards.map((board) => `#${board.boardIndex + 1} regs ${board.representativeRegisters}, depth ${board.maxDepth}/${board.targetDepth}, transit ${board.hasEfficientTransit ? "yes" : "no"}, score ${board.contributionScore}, penalty ${board.penalty}`).join("; ")}`
+      : "Meaningful board use: n/a",
     scenario.metrics.routeDrama
       ? `Route drama: ${scenario.metrics.routeDrama.level}, score ${scenario.metrics.routeDrama.score}, penalty ${scenario.metrics.routeDrama.penalty}, sharedTiles ${scenario.metrics.routeDrama.sharedTiles}, crossings ${scenario.metrics.routeDrama.crossings}, reverseEdges ${scenario.metrics.routeDrama.reverseEdges}`
       : "Route drama: n/a",    scenario.metrics.competitiveBlockImpact
@@ -16579,8 +16716,8 @@ let generationOverlayState = {
   slowTimerId: null
 };
 
-// UI-only provisional thresholds. Later calibration can replace these with observed
-// stage percentiles without changing the wording/state architecture.
+// UI responsiveness fallback thresholds. Calibrated route-work wording below
+// takes precedence whenever the generator has a checkpoint-known work estimate.
 const GENERATION_SLOW_STAGE_MS = Object.freeze({
   building: 4200,
   checkpoints: 3200,
@@ -16594,6 +16731,30 @@ const GENERATION_SLOW_STAGE_MS = Object.freeze({
   finishing: 3000,
   general: 4200
 });
+
+// Coarse player-facing route-work wording from the closed v47 calibration.
+// The checkpoint-known route-work diagnostics observed about 9.5k expansions at
+// the median and 34.9k at p90. These bands are presentation only: they never
+// change search budgets, proposal ranking, legality, acceptance, or timing.
+const V47_ROUTE_WORK_DISPLAY_BANDS = Object.freeze({
+  medianExpansions: 9502,
+  p90Expansions: 34912
+});
+
+function getCalibratedRouteWorkOverlayHint(stage = "") {
+  const match = String(stage || "").match(/~([0-9][0-9,]*)\s+route expansions/i);
+  if (!match) return "";
+  const predictedExpansions = Number(match[1].replaceAll(",", ""));
+  if (!Number.isFinite(predictedExpansions)) return "";
+
+  if (predictedExpansions < V47_ROUTE_WORK_DISPLAY_BANDS.medianExpansions) {
+    return "This layout looks fairly straightforward to check.";
+  }
+  if (predictedExpansions <= V47_ROUTE_WORK_DISPLAY_BANDS.p90Expansions) {
+    return "";
+  }
+  return "This layout may take longer than usual to check.";
+}
 
 function classifyGenerationStage(stage = "", stageContext = null) {
   const raw = String(stage || "").toLowerCase();
@@ -16652,7 +16813,7 @@ function getGenerationUserFacingState(stage = "", options = {}) {
   let activity = "Trying a course setup and checking that it plays well.";
   if (key === "retry") {
     heading = "Trying another layout";
-    activity = "The previous layout was not a close enough match, so another one is being tried.";
+    activity = "The previous layout did not work out, so another one is being tried.";
   } else if (key === "building") {
     heading = "Building the course";
     activity = "Choosing boards and arranging the course.";
@@ -16687,6 +16848,7 @@ function getGenerationUserFacingState(stage = "", options = {}) {
     heading,
     activity,
     slow,
+    calibratedWorkHint: getCalibratedRouteWorkOverlayHint(stage),
     slowHint: slow ? getGenerationSlowHint(key, stageContext) : ""
   };
 }
@@ -16737,7 +16899,7 @@ function renderGeneratingOverlayState() {
   }
   if (activityEl) activityEl.textContent = userState.activity;
   if (hintEl) {
-    const hint = userState.slowHint || getGenerationConstraintHint(generationOverlayState.preferences ?? {});
+    const hint = userState.calibratedWorkHint || userState.slowHint || getGenerationConstraintHint(generationOverlayState.preferences ?? {});
     hintEl.textContent = hint;
     hintEl.classList.toggle("hidden", !hint);
   }
@@ -17653,7 +17815,9 @@ function ensureDevFastBaselineControls() {
 
 function updateDevView() {
   ensureDevGenerationSeedControls();
-  ensureDevFastBaselineControls();
+  // Traffic/alternate-route experiment controls are intentionally no longer
+  // surfaced in Dev View. The dormant override helpers remain below so this UI
+  // cleanup does not alter the generation-mode mechanisms themselves.
   const enabled = isDevViewEnabled();
   if (enabled) {
     ensureCourseEvaluationReportElement();
@@ -17662,7 +17826,6 @@ function updateDevView() {
   document.getElementById("report-panel")?.classList.toggle("hidden", !enabled);
   document.getElementById("board-audit-toggle-label")?.classList.toggle("hidden", !enabled);
   document.getElementById("dev-generation-seed-controls")?.classList.toggle("hidden", !enabled);
-  document.getElementById("dev-fast-baseline-controls")?.classList.toggle("hidden", !enabled);
   document.getElementById("run-diagnostics")?.classList.add("hidden");
   updateBoardAuditVisibility();
   updateDevStartResidualTable(currentScenario);
@@ -18331,7 +18494,11 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     } else {
       const configuredDockSets = sandwichedDock
         ? orderedDockIds.map((dockId) => [dockId])
-        : (dockConfigurations.length ? dockConfigurations : orderedDockIds.map((dockId) => [dockId]));
+        : (
+          dockConfigurations.length && isVariantForced(preferences, "extraDocks")
+            ? [...dockConfigurations, ...orderedDockIds.map((dockId) => [dockId])]
+            : (dockConfigurations.length ? dockConfigurations : orderedDockIds.map((dockId) => [dockId]))
+        );
 
       for (const dockConfiguration of configuredDockSets) {
         // Preserve the established dock-placement semantics. Calibration ranks
@@ -18571,6 +18738,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
   const stallLimit = getFlagRetryStallLimit(generationPreferences);
   let evaluationsUsed = 0;
   let bestScenario = null;
+  let bestExtraDocksNearMissScenario = null;
   let staleRetries = 0;
   const rejectionEvents = [];
   let currentConstructionFingerprint = null;
@@ -19639,16 +19807,12 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     const effectiveStartZoneCount = effectiveNoDocks
       ? (noDockEdge ? 1 : 0)
       : scenarioDockPlacements.length;
+    const extraDocksRequestMismatch = Boolean(
+      effectiveVariantBundle.extraDocks &&
+      effectiveStartZoneCount <= 1 &&
+      isVariantForced(preferences, "extraDocks")
+    );
     if (effectiveVariantBundle.extraDocks && effectiveStartZoneCount <= 1) {
-      if (isVariantForced(preferences, "extraDocks")) {
-        recordRejectionEvent(
-          retryTelemetryBefore,
-          "extra-docks",
-          "Extra Docks was forced but fewer than two dock zones survived"
-        );
-        staleRetries += 1;
-        continue;
-      }
       effectiveVariantBundle = {
         ...effectiveVariantBundle,
         extraDocks: false
@@ -19693,7 +19857,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     );
 
     await reportStage("Checking difficulty, length, and final fit", evaluationsUsed);
-    const metrics = classifyCandidate(sequence, {
+    let metrics = classifyCandidate(sequence, {
       ...generationPreferences,
       ...effectiveVariantBundle,
       actFast,
@@ -19709,6 +19873,13 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       tileMap: scenarioTileMap,
       goalTileMap
     });
+    if (extraDocksRequestMismatch) {
+      metrics = {
+        ...metrics,
+        acceptable: false,
+        hardFailures: [...new Set([...(metrics.hardFailures ?? []), "extra-docks"])]
+      };
+    }
     const analyzedReachableIndices = new Set(
       computeCourseReachableStarts(sequence.firstLeg).map((entry) => entry.index)
     );
@@ -19879,12 +20050,24 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     }, effectiveVariantBundle);
 
     const scenarioFallbackScore = getFallbackScenarioScore(scenario);
-    const bestFallbackScore = getFallbackScenarioScore(bestScenario);
-    if (Number.isFinite(scenarioFallbackScore) && scenarioFallbackScore < bestFallbackScore) {
-      bestScenario = scenario;
-      staleRetries = 0;
+    if (extraDocksRequestMismatch) {
+      const bestNearMissScore = getFallbackScenarioScore(bestExtraDocksNearMissScenario);
+      if (Number.isFinite(scenarioFallbackScore) && scenarioFallbackScore < bestNearMissScore) {
+        bestExtraDocksNearMissScenario = scenario;
+      }
+      // This board construction cannot satisfy forced Extra Docks. Retain the
+      // completed one-dock course as a last-resort near miss, then move on to a
+      // fresh construction instead of spending checkpoint retries on a setup
+      // that can never become compliant.
+      staleRetries = stallLimit;
     } else {
-      staleRetries += 1;
+      const bestFallbackScore = getFallbackScenarioScore(bestScenario);
+      if (Number.isFinite(scenarioFallbackScore) && scenarioFallbackScore < bestFallbackScore) {
+        bestScenario = scenario;
+        staleRetries = 0;
+      } else {
+        staleRetries += 1;
+      }
     }
 
     if (!scenario.metrics.acceptable) {
@@ -19899,13 +20082,14 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       );
     }
 
-    if (scenario.metrics.acceptable || (retry > 0 && staleRetries >= stallLimit)) {
+    if (extraDocksRequestMismatch || scenario.metrics.acceptable || (retry > 0 && staleRetries >= stallLimit)) {
       break;
     }
   }
 
   return {
     scenario: bestScenario,
+    extraDocksNearMissScenario: bestExtraDocksNearMissScenario,
     evaluationsUsed: Math.max(1, evaluationsUsed),
     rejectionEvents,
     calibrationConstructionSnapshot
@@ -20509,6 +20693,7 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
   generationDiagnostics.searchProfile.devRouteModelOverrideActive =
     diagnosticsDevRouteModelOverrideActive;
   let bestScenario = null;
+  let bestExtraDocksNearMissScenario = null;
   let crashedAttempts = 0;
   let lastAttemptError = null;
   let attempt = 0;
@@ -20728,6 +20913,14 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
       })));
     }
     const scenario = result.scenario;
+    const extraDocksNearMissScenario = result.extraDocksNearMissScenario ?? null;
+    if (extraDocksNearMissScenario) {
+      const nearMissScore = getFallbackScenarioScore(extraDocksNearMissScenario);
+      const bestNearMissScore = getFallbackScenarioScore(bestExtraDocksNearMissScenario);
+      if (Number.isFinite(nearMissScore) && nearMissScore < bestNearMissScore) {
+        bestExtraDocksNearMissScenario = extraDocksNearMissScenario;
+      }
+    }
     const lastMeaningfulStage = lastStage;
     recordStageBoundary(scenario ? "Candidate complete" : "Candidate rejected");
 
@@ -20813,6 +21006,15 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
     terminationReason = attempt >= effectiveMaxAttempts
       ? (emergencyActivated ? "emergency-attempt-limit" : "attempt-limit")
       : "search-ended";
+  }
+
+  if (
+    !bestScenario &&
+    bestExtraDocksNearMissScenario &&
+    terminationReason !== "user-best-so-far"
+  ) {
+    bestScenario = bestExtraDocksNearMissScenario;
+    terminationReason = "extra-docks-fallback";
   }
 
   if (bestScenario) {
@@ -21332,7 +21534,17 @@ function summarizeCalibrationScenario(assets, scenario) {
       routedBoardUse: (metrics.meaningfulBoardUse?.boards ?? []).map((board) => ({
         boardIndex: board.boardIndex,
         uniqueRouteTiles: board.uniqueRouteTiles,
-        routeVisits: board.routeVisits
+        routeVisits: board.routeVisits,
+        representativeRegisters: board.representativeRegisters,
+        maxDepth: board.maxDepth,
+        targetDepth: board.targetDepth,
+        bestTransitRegisters: board.bestTransitRegisters,
+        bestTransitDepth: board.bestTransitDepth,
+        hasEfficientTransit: board.hasEfficientTransit,
+        finalCheckpointOnBoard: board.finalCheckpointOnBoard,
+        contributionScore: board.contributionScore,
+        weakUse: board.weakUse,
+        penalty: board.penalty
       })),
       trafficAveragePenalty: scenario.sequence?.firstLeg?.summary?.fullCourseTraffic?.averagePenalty ?? null,
       trafficAverageRawPenalty: scenario.sequence?.firstLeg?.summary?.fullCourseTraffic?.averageRawPenalty ?? null,
