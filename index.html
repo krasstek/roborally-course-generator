@@ -8,7 +8,7 @@
   <meta name="mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="mobile-web-app-title" content="RoboRally" />
   <meta name="application-name" content="RoboRally Course Generator" />
-  <meta name="app-version" content="20260826210336" />
+  <meta name="app-version" content="20260826173915" />
   <title>RoboRally Course Generator</title>
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="icon" type="image/png" sizes="16x16" href="./assets/icons/favicon-16.png" />
@@ -441,6 +441,16 @@
       box-shadow:
         inset 0 0 0 6px rgba(255, 255, 255, 0.5),
         0 16px 30px rgba(12, 16, 20, 0.18);
+    }
+
+    .map-inspection-control {
+      margin: 12px 0 8px;
+      color: rgba(31, 40, 47, 0.82);
+      max-width: 320px;
+    }
+
+    .map-inspection-control select {
+      width: 100%;
     }
 
     .meta-strip {
@@ -1261,9 +1271,12 @@
       }
 
       #about-button,
-      #reroll,
-      #trace-leg-label {
+      #reroll {
         grid-column: 1 / -1;
+      }
+
+      .map-inspection-control {
+        max-width: none;
       }
 
       .setup-row {
@@ -1457,12 +1470,6 @@
             </label>
           </div>
         </div>
-        <label id="trace-leg-label" class="hidden">
-          Trace leg
-          <select id="leg-select">
-            <option value="all" selected>All legs</option>
-          </select>
-        </label>
         <label class="toggle-label">
           <input id="dev-view" type="checkbox" />
           Dev View
@@ -1477,6 +1484,14 @@
       </div>
       <p id="fit-note" class="fit-note hidden"></p>
       <div id="setup-summary" class="setup-summary hidden">
+        <div class="setup-row">
+          <div class="setup-label">Difficulty</div>
+          <div id="setup-difficulty" class="setup-value"></div>
+        </div>
+        <div class="setup-row">
+          <div class="setup-label">Length</div>
+          <div id="setup-length" class="setup-value"></div>
+        </div>
         <div class="setup-row">
           <div class="setup-label">Boards</div>
           <div class="setup-value-wrap">
@@ -1493,7 +1508,7 @@
           <div id="setup-overlay-tiles" class="setup-value"></div>
         </div>
         <div class="setup-row">
-          <div class="setup-label">Flags</div>
+          <div class="setup-label">Checkpoints</div>
           <div id="setup-flags" class="setup-value"></div>
         </div>
         <div id="course-explanation-panel" class="course-explanation hidden">
@@ -1507,6 +1522,12 @@
           <p id="rules-advice-note" class="rules-note rules-advice-note hidden"></p>
         </div>
       </div>
+      <label id="trace-leg-label" class="map-inspection-control hidden">
+        Trace leg
+        <select id="leg-select">
+          <option value="all" selected>All legs</option>
+        </select>
+      </label>
       <canvas id="canvas"></canvas>
       <div class="meta-strip">
         <span class="pill">Orange square: prohibited starting space</span>
@@ -1608,8 +1629,9 @@
         <button id="about-close-icon" class="secondary-button about-close" type="button" aria-label="Close about dialog">×</button>
       </div>
       <p class="about-copy">Unofficial fan-made RoboRally course generator.</p>
+      <p class="about-copy">The layouts are randomized, but not blindly. The generator checks how robots can travel through the course and weighs starting balance, difficulty, length, checkpoint pacing, traffic, and how well each board is used before presenting a result.</p>
+      <p class="about-copy">It can still produce unusual courses. Course notes point out some quirks so you can decide whether to play the result or generate another.</p>
       <p class="about-copy">This project is unaffiliated with the RoboRally publisher or rights holders.</p>
-      <p class="about-copy">It is currently in development and intended for fan use. If any content attribution or usage needs adjustment, the project will be updated accordingly.</p>
       <div class="about-actions">
         <button id="about-close-button" class="secondary-button" type="button">Close</button>
       </div>

@@ -1927,6 +1927,50 @@ function formatDifficultyLabel(difficultyPreference) {
   return labels[difficultyPreference] ?? String(difficultyPreference ?? "intermediate");
 }
 
+function formatSummaryBandLabel(value) {
+  const text = String(value ?? "");
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : "Unknown";
+}
+
+function isValueInBand(value, band) {
+  return Array.isArray(band) && value >= band[0] && value < band[1];
+}
+
+function formatActualDifficultyLabel(difficultyRaw) {
+  const value = Number(difficultyRaw);
+  if (!Number.isFinite(value)) return "Unknown";
+  const thresholds = getDifficultyThresholds();
+  if (isValueInBand(value, thresholds.brutal)) {
+    return formatSummaryBandLabel(formatDifficultyLabel("brutal"));
+  }
+  const matches = ["easy", "moderate", "hard"]
+    .filter((band) => isValueInBand(value, thresholds[band]))
+    .map((band) => formatSummaryBandLabel(formatDifficultyLabel(band)));
+  if (matches.length) return matches.join("–");
+  return value < thresholds.easy[0] ? "Beginner" : "Advanced";
+}
+
+function formatActualLengthLabel(lengthRaw) {
+  const value = Number(lengthRaw);
+  if (!Number.isFinite(value)) return "Unknown";
+  const thresholds = getLengthThresholds();
+  const matches = ["short", "moderate", "long", "epic"]
+    .filter((band) => isValueInBand(value, thresholds[band]))
+    .map((band) => formatSummaryBandLabel(formatLengthLabel(band)));
+  if (matches.length) return matches.join("–");
+  return value < thresholds.short[0] ? "Short" : "Epic";
+}
+
+function getEstimatedGameTurnsLabel(scenario) {
+  const lengthMetrics = scenario?.metrics?.lengthMetrics;
+  const routeActions = Number(lengthMetrics?.inputs?.totalActionLoad);
+  if (!Number.isFinite(routeActions)) return null;
+  const uncertaintyActions = Number(lengthMetrics?.contributions?.forecastEquivalentActions);
+  const adjustedActions = routeActions + (Number.isFinite(uncertaintyActions) ? uncertaintyActions : 0);
+  const turns = Math.max(1, Math.floor(adjustedActions / 5));
+  return `${turns}+ game turn${turns === 1 ? "" : "s"}`;
+}
+
 function getTuningDifficulty(difficultyPreference) {
   return difficultyPreference === "brutal" ? "hard" : (difficultyPreference ?? "moderate");
 }
@@ -2771,6 +2815,8 @@ function initializeBoardAudit(assets) {
 function updateSetupSummary(scenario) {
   const fitNoteEl = document.getElementById("fit-note");
   const summary = document.getElementById("setup-summary");
+  const difficultyEl = document.getElementById("setup-difficulty");
+  const lengthEl = document.getElementById("setup-length");
   const boardsEl = document.getElementById("setup-boards");
   const overlayBoardsRowEl = document.getElementById("setup-overlay-boards-row");
   const overlayBoardsEl = document.getElementById("setup-overlay-boards");
@@ -2784,6 +2830,8 @@ function updateSetupSummary(scenario) {
   if (
     !fitNoteEl ||
     !summary ||
+    !difficultyEl ||
+    !lengthEl ||
     !boardsEl ||
     !overlayBoardsRowEl ||
     !overlayBoardsEl ||
@@ -2804,6 +2852,8 @@ function updateSetupSummary(scenario) {
     fitNoteEl.textContent = "";
     fitNoteEl.classList.add("hidden");
     summary.classList.add("hidden");
+    difficultyEl.textContent = "";
+    lengthEl.textContent = "";
     boardsEl.textContent = "";
     overlayBoardsRowEl.classList.add("hidden");
     overlayBoardsEl.textContent = "";
@@ -2832,6 +2882,16 @@ function updateSetupSummary(scenario) {
     };
   }
 
+  const actualDifficultyLabel = formatActualDifficultyLabel(scenario.metrics?.difficultyRaw);
+  const actualLengthLabel = formatActualLengthLabel(
+    scenario.metrics?.lengthFitRaw ?? scenario.metrics?.lengthRaw
+  );
+  const estimatedTurnsLabel = getEstimatedGameTurnsLabel(scenario);
+  difficultyEl.textContent = actualDifficultyLabel;
+  lengthEl.textContent = estimatedTurnsLabel
+    ? `${actualLengthLabel} (${estimatedTurnsLabel})`
+    : actualLengthLabel;
+
   const boardLabels = scenario.mainBoardIds.map((pieceId) => (
     formatBoardLabel(pieceId, scenario.pieceMap)
   ));
@@ -2859,7 +2919,7 @@ function updateSetupSummary(scenario) {
   const visibleCheckpointCount = scenario.virtualBots
     ? Math.max(0, scenario.checkpoints.length - 1)
     : scenario.checkpoints.length;
-  flagsEl.textContent = `${visibleCheckpointCount} checkpoint${visibleCheckpointCount === 1 ? "" : "s"}${scenario.virtualBots ? " + entry" : ""}`;
+  flagsEl.textContent = `${visibleCheckpointCount}${scenario.virtualBots ? " + entry" : ""}`;
   const noteParts = [];
   const difficultyFit = scenario.metrics.difficultyFit ?? 0;
   const lengthFit = scenario.metrics.lengthFit ?? 0;
@@ -3575,20 +3635,36 @@ function updateRulesNote(scenario) {
   }
 
   if (scenario.noDocks) {
+    let noDockText;
     if (scenario.subsidizedStarts) {
-      notes.push("No Docks: do not use a docking bay. The subsidized starting spaces along the indicated outer board edge replace docking-bay starting spaces.");
+      noDockText = "No Docks: do not use a docking bay. The subsidized starting spaces along the indicated outer board edge replace docking-bay starting spaces.";
     } else if (scenario.payToWin) {
-      notes.push("No Docks: do not use a docking bay. The priced starting spaces along the indicated outer board edge replace docking-bay starting spaces.");
-    } else if (scenario.startupSpinUp) {
-      notes.push("No Docks: do not use a docking bay. White circles along the indicated outer board edge are the available starting spaces.");
+      noDockText = "No Docks: do not use a docking bay. The priced starting spaces along the indicated outer board edge replace docking-bay starting spaces.";
     } else {
-      notes.push("No Docks: do not use a docking bay. White circles along the indicated outer board edge are the available starting spaces; robots begin facing into the factory.");
+      noDockText = "No Docks: do not use a docking bay. White circles along the indicated outer board edge are the available starting spaces.";
     }
+    if (!scenario.startupSpinUp) {
+      const noDockFacing = scenario.noDockEdge?.facing ?? scenario.noDockEdges?.[0]?.facing ?? null;
+      if (noDockFacing) {
+        noDockText += ` Robots start facing ${noDockFacing} on the displayed map.`;
+      }
+    }
+    notes.push(noDockText);
     if (scenario.startupSpinUp) {
       notes.push(appendRuleReference(
         "Startup Spin-Up with No Docks: players may choose their robots' initial facing freely.",
         { source: "previous-editions", relation: "patterned" }
       ));
+    }
+  }
+
+  if (scenario.sandwichedDock) {
+    if (scenario.startupSpinUp) {
+      notes.push("Sandwiched Dock: robots start on the docking bay.");
+    } else if (scenario.sandwichedDockFacing) {
+      notes.push(`Sandwiched Dock: robots start on the docking bay, facing ${scenario.sandwichedDockFacing} toward checkpoint 1 on the displayed map.`);
+    } else {
+      notes.push("Sandwiched Dock: robots start on the docking bay, facing toward checkpoint 1.");
     }
   }
 
@@ -9346,10 +9422,93 @@ function getSandwichedDockStructure(boardPlacements, dockPlacement, pieceMap) {
     boardIndices: valid
       ? [...new Set([...sideAIndices, ...sideBIndices])]
       : [],
+    sideAIndices: valid ? [...sideAIndices] : [],
+    sideBIndices: valid ? [...sideBIndices] : [],
     sideACoverage,
     sideBCoverage,
     requiredCoverage
   };
+}
+
+function getBoardAdjacencyForSandwichSides(boardPlacements, pieceMap) {
+  const rects = (boardPlacements || []).map((placement, index) => ({
+    index,
+    ...getPlacedRect(pieceMap[placement.pieceId], placement)
+  }));
+  const adjacency = new Map(rects.map((rect) => [rect.index, new Set()]));
+  const overlap = (a0, a1, b0, b1) => Math.max(0, Math.min(a1, b1) - Math.max(a0, b0));
+
+  for (let left = 0; left < rects.length; left += 1) {
+    for (let right = left + 1; right < rects.length; right += 1) {
+      const a = rects[left];
+      const b = rects[right];
+      let sharedEdge = 0;
+      if (a.x + a.width === b.x || b.x + b.width === a.x) {
+        sharedEdge = overlap(a.y, a.y + a.height, b.y, b.y + b.height);
+      } else if (a.y + a.height === b.y || b.y + b.height === a.y) {
+        sharedEdge = overlap(a.x, a.x + a.width, b.x, b.x + b.width);
+      }
+      if (sharedEdge <= 0) continue;
+      adjacency.get(a.index).add(b.index);
+      adjacency.get(b.index).add(a.index);
+    }
+  }
+
+  return adjacency;
+}
+
+function expandSandwichSideBoardIndices(seedIndices, adjacency) {
+  const expanded = new Set(seedIndices || []);
+  const queue = [...expanded];
+  for (let index = 0; index < queue.length; index += 1) {
+    const current = queue[index];
+    for (const next of adjacency.get(current) || []) {
+      if (expanded.has(next)) continue;
+      expanded.add(next);
+      queue.push(next);
+    }
+  }
+  return expanded;
+}
+
+function getSandwichedDockSideBoardGroups(boardPlacements, dockPlacements, pieceMap) {
+  const adjacency = getBoardAdjacencyForSandwichSides(boardPlacements, pieceMap);
+
+  for (const dockPlacement of dockPlacements || []) {
+    const structure = getSandwichedDockStructure(boardPlacements, dockPlacement, pieceMap);
+    if (!structure.valid) continue;
+
+    const sideA = expandSandwichSideBoardIndices(structure.sideAIndices, adjacency);
+    const sideB = expandSandwichSideBoardIndices(structure.sideBIndices, adjacency);
+    const overlap = [...sideA].some((index) => sideB.has(index));
+    if (overlap) continue;
+
+    return { sideA, sideB };
+  }
+
+  return null;
+}
+
+function sandwichedDockHasCheckpointsOnBothSides(
+  boardPlacements,
+  dockPlacements,
+  pieceMap,
+  checkpoints
+) {
+  const sides = getSandwichedDockSideBoardGroups(boardPlacements, dockPlacements, pieceMap);
+  if (!sides) return false;
+
+  let sideAHasCheckpoint = false;
+  let sideBHasCheckpoint = false;
+  (checkpoints || []).forEach((checkpoint) => {
+    boardPlacements.forEach((placement, index) => {
+      if (!pointOnPlacement(checkpoint, placement, pieceMap)) return;
+      if (sides.sideA.has(index)) sideAHasCheckpoint = true;
+      if (sides.sideB.has(index)) sideBHasCheckpoint = true;
+    });
+  });
+
+  return sideAHasCheckpoint && sideBHasCheckpoint;
 }
 
 function getProtectedSandwichBoardIndices(boardPlacements, dockPlacements, pieceMap) {
@@ -9368,6 +9527,39 @@ function hasPhysicalSandwichedDock(boardPlacements, dockPlacements, pieceMap) {
   return (dockPlacements || []).some((dockPlacement) => (
     getSandwichedDockStructure(boardPlacements, dockPlacement, pieceMap).valid
   ));
+}
+
+function getSandwichedDockFacingTowardCheckpoint(dockPlacement, pieceMap, checkpoint) {
+  if (!dockPlacement || !checkpoint) return null;
+  const dockPiece = pieceMap[dockPlacement.pieceId];
+  if (!dockPiece) return null;
+
+  const dims = rotatedDimensions(dockPiece, dockPlacement.rotation ?? 0);
+  const centerX = dockPlacement.x + (dims.width - 1) / 2;
+  const centerY = dockPlacement.y + (dims.height - 1) / 2;
+
+  if (dims.width >= dims.height) {
+    if (checkpoint.y < centerY) return "N";
+    if (checkpoint.y > centerY) return "S";
+  } else {
+    if (checkpoint.x < centerX) return "W";
+    if (checkpoint.x > centerX) return "E";
+  }
+
+  return dockPlacement.startFacingOverride ?? null;
+}
+
+function orientSandwichedDockStartsTowardCheckpoint(starts, dockPlacements, pieceMap, checkpoint) {
+  if (!checkpoint || !starts?.length || !dockPlacements?.length) return starts;
+
+  return starts.map((start) => {
+    const dockPlacement = dockPlacements.find((placement) => (
+      pointOnPlacement(start, placement, pieceMap)
+    ));
+    if (!dockPlacement) return start;
+    const facing = getSandwichedDockFacingTowardCheckpoint(dockPlacement, pieceMap, checkpoint);
+    return facing ? { ...start, facing } : start;
+  });
 }
 
 function buildDockSummaries(boardPlacements, dockPlacements, pieceMap) {
@@ -15339,7 +15531,10 @@ function getMeaningfulBoardUseProfile(
     contributionScore = Math.min(1, contributionScore);
 
     const used = routeTiles.size > 0;
-    const weakUse = used && contributionScore < weakUseThreshold;
+    // Zero routed use is still handled by the existing unused-board hard gate.
+    // Keep it in the soft advisory count as well, because Sandwiched Dock may
+    // deliberately preserve a structurally required board that cannot be pruned.
+    const weakUse = !used || contributionScore < weakUseThreshold;
     const penalty = !used
       ? 0 // handled by unused-board pruning/gate
       : contributionScore < 0.5
@@ -18854,9 +19049,31 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         ? [flagZero, ...pickedCheckpoints]
         : pickedCheckpoints;
       const playableCheckpoints = getPlayableCheckpoints(checkpoints, virtualBots);
-      const activeStarts = virtualBots
+      // A Sandwiched Dock is only useful when the checkpoint sequence actually
+      // reaches both board components. Reject one-sided checkpoint layouts before
+      // spending any route-search work on them.
+      if (
+        sandwichedDock &&
+        !sandwichedDockHasCheckpointsOnBothSides(
+          boardLayout.placements,
+          courseDockPlacements,
+          pieceMap,
+          playableCheckpoints
+        )
+      ) {
+        continue;
+      }
+      const proposalStarts = virtualBots
         ? buildVirtualRobotStarts(flagZero, preferences.playerCount, startupSpinUp)
         : filterStartsForGoals(setupStarts, checkpoints);
+      const activeStarts = (!virtualBots && sandwichedDock && !startupSpinUp)
+        ? orientSandwichedDockStartsTowardCheckpoint(
+          proposalStarts,
+          courseDockPlacements,
+          pieceMap,
+          playableCheckpoints[0]
+        )
+        : proposalStarts;
       const prediction = predictConstructionGuidanceStage(
         assets.constructionGuidance,
         "checkpointsKnown",
@@ -19075,11 +19292,19 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         break;
       }
       effectiveVariantBundle = courseAvailability.variantBundle;
-      activeStarts = virtualBots
+      const resolvedPassStarts = virtualBots
         ? buildVirtualRobotStarts(flagZero, preferences.playerCount, startupSpinUp)
         : effectiveNoDocks
           ? filterStartsForGoals(noDockStarts, checkpoints)
           : filterStartsForGoals(resolved.starts, checkpoints);
+      activeStarts = (!virtualBots && sandwichedDock && !startupSpinUp)
+        ? orientSandwichedDockStartsTowardCheckpoint(
+          resolvedPassStarts,
+          scenarioDockPlacements,
+          pieceMap,
+          playableCheckpoints[0]
+        )
+        : resolvedPassStarts;
       if (pass === 0 && generationPreferences.calibrationCaptureEvidence) {
         calibrationConstructionSnapshot = buildCalibrationConstructionSnapshot({
           boardPlacements: scenarioBoardPlacements,
@@ -19105,7 +19330,6 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
           !startEnergyPricing &&
           !virtualBots &&
           !effectiveNoDocks &&
-          !sandwichedDock &&
           scenarioDockPlacements.length === 1
         );
         const baseAnalysisOptions = applyVariantAnalysisOptions({
@@ -19965,6 +20189,13 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     );
     const movingTargetTimelines = sequence.movingTargetTimelines ?? [];
     const movingTargetReentryMarkers = collectMovingTargetReentryMarkers(scenarioTileMap, playableCheckpoints, effectiveVariantBundle.movingTargets);
+    const sandwichedDockFacing = (sandwichedDock && !startupSpinUp)
+      ? getSandwichedDockFacingTowardCheckpoint(
+        scenarioDockPlacements[0],
+        pieceMap,
+        playableCheckpoints[0]
+      )
+      : null;
     const scenario = applyVariantScenarioState({
       pieceMap: assets.pieceMap,
       imageMap: assets.imageMap,
@@ -19992,6 +20223,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         scenarioDockPlacements,
         pieceMap
       ),
+      sandwichedDockFacing,
       noDockEdge: noDockEdge ? { boardIndex: noDockEdge.boardIndex, pieceId: noDockEdge.pieceId, side: noDockEdge.side, facing: noDockEdge.facing } : null,
       noDockEdges: noDockEdges.map((edge) => ({ boardIndex: edge.boardIndex, pieceId: edge.pieceId, side: edge.side, facing: edge.facing, edgeLength: edge.edgeLength })),
       noDockStarts,
@@ -20252,11 +20484,19 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
   } else {
     goalTileMap = applyFlagOverrides(tileMap, checkpoints, { hazardousFlags, movingTargets });
   }
-  const resolvedActiveStarts = virtualBots
+  const rawResolvedActiveStarts = virtualBots
     ? buildVirtualRobotStarts(flagZero, snapshot.preferences.playerCount, startupSpinUp)
     : noDocks
       ? filterStartsForGoals(noDockStarts, checkpoints)
       : filterStartsForGoals(starts, checkpoints);
+  const resolvedActiveStarts = (!virtualBots && sandwichedDock && !startupSpinUp)
+    ? orientSandwichedDockStartsTowardCheckpoint(
+      rawResolvedActiveStarts,
+      dockPlacements,
+      pieceMap,
+      playableCheckpoints[0]
+    )
+    : rawResolvedActiveStarts;
   const activeStarts = Array.isArray(snapshot.activeStarts) && snapshot.activeStarts.length
     ? snapshot.activeStarts
     : resolvedActiveStarts;
