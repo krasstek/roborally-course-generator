@@ -8,7 +8,7 @@
 # R dependency: jsonlite only. Node collection remains dependency-free and offline.
 
 input_files <- c(
-  "calibration-output/calibration-v47.jsonl"
+  "calibration-output/calibration-v47z.jsonl"
 )
 output_file <- "calibration/calibration-model-selection.json"
 
@@ -133,6 +133,7 @@ observation_row <- function(record) {
     player_count = safe_num(plan$playerCount),
     requested_difficulty = safe_chr(plan$difficulty),
     requested_length = safe_chr(plan$length),
+    requested_board_spread = if (identical(safe_chr(plan$boardSpread), "tight")) "tight" else "random",
     requested_board_count = safe_num(plan$boardCount),
     requested_flag_count = safe_num(plan$flagCount),
     checkpoint_sampling_regime = safe_chr(plan$checkpointSamplingRegime),
@@ -203,6 +204,7 @@ factorize <- function(data) {
   data$flag_factor <- factor(data$requested_flag_count)
   data$difficulty_factor <- factor(data$requested_difficulty, levels = c("easy", "moderate", "hard", "brutal"))
   data$length_factor <- factor(data$requested_length, levels = c("short", "moderate", "long", "epic"))
+  data$board_spread_factor <- factor(data$requested_board_spread, levels = c("random", "tight"))
   data$inventory_factor <- factor(data$inventory_preset)
   data
 }
@@ -573,9 +575,9 @@ dynamic_archiving <- rows[rows$stratum == "dynamic-archiving", , drop = FALSE]
 # Target-bearing terms are retained only as diagnostics so the new evidence can be
 # compared with the historical model family. Production candidates use physical
 # construction evidence only; requested difficulty/length remain external targets.
-counts_terms_no_inventory <- "player_factor + board_factor + flag_factor + difficulty_factor + length_factor"
+counts_terms_no_inventory <- "player_factor + board_factor + flag_factor + board_spread_factor + difficulty_factor + length_factor"
 counts_terms <- paste(counts_terms_no_inventory, "+ inventory_factor")
-counts_physical_no_inventory <- "player_factor + board_factor + flag_factor"
+counts_physical_no_inventory <- "player_factor + board_factor + flag_factor + board_spread_factor"
 counts_physical <- paste(counts_physical_no_inventory, "+ inventory_factor")
 profile_terms <- "profile_overall + profile_hazard + profile_congestion + profile_complexity + profile_swinginess + profile_density"
 layout_terms <- "compactness + adjacency_count + graph_diameter"
@@ -679,6 +681,7 @@ for (record in observations) {
       player_count = safe_num(plan$playerCount),
       requested_difficulty = safe_chr(plan$difficulty),
       requested_length = safe_chr(plan$length),
+      requested_board_spread = if (identical(safe_chr(plan$boardSpread), "tight")) "tight" else "random",
       requested_board_count = safe_num(plan$boardCount),
       requested_flag_count = safe_num(plan$flagCount),
       inventory_preset = safe_chr(plan$inventoryPreset),
@@ -835,13 +838,14 @@ treatment_models <- list()
 if (nrow(counterfactuals)) {
   recovery_effects <- counterfactuals[counterfactuals$kind == "recovery-rule", , drop = FALSE]
   overlay_effects <- counterfactuals[counterfactuals$kind == "remove-board-overlays", , drop = FALSE]
+  dynamic_archiving_length_terms <- checkpoint_manhattan_physical_terms
   treatment_terms <- checkpoint_hybrid_physical_terms
 
   treatment_models$dynamicArchiving <- list(
     length = fit_lm_snapshot(
       "dynamic-archiving-paired-length-effect",
       "paired-treatment",
-      stats::as.formula(paste("effect_length ~", treatment_terms)),
+      stats::as.formula(paste("effect_length ~", dynamic_archiving_length_terms)),
       recovery_effects,
       "effect_length",
       min_n = 80L
@@ -1236,6 +1240,8 @@ coverage <- list(
   requestedFlagCounts = sort(unique(rows$requested_flag_count[is.finite(rows$requested_flag_count)])),
   difficulties = sort(unique(rows$requested_difficulty[!is.na(rows$requested_difficulty)])),
   lengths = sort(unique(rows$requested_length[!is.na(rows$requested_length)])),
+  boardSpreads = sort(unique(rows$requested_board_spread[!is.na(rows$requested_board_spread)])),
+  boardSpreadCounts = as.list(table(rows$requested_board_spread, useNA = "ifany")),
   checkpointSamplingRegimes = sort(unique(rows$checkpoint_sampling_regime[!is.na(rows$checkpoint_sampling_regime)])),
   checkpointSamplingRegimeCounts = as.list(table(rows$checkpoint_sampling_regime, useNA = "ifany")),
   inventoryPresets = sort(unique(rows$inventory_preset[!is.na(rows$inventory_preset)])),

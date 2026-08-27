@@ -3,9 +3,9 @@
   "calibration": "robo-rally-construction-guidance-production-v2",
   "source": {
     "analysis": "construction-guidance-v3-model-selection",
-    "generatedAt": "2026-08-26 05:38:08 UTC",
-    "observations": 2560,
-    "modelEligibleObservations": 2520
+    "generatedAt": "2026-08-27 16:50:57 UTC",
+    "observations": 3840,
+    "modelEligibleObservations": 3786
   },
   "policy": {
     "guidanceOnly": true,
@@ -29,7 +29,9 @@
       1,
       2,
       3,
-      4
+      4,
+      5,
+      6
     ],
     "requestedFlagCounts": [
       2,
@@ -50,6 +52,10 @@
       "moderate",
       "short"
     ],
+    "boardSpreads": [
+      "random",
+      "tight"
+    ],
     "inventoryPresets": [
       "all",
       "core",
@@ -67,27 +73,30 @@
       "length": {
         "type": "linear",
         "targetTransform": "identity",
-        "formula": "length_raw ~ player_factor + board_factor + flag_factor + inventory_factor",
+        "formula": "length_raw ~ player_factor + board_factor + flag_factor + board_spread_factor +      inventory_factor",
         "coefficients": {
-          "(Intercept)": 45.8000740273,
-          "player_factor4": 11.5519473422,
-          "player_factor6": 24.6406437849,
-          "player_factor8": 44.7544639128,
-          "board_factor2": 16.5634799293,
-          "board_factor3": 24.4325825278,
-          "board_factor4": 31.2564163234,
-          "flag_factor3": 32.0515011041,
-          "flag_factor4": 64.5972277285,
-          "flag_factor5": 101.4431139515,
-          "flag_factor6": 136.7084297955,
-          "inventory_factorcore": -8.4417300998,
-          "inventory_factorcore+30th-anniversary": 5.0911590711,
-          "inventory_factorcore+chaos-and-carnage": 7.0955208761,
-          "inventory_factorcore+master-builder": -10.6332672155,
-          "inventory_factorcore+rr-dice": -17.2272111348,
-          "inventory_factorcore+thrills-and-spills": 2.5957032614,
-          "inventory_factorcore+wet-and-wild": 9.1534394783,
-          "inventory_factorsmall:master-builder": -35.8602418805
+          "(Intercept)": 41.0634275158,
+          "player_factor4": 13.831316042,
+          "player_factor6": 21.0662658169,
+          "player_factor8": 47.2544541186,
+          "board_factor2": 16.0898201619,
+          "board_factor3": 27.2590880855,
+          "board_factor4": 34.0917956853,
+          "board_factor5": 37.4872648697,
+          "board_factor6": 55.2455713333,
+          "flag_factor3": 32.6191736705,
+          "flag_factor4": 65.6197947953,
+          "flag_factor5": 105.963894113,
+          "flag_factor6": 142.1356240367,
+          "board_spread_factortight": -1.2101213701,
+          "inventory_factorcore": 4.6746467758,
+          "inventory_factorcore+30th-anniversary": 7.7476237202,
+          "inventory_factorcore+chaos-and-carnage": 14.2991226645,
+          "inventory_factorcore+master-builder": -11.9643036651,
+          "inventory_factorcore+rr-dice": -11.5655422328,
+          "inventory_factorcore+thrills-and-spills": -0.018760910649,
+          "inventory_factorcore+wet-and-wild": 9.4828922634,
+          "inventory_factorsmall:master-builder": -28.3723039446
         },
         "factorLevels": {
           "player_factor": [
@@ -100,7 +109,9 @@
             "1",
             "2",
             "3",
-            "4"
+            "4",
+            "5",
+            "6"
           ],
           "flag_factor": [
             "2",
@@ -108,6 +119,10 @@
             "4",
             "5",
             "6"
+          ],
+          "board_spread_factor": [
+            "random",
+            "tight"
           ],
           "inventory_factor": [
             "all",
@@ -122,44 +137,47 @@
           ]
         },
         "evidence": {
-          "sampleSize": 1231,
-          "heldOutRmse": 45.0665997675,
-          "heldOutMae": 33.244980654,
-          "heldOutRSquared": 0.5897957177,
+          "sampleSize": 1742,
+          "heldOutRmse": 45.5130965933,
+          "heldOutMae": 34.1851471677,
+          "heldOutRSquared": 0.60578144648,
           "outOfFoldResidualSpread": {
-            "absoluteP50": 24.6345861898,
-            "absoluteP80": 52.6226345135,
-            "absoluteP90": 71.5467100142,
-            "absoluteP95": 90.4471330382,
-            "signedP05": -64.2098949476,
-            "signedP95": 84.4241070484
+            "absoluteP50": 25.8507394634,
+            "absoluteP80": 53.7553026634,
+            "absoluteP90": 73.1489003053,
+            "absoluteP95": 93.0093446882,
+            "signedP05": -66.3241583342,
+            "signedP95": 84.3077289517
           }
         }
       },
       "difficulty": {
         "type": "linear",
         "targetTransform": "identity",
-        "formula": "difficulty_raw ~ player_factor + board_factor + flag_factor +      inventory_factor",
+        "formula": "difficulty_raw ~ player_factor + board_factor + flag_factor +      board_spread_factor + inventory_factor",
         "coefficients": {
-          "(Intercept)": 118.7545701496,
-          "player_factor4": 39.6093206857,
-          "player_factor6": 48.5214800027,
-          "player_factor8": 68.7334027824,
-          "board_factor2": 1.1576819547,
-          "board_factor3": 3.0110036589,
-          "board_factor4": 9.7078075825,
-          "flag_factor3": -6.7333446921,
-          "flag_factor4": -12.1831390545,
-          "flag_factor5": -13.0804027047,
-          "flag_factor6": -12.6113847945,
-          "inventory_factorcore": -33.085140996,
-          "inventory_factorcore+30th-anniversary": -13.1685262334,
-          "inventory_factorcore+chaos-and-carnage": 8.0205546571,
-          "inventory_factorcore+master-builder": -17.4023263579,
-          "inventory_factorcore+rr-dice": -31.2698055769,
-          "inventory_factorcore+thrills-and-spills": -16.0345301895,
-          "inventory_factorcore+wet-and-wild": -12.6539228829,
-          "inventory_factorsmall:master-builder": -32.6281146292
+          "(Intercept)": 103.0272861943,
+          "player_factor4": 32.0824397177,
+          "player_factor6": 49.0112450382,
+          "player_factor8": 63.0789192287,
+          "board_factor2": 6.3919885796,
+          "board_factor3": 16.1270435918,
+          "board_factor4": 17.4514698398,
+          "board_factor5": 29.7690031546,
+          "board_factor6": 27.2167390787,
+          "flag_factor3": 5.1374476067,
+          "flag_factor4": 2.5409658069,
+          "flag_factor5": 6.974092975,
+          "flag_factor6": 14.5514837118,
+          "board_spread_factortight": -1.8166660882,
+          "inventory_factorcore": -15.1497638902,
+          "inventory_factorcore+30th-anniversary": -9.4318124362,
+          "inventory_factorcore+chaos-and-carnage": 7.9788692928,
+          "inventory_factorcore+master-builder": -16.5529290083,
+          "inventory_factorcore+rr-dice": -31.0130646433,
+          "inventory_factorcore+thrills-and-spills": -11.9405133182,
+          "inventory_factorcore+wet-and-wild": -5.016375947,
+          "inventory_factorsmall:master-builder": -10.5061958922
         },
         "factorLevels": {
           "player_factor": [
@@ -172,7 +190,9 @@
             "1",
             "2",
             "3",
-            "4"
+            "4",
+            "5",
+            "6"
           ],
           "flag_factor": [
             "2",
@@ -180,6 +200,10 @@
             "4",
             "5",
             "6"
+          ],
+          "board_spread_factor": [
+            "random",
+            "tight"
           ],
           "inventory_factor": [
             "all",
@@ -194,44 +218,47 @@
           ]
         },
         "evidence": {
-          "sampleSize": 1231,
-          "heldOutRmse": 58.9517721568,
-          "heldOutMae": 46.2551851225,
-          "heldOutRSquared": 0.18155967701,
+          "sampleSize": 1742,
+          "heldOutRmse": 60.1537305762,
+          "heldOutMae": 47.2263834707,
+          "heldOutRSquared": 0.15209486526,
           "outOfFoldResidualSpread": {
-            "absoluteP50": 38.2487164375,
-            "absoluteP80": 73.4773749282,
-            "absoluteP90": 94.1268687006,
-            "absoluteP95": 113.9689389562,
-            "signedP05": -80.6703774319,
-            "signedP95": 110.4287404064
+            "absoluteP50": 39.9925180203,
+            "absoluteP80": 72.218574111,
+            "absoluteP90": 94.8642311805,
+            "absoluteP95": 116.0742979978,
+            "signedP05": -80.714517655,
+            "signedP95": 112.8574999146
           }
         }
       },
       "routeCost": {
         "type": "linear",
         "targetTransform": "log1p",
-        "formula": "log_route_expansions ~ player_factor + board_factor + flag_factor +      inventory_factor",
+        "formula": "log_route_expansions ~ player_factor + board_factor + flag_factor +      board_spread_factor + inventory_factor",
         "coefficients": {
-          "(Intercept)": 8.337860712,
-          "player_factor4": 0.2697776296,
-          "player_factor6": 0.08276464256,
-          "player_factor8": 0.094754884332,
-          "board_factor2": 0.50168630996,
-          "board_factor3": 0.64224477401,
-          "board_factor4": 1.2322881089,
-          "flag_factor3": 0.27728655999,
-          "flag_factor4": 0.33804407655,
-          "flag_factor5": 0.31842229274,
-          "flag_factor6": 0.47318209581,
-          "inventory_factorcore": -0.19206849937,
-          "inventory_factorcore+30th-anniversary": -0.11637622684,
-          "inventory_factorcore+chaos-and-carnage": 0.22121888369,
-          "inventory_factorcore+master-builder": -0.60611514657,
-          "inventory_factorcore+rr-dice": -0.35321921637,
-          "inventory_factorcore+thrills-and-spills": -0.023644280177,
-          "inventory_factorcore+wet-and-wild": 0.19334468252,
-          "inventory_factorsmall:master-builder": -4.314846277
+          "(Intercept)": 8.2755634889,
+          "player_factor4": -0.066401492333,
+          "player_factor6": -0.2118530144,
+          "player_factor8": -2.7543805616,
+          "board_factor2": -0.3664631122,
+          "board_factor3": 0.084406052805,
+          "board_factor4": 0.10930077925,
+          "board_factor5": 0.44354701244,
+          "board_factor6": 0.24908557033,
+          "flag_factor3": 0.16310785607,
+          "flag_factor4": 0.10352864431,
+          "flag_factor5": 0.41419291137,
+          "flag_factor6": 0.51602311368,
+          "board_spread_factortight": -0.10538322731,
+          "inventory_factorcore": 1.4926469976,
+          "inventory_factorcore+30th-anniversary": 1.6763528421,
+          "inventory_factorcore+chaos-and-carnage": 1.4108505548,
+          "inventory_factorcore+master-builder": -0.61599945901,
+          "inventory_factorcore+rr-dice": -0.41434475138,
+          "inventory_factorcore+thrills-and-spills": 1.6667715234,
+          "inventory_factorcore+wet-and-wild": 2.0898775045,
+          "inventory_factorsmall:master-builder": -1.6657768839
         },
         "factorLevels": {
           "player_factor": [
@@ -244,7 +271,9 @@
             "1",
             "2",
             "3",
-            "4"
+            "4",
+            "5",
+            "6"
           ],
           "flag_factor": [
             "2",
@@ -252,6 +281,10 @@
             "4",
             "5",
             "6"
+          ],
+          "board_spread_factor": [
+            "random",
+            "tight"
           ],
           "inventory_factor": [
             "all",
@@ -266,17 +299,17 @@
           ]
         },
         "evidence": {
-          "sampleSize": 1280,
-          "heldOutRmse": 1.5018718326,
-          "heldOutMae": 0.99033866893,
-          "heldOutRSquared": 0.42453798412,
+          "sampleSize": 1918,
+          "heldOutRmse": 2.334047081,
+          "heldOutMae": 1.7041305512,
+          "heldOutRSquared": 0.3071774331,
           "outOfFoldResidualSpread": {
-            "absoluteP50": 0.68611183293,
-            "absoluteP80": 1.4098811039,
-            "absoluteP90": 2.0626845763,
-            "absoluteP95": 3.2605114746,
-            "signedP05": -1.7738338887,
-            "signedP95": 2.2707677274
+            "absoluteP50": 1.2772374058,
+            "absoluteP80": 2.4260338406,
+            "absoluteP90": 4.0193294626,
+            "absoluteP95": 5.5324017708,
+            "signedP05": -5.5192969403,
+            "signedP95": 3.1053784904
           }
         }
       }
@@ -285,36 +318,39 @@
       "length": {
         "type": "linear",
         "targetTransform": "identity",
-        "formula": "length_raw ~ player_factor + board_factor + flag_factor + inventory_factor +      profile_overall + profile_hazard + profile_congestion + profile_complexity +      profile_swinginess + profile_density + compactness + adjacency_count +      graph_diameter",
+        "formula": "length_raw ~ player_factor + board_factor + flag_factor + board_spread_factor +      inventory_factor + profile_overall + profile_hazard + profile_congestion +      profile_complexity + profile_swinginess + profile_density +      compactness + adjacency_count + graph_diameter",
         "coefficients": {
-          "(Intercept)": -58.485707036,
-          "player_factor4": 9.1032537048,
-          "player_factor6": 23.7097173278,
-          "player_factor8": 42.3803869201,
-          "board_factor2": -8.0339672799,
-          "board_factor3": -16.0343468984,
-          "board_factor4": -15.7740461536,
-          "flag_factor3": 27.8295245875,
-          "flag_factor4": 58.3046320878,
-          "flag_factor5": 91.7433721151,
-          "flag_factor6": 126.5402495234,
-          "inventory_factorcore": -0.18605834501,
-          "inventory_factorcore+30th-anniversary": 6.2928344753,
-          "inventory_factorcore+chaos-and-carnage": 4.4921749454,
-          "inventory_factorcore+master-builder": -5.0169251177,
-          "inventory_factorcore+rr-dice": -6.205190185,
-          "inventory_factorcore+thrills-and-spills": 4.2928594476,
-          "inventory_factorcore+wet-and-wild": 5.7212094234,
-          "inventory_factorsmall:master-builder": -44.6927277007,
-          "profile_overall": 5.1360491982,
-          "profile_hazard": 13.7186839956,
-          "profile_congestion": 71.461196616,
-          "profile_complexity": -41.5514862224,
-          "profile_swinginess": 33.3428476978,
-          "profile_density": -83.1425983072,
-          "compactness": 20.5856565689,
-          "adjacency_count": 10.1767681992,
-          "graph_diameter": 25.8423515201
+          "(Intercept)": -50.1449828897,
+          "player_factor4": 12.5540102159,
+          "player_factor6": 22.6802205304,
+          "player_factor8": 47.2258099892,
+          "board_factor2": -10.7945836529,
+          "board_factor3": -13.6379541829,
+          "board_factor4": -19.7519088373,
+          "board_factor5": -24.2385507544,
+          "board_factor6": -16.8568651188,
+          "flag_factor3": 27.9394894106,
+          "flag_factor4": 59.0506486441,
+          "flag_factor5": 93.3143657063,
+          "flag_factor6": 127.7684935289,
+          "board_spread_factortight": -2.5812311933,
+          "inventory_factorcore": 6.1715497918,
+          "inventory_factorcore+30th-anniversary": 6.8036925379,
+          "inventory_factorcore+chaos-and-carnage": 10.007077122,
+          "inventory_factorcore+master-builder": -12.7718518903,
+          "inventory_factorcore+rr-dice": -4.750509574,
+          "inventory_factorcore+thrills-and-spills": -2.6971055303,
+          "inventory_factorcore+wet-and-wild": 7.9571325908,
+          "inventory_factorsmall:master-builder": -39.4962743661,
+          "profile_overall": -6.4976928055,
+          "profile_hazard": 24.6678593535,
+          "profile_congestion": 70.9478702977,
+          "profile_complexity": -29.5405792375,
+          "profile_swinginess": 22.5446214429,
+          "profile_density": -68.0778568946,
+          "compactness": 9.9717506793,
+          "adjacency_count": 9.9938701808,
+          "graph_diameter": 25.4941808969
         },
         "factorLevels": {
           "player_factor": [
@@ -327,7 +363,9 @@
             "1",
             "2",
             "3",
-            "4"
+            "4",
+            "5",
+            "6"
           ],
           "flag_factor": [
             "2",
@@ -335,6 +373,10 @@
             "4",
             "5",
             "6"
+          ],
+          "board_spread_factor": [
+            "random",
+            "tight"
           ],
           "inventory_factor": [
             "all",
@@ -349,53 +391,56 @@
           ]
         },
         "evidence": {
-          "sampleSize": 1231,
-          "heldOutRmse": 38.7180340497,
-          "heldOutMae": 28.77360815,
-          "heldOutRSquared": 0.69722696078,
+          "sampleSize": 1742,
+          "heldOutRmse": 38.6795272403,
+          "heldOutMae": 29.0541006336,
+          "heldOutRSquared": 0.71527434212,
           "outOfFoldResidualSpread": {
-            "absoluteP50": 21.6321504065,
-            "absoluteP80": 45.0558397512,
-            "absoluteP90": 60.6015356561,
-            "absoluteP95": 76.9466338417,
-            "signedP05": -56.0977676339,
-            "signedP95": 67.7163906639
+            "absoluteP50": 22.2840128873,
+            "absoluteP80": 46.0947369545,
+            "absoluteP90": 62.2128513043,
+            "absoluteP95": 78.5013299407,
+            "signedP05": -57.4639003182,
+            "signedP95": 70.8960505947
           }
         }
       },
       "difficulty": {
         "type": "linear",
         "targetTransform": "identity",
-        "formula": "difficulty_raw ~ player_factor + board_factor + flag_factor +      inventory_factor + profile_overall + profile_hazard + profile_congestion +      profile_complexity + profile_swinginess + profile_density +      compactness + adjacency_count + graph_diameter",
+        "formula": "difficulty_raw ~ player_factor + board_factor + flag_factor +      board_spread_factor + inventory_factor + profile_overall +      profile_hazard + profile_congestion + profile_complexity +      profile_swinginess + profile_density + compactness + adjacency_count +      graph_diameter",
         "coefficients": {
-          "(Intercept)": -138.164112787,
-          "player_factor4": 35.2049530498,
-          "player_factor6": 48.6471375575,
-          "player_factor8": 65.9557380533,
-          "board_factor2": -9.0532271412,
-          "board_factor3": -12.2778792831,
-          "board_factor4": -10.9053705645,
-          "flag_factor3": -8.3212789319,
-          "flag_factor4": -14.1134518043,
-          "flag_factor5": -18.3487159492,
-          "flag_factor6": -17.8499326943,
-          "inventory_factorcore": -11.6955210746,
-          "inventory_factorcore+30th-anniversary": -1.6469819304,
-          "inventory_factorcore+chaos-and-carnage": 5.4040356922,
-          "inventory_factorcore+master-builder": -1.4548144491,
-          "inventory_factorcore+rr-dice": -14.1474049078,
-          "inventory_factorcore+thrills-and-spills": -9.3190750453,
-          "inventory_factorcore+wet-and-wild": -7.9450745212,
-          "inventory_factorsmall:master-builder": -13.7010970627,
-          "profile_overall": -24.4798813799,
-          "profile_hazard": 137.4488483626,
-          "profile_congestion": 135.8655746876,
-          "profile_complexity": -40.649833341,
-          "profile_swinginess": -4.4093808348,
-          "profile_density": -143.4743473851,
-          "compactness": -0.26823492204,
-          "adjacency_count": 10.0613158774,
-          "graph_diameter": 6.6342455627
+          "(Intercept)": -215.6283633284,
+          "player_factor4": 31.747793458,
+          "player_factor6": 50.226122223,
+          "player_factor8": 65.0544866641,
+          "board_factor2": -10.949844768,
+          "board_factor3": -6.8147875877,
+          "board_factor4": -13.1594158948,
+          "board_factor5": -0.36213421904,
+          "board_factor6": -12.9414349586,
+          "flag_factor3": 1.846542043,
+          "flag_factor4": 0.39216001051,
+          "flag_factor5": -0.61846234231,
+          "flag_factor6": 4.8403043662,
+          "board_spread_factortight": -1.6973269103,
+          "inventory_factorcore": 5.0537089448,
+          "inventory_factorcore+30th-anniversary": -0.3424087094,
+          "inventory_factorcore+chaos-and-carnage": -1.5162417757,
+          "inventory_factorcore+master-builder": -0.5535077843,
+          "inventory_factorcore+rr-dice": -13.5348785488,
+          "inventory_factorcore+thrills-and-spills": -10.4096570386,
+          "inventory_factorcore+wet-and-wild": -2.9403369265,
+          "inventory_factorsmall:master-builder": 2.7352259337,
+          "profile_overall": -68.0031332364,
+          "profile_hazard": 130.3965052995,
+          "profile_congestion": 140.1474543643,
+          "profile_complexity": -32.9717992156,
+          "profile_swinginess": 79.4338239374,
+          "profile_density": -80.3199655753,
+          "compactness": 16.9391019174,
+          "adjacency_count": 3.5859280598,
+          "graph_diameter": 17.6706331997
         },
         "factorLevels": {
           "player_factor": [
@@ -408,7 +453,9 @@
             "1",
             "2",
             "3",
-            "4"
+            "4",
+            "5",
+            "6"
           ],
           "flag_factor": [
             "2",
@@ -416,6 +463,10 @@
             "4",
             "5",
             "6"
+          ],
+          "board_spread_factor": [
+            "random",
+            "tight"
           ],
           "inventory_factor": [
             "all",
@@ -430,53 +481,56 @@
           ]
         },
         "evidence": {
-          "sampleSize": 1231,
-          "heldOutRmse": 51.2629679226,
-          "heldOutMae": 40.2652766791,
-          "heldOutRSquared": 0.38112807554,
+          "sampleSize": 1742,
+          "heldOutRmse": 52.5768928301,
+          "heldOutMae": 40.606549951,
+          "heldOutRSquared": 0.35224322185,
           "outOfFoldResidualSpread": {
-            "absoluteP50": 32.4491843749,
-            "absoluteP80": 63.5972711069,
-            "absoluteP90": 83.9260378126,
-            "absoluteP95": 98.7323938419,
-            "signedP05": -74.8253345171,
-            "signedP95": 93.5569113853
+            "absoluteP50": 33.7453239926,
+            "absoluteP80": 64.8697058732,
+            "absoluteP90": 82.744207646,
+            "absoluteP95": 100.183280306,
+            "signedP05": -74.1054878477,
+            "signedP95": 94.1290901408
           }
         }
       },
       "routeCost": {
         "type": "linear",
         "targetTransform": "log1p",
-        "formula": "log_route_expansions ~ player_factor + board_factor + flag_factor +      inventory_factor + profile_overall + profile_hazard + profile_congestion +      profile_complexity + profile_swinginess + profile_density +      compactness + adjacency_count + graph_diameter",
+        "formula": "log_route_expansions ~ player_factor + board_factor + flag_factor +      board_spread_factor + inventory_factor + profile_overall +      profile_hazard + profile_congestion + profile_complexity +      profile_swinginess + profile_density + compactness + adjacency_count +      graph_diameter",
         "coefficients": {
-          "(Intercept)": 5.2799311262,
-          "player_factor4": -0.012605717259,
-          "player_factor6": -0.018543324427,
-          "player_factor8": 0.045205802351,
-          "board_factor2": 0.28829927152,
-          "board_factor3": 0.6034329911,
-          "board_factor4": 0.87972493465,
-          "flag_factor3": 0.17188199234,
-          "flag_factor4": 0.29064500397,
-          "flag_factor5": 0.28038482503,
-          "flag_factor6": 0.38996917065,
-          "inventory_factorcore": 0.04412750728,
-          "inventory_factorcore+30th-anniversary": 0.042220204903,
-          "inventory_factorcore+chaos-and-carnage": 0.13187296221,
-          "inventory_factorcore+master-builder": -0.26119654796,
-          "inventory_factorcore+rr-dice": -0.069003267203,
-          "inventory_factorcore+thrills-and-spills": 0.010966037682,
-          "inventory_factorcore+wet-and-wild": 0.25503247204,
-          "inventory_factorsmall:master-builder": -1.2671863347,
-          "profile_overall": -0.19127452289,
-          "profile_hazard": 1.766681806,
-          "profile_congestion": 2.0858219384,
-          "profile_complexity": -1.0694202175,
-          "profile_swinginess": 0.30015958564,
-          "profile_density": -3.501986645,
-          "compactness": 0.17330332655,
-          "adjacency_count": 0.01340824604,
-          "graph_diameter": 0.067714457718
+          "(Intercept)": 5.2946172852,
+          "player_factor4": 0.0073425934705,
+          "player_factor6": 0.015512513408,
+          "player_factor8": 0.070790710294,
+          "board_factor2": 0.17243369877,
+          "board_factor3": 0.54539399014,
+          "board_factor4": 0.76042268456,
+          "board_factor5": 0.91983986886,
+          "board_factor6": 1.0712473745,
+          "flag_factor3": 0.23847370883,
+          "flag_factor4": 0.31185293938,
+          "flag_factor5": 0.35446665116,
+          "flag_factor6": 0.42611681805,
+          "board_spread_factortight": -0.065000550516,
+          "inventory_factorcore": 0.23312102228,
+          "inventory_factorcore+30th-anniversary": 0.18933039226,
+          "inventory_factorcore+chaos-and-carnage": 0.20460216622,
+          "inventory_factorcore+master-builder": -0.18433985523,
+          "inventory_factorcore+rr-dice": 0.075551741833,
+          "inventory_factorcore+thrills-and-spills": 0.19705664655,
+          "inventory_factorcore+wet-and-wild": 0.34990533751,
+          "inventory_factorsmall:master-builder": -1.1014107793,
+          "profile_overall": 0.04431648642,
+          "profile_hazard": 1.4390361014,
+          "profile_congestion": 2.051367717,
+          "profile_complexity": -0.93256318027,
+          "profile_swinginess": 0.36805724327,
+          "profile_density": -3.2407111162,
+          "compactness": -0.2357416876,
+          "adjacency_count": -0.12738670482,
+          "graph_diameter": 0.27707223838
         },
         "factorLevels": {
           "player_factor": [
@@ -489,7 +543,9 @@
             "1",
             "2",
             "3",
-            "4"
+            "4",
+            "5",
+            "6"
           ],
           "flag_factor": [
             "2",
@@ -497,6 +553,10 @@
             "4",
             "5",
             "6"
+          ],
+          "board_spread_factor": [
+            "random",
+            "tight"
           ],
           "inventory_factor": [
             "all",
@@ -511,17 +571,17 @@
           ]
         },
         "evidence": {
-          "sampleSize": 1233,
-          "heldOutRmse": 0.73184830743,
-          "heldOutMae": 0.58514232535,
-          "heldOutRSquared": 0.45519780733,
+          "sampleSize": 1746,
+          "heldOutRmse": 0.73952416846,
+          "heldOutMae": 0.5866396141,
+          "heldOutRSquared": 0.48376282737,
           "outOfFoldResidualSpread": {
-            "absoluteP50": 0.50329306811,
-            "absoluteP80": 0.91918374179,
-            "absoluteP90": 1.2063890301,
-            "absoluteP95": 1.4258204826,
-            "signedP05": -1.2433320186,
-            "signedP95": 1.1934364708
+            "absoluteP50": 0.49273874286,
+            "absoluteP80": 0.93532706328,
+            "absoluteP90": 1.2202734857,
+            "absoluteP95": 1.4504364486,
+            "signedP05": -1.221944895,
+            "signedP95": 1.2185408642
           }
         }
       }
@@ -530,46 +590,49 @@
       "length": {
         "type": "linear",
         "targetTransform": "identity",
-        "formula": "length_raw ~ player_factor + board_factor + flag_factor + inventory_factor +      profile_overall + profile_hazard + profile_congestion + profile_complexity +      profile_swinginess + profile_density + compactness + adjacency_count +      graph_diameter + first_start_manhattan_mean + first_start_static_fallback +      sequential_manhattan_sum + sequential_static_fallback + final_manhattan +      final_static_fallback + static_topology_missing + board_depth_mean +      represented_board_count + shallow_checkpoint_count",
+        "formula": "length_raw ~ player_factor + board_factor + flag_factor + board_spread_factor +      inventory_factor + profile_overall + profile_hazard + profile_congestion +      profile_complexity + profile_swinginess + profile_density +      compactness + adjacency_count + graph_diameter + first_start_manhattan_mean +      first_start_static_fallback + sequential_manhattan_sum +      sequential_static_fallback + final_manhattan + final_static_fallback +      static_topology_missing + board_depth_mean + represented_board_count +      shallow_checkpoint_count",
         "coefficients": {
-          "(Intercept)": -69.0425388726,
-          "player_factor4": 11.9983479785,
-          "player_factor6": 24.3557857478,
-          "player_factor8": 45.370297642,
-          "board_factor2": 1.7075375543,
-          "board_factor3": -0.16669230541,
-          "board_factor4": 0.057014639291,
-          "flag_factor3": 4.7539817714,
-          "flag_factor4": 14.5204021873,
-          "flag_factor5": 23.9933627347,
-          "flag_factor6": 36.283730463,
-          "inventory_factorcore": -0.79208123238,
-          "inventory_factorcore+30th-anniversary": 0.41883835999,
-          "inventory_factorcore+chaos-and-carnage": 1.3657052167,
-          "inventory_factorcore+master-builder": 2.124599204,
-          "inventory_factorcore+rr-dice": -3.1198922933,
-          "inventory_factorcore+thrills-and-spills": -3.3398691548,
-          "inventory_factorcore+wet-and-wild": 3.9287256716,
-          "inventory_factorsmall:master-builder": 3.2298775005,
-          "profile_overall": 6.1639888845,
-          "profile_hazard": 30.7791731569,
-          "profile_congestion": 34.8158402169,
-          "profile_complexity": -30.2688165691,
-          "profile_swinginess": 22.6362391421,
-          "profile_density": -87.7979382888,
-          "compactness": 4.833089071,
-          "adjacency_count": 1.3935940426,
-          "graph_diameter": 1.7768522404,
-          "first_start_manhattan_mean": -0.28114347607,
-          "first_start_static_fallback": 3.1936478225,
-          "sequential_manhattan_sum": 2.3208247015,
-          "sequential_static_fallback": 0.60319203781,
-          "final_manhattan": -0.26748037229,
-          "final_static_fallback": -0.30281271737,
-          "static_topology_missing": 1.5149488018,
-          "board_depth_mean": -0.561681783,
-          "represented_board_count": 2.4032663802,
-          "shallow_checkpoint_count": -1.0832293752
+          "(Intercept)": -58.0269387685,
+          "player_factor4": 12.7432795775,
+          "player_factor6": 24.5205028473,
+          "player_factor8": 45.6512157513,
+          "board_factor2": -0.78495583886,
+          "board_factor3": 1.7106074093,
+          "board_factor4": 0.81912083517,
+          "board_factor5": 5.826404953,
+          "board_factor6": 2.4629251299,
+          "flag_factor3": 5.1162543333,
+          "flag_factor4": 13.2554482419,
+          "flag_factor5": 26.6987020481,
+          "flag_factor6": 40.4118577487,
+          "board_spread_factortight": -0.062659992076,
+          "inventory_factorcore": 1.0779336154,
+          "inventory_factorcore+30th-anniversary": 0.42273365067,
+          "inventory_factorcore+chaos-and-carnage": 2.6961528676,
+          "inventory_factorcore+master-builder": 1.3145394105,
+          "inventory_factorcore+rr-dice": -1.2636557892,
+          "inventory_factorcore+thrills-and-spills": -4.4910823718,
+          "inventory_factorcore+wet-and-wild": 2.1472161103,
+          "inventory_factorsmall:master-builder": 1.6521537922,
+          "profile_overall": -3.8271068464,
+          "profile_hazard": 25.7383677568,
+          "profile_congestion": 39.4898572566,
+          "profile_complexity": -30.9597903591,
+          "profile_swinginess": 39.0834278941,
+          "profile_density": -70.5966004693,
+          "compactness": -3.1311028748,
+          "adjacency_count": -0.046982448202,
+          "graph_diameter": 0.63500887458,
+          "first_start_manhattan_mean": -1.0194187903,
+          "first_start_static_fallback": 3.9094579941,
+          "sequential_manhattan_sum": 2.4662906091,
+          "sequential_static_fallback": 0.53686358897,
+          "final_manhattan": -0.84953480799,
+          "final_static_fallback": 0.096994534591,
+          "static_topology_missing": 3.0214060509,
+          "board_depth_mean": -3.1781513036,
+          "represented_board_count": 3.8258997666,
+          "shallow_checkpoint_count": -3.3168990323
         },
         "factorLevels": {
           "player_factor": [
@@ -582,7 +645,9 @@
             "1",
             "2",
             "3",
-            "4"
+            "4",
+            "5",
+            "6"
           ],
           "flag_factor": [
             "2",
@@ -590,6 +655,10 @@
             "4",
             "5",
             "6"
+          ],
+          "board_spread_factor": [
+            "random",
+            "tight"
           ],
           "inventory_factor": [
             "all",
@@ -604,63 +673,66 @@
           ]
         },
         "evidence": {
-          "sampleSize": 1231,
-          "heldOutRmse": 20.1509810497,
-          "heldOutMae": 14.7795240273,
-          "heldOutRSquared": 0.91798694407,
+          "sampleSize": 1742,
+          "heldOutRmse": 19.6488734728,
+          "heldOutMae": 14.3657043171,
+          "heldOutRSquared": 0.92652499867,
           "outOfFoldResidualSpread": {
-            "absoluteP50": 10.7236557525,
-            "absoluteP80": 23.3769616871,
-            "absoluteP90": 32.2834096678,
-            "absoluteP95": 40.4744461136,
-            "signedP05": -31.4311755512,
-            "signedP95": 32.6583121837
+            "absoluteP50": 10.9530898494,
+            "absoluteP80": 22.6300946101,
+            "absoluteP90": 30.3950939625,
+            "absoluteP95": 38.2714311272,
+            "signedP05": -29.9014849937,
+            "signedP95": 31.6224034622
           }
         }
       },
       "difficulty": {
         "type": "linear",
         "targetTransform": "identity",
-        "formula": "difficulty_raw ~ player_factor + board_factor + flag_factor +      inventory_factor + profile_overall + profile_hazard + profile_congestion +      profile_complexity + profile_swinginess + profile_density +      compactness + adjacency_count + graph_diameter + first_start_manhattan_mean +      first_start_static_fallback + sequential_manhattan_sum +      sequential_static_fallback + final_manhattan + final_static_fallback +      static_topology_missing + board_depth_mean + represented_board_count +      shallow_checkpoint_count",
+        "formula": "difficulty_raw ~ player_factor + board_factor + flag_factor +      board_spread_factor + inventory_factor + profile_overall +      profile_hazard + profile_congestion + profile_complexity +      profile_swinginess + profile_density + compactness + adjacency_count +      graph_diameter + first_start_manhattan_mean + first_start_static_fallback +      sequential_manhattan_sum + sequential_static_fallback + final_manhattan +      final_static_fallback + static_topology_missing + board_depth_mean +      represented_board_count + shallow_checkpoint_count",
         "coefficients": {
-          "(Intercept)": -139.8210117952,
-          "player_factor4": 35.5278552716,
-          "player_factor6": 48.6015197122,
-          "player_factor8": 67.2435884174,
-          "board_factor2": -4.9365783284,
-          "board_factor3": -5.2339942244,
-          "board_factor4": -1.8382085845,
-          "flag_factor3": -6.2232887679,
-          "flag_factor4": -10.049646843,
-          "flag_factor5": -14.0510308035,
-          "flag_factor6": -12.2324337989,
-          "inventory_factorcore": -13.5565208214,
-          "inventory_factorcore+30th-anniversary": -6.0525380875,
-          "inventory_factorcore+chaos-and-carnage": -2.9693565337,
-          "inventory_factorcore+master-builder": 1.9238107947,
-          "inventory_factorcore+rr-dice": -14.8567307855,
-          "inventory_factorcore+thrills-and-spills": -13.773121597,
-          "inventory_factorcore+wet-and-wild": -9.38447938,
-          "inventory_factorsmall:master-builder": 14.1279243761,
-          "profile_overall": -24.2588734589,
-          "profile_hazard": 138.9919351312,
-          "profile_congestion": 96.0991497001,
-          "profile_complexity": -38.25317851,
-          "profile_swinginess": -15.5255225994,
-          "profile_density": -109.9456088775,
-          "compactness": 12.9803824117,
-          "adjacency_count": 2.9010215317,
-          "graph_diameter": -0.14604335959,
-          "first_start_manhattan_mean": -6.157462879,
-          "first_start_static_fallback": 10.9883747557,
-          "sequential_manhattan_sum": 0.63021134584,
-          "sequential_static_fallback": -0.33101602735,
-          "final_manhattan": 1.1254833707,
-          "final_static_fallback": -1.0628661713,
-          "static_topology_missing": -2.7293498843,
-          "board_depth_mean": -5.3903551805,
-          "represented_board_count": 1.0672496571,
-          "shallow_checkpoint_count": -4.6626946677
+          "(Intercept)": -185.666908443,
+          "player_factor4": 31.6044793908,
+          "player_factor6": 49.6765750925,
+          "player_factor8": 64.6555394154,
+          "board_factor2": -1.5877103172,
+          "board_factor3": 1.8588301199,
+          "board_factor4": -0.67676375307,
+          "board_factor5": 14.7127870633,
+          "board_factor6": -1.7013537085,
+          "flag_factor3": 1.2880947473,
+          "flag_factor4": -0.46179123898,
+          "flag_factor5": 0.75371121952,
+          "flag_factor6": 4.1114731532,
+          "board_spread_factortight": -0.36641946236,
+          "inventory_factorcore": 1.0852954553,
+          "inventory_factorcore+30th-anniversary": -5.5083280415,
+          "inventory_factorcore+chaos-and-carnage": -2.7171097437,
+          "inventory_factorcore+master-builder": 7.7265369669,
+          "inventory_factorcore+rr-dice": -14.0893097313,
+          "inventory_factorcore+thrills-and-spills": -13.7745861947,
+          "inventory_factorcore+wet-and-wild": -4.8473985681,
+          "inventory_factorsmall:master-builder": 25.8890281965,
+          "profile_overall": -62.1481066611,
+          "profile_hazard": 134.7976930877,
+          "profile_congestion": 108.389672125,
+          "profile_complexity": -32.7852105906,
+          "profile_swinginess": 57.9024873317,
+          "profile_density": -74.2137402747,
+          "compactness": 6.1720105789,
+          "adjacency_count": 1.3687423713,
+          "graph_diameter": 3.7496108836,
+          "first_start_manhattan_mean": -8.6887930142,
+          "first_start_static_fallback": 12.8473929489,
+          "sequential_manhattan_sum": 1.708269526,
+          "sequential_static_fallback": -1.2275972358,
+          "final_manhattan": 0.77417046941,
+          "final_static_fallback": -0.54937246071,
+          "static_topology_missing": -0.20187043882,
+          "board_depth_mean": -6.2682696764,
+          "represented_board_count": -3.3333532248,
+          "shallow_checkpoint_count": -4.4668327637
         },
         "factorLevels": {
           "player_factor": [
@@ -673,7 +745,9 @@
             "1",
             "2",
             "3",
-            "4"
+            "4",
+            "5",
+            "6"
           ],
           "flag_factor": [
             "2",
@@ -681,6 +755,10 @@
             "4",
             "5",
             "6"
+          ],
+          "board_spread_factor": [
+            "random",
+            "tight"
           ],
           "inventory_factor": [
             "all",
@@ -695,63 +773,66 @@
           ]
         },
         "evidence": {
-          "sampleSize": 1231,
-          "heldOutRmse": 45.3870147197,
-          "heldOutMae": 35.1768132768,
-          "heldOutRSquared": 0.51487179496,
+          "sampleSize": 1742,
+          "heldOutRmse": 46.5916375651,
+          "heldOutMae": 36.0859873937,
+          "heldOutRSquared": 0.49132770705,
           "outOfFoldResidualSpread": {
-            "absoluteP50": 28.0213173303,
-            "absoluteP80": 57.630770096,
-            "absoluteP90": 74.4407541655,
-            "absoluteP95": 87.7493083875,
-            "signedP05": -67.3687299067,
-            "signedP95": 84.7952049406
+            "absoluteP50": 29.5998308177,
+            "absoluteP80": 55.9976788909,
+            "absoluteP90": 74.8769014686,
+            "absoluteP95": 89.1981132734,
+            "signedP05": -66.1408606695,
+            "signedP95": 84.8677735833
           }
         }
       },
       "routeCost": {
         "type": "linear",
         "targetTransform": "log1p",
-        "formula": "log_route_expansions ~ player_factor + board_factor + flag_factor +      inventory_factor + profile_overall + profile_hazard + profile_congestion +      profile_complexity + profile_swinginess + profile_density +      compactness + adjacency_count + graph_diameter + first_start_manhattan_mean +      first_start_static_fallback + sequential_manhattan_sum +      sequential_static_fallback + final_manhattan + final_static_fallback +      static_topology_missing + board_depth_mean + represented_board_count +      shallow_checkpoint_count",
+        "formula": "log_route_expansions ~ player_factor + board_factor + flag_factor +      board_spread_factor + inventory_factor + profile_overall +      profile_hazard + profile_congestion + profile_complexity +      profile_swinginess + profile_density + compactness + adjacency_count +      graph_diameter + first_start_manhattan_mean + first_start_static_fallback +      sequential_manhattan_sum + sequential_static_fallback + final_manhattan +      final_static_fallback + static_topology_missing + board_depth_mean +      represented_board_count + shallow_checkpoint_count",
         "coefficients": {
-          "(Intercept)": 4.9431537311,
-          "player_factor4": 0.0014439425016,
-          "player_factor6": -0.020021167534,
-          "player_factor8": 0.071665541254,
-          "board_factor2": 0.3511942733,
-          "board_factor3": 0.7235440223,
-          "board_factor4": 0.99284475192,
-          "flag_factor3": 0.10442689722,
-          "flag_factor4": 0.17803651631,
-          "flag_factor5": 0.10157122567,
-          "flag_factor6": 0.14659555577,
-          "inventory_factorcore": 0.023764852757,
-          "inventory_factorcore+30th-anniversary": -0.034125934872,
-          "inventory_factorcore+chaos-and-carnage": 0.0471297754,
-          "inventory_factorcore+master-builder": -0.19940781214,
-          "inventory_factorcore+rr-dice": -0.054273874223,
-          "inventory_factorcore+thrills-and-spills": -0.085354990818,
-          "inventory_factorcore+wet-and-wild": 0.2264248466,
-          "inventory_factorsmall:master-builder": -0.83672218936,
-          "profile_overall": -0.1946828695,
-          "profile_hazard": 1.8354661839,
-          "profile_congestion": 1.5196339463,
-          "profile_complexity": -0.96361839791,
-          "profile_swinginess": 0.27873699709,
-          "profile_density": -3.3004786155,
-          "compactness": 0.25408301633,
-          "adjacency_count": -0.068913878859,
-          "graph_diameter": -0.10172061209,
-          "first_start_manhattan_mean": -0.077689515329,
-          "first_start_static_fallback": 0.12019022204,
-          "sequential_manhattan_sum": 0.0043685910548,
-          "sequential_static_fallback": 0.0050943436812,
-          "final_manhattan": 0.018272151134,
-          "final_static_fallback": 0.0029464435232,
-          "static_topology_missing": 0.047317904122,
-          "board_depth_mean": 0.015978342634,
-          "represented_board_count": 0.025282642127,
-          "shallow_checkpoint_count": -0.0023350877609
+          "(Intercept)": 5.3239612083,
+          "player_factor4": 0.0079512580838,
+          "player_factor6": 0.020908012836,
+          "player_factor8": 0.04738990949,
+          "board_factor2": 0.30409543695,
+          "board_factor3": 0.7137031425,
+          "board_factor4": 0.97445484071,
+          "board_factor5": 1.2041116183,
+          "board_factor6": 1.2436661344,
+          "flag_factor3": 0.14089011112,
+          "flag_factor4": 0.12980254108,
+          "flag_factor5": 0.11974247507,
+          "flag_factor6": 0.12255338035,
+          "board_spread_factortight": -0.040367123512,
+          "inventory_factorcore": 0.20234135143,
+          "inventory_factorcore+30th-anniversary": 0.14458163088,
+          "inventory_factorcore+chaos-and-carnage": 0.16467827442,
+          "inventory_factorcore+master-builder": -0.022782307989,
+          "inventory_factorcore+rr-dice": 0.099461941153,
+          "inventory_factorcore+thrills-and-spills": 0.17781579525,
+          "inventory_factorcore+wet-and-wild": 0.31429213798,
+          "inventory_factorsmall:master-builder": -0.69900768044,
+          "profile_overall": 0.0083553632195,
+          "profile_hazard": 1.4670872295,
+          "profile_congestion": 1.5202164236,
+          "profile_complexity": -0.87574388527,
+          "profile_swinginess": 0.48324089171,
+          "profile_density": -2.9621260029,
+          "compactness": -0.33384086259,
+          "adjacency_count": -0.17332807134,
+          "graph_diameter": 0.0398823964,
+          "first_start_manhattan_mean": -0.098847481188,
+          "first_start_static_fallback": 0.14155525942,
+          "sequential_manhattan_sum": 0.0069568816693,
+          "sequential_static_fallback": 0.008330342571,
+          "final_manhattan": 0.013001012468,
+          "final_static_fallback": 0.0018981604991,
+          "static_topology_missing": 0.083484410931,
+          "board_depth_mean": -0.069158976684,
+          "represented_board_count": -0.051250553132,
+          "shallow_checkpoint_count": -0.044614181281
         },
         "factorLevels": {
           "player_factor": [
@@ -764,7 +845,9 @@
             "1",
             "2",
             "3",
-            "4"
+            "4",
+            "5",
+            "6"
           ],
           "flag_factor": [
             "2",
@@ -772,6 +855,10 @@
             "4",
             "5",
             "6"
+          ],
+          "board_spread_factor": [
+            "random",
+            "tight"
           ],
           "inventory_factor": [
             "all",
@@ -786,17 +873,17 @@
           ]
         },
         "evidence": {
-          "sampleSize": 1233,
-          "heldOutRmse": 0.6705276315,
-          "heldOutMae": 0.53705540181,
-          "heldOutRSquared": 0.54266961195,
+          "sampleSize": 1746,
+          "heldOutRmse": 0.66534142774,
+          "heldOutMae": 0.53010375241,
+          "heldOutRSquared": 0.58213724666,
           "outOfFoldResidualSpread": {
-            "absoluteP50": 0.44706690256,
-            "absoluteP80": 0.85603265469,
-            "absoluteP90": 1.1245063094,
-            "absoluteP95": 1.2734486502,
-            "signedP05": -1.1395224227,
-            "signedP95": 1.0989608207
+            "absoluteP50": 0.44941508887,
+            "absoluteP80": 0.83264891447,
+            "absoluteP90": 1.0837065132,
+            "absoluteP95": 1.2875409141,
+            "signedP05": -1.075673293,
+            "signedP95": 1.088088439
           }
         }
       }
@@ -806,27 +893,30 @@
     "stage": "countsKnown",
     "type": "logistic",
     "applicability": "baseline construction prioritization; suppress as a hard signal for structural-board-overlay and other poorly calibrated structural variants",
-    "formula": "structural_success ~ player_factor + board_factor + flag_factor +      inventory_factor",
+    "formula": "structural_success ~ player_factor + board_factor + flag_factor +      board_spread_factor + inventory_factor",
     "coefficients": {
-      "(Intercept)": 3.1630259967,
-      "player_factor4": 0.6422352524,
-      "player_factor6": -1.6689407806,
-      "player_factor8": -3.2460825026,
-      "board_factor2": 0.34108760905,
-      "board_factor3": 0.1320620295,
-      "board_factor4": 0.25252975269,
-      "flag_factor3": 0.93183909274,
-      "flag_factor4": 1.0745547799,
-      "flag_factor5": 1.5366572248,
-      "flag_factor6": 1.6951738016,
-      "inventory_factorcore": 1.412708578,
-      "inventory_factorcore+30th-anniversary": 0.5378776024,
-      "inventory_factorcore+chaos-and-carnage": -0.010365266511,
-      "inventory_factorcore+master-builder": -0.34021037193,
-      "inventory_factorcore+rr-dice": 0.21247666613,
-      "inventory_factorcore+thrills-and-spills": 0.71613848989,
-      "inventory_factorcore+wet-and-wild": 0.20826317488,
-      "inventory_factorsmall:master-builder": -3.8949931035
+      "(Intercept)": 4.2686368732,
+      "player_factor4": -0.827933106,
+      "player_factor6": -2.5632357872,
+      "player_factor8": -5.0565561828,
+      "board_factor2": -0.88340864413,
+      "board_factor3": -0.36059129013,
+      "board_factor4": -0.63464339783,
+      "board_factor5": -0.21780573423,
+      "board_factor6": -0.8890780639,
+      "flag_factor3": 0.40315704025,
+      "flag_factor4": 0.75965271388,
+      "flag_factor5": 0.96847083001,
+      "flag_factor6": 1.0881736871,
+      "board_spread_factortight": 0.073475195526,
+      "inventory_factorcore": 1.3996401218,
+      "inventory_factorcore+30th-anniversary": 1.7997193843,
+      "inventory_factorcore+chaos-and-carnage": 1.0907336495,
+      "inventory_factorcore+master-builder": -0.43918610111,
+      "inventory_factorcore+rr-dice": -0.26282974085,
+      "inventory_factorcore+thrills-and-spills": 1.4843529393,
+      "inventory_factorcore+wet-and-wild": 1.5901353327,
+      "inventory_factorsmall:master-builder": -2.0823780988
     },
     "factorLevels": {
       "player_factor": [
@@ -839,7 +929,9 @@
         "1",
         "2",
         "3",
-        "4"
+        "4",
+        "5",
+        "6"
       ],
       "flag_factor": [
         "2",
@@ -847,6 +939,10 @@
         "4",
         "5",
         "6"
+      ],
+      "board_spread_factor": [
+        "random",
+        "tight"
       ],
       "inventory_factor": [
         "all",
@@ -861,115 +957,114 @@
       ]
     },
     "evidence": {
-      "sampleSize": 1280,
-      "actualRate": 0.8875,
-      "predictedRate": 0.8861993939,
-      "heldOutBrier": 0.077932233669,
-      "baselineBrier": 0.099941340144,
+      "sampleSize": 1918,
+      "actualRate": 0.83680917623,
+      "predictedRate": 0.83586929807,
+      "heldOutBrier": 0.086447827209,
+      "baselineBrier": 0.13671267534,
       "predictedRange": {
-        "p01": 0.19267212693,
-        "p05": 0.49643539309,
-        "p50": 0.96827833477,
-        "p95": 0.99797779924,
-        "p99": 0.99903188006
+        "p01": 0.18097058263,
+        "p05": 0.29975051811,
+        "p50": 0.96129756606,
+        "p95": 0.99818543676,
+        "p99": 0.99908032851
       },
       "calibrationBins": [
         {
           "bin": "0-0.10",
           "n": 1,
-          "predictedMean": 0.08229525805,
+          "predictedMean": 0.095445823244,
           "actualRate": 0
         },
         {
           "bin": "0.10-0.25",
-          "n": 19,
-          "predictedMean": 0.18041859832,
-          "actualRate": 0.21052631579
+          "n": 67,
+          "predictedMean": 0.19970264302,
+          "actualRate": 0.11940298507
         },
         {
           "bin": "0.25-0.50",
-          "n": 45,
-          "predictedMean": 0.36963399401,
-          "actualRate": 0.64444444444
+          "n": 176,
+          "predictedMean": 0.37857710362,
+          "actualRate": 0.36931818182
         },
         {
           "bin": "0.50-0.75",
-          "n": 117,
-          "predictedMean": 0.65570204842,
-          "actualRate": 0.63247863248
+          "n": 223,
+          "predictedMean": 0.64547694079,
+          "actualRate": 0.74887892377
         },
         {
           "bin": "0.75-0.90",
-          "n": 248,
-          "predictedMean": 0.82939438995,
-          "actualRate": 0.8064516129
+          "n": 275,
+          "predictedMean": 0.83094498131,
+          "actualRate": 0.84
         },
         {
           "bin": "0.90-1.00",
-          "n": 850,
-          "predictedMean": 0.97856999701,
-          "actualRate": 0.97529411765
+          "n": 1176,
+          "predictedMean": 0.97843621845,
+          "actualRate": 0.96428571429
         }
       ]
     }
   },
   "treatments": {
     "dynamicArchiving": {
-      "policy": "constant treatment priors remain for counts/boards-known and for difficulty; checkpoint-known length uses the promoted full contextual paired-effect model",
-      "lengthEffectMean": 7.2568486352,
-      "lengthEffectMedian": 1.71,
-      "lengthEffectP10": -2.458,
-      "lengthEffectP90": 25.366,
-      "difficultyEffectMean": 1.9600744417,
-      "difficultyEffectMedian": 0.46,
-      "difficultyEffectP10": -19.314,
-      "difficultyEffectP90": 25.136,
+      "policy": "constant treatment priors remain for counts/boards-known and for difficulty; checkpoint-known length uses the promoted reduced checkpoint-geometry paired-effect model",
+      "lengthEffectMean": 6.9769846678,
+      "lengthEffectMedian": 1.69,
+      "lengthEffectP10": -3.802,
+      "lengthEffectP90": 25.43,
+      "difficultyEffectMean": 1.1744633731,
+      "difficultyEffectMedian": 0,
+      "difficultyEffectP10": -17.67,
+      "difficultyEffectP90": 21.15,
       "contextualModelEnabled": true,
       "lengthContextStage": "checkpointsKnown",
       "lengthContextModel": {
         "stage": "checkpointsKnown",
         "type": "linear",
         "targetTransform": "identity",
-        "formula": "effect_length ~ player_factor + board_factor + flag_factor +      inventory_factor + profile_overall + profile_hazard + profile_congestion +      profile_complexity + profile_swinginess + profile_density +      compactness + adjacency_count + graph_diameter + first_start_manhattan_mean +      first_start_static_fallback + sequential_manhattan_sum +      sequential_static_fallback + final_manhattan + final_static_fallback +      static_topology_missing + board_depth_mean + represented_board_count +      shallow_checkpoint_count",
+        "formula": "effect_length ~ player_factor + board_factor + flag_factor +      board_spread_factor + inventory_factor + profile_overall +      profile_hazard + profile_congestion + profile_complexity +      profile_swinginess + profile_density + compactness + adjacency_count +      graph_diameter + first_start_manhattan_mean + sequential_manhattan_sum +      final_manhattan + board_depth_mean + represented_board_count +      shallow_checkpoint_count",
         "coefficients": {
-          "(Intercept)": -25.7436833047,
-          "player_factor4": -2.3321051933,
-          "player_factor6": -0.81686025978,
-          "player_factor8": 1.1825442438,
-          "board_factor2": -2.723851889,
-          "board_factor3": -2.3944403034,
-          "board_factor4": -0.41928815671,
-          "flag_factor3": -2.7854699343,
-          "flag_factor4": -10.2154755727,
-          "flag_factor5": -11.8610398468,
-          "flag_factor6": -14.1648568925,
-          "inventory_factorcore": 2.2047171628,
-          "inventory_factorcore+30th-anniversary": -1.8694722915,
-          "inventory_factorcore+chaos-and-carnage": 2.5163221816,
-          "inventory_factorcore+master-builder": 0.36861883639,
-          "inventory_factorcore+rr-dice": 2.1321722979,
-          "inventory_factorcore+thrills-and-spills": -0.7659116703,
-          "inventory_factorcore+wet-and-wild": 3.5137014342,
-          "inventory_factorsmall:master-builder": 6.4785411013,
-          "profile_overall": -9.6745254916,
-          "profile_hazard": 10.8488588194,
-          "profile_congestion": 19.1313431249,
-          "profile_complexity": -12.7938067297,
-          "profile_swinginess": 21.6598537453,
-          "profile_density": -15.6208203132,
-          "compactness": -4.985701946,
-          "adjacency_count": -3.0169916414,
-          "graph_diameter": 1.6071152049,
-          "first_start_manhattan_mean": -1.1029215013,
-          "first_start_static_fallback": 1.5066541004,
-          "sequential_manhattan_sum": 0.094902889629,
-          "sequential_static_fallback": 0.49350348899,
-          "final_manhattan": 0.73436464821,
-          "final_static_fallback": -1.0259979451,
-          "static_topology_missing": 0.89389834139,
-          "board_depth_mean": 1.091880354,
-          "represented_board_count": -3.4273131351,
-          "shallow_checkpoint_count": 1.630554474
+          "(Intercept)": -20.8528029295,
+          "player_factor4": -0.70536417126,
+          "player_factor6": -0.089988790369,
+          "player_factor8": -2.4969163037,
+          "board_factor2": 0.72496931599,
+          "board_factor3": 1.5284445074,
+          "board_factor4": 0.69895138275,
+          "board_factor5": 0.9671237561,
+          "board_factor6": -0.41897074017,
+          "flag_factor3": -0.052787299015,
+          "flag_factor4": 0.5330229367,
+          "flag_factor5": -5.6176274904,
+          "flag_factor6": -4.3314750801,
+          "board_spread_factortight": -0.16123179988,
+          "inventory_factorcore": -1.90956741,
+          "inventory_factorcore+30th-anniversary": -3.4217793057,
+          "inventory_factorcore+chaos-and-carnage": -2.3178255998,
+          "inventory_factorcore+master-builder": -2.4136698148,
+          "inventory_factorcore+rr-dice": -0.67149011968,
+          "inventory_factorcore+thrills-and-spills": -4.5279852261,
+          "inventory_factorcore+wet-and-wild": 3.2694918844,
+          "inventory_factorsmall:master-builder": -2.5514450994,
+          "profile_overall": -6.2961941366,
+          "profile_hazard": 7.628962276,
+          "profile_congestion": 4.5968622476,
+          "profile_complexity": -5.2781110648,
+          "profile_swinginess": 16.8365632352,
+          "profile_density": -16.5081371999,
+          "compactness": 4.89096984,
+          "adjacency_count": -3.1492110034,
+          "graph_diameter": 2.538268944,
+          "first_start_manhattan_mean": 0.12517139934,
+          "sequential_manhattan_sum": 0.39260407326,
+          "final_manhattan": 0.4255966664,
+          "board_depth_mean": 0.47442019041,
+          "represented_board_count": -4.1166051324,
+          "shallow_checkpoint_count": 1.4400038536
         },
         "factorLevels": {
           "player_factor": [
@@ -982,7 +1077,9 @@
             "1",
             "2",
             "3",
-            "4"
+            "4",
+            "5",
+            "6"
           ],
           "flag_factor": [
             "2",
@@ -990,6 +1087,10 @@
             "4",
             "5",
             "6"
+          ],
+          "board_spread_factor": [
+            "random",
+            "tight"
           ],
           "inventory_factor": [
             "all",
@@ -1004,17 +1105,17 @@
           ]
         },
         "evidence": {
-          "sampleSize": 403,
-          "heldOutRmse": 14.6428038476,
-          "heldOutMae": 9.8582417613,
-          "heldOutRSquared": 0.10822969427,
+          "sampleSize": 587,
+          "heldOutRmse": 14.8764867415,
+          "heldOutMae": 9.8327847004,
+          "heldOutRSquared": 0.10641622433,
           "outOfFoldResidualSpread": {
-            "absoluteP50": 6.6315242365,
-            "absoluteP80": 15.6894128401,
-            "absoluteP90": 20.8661136478,
-            "absoluteP95": 27.9273317975,
-            "signedP05": -19.9466538258,
-            "signedP95": 21.8926583792
+            "absoluteP50": 6.6926651827,
+            "absoluteP80": 14.2641553657,
+            "absoluteP90": 21.0712502483,
+            "absoluteP95": 29.7854399673,
+            "signedP05": -18.9348199036,
+            "signedP95": 23.0259376573
           }
         }
       }
@@ -1023,45 +1124,48 @@
       "policy": "no direct length/difficulty offset; checkpoint-known route-work uses the promoted overlay-count-plus-geometry log-ratio model; piece identity remains unpromoted",
       "lengthDifficultyOffsetEnabled": false,
       "analysisWorkPrior": {
-        "medianExpansionIncrease": 3565,
-        "medianExpansionRatio": 1.5635555556,
-        "p90ExpansionRatio": 3.3072742851,
+        "medianExpansionIncrease": 3562,
+        "medianExpansionRatio": 1.6078540852,
+        "p90ExpansionRatio": 3.3922302655,
         "contextualModelEnabled": true,
         "contextualStage": "checkpointsKnown",
         "logRatioContextModel": {
           "stage": "checkpointsKnown",
           "type": "linear",
           "targetTransform": "identity",
-          "formula": "effect_log_expansions ~ overlay_board_count + player_factor +      board_factor + flag_factor + inventory_factor + profile_overall +      profile_hazard + profile_congestion + profile_complexity +      profile_swinginess + profile_density + compactness + adjacency_count +      graph_diameter + first_start_manhattan_mean + sequential_manhattan_sum +      final_manhattan + board_depth_mean + represented_board_count +      shallow_checkpoint_count",
+          "formula": "effect_log_expansions ~ overlay_board_count + player_factor +      board_factor + flag_factor + board_spread_factor + inventory_factor +      profile_overall + profile_hazard + profile_congestion + profile_complexity +      profile_swinginess + profile_density + compactness + adjacency_count +      graph_diameter + first_start_manhattan_mean + sequential_manhattan_sum +      final_manhattan + board_depth_mean + represented_board_count +      shallow_checkpoint_count",
           "coefficients": {
-            "(Intercept)": -2.3733423081,
-            "overlay_board_count": -0.38775882044,
-            "player_factor4": -0.18167987687,
-            "player_factor6": -0.10814360709,
-            "player_factor8": -0.063757135994,
-            "board_factor2": 0.64002091096,
-            "board_factor3": 1.0613677866,
-            "board_factor4": 1.4870044722,
-            "flag_factor3": -0.059476261713,
-            "flag_factor4": 0.14865944763,
-            "flag_factor5": 0.36363894633,
-            "flag_factor6": 0.32034687105,
-            "inventory_factorcore+master-builder": 0.25658132242,
-            "profile_overall": -2.0652109637,
-            "profile_hazard": -0.63953700156,
-            "profile_congestion": 1.5427846369,
-            "profile_complexity": -0.26900064618,
-            "profile_swinginess": 3.6855026823,
-            "profile_density": 3.908815415,
-            "compactness": 0.58230087842,
-            "adjacency_count": -0.13339997915,
-            "graph_diameter": -0.35587487456,
-            "first_start_manhattan_mean": -0.00073669276877,
-            "sequential_manhattan_sum": -0.012616583821,
-            "final_manhattan": 0.0032355126299,
-            "board_depth_mean": -0.23718205098,
-            "represented_board_count": 0.1700129264,
-            "shallow_checkpoint_count": -0.081205400929
+            "(Intercept)": -1.9365279715,
+            "overlay_board_count": 0.40964602138,
+            "player_factor4": 0.087875795183,
+            "player_factor6": -0.0048779109599,
+            "player_factor8": 0.090939986508,
+            "board_factor2": 0.40888888445,
+            "board_factor3": 0.63307332744,
+            "board_factor4": 1.1148061732,
+            "board_factor5": 1.2349216404,
+            "board_factor6": 1.3609406619,
+            "flag_factor3": 0.081131038064,
+            "flag_factor4": 0.055607110544,
+            "flag_factor5": -0.16112888743,
+            "flag_factor6": -0.056327998527,
+            "board_spread_factortight": 0.064610139065,
+            "inventory_factorcore+master-builder": 0.063002828363,
+            "profile_overall": -0.42967329026,
+            "profile_hazard": 0.096042233486,
+            "profile_congestion": 0.39478028786,
+            "profile_complexity": 1.2493721935,
+            "profile_swinginess": 0.098542519756,
+            "profile_density": 1.0026352484,
+            "compactness": -0.61789153826,
+            "adjacency_count": -0.11546347958,
+            "graph_diameter": -0.22866631338,
+            "first_start_manhattan_mean": 0.0038494622859,
+            "sequential_manhattan_sum": 0.00013478633703,
+            "final_manhattan": -0.0039523624032,
+            "board_depth_mean": 0.063497218946,
+            "represented_board_count": -0.11107154783,
+            "shallow_checkpoint_count": 0.088220160477
           },
           "factorLevels": {
             "player_factor": [
@@ -1074,7 +1178,9 @@
               "1",
               "2",
               "3",
-              "4"
+              "4",
+              "5",
+              "6"
             ],
             "flag_factor": [
               "2",
@@ -1083,23 +1189,27 @@
               "5",
               "6"
             ],
+            "board_spread_factor": [
+              "random",
+              "tight"
+            ],
             "inventory_factor": [
               "all",
               "core+master-builder"
             ]
           },
           "evidence": {
-            "sampleSize": 127,
-            "heldOutRmse": 0.6435837081,
-            "heldOutMae": 0.48698799606,
-            "heldOutRSquared": 0.11087489149,
+            "sampleSize": 133,
+            "heldOutRmse": 0.5137381189,
+            "heldOutMae": 0.39531008842,
+            "heldOutRSquared": 0.053437351116,
             "outOfFoldResidualSpread": {
-              "absoluteP50": 0.40309345147,
-              "absoluteP80": 0.82896523179,
-              "absoluteP90": 0.9853094383,
-              "absoluteP95": 1.1444938377,
-              "signedP05": -0.95025364269,
-              "signedP95": 1.0360959632
+              "absoluteP50": 0.28150389805,
+              "absoluteP80": 0.65002963687,
+              "absoluteP90": 0.83643192806,
+              "absoluteP95": 1.0469440519,
+              "signedP05": -0.88995455449,
+              "signedP95": 0.8134186934
             }
           }
         },

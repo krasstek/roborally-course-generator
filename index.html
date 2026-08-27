@@ -8,7 +8,7 @@
   <meta name="mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="mobile-web-app-title" content="RoboRally" />
   <meta name="application-name" content="RoboRally Course Generator" />
-  <meta name="app-version" content="20260827055452" />
+  <meta name="app-version" content="20260827203632" />
   <title>RoboRally Course Generator</title>
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="icon" type="image/png" sizes="16x16" href="./assets/icons/favicon-16.png" />
@@ -91,6 +91,21 @@
       line-height: 1.55;
       font-weight: 700;
       letter-spacing: 0.02em;
+    }
+
+    .special-rules-note,
+    .rules-advice-note {
+      font-weight: 400;
+    }
+
+    .rules-note-heading,
+    .rules-note-rule-name {
+      font-weight: 700;
+    }
+
+    .rules-note-heading,
+    .rules-note-entry {
+      display: inline;
     }
 
     .rules-advice-note {
@@ -997,6 +1012,14 @@
       font-size: 14px;
     }
 
+    .overlay-copy-refresh {
+      animation: overlay-copy-refresh 0.16s ease-out;
+    }
+
+    @keyframes overlay-copy-refresh {
+      from { opacity: 0.55; transform: translateY(1px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
 
 
     .toast-stack {
@@ -1518,7 +1541,7 @@
       </div>
       <div id="rules-anchor-top">
         <div id="rules-block-top" class="hidden">
-          <p id="rules-note" class="rules-note hidden">SPECIAL RULES:</p>
+          <p id="rules-note" class="rules-note special-rules-note hidden">SPECIAL RULES:</p>
           <p id="rules-advice-note" class="rules-note rules-advice-note hidden"></p>
         </div>
       </div>
@@ -1588,8 +1611,7 @@
           <p id="overlay-text" class="overlay-text">Trying a course setup and checking that it works.</p>
           <p id="overlay-hint" class="overlay-hint hidden"></p>
           <div class="overlay-stop-control">
-            <button id="use-best-so-far" class="secondary-button" type="button">Use Best So Far</button>
-            <p id="use-best-so-far-note" class="overlay-stop-note">Stops at the next safe point; the current check may finish first.</p>
+            <button id="use-best-so-far" class="secondary-button" type="button">Stop</button>
           </div>
         </div>
       </div>
@@ -1630,6 +1652,7 @@
       </div>
       <p class="about-copy">Unofficial fan-made RoboRally course generator.</p>
       <p class="about-copy">The layouts are randomized, but not blindly. The generator checks how robots can travel through the course and weighs starting balance, difficulty, length, checkpoint pacing, traffic, and how well each board is used before presenting a result.</p>
+      <p class="about-copy">Some courses are harder to predict than others. Longer, more hazardous, and more congested layouts create more possible interactions, so later parts of a race become less certain. The generator accounts for that uncertainty rather than treating every estimate as equally exact.</p>
       <p class="about-copy">It can still produce unusual courses. Course notes point out some quirks so you can decide whether to play the result or generate another.</p>
       <p class="about-copy">This project is unaffiliated with the RoboRally publisher or rights holders.</p>
       <div class="about-actions">

@@ -1380,80 +1380,30 @@ function drawReentryMarkers(ctx, markers, bounds, tileSize, margin) {
   }
 }
 
-function drawVirtualBotEntry(ctx, entry, bounds, tileSize, margin) {
+function drawVirtualBotEntry(ctx, entry, bounds, tileSize, margin, showFacing = false) {
   if (!entry) return;
 
   const left = margin + (entry.x - bounds.minX) * tileSize;
   const top = margin + (entry.y - bounds.minY) * tileSize;
-  const size = tileSize * 0.72;
+  const size = tileSize * 0.46;
   const inset = (tileSize - size) / 2;
-  const cx = left + tileSize / 2;
-  const cy = top + tileSize / 2;
 
   ctx.save();
-  ctx.fillStyle = "#73c53d";
-  ctx.strokeStyle = "#2f7e1c";
-  ctx.lineWidth = 2.4;
+  // Match the player-facing No Docks start marker: Virtual Bots now use a
+  // shared starting space rather than borrowing the board's reboot token.
+  ctx.fillStyle = "rgba(255, 255, 255, 0.96)";
+  ctx.strokeStyle = "#111111";
+  ctx.lineWidth = 1.8;
   ctx.beginPath();
-  ctx.roundRect(left + inset, top + inset, size, size, 10);
+  ctx.arc(left + tileSize / 2, top + tileSize / 2, size / 2, 0, Math.PI * 2);
   ctx.fill();
   ctx.stroke();
 
-  ctx.translate(cx, cy);
-
-  if (entry.dir) {
-    const rotation = {
-      N: 0,
-      E: Math.PI / 2,
-      S: Math.PI,
-      W: -Math.PI / 2
-    }[entry.dir] ?? 0;
-    ctx.rotate(rotation);
-    ctx.fillStyle = "rgba(255,255,255,0.98)";
-    ctx.beginPath();
-    ctx.moveTo(0, -tileSize * 0.23);
-    ctx.lineTo(tileSize * 0.14, -tileSize * 0.02);
-    ctx.lineTo(tileSize * 0.06, -tileSize * 0.02);
-    ctx.lineTo(tileSize * 0.06, tileSize * 0.2);
-    ctx.lineTo(-tileSize * 0.06, tileSize * 0.2);
-    ctx.lineTo(-tileSize * 0.06, -tileSize * 0.02);
-    ctx.lineTo(-tileSize * 0.14, -tileSize * 0.02);
-    ctx.closePath();
-    ctx.fill();
-  } else {
-    // Startup Spin-Up: the shared entry point has no required facing.
-    ctx.strokeStyle = "rgba(255,255,255,0.98)";
-    ctx.lineWidth = Math.max(2, tileSize * 0.065);
-    ctx.beginPath();
-    ctx.arc(0, 0, tileSize * 0.15, 0, Math.PI * 2);
-    ctx.stroke();
-    for (const [dx, dy] of [[0,-1],[1,0],[0,1],[-1,0]]) {
-      ctx.beginPath();
-      ctx.moveTo(dx * tileSize * 0.08, dy * tileSize * 0.08);
-      ctx.lineTo(dx * tileSize * 0.22, dy * tileSize * 0.22);
-      ctx.stroke();
-    }
+  if (showFacing && entry.dir) {
+    ctx.fillStyle = "#1f1815";
+    ctx.font = "10px sans-serif";
+    ctx.fillText(entry.dir, left + 2, top + tileSize - 4);
   }
-
-  // Draw the energy cube last, at the rear edge opposite the marker's facing,
-  // so the arrow remains unobscured and directionality is immediately legible.
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  const cubeSize = tileSize * 0.20;
-  const rearOffset = tileSize * 0.235;
-  const rearVector = {
-    N: { x: 0, y: 1 },
-    E: { x: -1, y: 0 },
-    S: { x: 0, y: -1 },
-    W: { x: 1, y: 0 }
-  }[entry.dir] ?? { x: 0, y: 0 };
-  const cubeCx = cx + rearVector.x * rearOffset;
-  const cubeCy = cy + rearVector.y * rearOffset;
-
-  ctx.fillStyle = "#f28c28";
-  ctx.strokeStyle = "#8d4308";
-  ctx.lineWidth = Math.max(1.5, tileSize * 0.04);
-  ctx.fillRect(cubeCx - cubeSize / 2, cubeCy - cubeSize / 2, cubeSize, cubeSize);
-  ctx.strokeRect(cubeCx - cubeSize / 2, cubeCy - cubeSize / 2, cubeSize, cubeSize);
 
   ctx.restore();
 }
@@ -1760,7 +1710,7 @@ export function render(canvas, pieces, imageMap = {}, options = {}) {
     hideUnusableStarts
   );
   drawRebootTokens(ctx, options.rebootTokens || [], bounds, tileSize, margin);
-  drawVirtualBotEntry(ctx, options.virtualBotEntry || null, bounds, tileSize, margin);
+  drawVirtualBotEntry(ctx, options.virtualBotEntry || null, bounds, tileSize, margin, showStartFacing);
   drawMovingTargetPaths(ctx, options.movingTargetTimelines || [], bounds, tileSize, margin, {
     showDetails: options.showMovingTargetDetails
   });

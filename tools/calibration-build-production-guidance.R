@@ -198,13 +198,13 @@ assert_promoted_context_candidate <- function(candidates, selected_name, label, 
 }
 
 # v47 treatment decisions:
-# - Dynamic Archiving length promotes the full checkpoint-context model.
+# - Dynamic Archiving length promotes the reduced checkpoint-geometry model.
 # - Structural board-overlay route work promotes overlayCountGeometry.
 # - All other treatment outcomes remain simple priors unless future evidence
 #   independently clears the same guardrail.
 dynamic_archiving_length_selected <- assert_promoted_context_candidate(
   treatment_selection$dynamicArchiving$length,
-  "full",
+  "geometryReduced",
   "Dynamic Archiving length"
 )
 overlay_route_cost_selected <- assert_promoted_context_candidate(
@@ -378,6 +378,7 @@ production <- list(
     requestedFlagCounts = analysis$coverage$requestedFlagCounts,
     difficulties = analysis$coverage$difficulties,
     lengths = analysis$coverage$lengths,
+    boardSpreads = analysis$coverage$boardSpreads,
     inventoryPresets = analysis$coverage$inventoryPresets
   ),
 
@@ -412,7 +413,7 @@ production <- list(
     dynamicArchiving = list(
       policy = paste(
         "constant treatment priors remain for counts/boards-known and for difficulty;",
-        "checkpoint-known length uses the promoted full contextual paired-effect model"
+        "checkpoint-known length uses the promoted reduced checkpoint-geometry paired-effect model"
       ),
       lengthEffectMean = paired_recovery$lengthEffectMean,
       lengthEffectMedian = paired_recovery$lengthEffectMedian,

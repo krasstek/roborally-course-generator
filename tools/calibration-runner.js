@@ -16,7 +16,7 @@ const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const PROJECT_DIR = dirname(SCRIPT_DIR);
 
 const DEFAULTS = Object.freeze({
-  count: 3200,
+  count: 3840,
   seed: Date.now() >>> 0,
   analysisMode: "balanced",
   pairedRecoveryRate: 0.25,
@@ -36,6 +36,7 @@ const DIFFICULTIES = Object.freeze(["easy", "moderate", "hard", "brutal"]);
 const LENGTHS = Object.freeze(["short", "moderate", "long", "epic"]);
 const FLAG_COUNTS = Object.freeze([2, 3, 4, 5, 6]);
 const CHECKPOINT_SAMPLING_REGIMES = Object.freeze(["compact", "ordinary", "stretched"]);
+const BOARD_SPREADS = Object.freeze(["random", "tight"]);
 const GENERAL_DESIGN_BLOCK_SIZE = PLAYERS.length * DIFFICULTIES.length * LENGTHS.length * FLAG_COUNTS.length;
 const OVERLAY_STUDY_BLOCK_SIZE = 20;
 const BLOCK_STRATA = Object.freeze([
@@ -140,7 +141,7 @@ function parseArgs(argv) {
 }
 
 function printHelp() {
-  console.log(`Robo Rally calibration runner\n\nUsage:\n  node tools/calibration-runner.js [options]\n\nOptions:\n  --count N                  Total observations to collect (default ${DEFAULTS.count}; 320 = one full general-design block)\n  --pilot                    Convenience smoke test: 80 observations unless --count is supplied\n  --overlay-study            Targeted structural-overlay study; defaults to 500 observations\n  --overlay-count N          In overlay study, force exactly N structural overlay boards; defaults to 300 observations\n  --overlay-placement-retries N  Cheap construction proposals per forced-overlay observation (default ${DEFAULTS.overlayPlacementRetries})\n  --seed N                   Deterministic master seed\n  --analysis-mode MODE       Reference route effort: fastest|fast|standard|balanced|thorough\n  --paired-recovery-rate P   Normal/DA constructions receiving same-course recovery counterfactual (default ${DEFAULTS.pairedRecoveryRate})\n  --mode-pair-rate P         Eligible courses receiving one extra route-effort counterfactual (default ${DEFAULTS.modePairRate})\n  --sets all|id,id            Restrict every observation to these expansion IDs\n  --output PATH              JSONL output path (default calibration-output/calibration-raw-<timestamp>.jsonl)\n  --timeout-seconds N        Hard wall-clock ceiling per observation (default ${DEFAULTS.timeoutSeconds}s)\n  --resume                   Continue an existing JSONL file; schedule/seed come from its header\n  --help                     Show this message\n\nThe runner uses only Node built-ins and local project files. Network access is explicitly blocked. Each primary observation runs in its own child process so pathological synchronous route searches can be terminated safely. A timeout is recorded as calibration data, not as route impossibility or a harness error. In --overlay-study mode every proposal requests a real structural board overlay (80% one overlay, 20% two unless --overlay-count is supplied) and every successful scenario receives a same-course no-overlay counterfactual. Structural overlay-board studies exclude small-board-only presets because overlay boards are not physically stacked on those layouts. When a fixed overlay count is requested, cheap construction failures are resampled up to the configured proposal limit; analyzed route failures, timeouts, and errors are never resampled. The final observation records how many construction proposals were needed. General-study scheduling is factorial in players × difficulty × length × flag count (320 observations per complete block), with board count and inventory independently scheduled. The ordinary general run also includes both one- and two-board-overlay cases, so a separate overlay run is optional rather than required. Normal console output is one updating progress line; only unexpected actionable errors are printed separately.`);
+  console.log(`Robo Rally calibration runner\n\nUsage:\n  node tools/calibration-runner.js [options]\n\nOptions:\n  --count N                  Total observations to collect (default ${DEFAULTS.count}; 320 = one full general-design block)\n  --pilot                    Convenience smoke test: 80 observations unless --count is supplied\n  --overlay-study            Targeted structural-overlay study; defaults to 500 observations\n  --overlay-count N          In overlay study, force exactly N structural overlay boards; defaults to 300 observations\n  --overlay-placement-retries N  Cheap construction proposals per forced-overlay observation (default ${DEFAULTS.overlayPlacementRetries})\n  --seed N                   Deterministic master seed\n  --analysis-mode MODE       Reference route effort: fastest|fast|standard|balanced|thorough\n  --paired-recovery-rate P   Normal/DA constructions receiving same-course recovery counterfactual (default ${DEFAULTS.pairedRecoveryRate})\n  --mode-pair-rate P         Eligible courses receiving one extra route-effort counterfactual (default ${DEFAULTS.modePairRate})\n  --sets all|id,id            Restrict every observation to these expansion IDs\n  --output PATH              JSONL output path (default calibration-output/calibration-raw-<timestamp>.jsonl)\n  --timeout-seconds N        Hard wall-clock ceiling per observation (default ${DEFAULTS.timeoutSeconds}s)\n  --resume                   Continue an existing JSONL file; schedule/seed come from its header\n  --help                     Show this message\n\nThe runner uses only Node built-ins and local project files. Network access is explicitly blocked. Each primary observation runs in its own child process so pathological synchronous route searches can be terminated safely. A timeout is recorded as calibration data, not as route impossibility or a harness error. In --overlay-study mode every proposal requests a real structural board overlay (80% one overlay, 20% two unless --overlay-count is supplied) and every successful scenario receives a same-course no-overlay counterfactual. Structural overlay-board studies exclude small-board-only presets because overlay boards are not physically stacked on those layouts. When a fixed overlay count is requested, cheap construction failures are resampled up to the configured proposal limit; analyzed route failures, timeouts, and errors are never resampled. The final observation records how many construction proposals were needed. General-study scheduling is factorial in players × difficulty × length × flag count (320 observations per complete block); repeated target cells alternate Random/Tight board spread, board count advances across repeated spread pairs, and inventory remains independently scheduled. The ordinary general run also includes both one- and two-board-overlay cases, so a separate overlay run is optional rather than required. Normal console output is one updating progress line; only unexpected actionable errors are printed separately.`);
 }
 
 function timestampId() {
@@ -351,8 +352,57 @@ function checkpointSamplingRegimeForDesignSlot(seed, designBlockIndex, designSlo
   return regimes[designSlotIndex] ?? "ordinary";
 }
 
-function independentBoardCount(config, index, preset, minimum = 1) {
-  const maxBoardCount = Math.max(1, preset?.maxBoardCount || 1);
+function boardSpreadForDesignCell(seed, designBlockIndex, designCell) {
+  // Every repeated target cell alternates Random/Tight independently of its
+  // requested dimensions. This lets calibration learn footprint effects without
+  // making Board Spread a proxy for Short/Long or Easy/Hard.
+  const phase = hash32(
+    seed,
+    "board-spread-phase",
+    designCell.playerCount,
+    designCell.difficulty,
+    designCell.length,
+    designCell.flagCount
+  ) % BOARD_SPREADS.length;
+  return BOARD_SPREADS[(designBlockIndex + phase) % BOARD_SPREADS.length];
+}
+
+function balancedBoardCountForDesignCell(config, designBlockIndex, designCell, preset, minimum = 1, maximum = null) {
+  const inventoryMaximum = Math.max(1, preset?.maxBoardCount || 1);
+  const maxBoardCount = Number.isFinite(Number(maximum))
+    ? Math.min(inventoryMaximum, Math.max(1, Math.floor(Number(maximum))))
+    : inventoryMaximum;
+  const minBoardCount = Math.min(maxBoardCount, Math.max(1, Math.floor(Number(minimum) || 1)));
+  const span = Math.max(1, maxBoardCount - minBoardCount + 1);
+  const phase = hash32(
+    config.seed,
+    "board-count-phase",
+    designCell.playerCount,
+    designCell.difficulty,
+    designCell.length,
+    designCell.flagCount,
+    preset?.id ?? "unknown"
+  ) % span;
+  // Board Spread alternates each block, while board count advances every pair
+  // of blocks. With the default twelve general-design blocks, a six-board Epic
+  // domain can therefore cover counts 1..6 under both Random and Tight.
+  const pairedBlock = Math.floor(designBlockIndex / BOARD_SPREADS.length);
+  return minBoardCount + ((pairedBlock + phase) % span);
+}
+
+function getTargetAwareMaxBoardCount(preset, length) {
+  const inventoryMaximum = Math.max(1, preset?.maxBoardCount || 1);
+  if (preset?.hasLargeBoards && length !== "epic") {
+    return Math.min(4, inventoryMaximum);
+  }
+  return inventoryMaximum;
+}
+
+function independentBoardCount(config, index, preset, minimum = 1, maximum = null) {
+  const inventoryMaximum = Math.max(1, preset?.maxBoardCount || 1);
+  const maxBoardCount = Number.isFinite(Number(maximum))
+    ? Math.min(inventoryMaximum, Math.max(1, Math.floor(Number(maximum))))
+    : inventoryMaximum;
   const minBoardCount = Math.min(maxBoardCount, Math.max(1, Math.floor(Number(minimum) || 1)));
   const span = Math.max(1, maxBoardCount - minBoardCount + 1);
   return minBoardCount + (hash32(config.seed, "board-count", index, preset?.id ?? "unknown") % span);
@@ -376,7 +426,7 @@ function buildOverlayStudyPlan(index, config, presets) {
 
   const difficulty = ["moderate", "hard", "brutal"][(blockIndex + slotIndex * 2) % 3];
   const length = LENGTHS[(blockIndex * 2 + slotIndex) % LENGTHS.length];
-  const maxBoardCount = Math.max(1, preset.maxBoardCount || 1);
+  const maxBoardCount = getTargetAwareMaxBoardCount(preset, length);
   const mixedOverlayCount = preset.overlayBoardIds?.length >= 2 && (hash32(config.seed, "overlay-count", index) % 4 === 0)
     ? 2
     : 1;
@@ -385,9 +435,10 @@ function buildOverlayStudyPlan(index, config, presets) {
     ? forcedBoardOverlayCount + 1
     : forcedBoardOverlayCount;
   const minimumBoardCount = Math.min(maxBoardCount, Math.max(1, productionMinimumBoards));
-  const boardCount = independentBoardCount(config, index, preset, minimumBoardCount);
+  const boardCount = independentBoardCount(config, index, preset, minimumBoardCount, maxBoardCount);
   const flagCount = FLAG_COUNTS[hash32(config.seed, "overlay-flags", index) % FLAG_COUNTS.length];
   const pairedMode = choosePairedMode(config, index, random);
+  const boardSpread = BOARD_SPREADS[hash32(config.seed, "overlay-board-spread", index) % BOARD_SPREADS.length];
 
   return {
     index,
@@ -399,6 +450,7 @@ function buildOverlayStudyPlan(index, config, presets) {
     playerCount,
     difficulty,
     length,
+    boardSpread,
     boardCount,
     flagCount,
     inventoryPreset: preset.id,
@@ -442,8 +494,16 @@ function buildObservationPlan(index, config, presets) {
     random,
     stratum === "structural-variant" ? null : playerCount
   );
-  const maxBoardCount = Math.max(1, preset.maxBoardCount || 1);
-  let boardCount = independentBoardCount(config, index, preset);
+  const maxBoardCount = getTargetAwareMaxBoardCount(preset, length);
+  const boardSpread = boardSpreadForDesignCell(config.seed, designBlockIndex, designCell);
+  let boardCount = balancedBoardCountForDesignCell(
+    config,
+    designBlockIndex,
+    designCell,
+    preset,
+    1,
+    maxBoardCount
+  );
   const forcedVariantIds = [];
   let overlayMode = "no";
   let forcedBoardOverlayCount = null;
@@ -461,7 +521,14 @@ function buildObservationPlan(index, config, presets) {
     const productionMinimumBoards = difficulty === "moderate"
       ? forcedBoardOverlayCount + 1
       : forcedBoardOverlayCount;
-    boardCount = independentBoardCount(config, index, preset, productionMinimumBoards);
+    boardCount = balancedBoardCountForDesignCell(
+      config,
+      designBlockIndex,
+      designCell,
+      preset,
+      productionMinimumBoards,
+      maxBoardCount
+    );
   }
   if (stratum === "structural-variant") {
     forcedVariantIds.push(STRUCTURAL_VARIANTS[hash32(config.seed, "structural-variant", index) % STRUCTURAL_VARIANTS.length]);
@@ -487,6 +554,7 @@ function buildObservationPlan(index, config, presets) {
     playerCount,
     difficulty,
     length,
+    boardSpread,
     boardCount,
     flagCount,
     checkpointSamplingRegime,
@@ -522,7 +590,7 @@ function makeRunHeader(config, presets) {
       generalDesign: config.study === "general" ? {
         blockSize: GENERAL_DESIGN_BLOCK_SIZE,
         factors: { players: PLAYERS.length, difficulties: DIFFICULTIES.length, lengths: LENGTHS.length, flagCounts: FLAG_COUNTS.length },
-        note: "Each complete block contains every Players × Difficulty × Length × Flag-count combination exactly once; board count, inventory, stratum, overlays, mode pairs, and compact/ordinary/stretched checkpoint sampling are independently scheduled."
+        note: "Each complete block contains every Players × Difficulty × Length × Flag-count combination exactly once. Repeated target cells alternate Random/Tight board spread, and board count advances across repeated spread pairs; inventory, stratum, overlays, mode pairs, and compact/ordinary/stretched checkpoint sampling remain independently scheduled."
       } : null,
       strataPerBlock: config.study === "overlay"
         ? { "board-overlay": OVERLAY_STUDY_BLOCK_SIZE }
@@ -535,6 +603,7 @@ function makeRunHeader(config, presets) {
       lengths: LENGTHS,
       flagCounts: FLAG_COUNTS,
       checkpointSamplingRegimes: CHECKPOINT_SAMPLING_REGIMES,
+      boardSpreads: BOARD_SPREADS,
       restrictedExpansionIds: config.expansionIds,
       timeoutSeconds: config.timeoutSeconds
     },
@@ -604,6 +673,7 @@ async function runObservationInWorker(request) {
     playerCount: plan.playerCount,
     difficulty: plan.difficulty,
     length: plan.length,
+    boardSpread: plan.boardSpread,
     boardCount: plan.boardCount,
     flagCount: plan.flagCount,
     generationMode: config.analysisMode,
@@ -790,6 +860,7 @@ function makeTimeoutRecord(config, plan, timeoutMs) {
       playerCount: plan.playerCount,
       difficulty: plan.difficulty,
       length: plan.length,
+      boardSpread: plan.boardSpread,
       boardCount: plan.boardCount,
       flagCount: plan.flagCount,
       checkpointSamplingRegime: plan.checkpointSamplingRegime ?? "ordinary",
@@ -839,6 +910,7 @@ function makeObservationRecord(config, plan, payload) {
       playerCount: plan.playerCount,
       difficulty: plan.difficulty,
       length: plan.length,
+      boardSpread: plan.boardSpread,
       boardCount: plan.boardCount,
       flagCount: plan.flagCount,
       checkpointSamplingRegime: plan.checkpointSamplingRegime ?? "ordinary",

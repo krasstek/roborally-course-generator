@@ -66,6 +66,7 @@ function getLegLabel(leg, scenario) {
 }
 
 const CHECKPOINT_PLACEMENT_ADVISORY_THRESHOLD = 6;
+const SHORT_CHECKPOINT_PLACEMENT_ADVISORY_THRESHOLD = 9;
 const CHECKPOINT_PLACEMENT_COMPONENT_NOTE_THRESHOLD = 1.5;
 
 export function getCheckpointPlacementAdvisory(scenario) {
@@ -95,16 +96,19 @@ export function getCheckpointPlacementAdvisory(scenario) {
   const middleAverageShortfall = middleAverage === null ? 0 : Math.max(0, 6 - middleAverage);
   const finalShortfall = finalFastest === null ? 0 : Math.max(0, 6 - finalFastest);
 
-  // Player-facing severity is intentionally independent of requested length and
-  // difficulty. Fit scoring keeps its existing request-sensitive penalties; this
-  // separate scale only decides whether a pacing quirk is substantial enough to
-  // bother the player with a Course Note / result-banner advisory.
+  // Player-facing severity uses the same route evidence regardless of request.
+  // Fit scoring keeps its existing request-sensitive penalties. Only the display
+  // threshold is more tolerant when the player explicitly requested a Short course,
+  // where mildly quick checkpoint pacing is expected rather than noteworthy.
   const openingSeverity = openingFastestShortfall * 2 + openingAverageShortfall * 1.2;
   const middleSeverity = middleShortestShortfall * 2 + middleAverageShortfall * 0.8;
   const finalSeverity = finalShortfall * 2.5;
   const severity = openingSeverity + middleSeverity + finalSeverity;
   const hasDeviation = severity > 0;
-  const active = severity >= CHECKPOINT_PLACEMENT_ADVISORY_THRESHOLD;
+  const advisoryThreshold = scenario?.preferences?.length === "short"
+    ? SHORT_CHECKPOINT_PLACEMENT_ADVISORY_THRESHOLD
+    : CHECKPOINT_PLACEMENT_ADVISORY_THRESHOLD;
+  const active = severity >= advisoryThreshold;
 
   const opening = active && openingSeverity >= CHECKPOINT_PLACEMENT_COMPONENT_NOTE_THRESHOLD;
   const consecutive = active && middleSeverity >= CHECKPOINT_PLACEMENT_COMPONENT_NOTE_THRESHOLD;
@@ -118,7 +122,7 @@ export function getCheckpointPlacementAdvisory(scenario) {
       final: false,
       consecutive: false,
       severity: Number(severity.toFixed(2)),
-      threshold: CHECKPOINT_PLACEMENT_ADVISORY_THRESHOLD,
+      threshold: advisoryThreshold,
       score: 0,
       bannerText: "",
       text: ""
@@ -170,7 +174,7 @@ export function getCheckpointPlacementAdvisory(scenario) {
     final,
     consecutive,
     severity: Number(severity.toFixed(2)),
-    threshold: CHECKPOINT_PLACEMENT_ADVISORY_THRESHOLD,
+    threshold: advisoryThreshold,
     score: Number(score.toFixed(2)),
     bannerText,
     text: noteText

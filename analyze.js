@@ -77,6 +77,12 @@ const REBOOT_AVERAGE_LOST_REGISTERS = 2;
 // mirrors portal/teleporter readability friction without re-counting damage or tempo.
 const REBOOT_DISCONTINUITY_PENALTY = 3;
 const REGISTER_COUNT = 5;
+// Expected auto-kill exposure uses the same underlying reboot consequence for
+// pits, edges, crushers and trapdoors. Recovery location then determines
+// whether that threat is merely lethal, additionally loses course progress,
+// or (for token-based recovery only) can sometimes be exploited as mobility.
+const AUTO_KILL_SETBACK_TEMPO_PER_STEP = REGISTER_TEMPO_COST * 0.5;
+const AUTO_KILL_PRESSURE_SETBACK_WEIGHT = 0.08;
 const PROGRAM_CARD_COUNTS = new Map([
   ["FORWARD", 4],
   ["FORWARD_2", 3],
@@ -1935,15 +1941,65 @@ function isExposedToPitOrEdge(tileMap, point, dir, options = {}) {
   return !toTile || isPit(toTile);
 }
 
+function getAutoKillRecoveryPoint(state, options = {}) {
+  if (!state) return null;
+
+  if (options.recoveryRule === "reboot_tokens") {
+    return getRebootTokenForPoint(state, options.boardRects, options.rebootTokens);
+  }
+
+  if (options.recoveryRule === "home_reboot") {
+    const choices = getHomeRebootChoices(options.rebootTokens);
+    if (!choices.length) return null;
+    const goal = options.goal;
+    if (!goal) return choices[0];
+    return choices.reduce((best, candidate) => (
+      heuristic(candidate, goal) < heuristic(best, goal) ? candidate : best
+    ));
+  }
+
+  if (options.recoveryRule === "dynamic_archiving") {
+    return options.dynamicArchivePoint ?? null;
+  }
+
+  return null;
+}
+
+function getAutoKillRecoveryProgress(state, options = {}) {
+  const goal = options.goal;
+  const recoveryPoint = getAutoKillRecoveryPoint(state, options);
+  if (!goal || !recoveryPoint) {
+    return {
+      recoveryPoint,
+      progress: 0,
+      setback: 0
+    };
+  }
+
+  const progress = heuristic(state, goal) - heuristic(recoveryPoint, goal);
+  return {
+    recoveryPoint,
+    progress,
+    setback: Math.max(0, -progress)
+  };
+}
+
 function getPitPressurePenalty(tileMap, point, options = {}) {
   let penalty = 0;
+  const { setback } = getAutoKillRecoveryProgress(point, options);
+  const setbackCost = setback * AUTO_KILL_SETBACK_TEMPO_PER_STEP;
+  const recoveryAwareExtra = Math.min(2.5, setbackCost * AUTO_KILL_PRESSURE_SETBACK_WEIGHT);
 
   for (const dir of ROTATION_ORDER) {
     if (!isExposedToPitOrEdge(tileMap, point, dir, options)) {
       continue;
     }
 
-    penalty += 0.5;
+    // This is accidental-death pressure, not deliberate reboot mobility.
+    // A recovery point that is behind the current leg makes nearby pits/edges
+    // more consequential; a forward recovery point gets no extra credit here
+    // because intentional entry is already represented by exact route physics.
+    penalty += 0.5 + recoveryAwareExtra;
   }
 
   return Number(penalty.toFixed(2));
@@ -2312,19 +2368,27 @@ function moveOneStep(tileMap, state, dir, mode, options = {}, moveBudget = null,
         options.rebootTokens
       )
       : null;
+    const homeRebootChoices = moveCheck.crash && options.recoveryRule === "home_reboot"
+      ? getHomeRebootChoices(options.rebootTokens)
+      : null;
 
-    if (rebootToken) {
+    if (rebootToken || homeRebootChoices?.length) {
+      const rebootDestination = rebootToken
+        ? { x: rebootToken.x, y: rebootToken.y }
+        : homeRebootChoices[0];
       return {
         state: {
-          x: rebootToken.x,
-          y: rebootToken.y,
+          x: rebootDestination.x,
+          y: rebootDestination.y,
           facing: state.facing
         },
-        rebootChoices: ROTATION_ORDER.map((facing) => ({
-          x: rebootToken.x,
-          y: rebootToken.y,
-          facing
-        })),
+        rebootChoices: rebootToken
+          ? ROTATION_ORDER.map((facing) => ({
+            x: rebootToken.x,
+            y: rebootToken.y,
+            facing
+          }))
+          : homeRebootChoices,
         blocked: false,
         crashed: false,
         rebooted: true,
@@ -2746,19 +2810,27 @@ function resolveCrusherPhase(tileMap, state, options = {}) {
   const rebootToken = options.recoveryRule === "reboot_tokens"
     ? getRebootTokenForPoint(state, options.boardRects, options.rebootTokens)
     : null;
+  const homeRebootChoices = options.recoveryRule === "home_reboot"
+    ? getHomeRebootChoices(options.rebootTokens)
+    : null;
 
-  if (rebootToken) {
+  if (rebootToken || homeRebootChoices?.length) {
+    const rebootDestination = rebootToken
+      ? { x: rebootToken.x, y: rebootToken.y }
+      : homeRebootChoices[0];
     return {
       state: {
-        x: rebootToken.x,
-        y: rebootToken.y,
+        x: rebootDestination.x,
+        y: rebootDestination.y,
         facing: state.facing
       },
-      rebootChoices: ROTATION_ORDER.map((facing) => ({
-        x: rebootToken.x,
-        y: rebootToken.y,
-        facing
-      })),
+      rebootChoices: rebootToken
+        ? ROTATION_ORDER.map((facing) => ({
+          x: rebootToken.x,
+          y: rebootToken.y,
+          facing
+        }))
+        : homeRebootChoices,
       traversed: [{ x: state.x, y: state.y }],
       conveyorSteps: [],
       hazard: getRebootDamagePenalty(options),
@@ -2903,46 +2975,82 @@ function getExpectedTimedPushPenalty(tileMap, state, feature, options = {}) {
   return Number((Math.min(3.6, Math.abs(delta) * 1.15 + 1.1) * duty).toFixed(2));
 }
 
-function getExpectedTimedCrusherPenalty(state, feature, options = {}) {
+function getExpectedTimedAutoKillPenalty(
+  state,
+  feature,
+  options = {},
+  {
+    exploitReliabilityBase = 0,
+    exploitReliabilityDuty = 0,
+    exploitScale = 0,
+    maxExploitCredit = 0
+  } = {}
+) {
   const duty = getFeatureDutyCycle(feature);
   if (duty <= 0) return 0;
 
-  const harm = 9.5 * duty;
-  const goal = options.goal;
-  if (!goal || options.recoveryRule !== "reboot_tokens") {
-    return Number(harm.toFixed(2));
+  // All auto-kills destroy the robot. The feature determines exposure timing;
+  // the lethal consequence itself is the same damage + lost-register reboot
+  // cost used by exact route realization.
+  const rebootConsequence = (
+    getRebootDamagePenalty(options) +
+    getRebootRoutePenalty()
+  );
+  let penalty = rebootConsequence * duty;
+
+  const { recoveryPoint, progress, setback } = getAutoKillRecoveryProgress(state, options);
+  if (!recoveryPoint || !options.goal) {
+    return Number(penalty.toFixed(2));
   }
 
-  const rebootToken = getRebootTokenForPoint(state, options.boardRects, options.rebootTokens);
-  if (!rebootToken) return Number(harm.toFixed(2));
+  const tokenMobility = (
+    options.recoveryRule === "reboot_tokens" ||
+    options.recoveryRule === "home_reboot"
+  );
+  if (tokenMobility && progress > 0) {
+    // Exact active-register physics remains authoritative for deliberate reboot
+    // mobility. Static timing uncertainty only grants a small reliability-
+    // discounted credit when recovery itself advances the current leg.
+    const exploitReliability = exploitReliabilityBase + duty * exploitReliabilityDuty;
+    const exploitCredit = (
+      Math.min(maxExploitCredit, progress * exploitScale) *
+      duty *
+      exploitReliability
+    );
+    penalty -= exploitCredit;
+  } else if (setback > 0) {
+    // Non-progressing recovery is a hazard, not mobility. Dynamic Archiving
+    // reaches this branch with the most recent archive already established by
+    // the route prefix; physical/Home reboot tokens use their actual recovery
+    // point. The average remaining-register reboot cost is already included
+    // above, so this term represents only lost course progress.
+    penalty += (
+      setback *
+      AUTO_KILL_SETBACK_TEMPO_PER_STEP *
+      duty
+    );
+  }
 
-  const shortcut = heuristic(state, goal) - heuristic(rebootToken, goal);
-  if (shortcut <= 0) return Number(harm.toFixed(2));
+  return Number(Math.max(0, penalty).toFixed(2));
+}
 
-  const exploitReliability = 0.2 + duty * 0.25;
-  const exploitCredit = Math.min(6.5, shortcut * 0.9) * duty * exploitReliability;
-  return Number((harm - exploitCredit).toFixed(2));
+function getExpectedTimedCrusherPenalty(state, feature, options = {}) {
+  return getExpectedTimedAutoKillPenalty(state, feature, options, {
+    exploitReliabilityBase: 0.2,
+    exploitReliabilityDuty: 0.25,
+    exploitScale: 0.9,
+    maxExploitCredit: 6.5
+  });
 }
 
 function getExpectedTimedTrapdoorPenalty(state, feature, options = {}) {
-  const duty = getFeatureDutyCycle(feature);
-  if (duty <= 0) return 0;
-
-  const harm = 10.5 * duty;
-  const goal = options.goal;
-  if (!goal || options.recoveryRule !== "reboot_tokens") {
-    return Number(harm.toFixed(2));
-  }
-
-  const rebootToken = getRebootTokenForPoint(state, options.boardRects, options.rebootTokens);
-  if (!rebootToken) return Number(harm.toFixed(2));
-  const shortcut = heuristic(state, goal) - heuristic(rebootToken, goal);
-  if (shortcut <= 0) return Number(harm.toFixed(2));
-
-  // A timed pit is even harder to exploit precisely than a timed pusher.
-  const exploitReliability = 0.16 + duty * 0.22;
-  const exploitCredit = Math.min(6, shortcut * 0.8) * duty * exploitReliability;
-  return Number((harm - exploitCredit).toFixed(2));
+  // A timed pit is even harder to exploit precisely than a timed crusher.
+  return getExpectedTimedAutoKillPenalty(state, feature, options, {
+    exploitReliabilityBase: 0.16,
+    exploitReliabilityDuty: 0.22,
+    exploitScale: 0.8,
+    maxExploitCredit: 6
+  });
 }
 
 function getEndOfRegisterFeaturePenalty(tileMap, state, options = {}) {
@@ -4837,12 +4945,36 @@ function getRouteEnergyShadowReserveKey(reserve, options = {}) {
   return `@e${safeReserve}`;
 }
 
-function getSearchStateKey(state, actionCount, options = {}, energyReserve = null) {
+function getDynamicArchiveStateKey(dynamicArchivePoint, options = {}) {
+  if (options.recoveryRule !== "dynamic_archiving" || !dynamicArchivePoint) {
+    return "";
+  }
+  return `@archive${dynamicArchivePoint.x},${dynamicArchivePoint.y}`;
+}
+
+function getNextDynamicArchivePoint(tileMap, destination, currentArchivePoint, options = {}) {
+  if (options.recoveryRule !== "dynamic_archiving") {
+    return currentArchivePoint ?? null;
+  }
+  if (isDynamicArchiveLanding(tileMap, destination, options)) {
+    return { x: destination.x, y: destination.y };
+  }
+  return currentArchivePoint ?? null;
+}
+
+function getSearchStateKey(
+  state,
+  actionCount,
+  options = {},
+  energyReserve = null,
+  dynamicArchivePoint = null
+) {
   const economyActionKey = isRouteAwareBatteryScoringActive(options)
     ? `@a${actionCount}${getRouteEnergyShadowReserveKey(energyReserve, options)}`
     : "";
+  const archiveKey = getDynamicArchiveStateKey(dynamicArchivePoint, options);
   if (!options.dynamicGoal) {
-    return `${stateKey(state)}${economyActionKey}`;
+    return `${stateKey(state)}${economyActionKey}${archiveKey}`;
   }
 
   const { periodStart = 0, periodLength = 0, positions = [] } = options.dynamicGoal;
@@ -4850,7 +4982,7 @@ function getSearchStateKey(state, actionCount, options = {}, energyReserve = nul
     ? `${periodStart}+${(actionCount - periodStart) % periodLength}`
     : String(Math.min(actionCount, Math.max(0, positions.length - 1)));
 
-  return `${stateKey(state)}@${phase}${economyActionKey}`;
+  return `${stateKey(state)}@${phase}${economyActionKey}${archiveKey}`;
 }
 
 function enumerateRoutes(tileMap, start, goal, options = {}) {
@@ -4885,11 +5017,15 @@ function enumerateRoutes(tileMap, start, goal, options = {}) {
     const initialEconomyState = getInitialRouteEconomyShadowState(options);
     const initialEnergyReserve = initialEconomyState.energy;
     const initialUpgradeCardUnits = initialEconomyState.usefulCardUnits;
+    const initialDynamicArchivePoint = options.recoveryRule === "dynamic_archiving"
+      ? { x: initialState.x, y: initialState.y }
+      : null;
     const initialStateKey = getSearchStateKey(
       initialState,
       0,
       options,
-      initialEnergyReserve
+      initialEnergyReserve,
+      initialDynamicArchivePoint
     );
     bestCostByState.set(initialStateKey, 0);
     queue.push(createQueueEntry({
@@ -4917,6 +5053,7 @@ function enumerateRoutes(tileMap, start, goal, options = {}) {
       routeEconomyEnergySpent: initialEconomyState.energySpent || 0,
       chopShopCardChoices: 0,
       chopShopEnergyChoices: 0,
+      dynamicArchivePoint: initialDynamicArchivePoint,
       baseCost: 0,
       actionHistory: []
     }, goal));
@@ -4931,7 +5068,8 @@ function enumerateRoutes(tileMap, start, goal, options = {}) {
       current.finalState,
       current.actions,
       options,
-      current.routeEnergyShadowReserve
+      current.routeEnergyShadowReserve,
+      current.dynamicArchivePoint
     );
     const knownBest = bestCostByState.get(currentStateId);
 
@@ -5013,7 +5151,8 @@ function enumerateRoutes(tileMap, start, goal, options = {}) {
       const transition = simulateAction(tileMap, current.finalState, action, {
         ...simulationOptions,
         goal,
-        registerIndex: current.actions % REGISTER_COUNT
+        registerIndex: current.actions % REGISTER_COUNT,
+        dynamicArchivePoint: current.dynamicArchivePoint
       });
       if (transition.crashed || transition.blocked) {
         continue;
@@ -5029,6 +5168,12 @@ function enumerateRoutes(tileMap, start, goal, options = {}) {
 
       for (const destination of destinations) {
         const nextActionCount = current.actions + 1;
+        const nextDynamicArchivePoint = getNextDynamicArchivePoint(
+          tileMap,
+          destination,
+          current.dynamicArchivePoint,
+          options
+        );
         const transitionRebootPenalty = transition.rebooted
           ? getRebootRoutePenalty(nextActionCount)
           : (transition.rebootPenalty || 0);
@@ -5052,7 +5197,8 @@ function enumerateRoutes(tileMap, start, goal, options = {}) {
           destination,
           nextActionCount,
           options,
-          energyStep.reserveAfter
+          energyStep.reserveAfter,
+          nextDynamicArchivePoint
         );
         const nextRoute = {
           finalState: destination,
@@ -5079,6 +5225,7 @@ function enumerateRoutes(tileMap, start, goal, options = {}) {
           routeEconomyEnergySpent: (current.routeEconomyEnergySpent || 0) + (energyStep.energySpent || 0),
           chopShopCardChoices: (current.chopShopCardChoices || 0) + (energyStep.chopShopChoice === "card" ? 1 : 0),
           chopShopEnergyChoices: (current.chopShopEnergyChoices || 0) + (energyStep.chopShopChoice === "energy" ? 1 : 0),
+          dynamicArchivePoint: nextDynamicArchivePoint,
           baseCost: current.baseCost + transition.hazard + transitionRebootPenalty + weightedDistance(transition.distance, transition.forcedDistance) + actionPenalty + reversePenalty + heavyMovePenalty + scarceReusePenalty + conveyorComplexity - energyEconomyRewardScore,
           actionHistory: nextActionHistory
         };
@@ -5134,15 +5281,17 @@ function getFullCourseSearchStateKey(
   actionCount,
   checkpointIndex,
   options = {},
-  energyReserve = null
+  energyReserve = null,
+  dynamicArchivePoint = null
 ) {
   const dynamicGoal = getFullCourseDynamicGoal(options, checkpointIndex);
   const registerPhase = actionCount % REGISTER_COUNT;
   const economyActionKey = isRouteAwareBatteryScoringActive(options)
     ? `@a${actionCount}${getRouteEnergyShadowReserveKey(energyReserve, options)}`
     : "";
+  const archiveKey = getDynamicArchiveStateKey(dynamicArchivePoint, options);
   if (!dynamicGoal) {
-    return `${stateKey(state)}@cp${checkpointIndex}@r${registerPhase}${economyActionKey}`;
+    return `${stateKey(state)}@cp${checkpointIndex}@r${registerPhase}${economyActionKey}${archiveKey}`;
   }
 
   const { periodStart = 0, periodLength = 0, positions = [] } = dynamicGoal;
@@ -5150,7 +5299,7 @@ function getFullCourseSearchStateKey(
     ? `${periodStart}+${(actionCount - periodStart) % periodLength}`
     : String(Math.min(actionCount, Math.max(0, positions.length - 1)));
 
-  return `${stateKey(state)}@cp${checkpointIndex}@r${registerPhase}@${phase}${economyActionKey}`;
+  return `${stateKey(state)}@cp${checkpointIndex}@r${registerPhase}@${phase}${economyActionKey}${archiveKey}`;
 }
 
 function estimateFullCourseRoute(route, flags, options = {}) {
@@ -5260,6 +5409,9 @@ function enumerateFullCourseRoutes(tileMap, start, flags, options = {}) {
     const initialEconomyState = getInitialRouteEconomyShadowState(options);
     const initialEnergyReserve = initialEconomyState.energy;
     const initialUpgradeCardUnits = initialEconomyState.usefulCardUnits;
+    const initialDynamicArchivePoint = options.recoveryRule === "dynamic_archiving"
+      ? { x: initialState.x, y: initialState.y }
+      : null;
     const initialRoute = {
       finalState: initialState,
       initialState,
@@ -5285,6 +5437,7 @@ function enumerateFullCourseRoutes(tileMap, start, flags, options = {}) {
       routeEconomyEnergySpent: initialEconomyState.energySpent || 0,
       chopShopCardChoices: 0,
       chopShopEnergyChoices: 0,
+      dynamicArchivePoint: initialDynamicArchivePoint,
       baseCost: 0,
       checkpointIndex: 0,
       checkpointHits: [],
@@ -5295,7 +5448,8 @@ function enumerateFullCourseRoutes(tileMap, start, flags, options = {}) {
       0,
       0,
       options,
-      initialEnergyReserve
+      initialEnergyReserve,
+      initialDynamicArchivePoint
     );
     acceptStateLabel(initialStateKey, 0, 1);
     queue.push(createFullCourseQueueEntry(initialRoute, flags, options));
@@ -5311,7 +5465,8 @@ function enumerateFullCourseRoutes(tileMap, start, flags, options = {}) {
       current.actions,
       current.checkpointIndex,
       options,
-      current.routeEnergyShadowReserve
+      current.routeEnergyShadowReserve,
+      current.dynamicArchivePoint
     );
     if (!stateLabelStillActive(currentStateId, current.baseCost)) continue;
 
@@ -5374,7 +5529,8 @@ function enumerateFullCourseRoutes(tileMap, start, flags, options = {}) {
       const transition = simulateAction(tileMap, current.finalState, action, {
         ...simulationOptions,
         goal: currentTarget,
-        registerIndex: current.actions % REGISTER_COUNT
+        registerIndex: current.actions % REGISTER_COUNT,
+        dynamicArchivePoint: current.dynamicArchivePoint
       });
       if (transition.crashed || transition.blocked) continue;
 
@@ -5388,6 +5544,12 @@ function enumerateFullCourseRoutes(tileMap, start, flags, options = {}) {
 
       for (const destination of destinations) {
         const nextActionCount = current.actions + 1;
+        const nextDynamicArchivePoint = getNextDynamicArchivePoint(
+          tileMap,
+          destination,
+          current.dynamicArchivePoint,
+          options
+        );
         const transitionRebootPenalty = transition.rebooted
           ? getRebootRoutePenalty(nextActionCount)
           : (transition.rebootPenalty || 0);
@@ -5432,6 +5594,7 @@ function enumerateFullCourseRoutes(tileMap, start, flags, options = {}) {
           routeEconomyEnergySpent: (current.routeEconomyEnergySpent || 0) + (energyStep.energySpent || 0),
           chopShopCardChoices: (current.chopShopCardChoices || 0) + (energyStep.chopShopChoice === "card" ? 1 : 0),
           chopShopEnergyChoices: (current.chopShopEnergyChoices || 0) + (energyStep.chopShopChoice === "energy" ? 1 : 0),
+          dynamicArchivePoint: nextDynamicArchivePoint,
           baseCost: current.baseCost + transition.hazard + transitionRebootPenalty + weightedDistance(transition.distance, transition.forcedDistance) + actionPenalty + reversePenalty + heavyMovePenalty + scarceReusePenalty + conveyorComplexity - energyEconomyRewardScore,
           checkpointIndex: current.checkpointIndex,
           checkpointHits: current.checkpointHits,
@@ -5452,7 +5615,8 @@ function enumerateFullCourseRoutes(tileMap, start, flags, options = {}) {
           nextActionCount,
           nextRoute.checkpointIndex,
           options,
-          nextRoute.routeEnergyShadowReserve
+          nextRoute.routeEnergyShadowReserve,
+          nextRoute.dynamicArchivePoint
         );
         const stateLabelLimit = (
           options.diverseStateLabelsAfterFirstCheckpoint &&
@@ -15204,11 +15368,21 @@ export async function analyzeFullCourseCooperative(tileMap, starts, flags, optio
     throw error;
   }
 
+  const completedProgressCounts = new Map();
   let step = iterator.next();
   while (!step.done) {
+    const progress = step.value ?? {};
+    const progressKey = progress.phase === "later-leg-start"
+      ? `${progress.phase}:${progress.legIndex ?? "?"}`
+      : progress.phase === "traffic-start"
+        ? `${progress.phase}:${progress.epoch ?? "?"}`
+        : String(progress.phase ?? "boundary");
+    const completedCount = (completedProgressCounts.get(progressKey) ?? 0) + 1;
+    completedProgressCounts.set(progressKey, completedCount);
+
     const now = analysisTelemetryNow();
     if (cooperativeYield && now - lastBrowserYieldAt >= yieldIntervalMs) {
-      await cooperativeYield(step.value);
+      await cooperativeYield({ ...progress, completedCount });
       lastBrowserYieldAt = analysisTelemetryNow();
     }
     if (shouldStopRequested()) {

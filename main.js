@@ -250,6 +250,7 @@ const NORMAL_CONTEXTUAL_FULL_FORECAST_SHARE = 0.65;
 const GENERATION_MODE_PROFILES = Object.freeze({
   fastest: Object.freeze({
     maxAttempts: 5,
+    acceptableCandidateTarget: 1,
     softExpansionBudget: 140000,
     softBudgetMinAttempts: 3,
     preflightOpeningExpansions: 800,
@@ -275,6 +276,7 @@ const GENERATION_MODE_PROFILES = Object.freeze({
   }),
   fast: Object.freeze({
     maxAttempts: 8,
+    acceptableCandidateTarget: 1,
     softExpansionBudget: 240000,
     softBudgetMinAttempts: 4,
     preflightOpeningExpansions: 1000,
@@ -299,6 +301,7 @@ const GENERATION_MODE_PROFILES = Object.freeze({
   standard: Object.freeze({
     // v34 frozen reference behavior.
     maxAttempts: 12,
+    acceptableCandidateTarget: 2,
     softExpansionBudget: 360000,
     softBudgetMinAttempts: 6,
     preflightOpeningExpansions: 1200,
@@ -321,6 +324,7 @@ const GENERATION_MODE_PROFILES = Object.freeze({
   }),
   balanced: Object.freeze({
     maxAttempts: 20,
+    acceptableCandidateTarget: 3,
     softExpansionBudget: 500000,
     softBudgetMinAttempts: 8,
     preflightOpeningExpansions: 1400,
@@ -345,6 +349,7 @@ const GENERATION_MODE_PROFILES = Object.freeze({
   }),
   thorough: Object.freeze({
     maxAttempts: 36,
+    acceptableCandidateTarget: 4,
     softExpansionBudget: 850000,
     softBudgetMinAttempts: 10,
     preflightOpeningExpansions: 1800,
@@ -397,6 +402,27 @@ const NO_DOCK_START_EDGE_FEATURE_TYPES = new Set([
   "repulsor",
   "ledge"
 ]);
+// Virtual Bots use the same clear-floor concept as No Docks, but the shared
+// entry may be anywhere on the assembled course. Facing is a separate soft
+// preference: immediately nonsensical directions are excluded, while nearby
+// lethal floor features and exposed course edges only bias the random choice.
+const VIRTUAL_BOT_AUTOKILL_FEATURE_TYPES = new Set([
+  "pit",
+  "crusher",
+  "trapdoor"
+]);
+const VIRTUAL_BOT_FACING_LOOKAHEAD = 4;
+const VIRTUAL_BOT_FORWARD_DANGER_PENALTY = Object.freeze({
+  2: 3,
+  3: 1.5,
+  4: 0.6
+});
+const VIRTUAL_BOT_EDGE_PROXIMITY_PENALTY = Object.freeze({
+  1: 2.4,
+  2: 1.4,
+  3: 0.7,
+  4: 0.3
+});
 // Closest-match fallback is intentionally broader than exact acceptance. These
 // failures describe courses that are still structurally playable but materially
 // worse fallback choices. Unknown/new hard-failure labels remain ineligible by
@@ -609,6 +635,7 @@ let scenarioAnimationFrameId = null;
 let lastScenarioRenderTime = 0;
 let isGenerating = false;
 let generationStopRequested = false;
+let generationHasRetainableCandidate = false;
 let boardAuditInitialized = false;
 let boardAuditState = {
   pieceId: null,
@@ -652,6 +679,84 @@ function createVariantCategoryBulkRow(category) {
   buttonEl.dataset.variantCategory = category;
 
   rowEl.append(nameEl, buttonEl);
+  return rowEl;
+}
+
+function getBoardSpreadControlButtons() {
+  return Array.from(document.querySelectorAll("[data-board-spread-control]"));
+}
+
+function formatBoardSpreadMode(mode) {
+  return normalizeBoardSpread(mode) === BOARD_SPREAD_MODES.tight ? "Tight" : "Random";
+}
+
+function setBoardSpreadControl(mode, buttonEl = null) {
+  const targets = buttonEl ? [buttonEl] : getBoardSpreadControlButtons();
+  if (!targets.length) {
+    return;
+  }
+
+  const normalized = normalizeBoardSpread(mode);
+  targets.forEach((button) => {
+    button.value = normalized;
+    button.dataset.boardSpread = normalized;
+    button.dataset.state = normalized === BOARD_SPREAD_MODES.tight ? "allowed" : "off";
+    button.textContent = formatBoardSpreadMode(normalized);
+    button.title = `Board Spread: ${formatBoardSpreadMode(normalized)}. Click to cycle Random and Tight.`;
+    button.setAttribute("aria-label", button.title);
+  });
+}
+
+function cycleBoardSpreadControl() {
+  const buttonEl = document.getElementById("board-spread");
+  if (!buttonEl) {
+    return;
+  }
+  const current = normalizeBoardSpread(buttonEl.value);
+  const next = current === BOARD_SPREAD_MODES.tight
+    ? BOARD_SPREAD_MODES.random
+    : BOARD_SPREAD_MODES.tight;
+  setBoardSpreadControl(next);
+  updateVariantSummary();
+}
+
+function createBoardSpreadRow(options = {}) {
+  const rowEl = document.createElement("div");
+  rowEl.className = "variant-rule";
+  rowEl.title = "Tight prefers more compact board arrangements without excluding large boards. With only a few boards, it usually makes little difference.";
+  rowEl.dataset.ruleSearch = "board spread random tight compact layout setup layout board arrangement";
+
+  const nameWrapEl = document.createElement("div");
+  nameWrapEl.className = "variant-rule-name-wrap";
+  const nameEl = document.createElement("div");
+  nameEl.className = "variant-rule-name";
+  nameEl.textContent = "Board Spread";
+  nameWrapEl.appendChild(nameEl);
+  if (options.showCategory) {
+    const categoryEl = document.createElement("div");
+    categoryEl.className = "variant-rule-category";
+    categoryEl.textContent = "Setup & Layout";
+    nameWrapEl.appendChild(categoryEl);
+  }
+  if (options.showDescription) {
+    const descriptionEl = document.createElement("div");
+    descriptionEl.className = "variant-rule-description";
+    descriptionEl.textContent = "Random keeps the ordinary layout mix. Tight prefers more compact arrangements without excluding large boards. With only a few boards, it usually makes little difference.";
+    nameWrapEl.appendChild(descriptionEl);
+  }
+
+  const buttonEl = document.createElement("button");
+  if (!options.mirror) {
+    buttonEl.id = "board-spread";
+  }
+  buttonEl.className = "variant-state board-spread-state";
+  buttonEl.type = "button";
+  buttonEl.dataset.boardSpreadControl = "true";
+
+  rowEl.append(nameWrapEl, buttonEl);
+
+  const primary = document.getElementById("board-spread");
+  setBoardSpreadControl(primary?.value ?? BOARD_SPREAD_MODES.random, buttonEl);
   return rowEl;
 }
 
@@ -892,11 +997,16 @@ function renderOptionalRulesIndex() {
   }
   listEl.replaceChildren();
   const entries = [
+    { type: "board-spread", label: "Board Spread" },
     { type: "overlay", label: "Overlays" },
     ...VARIANT_DEFINITIONS.map((variant) => ({ type: "variant", label: variant.label, variant }))
   ].sort((left, right) => left.label.localeCompare(right.label));
 
   entries.forEach((entry) => {
+    if (entry.type === "board-spread") {
+      listEl.appendChild(createBoardSpreadRow({ mirror: true, showCategory: true, showDescription: true }));
+      return;
+    }
     if (entry.type === "overlay") {
       listEl.appendChild(createOverlayModeRow({ mirror: true, showCategory: true, showDescription: true }));
       return;
@@ -959,6 +1069,7 @@ function renderVariantControls() {
     menuEl.appendChild(bulkRowEl);
 
     if (category === UI_SETUP_LAYOUT_CATEGORY) {
+      menuEl.appendChild(createBoardSpreadRow());
       menuEl.appendChild(createOverlayModeRow());
     }
 
@@ -1967,7 +2078,7 @@ function getEstimatedGameTurnsLabel(scenario) {
   if (!Number.isFinite(routeActions)) return null;
   const uncertaintyActions = Number(lengthMetrics?.contributions?.forecastEquivalentActions);
   const adjustedActions = routeActions + (Number.isFinite(uncertaintyActions) ? uncertaintyActions : 0);
-  const turns = Math.max(1, Math.floor(adjustedActions / 5));
+  const turns = Math.max(1, Math.ceil(adjustedActions / 5));
   return `${turns}+ game turn${turns === 1 ? "" : "s"}`;
 }
 
@@ -1977,6 +2088,17 @@ function getTuningDifficulty(difficultyPreference) {
 
 function isHardestDifficulty(preferences = {}) {
   return preferences.difficulty === "brutal";
+}
+
+const BOARD_SPREAD_MODES = Object.freeze({
+  random: "random",
+  tight: "tight"
+});
+
+function normalizeBoardSpread(value) {
+  return value === BOARD_SPREAD_MODES.tight
+    ? BOARD_SPREAD_MODES.tight
+    : BOARD_SPREAD_MODES.random;
 }
 
 const OVERLAY_MODES = {
@@ -2919,7 +3041,7 @@ function updateSetupSummary(scenario) {
   const visibleCheckpointCount = scenario.virtualBots
     ? Math.max(0, scenario.checkpoints.length - 1)
     : scenario.checkpoints.length;
-  flagsEl.textContent = `${visibleCheckpointCount}${scenario.virtualBots ? " + entry" : ""}`;
+  flagsEl.textContent = String(visibleCheckpointCount);
   const noteParts = [];
   const difficultyFit = scenario.metrics.difficultyFit ?? 0;
   const lengthFit = scenario.metrics.lengthFit ?? 0;
@@ -2940,6 +3062,13 @@ function updateSetupSummary(scenario) {
       : scenario.generationBestMatch && lengthFit > 0
         ? "slightly"
         : null;
+  const epicUpperLength = getLengthThresholds().epic[1];
+  const epicVeryLong = (
+    scenario.preferences.length === "epic" &&
+    scenario.metrics.lengthDirection === "high" &&
+    Number.isFinite(scenario.metrics.lengthFitRaw) &&
+    scenario.metrics.lengthFitRaw > epicUpperLength
+  );
 
   if (scenario.preferences.difficulty !== "any" && difficultyStrength) {
     noteParts.push(scenario.metrics.difficultyDirection === "low"
@@ -2947,7 +3076,7 @@ function updateSetupSummary(scenario) {
       : `${difficultyStrength} harder`);
   }
 
-  if (scenario.preferences.length !== "any" && lengthStrength) {
+  if (scenario.preferences.length !== "any" && lengthStrength && !epicVeryLong) {
     noteParts.push(scenario.metrics.lengthDirection === "low"
       ? `${lengthStrength} shorter`
       : `${lengthStrength} longer`);
@@ -2959,6 +3088,9 @@ function updateSetupSummary(scenario) {
     lengthFit >= 24
   );
   const checkpointPlacementAdvisory = getCheckpointPlacementAdvisory(scenario);
+  const epicLengthSentence = epicVeryLong
+    ? " This course is very long, even for an Epic game."
+    : "";
   const checkpointPlacementSentence = checkpointPlacementAdvisory?.active
     ? ` ${checkpointPlacementAdvisory.bannerText}`
     : "";
@@ -2972,7 +3104,7 @@ function updateSetupSummary(scenario) {
     !scenario.extraDocks
   );
 
-  if (scenario.generationBestMatch && (extraDocksRequestMismatch || noteParts.length)) {
+  if (scenario.generationBestMatch && (extraDocksRequestMismatch || noteParts.length || epicVeryLong)) {
     const extraDocksMismatchText = extraDocksRequestMismatch
       ? " Extra Docks was required, but this course uses one docking bay."
       : "";
@@ -2981,9 +3113,11 @@ function updateSetupSummary(scenario) {
       : "";
     const regenerateText = extraDocksRequestMismatch && !noteParts.length
       ? " Regenerating may find a course with multiple docking bays."
-      : " Regenerating may find a closer match.";
+      : noteParts.length
+        ? " Regenerating may find a closer match."
+        : "";
     fitNoteEl.textContent =
-      `Closest match found.${extraDocksMismatchText}${mismatchText}${checkpointPlacementSentence}${boardUseSentence}${regenerateText}`;
+      `Closest match found.${extraDocksMismatchText}${mismatchText}${epicLengthSentence}${checkpointPlacementSentence}${boardUseSentence}${regenerateText}`;
     fitNoteEl.classList.remove("hidden");
   } else if (scenario.generationBestMatch && (checkpointPlacementAdvisory?.active || weakBoardCount > 0)) {
     const regenerateText = checkpointPlacementAdvisory?.active
@@ -2995,13 +3129,13 @@ function updateSetupSummary(scenario) {
     const rerollText = shouldSuggestReroll || checkpointPlacementAdvisory?.active
       ? " Regenerating may give a better match."
       : "";
-    fitNoteEl.textContent = `Closest fit: this course is ${noteParts.join(" and ")} than requested.${checkpointPlacementSentence}${boardUseSentence}${rerollText}`;
+    fitNoteEl.textContent = `Closest fit: this course is ${noteParts.join(" and ")} than requested.${epicLengthSentence}${checkpointPlacementSentence}${boardUseSentence}${rerollText}`;
     fitNoteEl.classList.remove("hidden");
-  } else if (checkpointPlacementAdvisory?.active || weakBoardCount > 0) {
+  } else if (epicVeryLong || checkpointPlacementAdvisory?.active || weakBoardCount > 0) {
     const regenerateText = checkpointPlacementAdvisory?.active
       ? " Regenerate if you prefer a more conventional layout."
       : "";
-    fitNoteEl.textContent = `Course generated.${checkpointPlacementSentence}${boardUseSentence}${regenerateText}`;
+    fitNoteEl.textContent = `Course generated.${epicLengthSentence}${checkpointPlacementSentence}${boardUseSentence}${regenerateText}`;
     fitNoteEl.classList.remove("hidden");
   } else {
     fitNoteEl.textContent = "";
@@ -3081,17 +3215,19 @@ function getVariantCategoryAllAllowed(category, states = getVariantCategoryState
     return variantsAllowed;
   }
   const preferences = getPreferencesFromControls();
+  const boardSpreadTight = normalizeBoardSpread(preferences.boardSpread) === BOARD_SPREAD_MODES.tight;
   if (!isOverlayModeAvailable(preferences)) {
-    return variantsAllowed;
+    return variantsAllowed && boardSpreadTight;
   }
-  return variantsAllowed && normalizeOverlayMode(document.getElementById("overlay-mode")?.value) === OVERLAY_MODES.yes;
+  return variantsAllowed && boardSpreadTight && normalizeOverlayMode(document.getElementById("overlay-mode")?.value) === OVERLAY_MODES.yes;
 }
 
 function countSelectedOptionalRules() {
   const variantCount = VARIANT_DEFINITIONS.filter((variant) => getVariantControlState(variant.id) !== "off").length;
   const preferences = getPreferencesFromControls();
   const overlayCount = isOverlayModeAvailable(preferences) && normalizeOverlayMode(preferences.overlayMode) !== OVERLAY_MODES.no ? 1 : 0;
-  return variantCount + overlayCount;
+  const boardSpreadCount = normalizeBoardSpread(preferences.boardSpread) === BOARD_SPREAD_MODES.tight ? 1 : 0;
+  return variantCount + overlayCount + boardSpreadCount;
 }
 
 function updateVariantSummary() {
@@ -3105,11 +3241,15 @@ function updateVariantSummary() {
       const preferences = getPreferencesFromControls();
       const overlayAvailable = isOverlayModeAvailable(preferences);
       const overlayLabel = formatOverlayMode(preferences.overlayMode);
+      if (normalizeBoardSpread(preferences.boardSpread) === BOARD_SPREAD_MODES.tight) {
+        selectedCount += 1;
+      }
       if (overlayAvailable && normalizeOverlayMode(preferences.overlayMode) !== OVERLAY_MODES.no) {
         selectedCount += 1;
       }
       summaryEl.title = [
         ...states.map((entry) => `${entry.label}: ${getVariantStateCopy(entry.id, entry.state).label}`),
+        `Board Spread: ${formatBoardSpreadMode(preferences.boardSpread)}`,
         `Overlays: ${overlayLabel}${overlayAvailable ? "" : " (unavailable)"}`
       ].join(", ");
     } else {
@@ -3163,6 +3303,7 @@ function toggleVariantCategoryStates(category) {
 
   if (category === UI_SETUP_LAYOUT_CATEGORY) {
     const preferences = getPreferencesFromControls();
+    setBoardSpreadControl(allAllowed ? BOARD_SPREAD_MODES.random : BOARD_SPREAD_MODES.tight);
     if (isOverlayModeAvailable(preferences)) {
       setOverlayModeControl(allAllowed ? OVERLAY_MODES.no : OVERLAY_MODES.yes);
     }
@@ -3511,8 +3652,8 @@ function variantGuidanceTargetIsLegal(variantId, scenario) {
 }
 
 function buildVariantRuleGuidanceNotes(scenario) {
-  if (!scenario) return [];
-  const suggestions = [];
+  if (!scenario) return { suggestions: [], warnings: [] };
+  const suggestionTargetsBySource = new Map();
   const warnings = [];
 
   for (const source of VARIANT_DEFINITIONS) {
@@ -3528,7 +3669,15 @@ function buildVariantRuleGuidanceNotes(scenario) {
         if (targetId && (targetActive || !variantGuidanceTargetIsLegal(targetId, scenario))) {
           continue;
         }
-        if (rule.text) suggestions.push(rule.text);
+        const target = targetId ? getRegisteredVariantDefinition(targetId) : null;
+        if (!target?.label) continue;
+        if (!suggestionTargetsBySource.has(source.id)) {
+          suggestionTargetsBySource.set(source.id, {
+            sourceLabel: source.label,
+            targetLabels: []
+          });
+        }
+        suggestionTargetsBySource.get(source.id).targetLabels.push(target.label);
         continue;
       }
 
@@ -3539,10 +3688,100 @@ function buildVariantRuleGuidanceNotes(scenario) {
     }
   }
 
-  return [
-    ...suggestions.map((text) => `Suggestion: ${text}`),
-    ...warnings.map((text) => `Note: ${text}`)
-  ];
+  return {
+    suggestions: [...suggestionTargetsBySource.values()],
+    warnings
+  };
+}
+
+function capitalizeRuleNoteBody(text) {
+  return String(text ?? "").replace(/[A-Za-z]/, (letter) => letter.toUpperCase());
+}
+
+function splitRuleNoteEntry(text) {
+  const trimmed = String(text ?? "").trim();
+  const colonIndex = trimmed.indexOf(":");
+  if (colonIndex <= 0) {
+    return { label: "", body: capitalizeRuleNoteBody(trimmed) };
+  }
+  return {
+    label: trimmed.slice(0, colonIndex).trim(),
+    body: capitalizeRuleNoteBody(trimmed.slice(colonIndex + 1).trim())
+  };
+}
+
+function appendRuleNoteHeading(noteEl, text) {
+  const headingEl = document.createElement("strong");
+  headingEl.className = "rules-note-heading";
+  headingEl.textContent = text;
+  noteEl.appendChild(headingEl);
+}
+
+function appendRuleNoteEntry(noteEl, text) {
+  const { label, body } = splitRuleNoteEntry(text);
+  const entryEl = document.createElement("span");
+  entryEl.className = "rules-note-entry";
+  if (label) {
+    const labelEl = document.createElement("strong");
+    labelEl.className = "rules-note-rule-name";
+    labelEl.textContent = `${label}:`;
+    entryEl.appendChild(labelEl);
+    if (body) entryEl.appendChild(document.createTextNode(` ${body}`));
+  } else {
+    entryEl.textContent = body;
+  }
+  noteEl.appendChild(entryEl);
+}
+
+function appendNamedList(parentEl, labels) {
+  labels.forEach((label, index) => {
+    if (index > 0) {
+      parentEl.appendChild(document.createTextNode(
+        index === labels.length - 1 ? " and " : ", "
+      ));
+    }
+    const labelEl = document.createElement("strong");
+    labelEl.className = "rules-note-rule-name";
+    labelEl.textContent = label;
+    parentEl.appendChild(labelEl);
+  });
+}
+
+function renderVariantRuleGuidanceNote(noteEl, guidance) {
+  noteEl.replaceChildren();
+  appendRuleNoteHeading(noteEl, "RULES NOTES:");
+
+  if (guidance.suggestions.length) {
+    noteEl.appendChild(document.createTextNode(" "));
+    const entryEl = document.createElement("span");
+    entryEl.className = "rules-note-entry";
+    entryEl.appendChild(document.createTextNode("Suggestion: "));
+    guidance.suggestions.forEach((suggestion, index) => {
+      if (index > 0) entryEl.appendChild(document.createTextNode(" "));
+      const sourceEl = document.createElement("strong");
+      sourceEl.className = "rules-note-rule-name";
+      sourceEl.textContent = suggestion.sourceLabel;
+      entryEl.appendChild(sourceEl);
+      entryEl.appendChild(document.createTextNode(" pairs well with "));
+      appendNamedList(entryEl, suggestion.targetLabels);
+      entryEl.appendChild(document.createTextNode("."));
+    });
+    noteEl.appendChild(entryEl);
+  }
+
+  for (const warning of guidance.warnings) {
+    noteEl.appendChild(document.createTextNode(" "));
+    appendRuleNoteEntry(noteEl, `Note: ${warning}`);
+  }
+}
+
+function renderSpecialRulesNote(noteEl, notes) {
+  noteEl.replaceChildren();
+  appendRuleNoteHeading(noteEl, "SPECIAL RULES:");
+  notes.forEach((note) => {
+    noteEl.appendChild(document.createTextNode(" "));
+    appendRuleNoteEntry(noteEl, note);
+  });
 }
 
 function updateRulesNote(scenario) {
@@ -3567,10 +3806,10 @@ function updateRulesNote(scenario) {
     checkpointNoteEl.classList.add("hidden");
     photoRulesNoteEl.textContent = "";
     photoRulesNoteEl.classList.add("hidden");
-    noteEl.textContent = "";
+    noteEl.replaceChildren();
     noteEl.classList.add("hidden");
     if (adviceNoteEl) {
-      adviceNoteEl.textContent = "";
+      adviceNoteEl.replaceChildren();
       adviceNoteEl.classList.add("hidden");
     }
     return;
@@ -3823,17 +4062,12 @@ function updateRulesNote(scenario) {
   }
 
   if (scenario.virtualBots) {
-    const entry = scenario.checkpoints?.[0];
-    const dirText = entry?.facing ? ` facing ${entry.facing}` : "";
-    const entryName = scenario.recoveryRule === "reboot_tokens" ? "starting reboot" : "entry";
-    const markerDescription = scenario.recoveryRule === "reboot_tokens"
-      ? "the reboot token with an orange energy cube on it"
-      : "a reboot token with an orange energy cube on it";
+    const entryName = "shared starting space";
 
     if (scenario.startupSpinUp) {
       notes.push(
         appendRuleReference(
-          `Virtual Bots: do not use a docking bay or starting spaces. The ${entryName} is marked by ${markerDescription}. Place every player's Archive Token there. These Archive Tokens are the robots' Virtual Bots. Virtual Bots move and are affected by the factory floor normally, including conveyors, pushers, gears, pits, board lasers, and other board elements, but they do not interact with robots or other Virtual Bots: they do not push or block them, and robot weapons cannot affect Virtual Bots or be used by Virtual Bots against other robots. Resolve all five registers of the first turn this way. At the end of each turn, any Virtual Bot that does not share its space with another robot or Virtual Bot is replaced by that player's robot miniature; from then on that robot follows the normal rules. A Virtual Bot sharing a space remains virtual until the end of a later turn when it is alone.`,
+          `Virtual Bots: No docking bay is used. The ${entryName} is marked with a white circle. Place every player's Archive Token there. These Archive Tokens are the robots' Virtual Bots. Virtual Bots move and are affected by the factory floor normally, including conveyors, pushers, gears, pits, board lasers, and other board elements, but they do not interact with robots or other Virtual Bots: they do not push or block them, and robot weapons cannot affect Virtual Bots or be used by Virtual Bots against other robots. Resolve all five registers of the first turn this way. At the end of each turn, any Virtual Bot that does not share its space with another robot or Virtual Bot is replaced by that player's robot miniature; from then on that robot follows the normal rules. A Virtual Bot sharing a space remains virtual until the end of a later turn when it is alone.`,
           { source: "previous-editions", relation: "patterned" }
         )
       );
@@ -3844,9 +4078,10 @@ function updateRulesNote(scenario) {
         )
       );
     } else {
+      const entryFacing = scenario.virtualBotEntry?.dir;
       notes.push(
         appendRuleReference(
-          `Virtual Bots: do not use a docking bay or starting spaces. The ${entryName} is marked by ${markerDescription}${dirText}. Place every player's Archive Token there facing in the direction shown by the marker. These Archive Tokens are the robots' Virtual Bots. Virtual Bots move and are affected by the factory floor normally, including conveyors, pushers, gears, pits, board lasers, and other board elements, but they do not interact with robots or other Virtual Bots: they do not push or block them, and robot weapons cannot affect Virtual Bots or be used by Virtual Bots against other robots. Resolve all five registers of the first turn this way. At the end of each turn, any Virtual Bot that does not share its space with another robot or Virtual Bot is replaced by that player's robot miniature; from then on that robot follows the normal rules. A Virtual Bot sharing a space remains virtual until the end of a later turn when it is alone.`,
+          `Virtual Bots: No docking bay is used. The ${entryName} is marked with a white circle. Place every player's Archive Token there${entryFacing ? ` facing ${entryFacing}` : ""}. These Archive Tokens are the robots' Virtual Bots. Virtual Bots move and are affected by the factory floor normally, including conveyors, pushers, gears, pits, board lasers, and other board elements, but they do not interact with robots or other Virtual Bots: they do not push or block them, and robot weapons cannot affect Virtual Bots or be used by Virtual Bots against other robots. Resolve all five registers of the first turn this way. At the end of each turn, any Virtual Bot that does not share its space with another robot or Virtual Bot is replaced by that player's robot miniature; from then on that robot follows the normal rules. A Virtual Bot sharing a space remains virtual until the end of a later turn when it is alone.`,
           { source: "previous-editions", relation: "patterned" }
         )
       );
@@ -3900,11 +4135,11 @@ function updateRulesNote(scenario) {
   // prerequisites, and collection availability remain separate registry concepts.
   const guidanceNotes = buildVariantRuleGuidanceNotes(scenario);
   if (adviceNoteEl) {
-    if (guidanceNotes.length) {
-      adviceNoteEl.textContent = `RULES NOTES: ${guidanceNotes.join(" ")}`;
+    if (guidanceNotes.suggestions.length || guidanceNotes.warnings.length) {
+      renderVariantRuleGuidanceNote(adviceNoteEl, guidanceNotes);
       adviceNoteEl.classList.remove("hidden");
     } else {
-      adviceNoteEl.textContent = "";
+      adviceNoteEl.replaceChildren();
       adviceNoteEl.classList.add("hidden");
     }
   }
@@ -3932,10 +4167,10 @@ function updateRulesNote(scenario) {
   topAnchorEl?.appendChild(topRulesBlockEl);
   topRulesBlockEl?.classList.toggle("hidden", !hasTopRules);
   if (notes.length) {
-    noteEl.textContent = `SPECIAL RULES: ${notes.join(" ")}`;
+    renderSpecialRulesNote(noteEl, notes);
     noteEl.classList.remove("hidden");
   } else {
-    noteEl.textContent = "";
+    noteEl.replaceChildren();
     noteEl.classList.add("hidden");
   }
 }
@@ -3968,13 +4203,9 @@ function updateLegend(scenario) {
   const rebootTokenEl = document.getElementById("legend-reboot-token");
   const payToWinStartEl = document.getElementById("legend-pay-to-win-start");
   if (rebootTokenEl) {
-    rebootTokenEl.textContent = scenario?.virtualBots
-      ? (scenario?.rebootTokens?.length
-        ? "Green markers: Virtual Bots entry and reboot token"
-        : "Green marker + orange cube: Virtual Bots entry")
-      : "Green marker: reboot token";
+    rebootTokenEl.textContent = "Green marker: reboot token";
   }
-  rebootTokenEl?.classList.toggle("hidden", !scenario?.virtualBots && !["reboot_tokens", "home_reboot"].includes(scenario?.recoveryRule));
+  rebootTokenEl?.classList.toggle("hidden", !["reboot_tokens", "home_reboot"].includes(scenario?.recoveryRule));
   if (payToWinStartEl) {
     payToWinStartEl.textContent = scenario?.subsidizedStarts
       ? "Light-blue square: extra starting Energy subsidy"
@@ -4376,7 +4607,10 @@ function getConstructionGuidanceModePolicy(preferences = {}) {
       routeWorkPressure: 0,
       routeWorkTailRiskPressure: 0,
       explorationFloor: 1,
-      boardProposalCount: 1,
+      // Random remains a literal single raw proposal in calibration. Tight is
+      // itself a construction treatment, so it needs several unguided proposals
+      // from which to choose the smallest board bounding box.
+      boardProposalCount: normalizeBoardSpread(preferences.boardSpread) === BOARD_SPREAD_MODES.tight ? 6 : 1,
       checkpointProposalCount: 1,
       grossMismatchExplorationRate: 1
     };
@@ -4520,6 +4754,7 @@ function getPreferencesFromControls() {
     difficulty: document.getElementById("difficulty").value,
     length: document.getElementById("length").value,
     generationMode: normalizeGenerationMode(document.getElementById("generation-mode")?.value),
+    boardSpread: normalizeBoardSpread(document.getElementById("board-spread")?.value),
     overlayMode: normalizeOverlayMode(document.getElementById("overlay-mode")?.value),
     actFastMode: getActFastModeFromControls(),
     selectedExpansions: {
@@ -4558,6 +4793,7 @@ function applyPreferencesToControls(preferences) {
       ? normalizeGenerationMode(normalizedPreferences.generationMode)
       : "balanced";
   }
+  setBoardSpreadControl(normalizedPreferences.boardSpread);
   setOverlayModeControl(normalizedPreferences.overlayMode);
   document.getElementById("expansion-roborally").checked = normalizedPreferences.selectedExpansions?.roborally ?? true;
   document.getElementById("expansion-rr-dice").checked = normalizedPreferences.selectedExpansions?.["rr-dice"] ?? false;
@@ -4873,6 +5109,7 @@ function normalizeConstructionGuidanceCalibration(calibration) {
       requestedFlagCounts: normalizeNumberArray(calibration?.domain?.requestedFlagCounts),
       difficulties: normalizeStringArray(calibration?.domain?.difficulties),
       lengths: normalizeStringArray(calibration?.domain?.lengths),
+      boardSpreads: normalizeStringArray(calibration?.domain?.boardSpreads),
       inventoryPresets: normalizeStringArray(calibration?.domain?.inventoryPresets)
     },
     normalLandscape,
@@ -5044,9 +5281,11 @@ function getConstructionGuidanceBaseFeatures(
 
   const difficulty = String(preferences.difficulty ?? "");
   const length = String(preferences.length ?? "");
+  const boardSpread = normalizeBoardSpread(preferences.boardSpread);
   if (
     !calibration.domain.difficulties.includes(difficulty) ||
-    !calibration.domain.lengths.includes(length)
+    !calibration.domain.lengths.includes(length) ||
+    (calibration.domain.boardSpreads.length > 0 && !calibration.domain.boardSpreads.includes(boardSpread))
   ) {
     return null;
   }
@@ -5066,6 +5305,7 @@ function getConstructionGuidanceBaseFeatures(
     player_factor: String(playerCount),
     board_factor: String(safeBoardCount),
     flag_factor: String(safeFlagCount),
+    board_spread_factor: boardSpread,
     difficulty_factor: difficulty,
     length_factor: length,
     inventory_factor: inventoryPreset
@@ -5784,8 +6024,8 @@ function getConstructionGuidanceGrossMismatch(
   ) {
     return { abort: false, mismatches: [] };
   }
-  // Routed raw length adds uncertainty-weighted late-register
-  // time. The current calibration length models were fit to the pre-uncertainty
+  // Routed raw length adds confidence-weighted forecast-uncertainty time. The
+  // current calibration length models were fit to the pre-uncertainty
   // metric, so they may still rank proposals but must not hard-abort a checkpoint
   // proposal on length until calibration is regenerated for the new target.
   const mismatches = [
@@ -7304,6 +7544,14 @@ function getWallsAtTile(tile) {
   return walls;
 }
 
+function isUnsafeRebootQueueTile(tile) {
+  return (tile?.features || []).some((feature) => (
+    feature.type === "pit" ||
+    feature.type === "trapdoor" ||
+    feature.type === "crusher"
+  ));
+}
+
 function canStepForReboot(tileMap, boardRect, from, dir) {
   const delta = {
     N: { dx: 0, dy: -1 },
@@ -7328,7 +7576,7 @@ function canStepForReboot(tileMap, boardRect, from, dir) {
 
   const fromTile = tileMap.get(`${from.x},${from.y}`);
   const toTile = tileMap.get(`${to.x},${to.y}`);
-  if (!toTile) {
+  if (!toTile || isUnsafeRebootQueueTile(toTile)) {
     return false;
   }
 
@@ -7338,14 +7586,14 @@ function canStepForReboot(tileMap, boardRect, from, dir) {
     return false;
   }
 
-  return !(toTile.features || []).some((feature) => feature.type === "pit");
+  return true;
 }
 
-function scoreRebootDirection(tileMap, boardRect, point, dir, minRunway) {
+function scoreRebootDirection(tileMap, boardRect, point, dir, requiredRunway) {
   let runway = 0;
   let current = point;
 
-  while (runway < 3 && canStepForReboot(tileMap, boardRect, current, dir)) {
+  while (canStepForReboot(tileMap, boardRect, current, dir)) {
     const delta = {
       N: { dx: 0, dy: -1 },
       E: { dx: 1, dy: 0 },
@@ -7359,15 +7607,21 @@ function scoreRebootDirection(tileMap, boardRect, point, dir, minRunway) {
     runway += 1;
   }
 
-  if (runway < minRunway) {
+  if (runway < requiredRunway) {
     return null;
   }
 
-  return runway * 4;
+  // Preserve the established placement preference cap: once a direction has
+  // enough capacity, extra runway beyond three squares does not make the token
+  // otherwise more desirable.
+  return Math.min(runway, 3) * 4;
 }
 
 function placeRebootTokens(boardRects, tileMap, checkpoints, playerCount) {
-  const minRunway = playerCount >= 5 ? 2 : 1;
+  // The token square is the first simultaneous-reboot position. The arrow must
+  // provide one additional safe square per remaining player so every robot can
+  // be placed without looping back through an occupied or lethal reboot space.
+  const requiredRunway = Math.max(0, Math.floor(Number(playerCount) || 1) - 1);
   const dirs = ["N", "E", "S", "W"];
   const tokens = [];
 
@@ -7388,7 +7642,7 @@ function placeRebootTokens(boardRects, tileMap, checkpoints, playerCount) {
           continue;
         }
 
-        if (features.some((feature) => feature.type === "pit")) {
+        if (isUnsafeRebootQueueTile(tile)) {
           continue;
         }
 
@@ -7404,7 +7658,7 @@ function placeRebootTokens(boardRects, tileMap, checkpoints, playerCount) {
         const centerDistance = Math.abs(point.x - center.x) + Math.abs(point.y - center.y);
 
         for (const dir of dirs) {
-          const directionScore = scoreRebootDirection(tileMap, boardRect, point, dir, minRunway);
+          const directionScore = scoreRebootDirection(tileMap, boardRect, point, dir, requiredRunway);
           if (directionScore === null) {
             continue;
           }
@@ -8158,18 +8412,25 @@ function collectMovingTargetReentryMarkers(tileMap, checkpoints = [], enabled = 
 }
 
 function pickVirtualBotEntry(flagCandidates, tileMap, boardPlacements, pieceMap, preferences = {}) {
+  const difficulty = getTuningDifficulty(preferences.difficulty);
   const eligible = flagCandidates
+    .filter((candidate) => isNoDockStartTileClear(tileMap.get(`${candidate.x},${candidate.y}`)))
     .filter((candidate) => getVirtualBotEntryDirections(tileMap, candidate).length > 0)
     .map((candidate) => {
-      const approach = getFlagCandidateApproachStats(tileMap, candidate);
-      const boardUse = getCandidateBoardDepth(candidate, boardPlacements, pieceMap);
-      const rawWeight = Math.max(0.05,
-        (candidate.weight ?? 1) +
-        approach.openCount * 1.1 +
-        approach.convergencePotential * 0.55 +
-        Math.min(1.6, boardUse.depth * 0.35)
+      // Borrow only the checkpoint sampler's nearby-area hazard preference. The
+      // entry square itself is already required to be clear, and route geometry
+      // is deliberately not used to turn this into a checkpoint-like target.
+      const areaPenalty = getFlagCandidateAreaPenalty(
+        candidate,
+        tileMap,
+        difficulty,
+        preferences
       );
-      return { ...candidate, weight: Math.pow(rawWeight, getConstructionGuidanceStrength(preferences)) };
+      const baseWeight = Math.max(0.05, Number(candidate.weight) || 1);
+      return {
+        ...candidate,
+        weight: Math.max(0.01, baseWeight / (1 + areaPenalty))
+      };
     });
   return sampleManyWeighted(eligible, 1)[0] ?? null;
 }
@@ -8756,19 +9017,105 @@ function hideVirtualFlagZeroFeature(tileMap, flagZero) {
 }
 
 function getVirtualBotEntryDirections(tileMap, point) {
-  const deltas = {
-    N: { dx: 0, dy: -1, opposite: "S" },
-    E: { dx: 1, dy: 0, opposite: "W" },
-    S: { dx: 0, dy: 1, opposite: "N" },
-    W: { dx: -1, dy: 0, opposite: "E" }
-  };
-  return Object.entries(deltas).filter(([dir, d]) => {
-    const fromTile = tileMap.get(`${point.x},${point.y}`);
-    const toTile = tileMap.get(`${point.x + d.dx},${point.y + d.dy}`);
+  return Object.entries(CARDINAL_DIRS).filter(([dir, d]) => {
+    const to = { x: point.x + d.dx, y: point.y + d.dy };
+    const toTile = tileMap.get(`${to.x},${to.y}`);
     if (!toTile) return false;
-    if (getWallsAtTile(fromTile).has(dir) || getWallsAtTile(toTile).has(d.opposite)) return false;
-    return !(toTile.features || []).some((feature) => feature.type === "pit");
+    if (isBlockedBetween(tileMap, point, to, dir)) return false;
+    return !(toTile.features || []).some((feature) => (
+      VIRTUAL_BOT_AUTOKILL_FEATURE_TYPES.has(feature.type)
+    ));
   }).map(([dir]) => dir);
+}
+
+function getVirtualBotForwardDangerPenalty(tileMap, point, dir) {
+  const delta = CARDINAL_DIRS[dir];
+  if (!delta) return 0;
+
+  let previous = { x: point.x, y: point.y };
+  for (let distance = 1; distance <= VIRTUAL_BOT_FACING_LOOKAHEAD; distance += 1) {
+    const next = {
+      x: point.x + delta.dx * distance,
+      y: point.y + delta.dy * distance
+    };
+
+    // An adjacent wall is already a hard exclusion. Farther walls simply end
+    // this straight-ahead look; hazards beyond them should not bias facing.
+    if (isBlockedBetween(tileMap, previous, next, dir)) {
+      return 0;
+    }
+
+    const tile = tileMap.get(`${next.x},${next.y}`);
+    if (!tile) {
+      return distance === 1
+        ? Infinity
+        : (VIRTUAL_BOT_FORWARD_DANGER_PENALTY[distance] ?? 0);
+    }
+    if ((tile.features || []).some((feature) => (
+      VIRTUAL_BOT_AUTOKILL_FEATURE_TYPES.has(feature.type)
+    ))) {
+      return distance === 1
+        ? Infinity
+        : (VIRTUAL_BOT_FORWARD_DANGER_PENALTY[distance] ?? 0);
+    }
+
+    previous = next;
+  }
+
+  return 0;
+}
+
+function getVirtualBotCourseEdgeDistance(tileMap, point, dir) {
+  const delta = CARDINAL_DIRS[dir];
+  if (!delta) return null;
+
+  for (let distance = 1; distance <= VIRTUAL_BOT_FACING_LOOKAHEAD; distance += 1) {
+    const tile = tileMap.get(`${point.x + delta.dx * distance},${point.y + delta.dy * distance}`);
+    if (!tile) return distance;
+  }
+
+  return null;
+}
+
+function getVirtualBotCourseEdgeOrientationPenalty(tileMap, point, facing) {
+  let penalty = 0;
+
+  for (const edgeDir of Object.keys(CARDINAL_DIRS)) {
+    const distance = getVirtualBotCourseEdgeDistance(tileMap, point, edgeDir);
+    if (!distance) continue;
+    const proximityPenalty = VIRTUAL_BOT_EDGE_PROXIMITY_PENALTY[distance] ?? 0;
+    if (!proximityPenalty) continue;
+
+    if (facing === edgeDir) {
+      // Facing toward a nearby exposed edge should look less natural even when
+      // a wall or another local detail prevents the edge from being an immediate
+      // crash. Straight-ahead void also receives the danger penalty above.
+      penalty += proximityPenalty;
+    } else if (facing !== getOppositeSide(edgeDir)) {
+      // A sideways-facing robot on an exposed edge is legal, but players tend
+      // to expect edge starts to face inward. Fade that preference with depth.
+      penalty += proximityPenalty * 0.45;
+    }
+  }
+
+  return penalty;
+}
+
+function pickVirtualBotEntryFacing(tileMap, point) {
+  const weightedDirections = getVirtualBotEntryDirections(tileMap, point)
+    .map((dir) => {
+      const penalty = (
+        getVirtualBotForwardDangerPenalty(tileMap, point, dir) +
+        getVirtualBotCourseEdgeOrientationPenalty(tileMap, point, dir)
+      );
+      return {
+        dir,
+        weight: Number.isFinite(penalty) ? 1 / (1 + penalty) : 0
+      };
+    })
+    .filter((entry) => entry.weight > 0);
+
+  return sampleManyWeighted(weightedDirections, 1)[0]?.dir ?? null;
 }
 
 function getPlayableCheckpoints(checkpoints = [], virtualBots = false) {
@@ -9023,17 +9370,19 @@ function getBoardPlacementPlanningContext(pieceMap, expansionIds = null, prefere
     allowBlankMiniBoards || !isBlankCustomBoardPiece(pieceMap[boardId])
   ));
   const hasLargeBoards = mainBoardIds.some((boardId) => pieceMap[boardId]?.kind !== "small");
+  const explicitEpic = preferences.length === "epic" && !preferences.targetGuidanceOnlyLength;
   const maxBoards = Math.min(
-    hasLargeBoards ? 4 : 6,
+    hasLargeBoards ? (explicitEpic ? 6 : 4) : 6,
     countPhysicalBoards(mainBoardIds, pieceMap)
   );
   return { mainBoardIds, hasLargeBoards, maxBoards };
 }
 
-// Board construction deliberately does not accept a length target, guidance
-// level, or attempt number. Those old hand-tuned levers were removed: the cheap
-// board proposal should stay target-neutral, then staged calibration ranks the
-// resulting geometry by target fit and predicted work.
+// Board construction stays target-neutral inside the ordinary board-count
+// domain. Explicit Epic is the one eligibility exception: it may use up to six
+// large boards when the physical inventory supports them. Hidden Any guidance
+// never receives that expanded domain; staged calibration still ranks the
+// eligible geometry by target fit and predicted work.
 function createBoardPlacements(
   pieceMap,
   preferences,
@@ -10186,6 +10535,51 @@ function chooseSubsidizedStartAdjustment(paymentScores, baselineFullScore, maxAd
   return candidates[0].adjustment;
 }
 
+function choosePayToWinStartAdjustment(paymentScores, baselineFullScore, maxAdjustment, denialCost) {
+  const epsilon = 1e-9;
+  const candidates = [];
+  let canReachBaseline = false;
+
+  // Pay to Win is the mirror image of Subsidized Starts: payment makes a
+  // stronger start worse. Choose the integer payment whose modeled result is
+  // closest to the weakest-start baseline instead of always taking the first
+  // point that crosses it.
+  for (let adjustment = 0; adjustment <= maxAdjustment; adjustment += 1) {
+    const postAdjustmentScore = Number(paymentScores?.[adjustment]);
+    if (!Number.isFinite(postAdjustmentScore)) continue;
+
+    // Lower score is stronger. Negative delta means the priced start is still
+    // stronger than the baseline; positive means the payment has overcharged it.
+    const delta = postAdjustmentScore - baselineFullScore;
+    if (adjustment > 0 && delta >= -epsilon) canReachBaseline = true;
+    candidates.push({
+      adjustment,
+      delta,
+      absoluteGap: Math.abs(delta),
+      nonOvercharging: delta <= epsilon
+    });
+  }
+
+  if (!canReachBaseline || !candidates.length) {
+    return denialCost;
+  }
+
+  candidates.sort((left, right) => {
+    const gapDifference = left.absoluteGap - right.absoluteGap;
+    if (Math.abs(gapDifference) > epsilon) return gapDifference;
+
+    // If two integer payments are equally close, avoid making the paid start
+    // worse than the baseline when an equally good undercharge exists. If the
+    // modeled outcome is otherwise identical, prefer the smaller payment.
+    if (left.nonOvercharging !== right.nonOvercharging) {
+      return left.nonOvercharging ? -1 : 1;
+    }
+    return left.adjustment - right.adjustment;
+  });
+
+  return candidates[0].adjustment;
+}
+
 function getPayToWinRemovalBias(options = {}) {
   let bias = 0;
   // Endpoint pruning is the priced-start setup's one deliberate freedom to
@@ -10439,16 +10833,12 @@ function buildPayToWinRegisterPricingState(
           denialCost
         );
       } else {
-        energyCost = denialCost;
-        for (let adjustment = 1; adjustment <= maxAdjustment; adjustment += 1) {
-          const postAdjustmentScore = Number(entry.paymentScores[adjustment]);
-          const balanced = Number.isFinite(postAdjustmentScore) &&
-            postAdjustmentScore + 1e-9 >= baseline.fullScore;
-          if (balanced) {
-            energyCost = adjustment;
-            break;
-          }
-        }
+        energyCost = choosePayToWinStartAdjustment(
+          entry.paymentScores,
+          baseline.fullScore,
+          maxAdjustment,
+          denialCost
+        );
       }
     }
 
@@ -13538,6 +13928,14 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
   };
 
   if (analyzedFirstLeg && typeof analyzedFirstLeg.then === "function") {
+    if (typeof options.cooperativeStage === "function") {
+      return analyzedFirstLeg.then(async (firstLeg) => {
+        await options.cooperativeStage("Balancing routed starting choices");
+        const finished = finishSequence(firstLeg);
+        await options.cooperativeStage("Route analysis and start balancing complete");
+        return finished;
+      });
+    }
     return analyzedFirstLeg.then(finishSequence);
   }
   return finishSequence(analyzedFirstLeg);
@@ -13795,6 +14193,12 @@ function getFallbackScenarioScore(scenario) {
   const fitScore = Number(scenario?.metrics?.fitScore);
   if (!Number.isFinite(fitScore)) return Infinity;
   return fitScore + getFallbackHardFailurePenalty(scenario);
+}
+
+function getAcceptableScenarioScore(scenario) {
+  if (!scenario?.metrics?.acceptable) return Infinity;
+  const fitScore = Number(scenario.metrics.fitScore);
+  return Number.isFinite(fitScore) ? fitScore : Infinity;
 }
 
 function getCompetitiveBalanceProfile(entries = []) {
@@ -14480,7 +14884,11 @@ function computeLaterCheckpointPressure(tileMap, checkpoints = [], preferences =
     }))
     .filter((score) => Number.isFinite(score));
 
-  return laterScores.length ? Number(averageValues(laterScores).toFixed(2)) : 0;
+  // Later-leg route score and congestion already measure sustained course
+  // pressure as averages. This separate checkpoint-local term exists to retain
+  // a dangerous arrival area, so use the worst later checkpoint rather than
+  // allowing additional benign checkpoints to dilute it.
+  return laterScores.length ? Number(Math.max(...laterScores).toFixed(2)) : 0;
 }
 
 function computeDifficultyRaw(sequence, checkpointPressure = 0) {
@@ -14931,7 +15339,11 @@ function computeActFastLengthLoad(preferences = {}, playerCount = 4) {
 const LENGTH_FORECAST_SPECULATIVE_CONFIDENCE = 0.50;
 const LENGTH_FORECAST_CONFIDENCE_FLOOR = 0.06;
 const LENGTH_FORECAST_MAX_ACTION_UPLIFT = 0.55;
-const LENGTH_FORECAST_UNCERTAINTY_EXPONENT = 0.90;
+// Length uncertainty is a smooth premium, not a cliff at 0.50 confidence.
+// Squaring normalized uncertainty keeps high-confidence registers essentially
+// unchanged while letting long/hazardous low-confidence tails contribute
+// progressively more expected play time. The 0.50 threshold remains diagnostic.
+const LENGTH_FORECAST_UNCERTAINTY_EXPONENT = 2.00;
 
 function computeExpectedLengthForecastProfile(sequence, preferences = {}) {
   const firstLeg = sequence?.firstLeg;
@@ -14986,15 +15398,15 @@ function computeExpectedLengthForecastProfile(sequence, preferences = {}) {
       weightedConfidence += confidence;
       totalRegisters += 1;
       minimumConfidence = Math.min(minimumConfidence, confidence);
-      if (confidence >= LENGTH_FORECAST_SPECULATIVE_CONFIDENCE) continue;
-      uncertainRegisters += 1;
-      const normalized = clamp(
-        (LENGTH_FORECAST_SPECULATIVE_CONFIDENCE - confidence) /
-          (LENGTH_FORECAST_SPECULATIVE_CONFIDENCE - LENGTH_FORECAST_CONFIDENCE_FLOOR),
+      if (confidence < LENGTH_FORECAST_SPECULATIVE_CONFIDENCE) {
+        uncertainRegisters += 1;
+      }
+      const normalizedUncertainty = clamp(
+        (1 - confidence) / (1 - LENGTH_FORECAST_CONFIDENCE_FLOOR),
         0,
         1
       );
-      exposure += Math.pow(normalized, LENGTH_FORECAST_UNCERTAINTY_EXPONENT);
+      exposure += Math.pow(normalizedUncertainty, LENGTH_FORECAST_UNCERTAINTY_EXPONENT);
     }
     routeEquivalentActions.push(exposure * LENGTH_FORECAST_MAX_ACTION_UPLIFT);
     routeUncertainRegisters.push(uncertainRegisters);
@@ -16648,6 +17060,7 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     `Requested: ${scenario.preferences.playerCount} players, ${formatDifficultyLabel(scenario.preferences.difficulty)} difficulty, ${formatLengthLabel(scenario.preferences.length)} length`,
     `Generation mode: ${formatGenerationModeLabel(getScenarioGenerationMode(scenario))}`,
     `Layout mode: ${scenario.preferences.alignedLayout ? "aligned" : "freeform"}`,
+    `Board spread: ${normalizeBoardSpread(scenario.preferences.boardSpread)}`,
     `Sets: ${[...getSelectedExpansionIds(scenario.preferences)].map((id) => formatExpansionName(id)).join(", ") || "none"}`,
     `Allowed variants: ${describeAllowedVariants(scenario.preferences)}`,
     `Variant complexity: ${scenario.variantComplexityUsed ?? 0}/${scenario.variantComplexityBudget ?? 0}`,
@@ -16683,6 +17096,9 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     scenario.generationDiagnostics
       ? `Generation timing: total ${formatGenerationDuration(scenario.generationDiagnostics.totalMs)}, routeSearch ${formatGenerationDuration(scenario.generationDiagnostics.routeSearchMs)}, searches ${scenario.generationDiagnostics.routeSearches}, expansions ${scenario.generationDiagnostics.routeExpansions}, capped ${scenario.generationDiagnostics.cappedRouteSearches}, mode ${scenario.generationDiagnostics.generationModeLabel ?? formatGenerationModeLabel(getScenarioGenerationMode(scenario))}, softBudget ${scenario.generationDiagnostics.softExpansionBudget ?? getGenerationModeProfile({ generationMode: getScenarioGenerationMode(scenario) }).softExpansionBudget}`
       : "Generation timing: n/a",
+    scenario.generationDiagnostics
+      ? `Acceptable candidate pool: ${scenario.generationDiagnostics.acceptableCandidatesFound ?? 0}/${scenario.generationDiagnostics.acceptableCandidateTarget ?? 1}; scores ${(scenario.generationDiagnostics.acceptableCandidateScores ?? []).join(", ") || "none"}`
+      : "Acceptable candidate pool: n/a",
     scenario.generationDiagnostics?.searchProfile
       ? `Generation search profile: attempts ${scenario.generationDiagnostics.maxAttempts ?? getScenarioGenerationMaxAttempts(scenario)}, preflight ${scenario.generationDiagnostics.searchProfile.preflightOpeningExpansions}/${scenario.generationDiagnostics.searchProfile.preflightLaterExpansions}, witnesses ${scenario.generationDiagnostics.searchProfile.primaryWitnessRoutes ?? "?"}, traffic ${scenario.generationDiagnostics.searchProfile.trafficEnabled ? `${scenario.generationDiagnostics.searchProfile.trafficEpochs ?? 0} exploration epoch(s), new-search cap ${scenario.generationDiagnostics.searchProfile.trafficAlternateMaxNewSearchesPerEpoch ?? 0}/epoch, uncertainty effort floor ${scenario.generationDiagnostics.searchProfile.trafficAlternateUncertaintyEffortFloor ?? 1}/curve ${scenario.generationDiagnostics.searchProfile.trafficAlternateUncertaintyEffortExponent ?? 1}, uncertainty exploration ${Math.round((scenario.generationDiagnostics.searchProfile.trafficExplorationUncertaintyShare ?? 0) * 100)}% above confidence ${scenario.generationDiagnostics.searchProfile.trafficExplorationConfidenceFloor ?? 1}` : "off"}`
       : "Generation search profile: n/a",
@@ -16752,7 +17168,7 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     `Length raw: ${scenario.metrics.lengthRaw}`,
     `Length inputs: flags ${scenario.metrics.lengthMetrics.inputs.flagCount}, players ${scenario.metrics.lengthMetrics.inputs.playerCount}, actionScore ${scenario.metrics.lengthMetrics.inputs.totalActionLoad}, distanceScore ${scenario.metrics.lengthMetrics.inputs.totalRouteDistance}, congestion ${scenario.metrics.lengthMetrics.inputs.totalCongestion}, flagArea ${scenario.metrics.lengthMetrics.inputs.flagAreaScore}, totalDifficulty ${scenario.metrics.lengthMetrics.inputs.totalDifficulty}`,
     `Length contributions: flags ${scenario.metrics.lengthMetrics.contributions.checkpointLoad}, players ${scenario.metrics.lengthMetrics.contributions.playerLoad}, actions ${scenario.metrics.lengthMetrics.contributions.actionLoad}, uncertainty ${scenario.metrics.lengthMetrics.contributions.forecastUncertaintyLoad ?? 0}, distance ${scenario.metrics.lengthMetrics.contributions.distanceLoad}, congestion ${scenario.metrics.lengthMetrics.contributions.congestionLoad} (weight ${scenario.metrics.lengthMetrics.contributions.congestionWeight}; harshness ${scenario.metrics.lengthMetrics.contributions.boardHarshness}), flagArea ${scenario.metrics.lengthMetrics.contributions.flagAreaLoad}, difficulty ${scenario.metrics.lengthMetrics.contributions.difficultyLoad}, moving-target residual ${scenario.metrics.lengthMetrics.contributions.movingTargetLoad} (legacy estimate ${scenario.metrics.lengthMetrics.contributions.movingTargetLegacyEstimate ?? 0}), act-fast ${scenario.metrics.lengthMetrics.contributions.actFastLoad}, reshuffle ${scenario.metrics.lengthMetrics.contributions.lessForeshadowingLoad ?? 0}, shared-deck ${scenario.metrics.lengthMetrics.contributions.sharedDeckLoad ?? 0}`,
-    `Length uncertainty: pre-adjustment ${scenario.metrics.lengthMetrics.contributions.preUncertaintyRaw ?? scenario.metrics.lengthRaw}, forecast confidence mean/min/end ${scenario.metrics.lengthMetrics.inputs.forecastConfidenceMean ?? 1}/${scenario.metrics.lengthMetrics.inputs.forecastConfidenceMin ?? 1}/${scenario.metrics.lengthMetrics.inputs.forecastConfidenceEnd ?? 1}, speculative registers ${scenario.metrics.lengthMetrics.inputs.forecastUncertainRegisters ?? 0}/${scenario.metrics.lengthMetrics.inputs.forecastTotalRegisters ?? 0} avg, equivalent extra actions ${scenario.metrics.lengthMetrics.contributions.forecastEquivalentActions ?? 0}, threshold ${scenario.metrics.lengthMetrics.contributions.forecastSpeculativeThreshold ?? LENGTH_FORECAST_SPECULATIVE_CONFIDENCE}, max per-register action uplift ${Math.round((scenario.metrics.lengthMetrics.contributions.forecastMaxActionUplift ?? LENGTH_FORECAST_MAX_ACTION_UPLIFT) * 100)}%`,
+    `Length uncertainty: pre-adjustment ${scenario.metrics.lengthMetrics.contributions.preUncertaintyRaw ?? scenario.metrics.lengthRaw}, forecast confidence mean/min/end ${scenario.metrics.lengthMetrics.inputs.forecastConfidenceMean ?? 1}/${scenario.metrics.lengthMetrics.inputs.forecastConfidenceMin ?? 1}/${scenario.metrics.lengthMetrics.inputs.forecastConfidenceEnd ?? 1}, low-confidence registers ${scenario.metrics.lengthMetrics.inputs.forecastUncertainRegisters ?? 0}/${scenario.metrics.lengthMetrics.inputs.forecastTotalRegisters ?? 0} avg below ${scenario.metrics.lengthMetrics.contributions.forecastSpeculativeThreshold ?? LENGTH_FORECAST_SPECULATIVE_CONFIDENCE}, equivalent extra actions ${scenario.metrics.lengthMetrics.contributions.forecastEquivalentActions ?? 0}, smooth uncertainty exponent ${scenario.metrics.lengthMetrics.forecastLengthProfile?.exponent ?? LENGTH_FORECAST_UNCERTAINTY_EXPONENT}, max per-register action uplift ${Math.round((scenario.metrics.lengthMetrics.contributions.forecastMaxActionUplift ?? LENGTH_FORECAST_MAX_ACTION_UPLIFT) * 100)}%`,
     `Variant length accounting v38: ${(scenario.metrics.lengthMetrics.variantLengthContributions ?? []).map((entry) => `${entry.id} ${entry.delta >= 0 ? "+" : ""}${entry.delta} [${entry.kind}]`).join(", ") || "none"}; method ${scenario.metrics.lengthMetrics.method ?? "n/a"}`,
     `Moving target profile: active ${scenario.movingTargetStats?.activeCount ?? 0}, pathTiles ${scenario.movingTargetStats?.totalPathLength ?? 0}, uniqueCoverage ${scenario.movingTargetStats?.coverageTiles ?? 0}, turns ${scenario.movingTargetStats?.totalTurns ?? 0}, fastSegments ${scenario.movingTargetStats?.fastSegments ?? 0}, difficultyBonus ${scenario.movingTargetStats?.difficultyBonus ?? 0}, lengthBonus ${scenario.movingTargetStats?.lengthBonus ?? 0}`,
     `Moving target volatility penalty: ${scenario.metrics.movingTargetVolatilityPenalty ?? 0}`,
@@ -16908,11 +17324,16 @@ let generationOverlayState = {
   stageContext: null,
   semanticKey: "general",
   semanticStartedAt: 0,
+  generationStartedAt: 0,
+  acceptableCandidateTarget: 1,
+  acceptableCandidatesFound: 0,
   slowTimerId: null
 };
 
 // UI responsiveness fallback thresholds. Calibrated route-work wording below
 // takes precedence whenever the generator has a checkpoint-known work estimate.
+const GENERATION_ROUTE_PROGRESS_DISPLAY_INTERVAL_MS = 700;
+
 const GENERATION_SLOW_STAGE_MS = Object.freeze({
   building: 4200,
   checkpoints: 3200,
@@ -16969,7 +17390,11 @@ function classifyGenerationStage(stage = "", stageContext = null) {
     raw.includes("preflight") || raw.includes("refining") || raw.includes("evaluating starting")
   ) return "routes";
   if (raw.includes("traffic")) return "alternatives";
-  if (raw.includes("difficulty") || raw.includes("length") || raw.includes("final fit") || raw.includes("finishing") || raw.includes("candidate complete")) return "finishing";
+  if (
+    raw.includes("difficulty") || raw.includes("length") || raw.includes("final fit") ||
+    raw.includes("final classification") || raw.includes("finalizing") ||
+    raw.includes("guidance") || raw.includes("finishing") || raw.includes("candidate complete")
+  ) return "finishing";
   return "general";
 }
 
@@ -16995,6 +17420,31 @@ function getGenerationSlowHint(key, stageContext = null) {
   if (key === "checkpoints" || key === "movingTargets") return "This layout has several checkpoint arrangements to consider.";
   if (key === "retry") return "Finding a close match is taking a few tries.";
   return "This course is taking a little longer to check.";
+}
+
+function formatCooperativeRouteProgressStage(progress = {}) {
+  const completedCount = Math.max(1, Math.floor(Number(progress.completedCount) || 1));
+  const checkedLabel = `${completedCount} starting space${completedCount === 1 ? "" : "s"} checked`;
+
+  if (progress.phase === "estimated-start") {
+    return `Checking route possibilities — ${checkedLabel}`;
+  }
+  if (progress.phase === "realized-start") {
+    return `Verifying playable routes — ${checkedLabel}`;
+  }
+  if (progress.phase === "traffic-start") {
+    return `Comparing route options — ${checkedLabel}`;
+  }
+  if (progress.phase === "opening-start") {
+    return `Checking opening routes — ${checkedLabel}`;
+  }
+  if (progress.phase === "later-leg-start") {
+    const legNumber = Number.isInteger(progress.legIndex) ? progress.legIndex + 1 : null;
+    return legNumber
+      ? `Checking later routes — leg ${legNumber}, ${checkedLabel}`
+      : `Checking later routes — ${checkedLabel}`;
+  }
+  return `Checking routes — ${checkedLabel}`;
 }
 
 function getGenerationUserFacingState(stage = "", options = {}) {
@@ -17038,6 +17488,64 @@ function getGenerationUserFacingState(stage = "", options = {}) {
     activity = "Checking the final difficulty, length, and setup.";
   }
 
+  const rawStage = String(stage || "").toLowerCase();
+  const checkedStartsMatch = String(stage || "").match(/(\d+) starting spaces? checked/i);
+  const checkedStarts = checkedStartsMatch ? Number(checkedStartsMatch[1]) : null;
+  const cleanupPassMatch = String(stage || "").match(/pass\s+(\d+)/i);
+  const cleanupPass = cleanupPassMatch ? Number(cleanupPassMatch[1]) : null;
+  if (rawStage.includes("checking route possibilities") && checkedStarts) {
+    heading = slow ? "Checking some tricky routes" : "Checking the routes";
+    activity = `${checkedStarts} starting space${checkedStarts === 1 ? "" : "s"} checked for possible routes.`;
+  } else if (rawStage.includes("verifying playable routes") && checkedStarts) {
+    heading = slow ? "Checking some tricky routes" : "Verifying the routes";
+    activity = `${checkedStarts} starting space${checkedStarts === 1 ? "" : "s"} checked for playable routes.`;
+  } else if (rawStage.includes("comparing route options") && checkedStarts) {
+    heading = "Comparing route options";
+    activity = `${checkedStarts} starting space${checkedStarts === 1 ? "" : "s"} checked for useful alternatives.`;
+  } else if (rawStage.includes("checking opening routes") && checkedStarts) {
+    heading = slow ? "Checking some tricky routes" : "Checking opening routes";
+    activity = `${checkedStarts} starting space${checkedStarts === 1 ? "" : "s"} checked.`;
+  } else if (rawStage.includes("checking later routes") && checkedStarts) {
+    const legMatch = String(stage || "").match(/leg\s+(\d+)/i);
+    const legNumber = legMatch ? Number(legMatch[1]) : null;
+    heading = slow ? "Checking some tricky routes" : "Checking later routes";
+    activity = `${checkedStarts} starting space${checkedStarts === 1 ? "" : "s"} checked${legNumber ? ` on route leg ${legNumber}` : ""}.`;
+  } else if (rawStage.includes("balancing routed starting choices")) {
+    heading = "Balancing the starts";
+    activity = "Balancing the routed starting choices.";
+  } else if (rawStage.includes("route fairness and removable pieces")) {
+    heading = "Cleaning up the course";
+    activity = cleanupPass
+      ? `Starting cleanup pass ${cleanupPass}.`
+      : "Starting a cleanup pass.";
+  } else if (rawStage.includes("removable docks")) {
+    heading = "Cleaning up the course";
+    activity = `${cleanupPass ? `Cleanup pass ${cleanupPass}: ` : ""}checking docking areas.`;
+  } else if (rawStage.includes("removable boards")) {
+    heading = "Cleaning up the course";
+    activity = `${cleanupPass ? `Cleanup pass ${cleanupPass}: ` : ""}checking boards.`;
+  } else if (rawStage.includes("removable overlays")) {
+    heading = "Cleaning up the course";
+    activity = `${cleanupPass ? `Cleanup pass ${cleanupPass}: ` : ""}checking overlays.`;
+  } else if (rawStage.includes("cleanup pass")) {
+    heading = "Cleaning up the course";
+    activity = cleanupPass
+      ? `Cleanup pass ${cleanupPass} complete.`
+      : "Cleanup pass complete.";
+  } else if (rawStage.includes("recomputing retained course guidance")) {
+    heading = "Rechecking the course";
+    activity = "Updating the retained layout guidance after cleanup.";
+  } else if (rawStage.includes("recomputing retained checkpoint guidance")) {
+    heading = "Rechecking the course";
+    activity = "Updating checkpoint guidance for the retained layout.";
+  } else if (rawStage.includes("final classification complete")) {
+    heading = "Finishing the course";
+    activity = "The final fit check is complete; preparing the course result.";
+  } else if (rawStage.includes("finalizing course details")) {
+    heading = "Finishing the course";
+    activity = "Assembling the final course details.";
+  }
+
   return {
     key,
     heading,
@@ -17048,25 +17556,38 @@ function getGenerationUserFacingState(stage = "", options = {}) {
   };
 }
 
-function setGenerationStopControlState(requested = false) {
+function setGenerationStopControlState(requested = false, hasRetainableCandidate = generationHasRetainableCandidate) {
   const button = document.getElementById("use-best-so-far");
-  const note = document.getElementById("use-best-so-far-note");
-  if (button) {
-    button.disabled = Boolean(requested);
-    button.textContent = requested ? "Stopping…" : "Use Best So Far";
-    button.setAttribute("aria-disabled", requested ? "true" : "false");
-  }
-  if (note) {
-    note.textContent = requested
-      ? "Stop requested. The current check may finish before generation stops."
-      : "Stops at the next safe point; the current check may finish first.";
-  }
+  if (!button) return;
+  button.disabled = Boolean(requested);
+  button.textContent = requested
+    ? "Stopping…"
+    : hasRetainableCandidate
+      ? "Use Best So Far"
+      : "Stop";
+  button.setAttribute("aria-disabled", requested ? "true" : "false");
+}
+
+function setGenerationRetainedCandidateProgress(found, target) {
+  generationOverlayState.acceptableCandidatesFound = Math.max(0, Math.floor(Number(found) || 0));
+  generationOverlayState.acceptableCandidateTarget = Math.max(1, Math.floor(Number(target) || 1));
+  generationHasRetainableCandidate = generationOverlayState.acceptableCandidatesFound > 0;
+  setGenerationStopControlState(generationStopRequested);
+  renderGeneratingOverlayState();
 }
 
 function requestGenerationStop() {
   if (!isGenerating || generationStopRequested) return;
   generationStopRequested = true;
   setGenerationStopControlState(true);
+}
+
+function updateGeneratingOverlayText(element, text) {
+  if (!element || element.textContent === text) return;
+  element.textContent = text;
+  element.classList.remove("overlay-copy-refresh");
+  void element.offsetWidth;
+  element.classList.add("overlay-copy-refresh");
 }
 
 function renderGeneratingOverlayState() {
@@ -17088,14 +17609,14 @@ function renderGeneratingOverlayState() {
   const activityEl = document.getElementById("overlay-text");
   const hintEl = document.getElementById("overlay-hint");
 
-  if (headingEl) headingEl.textContent = userState.heading;
+  updateGeneratingOverlayText(headingEl, userState.heading);
   if (attemptEl) {
     attemptEl.textContent = `Course attempt ${Math.max(1, generationOverlayState.attempt)} / ${generationOverlayState.maxAttempts}`;
   }
-  if (activityEl) activityEl.textContent = userState.activity;
+  updateGeneratingOverlayText(activityEl, userState.activity);
   if (hintEl) {
     const hint = userState.calibratedWorkHint || userState.slowHint || getGenerationConstraintHint(generationOverlayState.preferences ?? {});
-    hintEl.textContent = hint;
+    updateGeneratingOverlayText(hintEl, hint);
     hintEl.classList.toggle("hidden", !hint);
   }
 }
@@ -17153,6 +17674,9 @@ function setGeneratingOverlay(visible, text = "", details = {}) {
     semanticStartedAt: attemptChanged || semanticChanged || !generationOverlayState.semanticStartedAt
       ? now
       : generationOverlayState.semanticStartedAt,
+    generationStartedAt: details.generationStartedAt ?? generationOverlayState.generationStartedAt ?? now,
+    acceptableCandidateTarget: details.acceptableCandidateTarget ?? generationOverlayState.acceptableCandidateTarget ?? 1,
+    acceptableCandidatesFound: details.acceptableCandidatesFound ?? generationOverlayState.acceptableCandidatesFound ?? 0,
     slowTimerId: generationOverlayState.slowTimerId
   };
 
@@ -18537,7 +19061,7 @@ function getFlagRetryStallLimit(preferences = {}) {
   return limitsByMode[normalizeGenerationMode(preferences.generationMode)] ?? 2;
 }
 
-async function createRandomCandidate(assets, preferences, attempt = 1, remainingEvaluations = 1, onEvaluation = null, onStage = null, shouldStopBeforeRetry = null, shouldStopDuringAnalysis = null) {
+async function createRandomCandidate(assets, preferences, attempt = 1, remainingEvaluations = 1, onEvaluation = null, onStage = null, shouldStopBeforeRetry = null, shouldStopDuringAnalysis = null, onCooperativeProgress = null) {
   if (preferences?.difficulty === "any" || preferences?.length === "any") {
     throw new Error("Generation requires concrete difficulty and length targets; resolve Any before construction.");
   }
@@ -18629,7 +19153,13 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     if (onStage) {
       await onStage(message, localEvaluation, generationStageContext);
     }
+    if (typeof shouldStopDuringAnalysis === "function" && shouldStopDuringAnalysis()) {
+      const error = new Error("Generation stop requested at a safe boundary.");
+      error.code = "ANALYSIS_STOP_REQUESTED";
+      throw error;
+    }
   };
+  let lastCooperativeRouteProgressDisplayAt = Number.NEGATIVE_INFINITY;
 
   await reportStage("Building board and dock layout", 1);
 
@@ -18809,13 +19339,42 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     boardProposals.push(proposal);
   }
 
-  const selectedBoardProposal = sampleConstructionGuidanceRankedCandidate(
-    boardProposals,
-    generationPreferences,
-    { predictionKey: "prediction" }
-  );
+  let selectableBoardProposals = boardProposals;
+  if (normalizeBoardSpread(generationPreferences.boardSpread) === BOARD_SPREAD_MODES.tight && boardProposals.length > 1) {
+    const withFootprint = boardProposals.map((proposal) => ({
+      proposal,
+      area: summarizeCalibrationLayout(proposal.boardLayout?.placements ?? [], pieceMap).bboxArea
+    })).filter((entry) => Number.isFinite(entry.area));
+    if (withFootprint.length) {
+      const minimumArea = Math.min(...withFootprint.map((entry) => entry.area));
+      selectableBoardProposals = withFootprint
+        .filter((entry) => entry.area === minimumArea)
+        .map((entry) => entry.proposal);
+    }
+  }
+  const selectedBoardProposal = !selectableBoardProposals.length
+    ? null
+    : isCalibrationHarnessGeneration(generationPreferences)
+      ? sample(selectableBoardProposals)
+      : sampleConstructionGuidanceRankedCandidate(
+        selectableBoardProposals,
+        generationPreferences,
+        { predictionKey: "prediction" }
+      );
   let boardLayout = selectedBoardProposal?.boardLayout ?? null;
   let dockPlacements = selectedBoardProposal?.dockPlacements ?? [];
+
+  if (
+    normalizeBoardSpread(generationPreferences.boardSpread) === BOARD_SPREAD_MODES.tight &&
+    selectedBoardProposal &&
+    boardProposals.length > 1
+  ) {
+    const layout = summarizeCalibrationLayout(selectedBoardProposal.boardLayout?.placements ?? [], pieceMap);
+    await reportStage(
+      `Choosing tight board spread — ${layout.bboxWidth}×${layout.bboxHeight} board bounding box`,
+      1
+    );
+  }
 
   if (selectedBoardProposal?.prediction && boardProposals.length > 1) {
     await reportStage(
@@ -19034,15 +19593,15 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       );
       if (!pickedCheckpoints) continue;
 
-      const virtualEntryDirections = virtualEntryCandidate
-        ? getVirtualBotEntryDirections(tileMap, virtualEntryCandidate)
-        : [];
-      if (virtualBots && !virtualEntryDirections.length) continue;
+      const virtualEntryFacing = virtualEntryCandidate && !startupSpinUp
+        ? pickVirtualBotEntryFacing(tileMap, virtualEntryCandidate)
+        : null;
+      if (virtualBots && !startupSpinUp && !virtualEntryFacing) continue;
       const flagZero = virtualBots
         ? {
           ...virtualEntryCandidate,
           id: 0,
-          facing: sample(virtualEntryDirections)
+          ...(virtualEntryFacing ? { facing: virtualEntryFacing } : {})
         }
         : null;
       const checkpoints = virtualBots
@@ -19253,18 +19812,26 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       scenarioBoardRects = buildBoardRects(scenarioBoardPlacements, pieceMap);
       const resolved = buildResolvedMap(scenarioPlacements, pieceMap);
       scenarioTileMap = resolved.tileMap;
+      const rebootPlacementExclusions = virtualBots && flagZero
+        ? [flagZero, ...playableCheckpoints]
+        : playableCheckpoints;
       rebootTokens = recoveryRule === "reboot_tokens"
-        ? placeRebootTokens(scenarioBoardRects, scenarioTileMap, playableCheckpoints, preferences.playerCount)
+        ? placeRebootTokens(
+          scenarioBoardRects,
+          scenarioTileMap,
+          rebootPlacementExclusions,
+          preferences.playerCount
+        )
         : recoveryRule === "home_reboot"
           ? placeHomeRebootTokens(scenarioDockPlacements, pieceMap, resolved.starts, scenarioTileMap, checkpoints, {
             lessDeadlyGame
           })
           : [];
-      if (virtualBots && recoveryRule === "reboot_tokens" && flagZero) {
-        const entryBoard = scenarioBoardRects.find((rect) => pointOnRect(flagZero, rect));
-        if (entryBoard) {
-          rebootTokens = rebootTokens.filter((token) => token.boardIndex !== entryBoard.index);
-        }
+      if (recoveryRule === "reboot_tokens" && rebootTokens.length < scenarioBoardRects.length) {
+        sequenceFailureCategory = "reboot-layout";
+        sequenceFailureReason = `reboot token placement could not provide ${preferences.playerCount}-robot safe capacity on every board`;
+        sequence = null;
+        break;
       }
       if (recoveryRule === "home_reboot") {
         const dockCountWithStarts = scenarioDockPlacements.filter((dockPlacement) => (
@@ -19501,7 +20068,24 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
           fullCourseAnalyzer: typeof shouldStopDuringAnalysis === "function"
             ? analyzeFullCourseCooperativeSafe
             : analyzeFullCourse,
-          cooperativeYield: typeof shouldStopDuringAnalysis === "function" ? nextFrame : null,
+          cooperativeYield: typeof shouldStopDuringAnalysis === "function"
+            ? async (progress) => {
+              const now = generationNow();
+              if (
+                typeof onCooperativeProgress === "function" &&
+                now - lastCooperativeRouteProgressDisplayAt >= GENERATION_ROUTE_PROGRESS_DISPLAY_INTERVAL_MS
+              ) {
+                lastCooperativeRouteProgressDisplayAt = now;
+                onCooperativeProgress(
+                  formatCooperativeRouteProgressStage(progress),
+                  evaluationsUsed,
+                  generationStageContext
+                );
+              }
+              await nextFrame();
+            }
+            : null,
+          cooperativeStage: typeof shouldStopDuringAnalysis === "function" ? reportStage : null,
           shouldStopRequested: typeof shouldStopDuringAnalysis === "function"
             ? shouldStopDuringAnalysis
             : () => false,
@@ -19913,6 +20497,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
           subsidizedStarts: effectiveVariantBundle.subsidizedStarts
         });
       let pruningChanged = false;
+      await reportStage(`Checking removable docks — pass ${pass + 1} / 4`, evaluationsUsed);
       const prunedDocks = pruneUnusedDockPlacements(
         scenarioDockPlacements,
         pieceMap,
@@ -19925,6 +20510,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         pruningChanged = true;
       }
 
+      await reportStage(`Checking removable boards — pass ${pass + 1} / 4`, evaluationsUsed);
       const protectedSandwichBoards = sandwichedDock
         ? getProtectedSandwichBoardIndices(
           scenarioBoardPlacements,
@@ -19947,6 +20533,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         pruningChanged = true;
       }
 
+      await reportStage(`Checking removable overlays — pass ${pass + 1} / 4`, evaluationsUsed);
       const prunedOverlays = pruneIrrelevantOverlayPlacements(
         scenarioOverlayPlacements,
         pieceMap,
@@ -19960,6 +20547,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         pruningChanged = true;
       }
 
+      await reportStage(`Cleanup pass ${pass + 1} / 4 complete`, evaluationsUsed);
       if (pruningChanged) {
         continue;
       }
@@ -20050,6 +20638,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     // Route cleanup may have removed unused boards, docks, or overlays after the
     // pre-route checkpoint prediction. Refresh the retained stage diagnostics so
     // the accepted scenario reports guidance for the construction it actually uses.
+    await reportStage("Recomputing retained course guidance", evaluationsUsed);
     boardsKnownGuidance = predictConstructionGuidanceStage(
       assets.constructionGuidance,
       "boardsKnown",
@@ -20063,6 +20652,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         overlayPlacements: scenarioOverlayPlacements
       }
     );
+    await reportStage("Recomputing retained checkpoint guidance", evaluationsUsed);
     checkpointsKnownGuidance = predictConstructionGuidanceStage(
       assets.constructionGuidance,
       "checkpointsKnown",
@@ -20097,6 +20687,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       tileMap: scenarioTileMap,
       goalTileMap
     });
+    await reportStage("Final classification complete — preparing course result", evaluationsUsed);
     if (extraDocksRequestMismatch) {
       metrics = {
         ...metrics,
@@ -20175,6 +20766,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       otherBlockedIndices: [...otherBlockedIndices].sort((left, right) => left - right)
     };
 
+    await reportStage("Finalizing course details", evaluationsUsed);
     scenarioPlacements = [
       ...scenarioBoardPlacements,
       ...scenarioDockPlacements,
@@ -20827,6 +21419,9 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
 async function generateScenarioForPreferences(assets, preferences, options = {}) {
   const generationMode = normalizeGenerationMode(preferences.generationMode);
   const generationProfile = getGenerationModeProfile({ generationMode });
+  const acceptableCandidateTarget = Math.max(1, Math.floor(
+    Number(options.acceptableCandidateTarget ?? generationProfile.acceptableCandidateTarget) || 1
+  ));
   const maxAttempts = options.maxAttempts ?? generationProfile.maxAttempts;
   const emergencyAttemptReserve = Math.max(0, Math.floor(
     Number(options.emergencyAttemptReserve) || 0
@@ -20835,6 +21430,12 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
   const softExpansionBudget = options.softExpansionBudget ?? generationProfile.softExpansionBudget;
   const softBudgetMinAttempts = options.softBudgetMinAttempts ?? generationProfile.softBudgetMinAttempts;
   const onProgress = options.onProgress ?? null;
+  const onCooperativeProgress = typeof options.onCooperativeProgress === "function"
+    ? options.onCooperativeProgress
+    : null;
+  const onRetainableCandidate = typeof options.onRetainableCandidate === "function"
+    ? options.onRetainableCandidate
+    : null;
   const shouldStopRequested = typeof options.shouldStopRequested === "function"
     ? options.shouldStopRequested
     : () => false;
@@ -20857,6 +21458,9 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
     rejectionSummary: null,
     generationMode,
     generationModeLabel: formatGenerationModeLabel(generationMode),
+    acceptableCandidateTarget,
+    acceptableCandidatesFound: 0,
+    acceptableCandidateScores: [],
     maxAttempts,
     emergencyAttemptReserve,
     emergencyActivated: false,
@@ -20932,6 +21536,9 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
       : 1;
   generationDiagnostics.searchProfile.devRouteModelOverrideActive =
     diagnosticsDevRouteModelOverrideActive;
+  const acceptableCandidates = [];
+  let bestAcceptableScenario = null;
+  let bestAcceptableScore = Infinity;
   let bestScenario = null;
   let bestExtraDocksNearMissScenario = null;
   let crashedAttempts = 0;
@@ -20959,6 +21566,10 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
     generationDiagnostics.rejectionSummary = summarizeGenerationRejectionEvents(
       generationDiagnostics.rejectionEvents
     );
+    generationDiagnostics.acceptableCandidatesFound = acceptableCandidates.length;
+    generationDiagnostics.acceptableCandidateScores = acceptableCandidates.map((candidate) => (
+      Number(getAcceptableScenarioScore(candidate).toFixed(2))
+    ));
     scenario.generationDiagnostics = {
       ...generationDiagnostics,
       attempts: generationDiagnostics.attempts.map((entry) => ({
@@ -21088,7 +21699,21 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
           const work = getAnalysisTelemetrySnapshotSafe();
           return (work.totalExpansions ?? 0) >= softExpansionBudget;
         },
-        shouldStopRequested
+        shouldStopRequested,
+        onCooperativeProgress
+          ? (stage, localEvaluations = 1, stageContext = null) => {
+            const visibleAttempt = Math.min(
+              progressMaxAttempts,
+              attempt + Math.max(1, localEvaluations)
+            );
+            onCooperativeProgress(
+              visibleAttempt,
+              progressMaxAttempts,
+              stage,
+              stageContext
+            );
+          }
+          : null
       );
     } catch (error) {
       if (error?.code === "ANALYSIS_STOP_REQUESTED" && shouldStopRequested()) {
@@ -21205,24 +21830,46 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
       bestScenario = scenario;
     }
 
+    if (scenario.metrics.acceptable) {
+      const acceptableScore = getAcceptableScenarioScore(scenario);
+      acceptableCandidates.push(scenario);
+      generationDiagnostics.acceptableCandidatesFound = acceptableCandidates.length;
+      generationDiagnostics.acceptableCandidateScores = acceptableCandidates.map((candidate) => (
+        Number(getAcceptableScenarioScore(candidate).toFixed(2))
+      ));
+      if (acceptableScore < bestAcceptableScore) {
+        bestAcceptableScenario = scenario;
+        bestAcceptableScore = acceptableScore;
+      }
+      if (onRetainableCandidate) {
+        await onRetainableCandidate({
+          found: acceptableCandidates.length,
+          target: acceptableCandidateTarget,
+          bestScore: bestAcceptableScore
+        });
+      }
+    }
+
     if (shouldStopRequested()) {
       terminationReason = "user-best-so-far";
       break;
     }
 
-    if (scenario.metrics.acceptable) {
+    if (acceptableCandidates.length >= acceptableCandidateTarget) {
       terminationReason = "accepted";
-      scenario.generationBestMatch = false;
-      scenario.generationTerminationReason = terminationReason;
-      attachDiagnostics(scenario);
+      const selectedScenario = bestAcceptableScenario ?? scenario;
+      selectedScenario.generationBestMatch = false;
+      selectedScenario.generationTerminationReason = terminationReason;
+      selectedScenario.attempts = attempt;
+      attachDiagnostics(selectedScenario);
       return {
-        scenario,
+        scenario: selectedScenario,
         attemptsUsed: attempt,
         crashedAttempts,
         lastAttemptError,
         accepted: true,
         terminationReason,
-        generationDiagnostics: scenario.generationDiagnostics
+        generationDiagnostics: selectedScenario.generationDiagnostics
       };
     }
 
@@ -21246,6 +21893,12 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
     terminationReason = attempt >= effectiveMaxAttempts
       ? (emergencyActivated ? "emergency-attempt-limit" : "attempt-limit")
       : "search-ended";
+  }
+
+  if (terminationReason === "user-best-so-far") {
+    bestScenario = bestAcceptableScenario;
+  } else if (bestAcceptableScenario) {
+    bestScenario = bestAcceptableScenario;
   }
 
   if (
@@ -21704,6 +22357,7 @@ function buildCalibrationConstructionSnapshot({
       length: preferences.length ?? null,
       recoveryRule: preferences.recoveryRule ?? null,
       generationMode: preferences.generationMode ?? null,
+      boardSpread: normalizeBoardSpread(preferences.boardSpread),
       guidanceStrength: getConstructionGuidanceStrength(preferences),
       calibrationBoardOverlayCount: preferences.calibrationBoardOverlayCount != null &&
         Number.isInteger(Number(preferences.calibrationBoardOverlayCount))
@@ -21814,7 +22468,10 @@ export function describeCalibrationInventory(assets, requestedExpansionIds = nul
     overlayBoardIds: overlayIds.filter((id) => !isMiniOverlayPiece(pieceMap[id])),
     overlayTileIds: overlayIds.filter((id) => isMiniOverlayPiece(pieceMap[id])),
     physicalBoardCount: countPhysicalBoards(mainBoardIds, pieceMap),
-    maxBoardCount: Math.min(hasLargeBoards ? 4 : 6, countPhysicalBoards(mainBoardIds, pieceMap)),
+    // Calibration inventory reports physical sampling capacity, not production
+    // eligibility for every requested length. The runner restricts fifth and sixth
+    // large boards to explicit Epic observations.
+    maxBoardCount: Math.min(6, countPhysicalBoards(mainBoardIds, pieceMap)),
     maxSingleDockStartCount: dockIds.reduce((maximum, dockId) => (
       Math.max(maximum, pieceMap[dockId]?.starts?.length ?? 0)
     ), 0),
@@ -21845,6 +22502,7 @@ export async function generateCalibrationObservation(assets, options = {}) {
   const difficulty = DIAGNOSTIC_DIFFICULTIES.includes(options.difficulty) ? options.difficulty : "moderate";
   const length = DIAGNOSTIC_LENGTHS.includes(options.length) ? options.length : "moderate";
   const generationMode = normalizeGenerationMode(options.generationMode ?? "balanced");
+  const boardSpread = normalizeBoardSpread(options.boardSpread);
   const overlayMode = normalizeOverlayMode(options.overlayMode ?? OVERLAY_MODES.no);
   const forcedVariantIds = Array.isArray(options.forcedVariantIds) ? options.forcedVariantIds : [];
   const selectedExpansions = Object.fromEntries(inventory.expansionIds.map((id) => [id, true]));
@@ -21853,6 +22511,7 @@ export async function generateCalibrationObservation(assets, options = {}) {
     difficulty,
     length,
     generationMode,
+    boardSpread,
     overlayMode,
     selectedExpansions,
     allowedVariantRules: buildCalibrationVariantStates(forcedVariantIds),
@@ -21990,6 +22649,9 @@ function analyzeCalibrationPlacements(assets, sourceScenario, placements, option
   const rebootTokens = recoveryRule === "reboot_tokens"
     ? placeRebootTokens(boardRects, tileMap, checkpoints, playerCount)
     : [];
+  if (recoveryRule === "reboot_tokens" && rebootTokens.length < boardRects.length) {
+    return null;
+  }
   const baseOptions = applyVariantAnalysisOptions({
     ...getRouteAnalysisVariantOptions({
       ...(sourceScenario.preferences ?? {}),
@@ -22102,7 +22764,9 @@ async function start() {
   const preferences = getPreferencesFromControls();
   const generationProfile = getGenerationModeProfile(preferences);
   const maxAttempts = generationProfile.maxAttempts;
+  const generationUiStartedAt = generationNow();
   generationStopRequested = false;
+  generationHasRetainableCandidate = false;
   setGenerationStopControlState(false);
   isGenerating = true;
 
@@ -22115,7 +22779,10 @@ async function start() {
         attempt: 1,
         maxAttempts,
         stage: "Loading course assets",
-        preferences
+        preferences,
+        generationStartedAt: generationUiStartedAt,
+        acceptableCandidateTarget: generationProfile.acceptableCandidateTarget,
+        acceptableCandidatesFound: 0
       }
     );
     await nextFrame();
@@ -22142,6 +22809,24 @@ async function start() {
         maxAttempts,
         emergencyAttemptReserve: GENERATION_EMERGENCY_ATTEMPT_RESERVE,
         shouldStopRequested: () => generationStopRequested,
+        onRetainableCandidate: async ({ found, target }) => {
+          setGenerationRetainedCandidateProgress(found, target);
+          await nextFrame();
+          lastGenerationUiYieldAt = generationNow();
+        },
+        onCooperativeProgress: (attempt, maxAttempts, stage = "", stageContext = null) => {
+          setGeneratingOverlay(
+            true,
+            "",
+            {
+              attempt,
+              maxAttempts,
+              stage,
+              preferences,
+              stageContext
+            }
+          );
+        },
         onProgress: async (attempt, maxAttempts, stage = "", stageContext = null) => {
           setGeneratingOverlay(
             true,
@@ -22213,6 +22898,7 @@ async function start() {
     isGenerating = false;
     setGeneratingOverlay(false);
     generationStopRequested = false;
+    generationHasRetainableCandidate = false;
     setGenerationStopControlState(false);
   }
 }
@@ -22417,6 +23103,11 @@ if (typeof document !== "undefined") {
 
     if (button.dataset.unavailableReason) {
       showToast(button.dataset.unavailableReason);
+      return;
+    }
+
+    if (button.dataset.boardSpreadControl) {
+      cycleBoardSpreadControl();
       return;
     }
 
