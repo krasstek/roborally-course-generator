@@ -829,7 +829,11 @@ const ROUTE_PAIR_CACHE_LIMIT = 2500;
 
 const ANALYSIS_TELEMETRY_MAX_SEARCHES = 5000;
 const ANALYSIS_TELEMETRY = {
-  routeSearches: []
+  routeSearches: [],
+  cooperativeIteratorSlices: 0,
+  cooperativeIteratorWorkMs: 0,
+  cooperativeBrowserYields: 0,
+  cooperativeMaxIteratorSliceMs: 0
 };
 const DYNAMIC_ARCHIVE_CACHE_TELEMETRY = {
   requests: 0,
@@ -864,6 +868,10 @@ function analysisTelemetryNow() {
 
 export function resetAnalysisTelemetry() {
   ANALYSIS_TELEMETRY.routeSearches.length = 0;
+  ANALYSIS_TELEMETRY.cooperativeIteratorSlices = 0;
+  ANALYSIS_TELEMETRY.cooperativeIteratorWorkMs = 0;
+  ANALYSIS_TELEMETRY.cooperativeBrowserYields = 0;
+  ANALYSIS_TELEMETRY.cooperativeMaxIteratorSliceMs = 0;
   DYNAMIC_ARCHIVE_CACHE_TELEMETRY.requests = 0;
   DYNAMIC_ARCHIVE_CACHE_TELEMETRY.hits = 0;
   DYNAMIC_ARCHIVE_CACHE_TELEMETRY.misses = 0;
@@ -1041,8 +1049,23 @@ export function getAnalysisTelemetrySnapshot() {
     replayExpansions: 0,
     savedRootExpansions: 0
   };
+  const cooperativeSearchTotals = {
+    searches: 0,
+    slices: 0,
+    pausedMs: 0,
+    maxSliceWorkMs: 0
+  };
 
   routeSearches.forEach((entry) => {
+    if ((entry.cooperativeSlices ?? 0) > 0) {
+      cooperativeSearchTotals.searches += 1;
+      cooperativeSearchTotals.slices += entry.cooperativeSlices ?? 0;
+      cooperativeSearchTotals.pausedMs += entry.cooperativePausedMs ?? 0;
+      cooperativeSearchTotals.maxSliceWorkMs = Math.max(
+        cooperativeSearchTotals.maxSliceWorkMs,
+        entry.cooperativeMaxSliceWorkMs ?? 0
+      );
+    }
     if (entry.resumedExhaustive) {
       resumeTotals.searches += 1;
       resumeTotals.checkpointExpansions += entry.resumeCheckpointExpansions ?? 0;
@@ -1105,6 +1128,9 @@ export function getAnalysisTelemetrySnapshot() {
     );
   });
 
+  cooperativeSearchTotals.pausedMs = Number(cooperativeSearchTotals.pausedMs.toFixed(2));
+  cooperativeSearchTotals.maxSliceWorkMs = Number(cooperativeSearchTotals.maxSliceWorkMs.toFixed(2));
+
   return {
     routeSearches,
     routeSearchCount: routeSearches.length,
@@ -1117,6 +1143,13 @@ export function getAnalysisTelemetrySnapshot() {
     contextualProfileTotals,
     exhaustiveContextualProfileTotals,
     resumeTotals,
+    cooperativeSearchTotals,
+    cooperativeIteratorTotals: {
+      slices: ANALYSIS_TELEMETRY.cooperativeIteratorSlices,
+      workMs: Number(ANALYSIS_TELEMETRY.cooperativeIteratorWorkMs.toFixed(2)),
+      browserYields: ANALYSIS_TELEMETRY.cooperativeBrowserYields,
+      maxSliceMs: Number(ANALYSIS_TELEMETRY.cooperativeMaxIteratorSliceMs.toFixed(2))
+    },
     physicalCacheTotals: {
       hits: physicalCacheHits,
       misses: physicalCacheMisses
@@ -1185,6 +1218,9 @@ function recordRouteSearchTelemetry(kind, startedAt, details = {}) {
     resumeBoundedEndExpansions: details.resumeBoundedEndExpansions ?? 0,
     resumeReplayExpansions: details.resumeReplayExpansions ?? 0,
     resumeSavedRootExpansions: details.resumeSavedRootExpansions ?? 0,
+    cooperativeSlices: details.cooperativeSlices ?? 0,
+    cooperativePausedMs: details.cooperativePausedMs ?? 0,
+    cooperativeMaxSliceWorkMs: details.cooperativeMaxSliceWorkMs ?? 0,
     contextualProfile: details.contextualProfile
       ? { ...details.contextualProfile }
       : null
@@ -14319,13 +14355,31 @@ function getPhysicalTimingTemplateStateKey(
 // The returned action traces are *templates*, never player-visible routes: every
 // concrete lineage must pass rebaseContextualCachedRoute(), which replays exact
 // rolling two-program depletion and the Energy economy before the trace can be used.
-function enumeratePhysicalTimingLegTemplates(
+function runGeneratorSynchronously(iterator) {
+  let step = iterator.next();
+  while (!step.done) step = iterator.next();
+  return step.value;
+}
+
+function* enumeratePhysicalTimingLegTemplatesSteps(
   tileMap,
   context,
   goal,
   options = {}
 ) {
   const telemetryStartedAt = analysisTelemetryNow();
+  const cooperativeSearchSlices = Boolean(options.contextualCooperativeSearchSlices);
+  const requestedCooperativeSlicePops = Number(
+    options.contextualCooperativeSearchSlicePops
+  );
+  const cooperativeSlicePops = Number.isFinite(requestedCooperativeSlicePops)
+    ? Math.max(1, Math.floor(requestedCooperativeSlicePops))
+    : 24;
+  let nextCooperativeSlicePop = cooperativeSlicePops;
+  let cooperativeSliceCount = 0;
+  let cooperativePausedMs = 0;
+  let cooperativeMaxSliceWorkMs = 0;
+  let cooperativeSliceWorkStartedAt = telemetryStartedAt;
   // v48zo keeps the v48zn targeted profiler available for explicit diagnostics,
   // but ordinary generation leaves contextualDetailedProfiling off so these
   // performance.now() calls do not tax the speed benchmark.
@@ -14810,6 +14864,29 @@ function enumeratePhysicalTimingLegTemplates(
       (profilePoppedNodes % profileSampleInterval === 0);
     if (profileSampleActive) profileTimedNodes += 1;
     profilePoppedNodes += 1;
+    if (
+      cooperativeSearchSlices &&
+      profilePoppedNodes >= nextCooperativeSlicePop
+    ) {
+      const suspendedAt = analysisTelemetryNow();
+      cooperativeMaxSliceWorkMs = Math.max(
+        cooperativeMaxSliceWorkMs,
+        suspendedAt - cooperativeSliceWorkStartedAt
+      );
+      cooperativeSliceCount += 1;
+      nextCooperativeSlicePop = profilePoppedNodes + cooperativeSlicePops;
+      yield {
+        phase: "route-search-slice",
+        searchKind: resumedExhaustive
+          ? (options.contextualResumeTelemetryKind ?? options.contextualTelemetryKind ?? "estimated-physical-leg-exhaustive")
+          : (options.contextualTelemetryKind ?? "contextual-physical-template"),
+        expansions: workExpansions,
+        poppedNodes: profilePoppedNodes
+      };
+      const resumedAt = analysisTelemetryNow();
+      cooperativePausedMs += Math.max(0, resumedAt - suspendedAt);
+      cooperativeSliceWorkStartedAt = resumedAt;
+    }
 
     let blockStartedAt = profileNow();
     const current = queue.pop();
@@ -15450,12 +15527,18 @@ function enumeratePhysicalTimingLegTemplates(
       !Number.isFinite(activeMaxExpansions) &&
       !Number.isFinite(activeMaxActions)
   };
+  const routeSearchFinishedAt = analysisTelemetryNow();
+  cooperativeMaxSliceWorkMs = Math.max(
+    cooperativeMaxSliceWorkMs,
+    routeSearchFinishedAt - cooperativeSliceWorkStartedAt
+  );
   recordRouteSearchTelemetry(
     resumedExhaustive
       ? (options.contextualResumeTelemetryKind ?? options.contextualTelemetryKind ?? "estimated-physical-leg-exhaustive")
       : (options.contextualTelemetryKind ?? "contextual-physical-template"),
     telemetryStartedAt,
     {
+      durationMs: Math.max(0, routeSearchFinishedAt - telemetryStartedAt - cooperativePausedMs),
       expansions: reportedExpansions,
       maxExpansions: activeMaxExpansions,
       completedRoutes: completed.length,
@@ -15475,6 +15558,9 @@ function enumeratePhysicalTimingLegTemplates(
       resumeSavedRootExpansions: resumedExhaustive
         ? resumeCheckpointExpansions
         : 0,
+      cooperativeSlices: cooperativeSliceCount,
+      cooperativePausedMs: Number(cooperativePausedMs.toFixed(2)),
+      cooperativeMaxSliceWorkMs: Number(cooperativeMaxSliceWorkMs.toFixed(2)),
       contextualProfile: profile,
       start: {
         x: context.state.x,
@@ -15485,6 +15571,17 @@ function enumeratePhysicalTimingLegTemplates(
     }
   );
   return selected;
+}
+
+function enumeratePhysicalTimingLegTemplates(
+  tileMap,
+  context,
+  goal,
+  options = {}
+) {
+  return runGeneratorSynchronously(
+    enumeratePhysicalTimingLegTemplatesSteps(tileMap, context, goal, options)
+  );
 }
 
 function enumerateContextualLegRoutes(
@@ -18166,7 +18263,7 @@ function* analyzeFullCourseContextualSteps(
     `skip${[...excludedPathKeys].sort().join(",") || "-"}`
   ].join("|");
 
-  const getEstimatedLegRoute = (
+  function* getEstimatedLegRoute(
     context,
     legIndex,
     start,
@@ -18176,7 +18273,7 @@ function* analyzeFullCourseContextualSteps(
     excludedPathKeys = [],
     searchPurpose = "primary",
     searchEffortScale = 1
-  ) => {
+  ) {
     const dynamicGoal = dynamicGoals[legIndex] ?? null;
     const namespace = options.recoveryRule === "home_reboot"
       ? `start${startIndex}`
@@ -18261,15 +18358,15 @@ function* analyzeFullCourseContextualSteps(
       excludedPathKeys.length + 1,
       primaryWitnessRoutes
     );
-    const runEstimate = (
+    function* runEstimate(
       maxExpansions,
       maxActions,
       telemetryKind,
       resumeTelemetryKind = null,
       resumeExhaustiveOnMiss = false
-    ) => {
+    ) {
       estimatedLegSearches += 1;
-      return enumeratePhysicalTimingLegTemplates(
+      return yield* enumeratePhysicalTimingLegTemplatesSteps(
         tileMap,
         searchContext,
         flags[legIndex],
@@ -18288,10 +18385,13 @@ function* analyzeFullCourseContextualSteps(
           contextualForbiddenFirstActions: [...forbiddenFirstActions],
           contextualTelemetryKind: telemetryKind,
           contextualResumeTelemetryKind: resumeTelemetryKind,
-          contextualResumeExhaustiveOnMiss: Boolean(resumeExhaustiveOnMiss)
+          contextualResumeExhaustiveOnMiss: Boolean(resumeExhaustiveOnMiss),
+          contextualCooperativeSearchSlices: Boolean(options.contextualCooperativeSearchSlices),
+          contextualCooperativeSearchSlicePops:
+            options.contextualCooperativeSearchSlicePops
         }
       );
-    };
+    }
 
     // Fast bounded estimate first. For primary routing/repair a cap or horizon is
     // never a failure verdict, so those searches widen to physical-graph exhaustion.
@@ -18327,7 +18427,7 @@ function* analyzeFullCourseContextualSteps(
     const exhaustiveTelemetryKind = forbiddenFirstActions.length
       ? "estimated-card-repair-leg-exhaustive"
       : "estimated-primary-leg-exhaustive";
-    let routes = runEstimate(
+    let routes = yield* runEstimate(
       nominalEstimateExpansions,
       nominalEstimateActions,
       boundedTelemetryKind,
@@ -18368,7 +18468,7 @@ function* analyzeFullCourseContextualSteps(
         estimatedLegWidenedSearches += 1;
       }
       estimatedLegFreshExhaustiveFallbacks += 1;
-      routes = runEstimate(
+      routes = yield* runEstimate(
         Infinity,
         Infinity,
         exhaustiveTelemetryKind
@@ -18390,7 +18490,7 @@ function* analyzeFullCourseContextualSteps(
       estimatedLegCache.set(cacheKey, retainedRoutes);
     }
     return route;
-  };
+  }
 
   const makeInitialStartContext = (start) => ({
     state: {
@@ -18649,17 +18749,17 @@ function* analyzeFullCourseContextualSteps(
     };
   };
 
-  const buildEstimatedCourseFrom = (
+  function* buildEstimatedCourseFrom(
     existingLegs,
     startLegIndex,
     physicalContext,
     start,
     startIndex
-  ) => {
+  ) {
     const legs = [...existingLegs];
     let context = { ...physicalContext, state: cloneState(physicalContext.state) };
     for (let legIndex = startLegIndex; legIndex < flags.length; legIndex += 1) {
-      const route = getEstimatedLegRoute(
+      const route = yield* getEstimatedLegRoute(
         context,
         legIndex,
         start,
@@ -18679,7 +18779,7 @@ function* analyzeFullCourseContextualSteps(
       context = getPhysicalContextAfterEstimatedLeg(route, context);
     }
     return { complete: true, legs, context };
-  };
+  }
 
   const getLegRoutes = (
     context,
@@ -19480,13 +19580,13 @@ function* analyzeFullCourseContextualSteps(
       legs.slice(0, legIndex).flatMap((leg) => leg?.localActionIds || [])
     );
 
-    const findAlternativeEstimatedCourse = (
+    function* findAlternativeEstimatedCourse(
       currentLegs,
       startAtLeg,
       start,
       startIndex,
       initialContext
-    ) => {
+    ) {
       const highestLeg = Math.min(
         Math.max(0, Math.floor(Number(startAtLeg) || 0)),
         Math.max(0, currentLegs.length - 1)
@@ -19516,7 +19616,7 @@ function* analyzeFullCourseContextualSteps(
         if (currentRoute) excludedPaths.add(getEstimatedRouteIdentity(currentRoute));
 
         while (true) {
-          const alternate = getEstimatedLegRoute(
+          const alternate = yield* getEstimatedLegRoute(
             legStartContext,
             legIndex,
             start,
@@ -19535,7 +19635,7 @@ function* analyzeFullCourseContextualSteps(
             alternate,
             legStartContext
           );
-          const rebuilt = buildEstimatedCourseFrom(
+          const rebuilt = yield* buildEstimatedCourseFrom(
             [...prefixLegs, alternate],
             legIndex + 1,
             afterAlternate,
@@ -19550,20 +19650,21 @@ function* analyzeFullCourseContextualSteps(
           // course could not be estimated. Exclude only this whole leg path for
           // this exact prefix; do not forbid its first action globally.
           excludedPaths.add(alternatePathKey);
-          const deeper = rebuilt.legs.length
-            ? findAlternativeEstimatedCourse(
+          let deeper = null;
+          if (rebuilt.legs.length) {
+            deeper = yield* findAlternativeEstimatedCourse(
               rebuilt.legs,
               rebuilt.failedLegIndex - 1,
               start,
               startIndex,
               initialContext
-            )
-            : null;
+            );
+          }
           if (deeper?.complete) return deeper;
         }
       }
       return null;
-    };
+    }
 
     // If an exact card failure cannot be repaired from the impossible register
     // itself, move the decision point backward through the existing estimated
@@ -19571,14 +19672,14 @@ function* analyzeFullCourseContextualSteps(
     // lead into the dead card prefix, then let the uncapped-on-miss physical
     // estimator rebuild the rest of that leg and all downstream legs. This is
     // card-constraint backtracking, not a capacity rescue.
-    const backtrackEstimatedCourseFromPrefix = (
+    function* backtrackEstimatedCourseFromPrefix(
       currentLegs,
       failureLegIndex,
       localFailureIndex,
       start,
       startIndex,
       initialContext
-    ) => {
+    ) {
       for (let legIndex = failureLegIndex; legIndex >= 0; legIndex -= 1) {
         const leg = currentLegs[legIndex];
         const actions = leg?.localActionIds || [];
@@ -19632,7 +19733,7 @@ function* analyzeFullCourseContextualSteps(
             state: pivotState,
             absoluteActions: pivotAbsoluteActions
           };
-          const suffix = getEstimatedLegRoute(
+          const suffix = yield* getEstimatedLegRoute(
             pivotContext,
             legIndex,
             start,
@@ -19658,7 +19759,7 @@ function* analyzeFullCourseContextualSteps(
             repairedLeg,
             legStartContext
           );
-          let rebuilt = buildEstimatedCourseFrom(
+          let rebuilt = yield* buildEstimatedCourseFrom(
             [...prefixLegs, repairedLeg],
             legIndex + 1,
             afterRepairedLeg,
@@ -19666,7 +19767,7 @@ function* analyzeFullCourseContextualSteps(
             startIndex
           );
           if (!rebuilt.complete && rebuilt.legs.length) {
-            const alternative = findAlternativeEstimatedCourse(
+            const alternative = yield* findAlternativeEstimatedCourse(
               rebuilt.legs,
               rebuilt.failedLegIndex - 1,
               start,
@@ -19682,7 +19783,7 @@ function* analyzeFullCourseContextualSteps(
         }
       }
       return null;
-    };
+    }
 
     // Milestone 1: finish physical estimates for every start before any start is
     // judged by card supply. Later legs automatically share the estimate cache by
@@ -19693,7 +19794,7 @@ function* analyzeFullCourseContextualSteps(
         ? start.analysisIndex
         : index;
       const initialContext = makeInitialStartContext(start);
-      let estimated = buildEstimatedCourseFrom(
+      let estimated = yield* buildEstimatedCourseFrom(
         [],
         0,
         initialContext,
@@ -19701,7 +19802,7 @@ function* analyzeFullCourseContextualSteps(
         sourceIndex
       );
       if (!estimated.complete && estimated.legs.length) {
-        const alternative = findAlternativeEstimatedCourse(
+        const alternative = yield* findAlternativeEstimatedCourse(
           estimated.legs,
           estimated.failedLegIndex - 1,
           start,
@@ -19815,20 +19916,23 @@ function* analyzeFullCourseContextualSteps(
             0,
             (estimatedLegs[lastLegIndex]?.localActionIds?.length ?? 1) - 1
           );
-          const alternative = backtrackEstimatedCourseFromPrefix(
+          let alternative = yield* backtrackEstimatedCourseFromPrefix(
             estimatedLegs,
             lastLegIndex,
             lastLocalIndex + 1,
             start,
             sourceIndex,
             initialContext
-          ) ?? findAlternativeEstimatedCourse(
-            estimatedLegs,
-            lastLegIndex,
-            start,
-            sourceIndex,
-            initialContext
           );
+          if (alternative == null) {
+            alternative = yield* findAlternativeEstimatedCourse(
+              estimatedLegs,
+              lastLegIndex,
+              start,
+              sourceIndex,
+              initialContext
+            );
+          }
           if (!alternative?.complete) break;
           estimatedLegs = alternative.legs;
           usedRepair = true;
@@ -19948,7 +20052,7 @@ function* analyzeFullCourseContextualSteps(
           approximateCurrentAgainUsed: exactFailureGuidance.currentAgainUsed,
           approximatePreviousActionId: exactFailureGuidance.previousActionId
         };
-        const suffix = getEstimatedLegRoute(
+        const suffix = yield* getEstimatedLegRoute(
           failureContext,
           failureLegIndex,
           start,
@@ -19973,7 +20077,7 @@ function* analyzeFullCourseContextualSteps(
             repairedLeg,
             legStartContext
           );
-          const rebuilt = buildEstimatedCourseFrom(
+          const rebuilt = yield* buildEstimatedCourseFrom(
             [...prefixLegs, repairedLeg],
             failureLegIndex + 1,
             afterRepairedLeg,
@@ -19984,7 +20088,7 @@ function* analyzeFullCourseContextualSteps(
             repairedCourse = rebuilt;
           } else {
             cardRepairDownstreamRebuildFailures += 1;
-            repairedCourse = findAlternativeEstimatedCourse(
+            repairedCourse = yield* findAlternativeEstimatedCourse(
               rebuilt.legs,
               rebuilt.failedLegIndex - 1,
               start,
@@ -19994,20 +20098,23 @@ function* analyzeFullCourseContextualSteps(
           }
         } else {
           cardRepairNoSuffix += 1;
-          repairedCourse = backtrackEstimatedCourseFromPrefix(
+          repairedCourse = yield* backtrackEstimatedCourseFromPrefix(
             estimatedLegs,
             failureLegIndex,
             localFailureIndex,
             start,
             sourceIndex,
             initialContext
-          ) ?? findAlternativeEstimatedCourse(
-            estimatedLegs,
-            failureLegIndex,
-            start,
-            sourceIndex,
-            initialContext
           );
+          if (repairedCourse == null) {
+            repairedCourse = yield* findAlternativeEstimatedCourse(
+              estimatedLegs,
+              failureLegIndex,
+              start,
+              sourceIndex,
+              initialContext
+            );
+          }
         }
 
         if (!repairedCourse?.complete) break;
@@ -20258,7 +20365,7 @@ function* analyzeFullCourseContextualSteps(
         // balance score, so this cleanly isolates traffic scoring from rerouting.
         if (!trafficAlternatesEnabled) break;
 
-        const fetchTrafficEstimatedLeg = (
+        function* fetchTrafficEstimatedLeg(
           context,
           legIndex,
           start,
@@ -20266,7 +20373,7 @@ function* analyzeFullCourseContextualSteps(
           startupSpinUp = false,
           excludedPathKeys = [],
           effortScale = 1
-        ) => {
+        ) {
           const dynamicGoal = dynamicGoals[legIndex] ?? null;
           const namespace = options.recoveryRule === "home_reboot"
             ? `start${startIndex}`
@@ -20288,7 +20395,7 @@ function* analyzeFullCourseContextualSteps(
             return null;
           }
           const searchesBefore = estimatedLegSearches;
-          const route = getEstimatedLegRoute(
+          const route = yield* getEstimatedLegRoute(
             context,
             legIndex,
             start,
@@ -20304,16 +20411,16 @@ function* analyzeFullCourseContextualSteps(
           trafficAlternateNewSearches += spent;
           if (spent > 0 && !route) trafficAlternateSearchNoRoutes += 1;
           return route;
-        };
+        }
 
-        const buildTrafficCourseWithReplacement = (
+        function* buildTrafficCourseWithReplacement(
           baselineRoute,
           replacementLeg,
           replacementLegIndex,
           start,
           startIndex,
           parentEffortScale = 1
-        ) => {
+        ) {
           const baselineLegs = baselineRoute?.legRoutes || [];
           if (baselineLegs.length !== flags.length) return null;
           const initialContext = makeInitialStartContext(start);
@@ -20358,7 +20465,7 @@ function* analyzeFullCourseContextualSteps(
                 parentEffortScale,
                 getTrafficAlternateEffortScale(downstreamConfidence, options)
               );
-              nextLeg = fetchTrafficEstimatedLeg(
+              nextLeg = yield* fetchTrafficEstimatedLeg(
                 context,
                 legIndex,
                 start,
@@ -20377,7 +20484,7 @@ function* analyzeFullCourseContextualSteps(
           }
 
           return realizeTrafficEstimatedCourse(estimatedLegs, initialContext);
-        };
+        }
 
         for (const analysis of frozenStarts) {
           const baselineRoute = selectedRouteByIndex.get(analysis.index);
@@ -20520,12 +20627,12 @@ function* analyzeFullCourseContextualSteps(
             ));
             const attemptedLegIds = new Set([baselineLegId]);
 
-            const evaluateReplacement = (replacementLeg) => {
+            function* evaluateReplacement(replacementLeg) {
               if (!replacementLeg) return null;
               const replacementId = getEstimatedRouteIdentity(replacementLeg);
               if (attemptedLegIds.has(replacementId)) return null;
               attemptedLegIds.add(replacementId);
-              const realized = buildTrafficCourseWithReplacement(
+              const realized = yield* buildTrafficCourseWithReplacement(
                 baselineRoute,
                 replacementLeg,
                 legIndex,
@@ -20558,12 +20665,12 @@ function* analyzeFullCourseContextualSteps(
                 bestCandidateLegIndex = legIndex;
               }
               return gain;
-            };
+            }
 
             let cachedProbeBestGain = -Infinity;
             for (const cachedWitness of divergentCachedWitnesses) {
               trafficAlternateCachedWitnessChecks += 1;
-              const gain = evaluateReplacement(cachedWitness);
+              const gain = yield* evaluateReplacement(cachedWitness);
               if (Number.isFinite(gain)) cachedProbeBestGain = Math.max(cachedProbeBestGain, gain);
             }
 
@@ -20579,7 +20686,7 @@ function* analyzeFullCourseContextualSteps(
               epochNewSearches < trafficMaxNewSearchesPerEpoch
             ) {
               trafficAlternateEscalations += 1;
-              const alternate = fetchTrafficEstimatedLeg(
+              const alternate = yield* fetchTrafficEstimatedLeg(
                 legStartContext,
                 legIndex,
                 startEntry.start,
@@ -20588,7 +20695,7 @@ function* analyzeFullCourseContextualSteps(
                 [...attemptedLegIds],
                 demanded.effortScale
               );
-              evaluateReplacement(alternate);
+              yield* evaluateReplacement(alternate);
             }
           }
 
@@ -21339,7 +21446,19 @@ export async function analyzeFullCourseCooperative(tileMap, starts, flags, optio
   }
 
   const completedProgressCounts = new Map();
-  let step = iterator.next();
+  const advanceIterator = () => {
+    const sliceStartedAt = analysisTelemetryNow();
+    const nextStep = iterator.next();
+    const sliceMs = Math.max(0, analysisTelemetryNow() - sliceStartedAt);
+    ANALYSIS_TELEMETRY.cooperativeIteratorSlices += 1;
+    ANALYSIS_TELEMETRY.cooperativeIteratorWorkMs += sliceMs;
+    ANALYSIS_TELEMETRY.cooperativeMaxIteratorSliceMs = Math.max(
+      ANALYSIS_TELEMETRY.cooperativeMaxIteratorSliceMs,
+      sliceMs
+    );
+    return nextStep;
+  };
+  let step = advanceIterator();
   while (!step.done) {
     const progress = step.value ?? {};
     const progressKey = progress.phase === "later-leg-start"
@@ -21352,6 +21471,7 @@ export async function analyzeFullCourseCooperative(tileMap, starts, flags, optio
 
     const now = analysisTelemetryNow();
     if (cooperativeYield && now - lastBrowserYieldAt >= yieldIntervalMs) {
+      ANALYSIS_TELEMETRY.cooperativeBrowserYields += 1;
       await cooperativeYield({ ...progress, completedCount });
       lastBrowserYieldAt = analysisTelemetryNow();
     }
@@ -21361,7 +21481,7 @@ export async function analyzeFullCourseCooperative(tileMap, starts, flags, optio
       error.code = "ANALYSIS_STOP_REQUESTED";
       throw error;
     }
-    step = iterator.next();
+    step = advanceIterator();
   }
   return step.value;
 }

@@ -224,6 +224,25 @@ export function buildCourseNoteEvidence(scenario, fitNotes = []) {
   const averageLegPressure = average(rankedLegs.map((entry) => entry.pressure));
   const programmingPressure = scenario?.metrics?.programmingPressure || {};
   const checkpointPlacement = getCheckpointPlacementAdvisory(scenario);
+  const boardUseBoards = Array.isArray(scenario?.metrics?.meaningfulBoardUse?.boards)
+    ? scenario.metrics.meaningfulBoardUse.boards
+    : [];
+  const sandwichedMissingSideCount = scenario?.sandwichedDock
+    ? Number(scenario?.metrics?.sandwichedDockUse?.missingSideCount) || 0
+    : 0;
+  const zeroRouteInfluenceCount = scenario?.sandwichedDock
+    ? 0
+    : boardUseBoards.filter((board) => (
+      board?.weakUse && (Number(board?.uniqueRouteTiles) || 0) === 0
+    )).length;
+  const sandwichedMissingBoardIndices = new Set(
+    scenario?.metrics?.sandwichedDockUse?.missingSideBoardIndices ?? []
+  );
+  const weakTraversedCount = boardUseBoards.filter((board) => (
+    board?.weakUse &&
+    (Number(board?.uniqueRouteTiles) || 0) > 0 &&
+    !sandwichedMissingBoardIndices.has(board?.boardIndex)
+  )).length;
 
   return {
     fitNotes: [...fitNotes],
@@ -242,6 +261,11 @@ export function buildCourseNoteEvidence(scenario, fitNotes = []) {
     generationModeLabel: scenario?.generationDiagnostics?.generationModeLabel ?? formatGenerationModeForNotes(scenario?.preferences?.generationMode),
     generationModeProfile: scenario?.generationDiagnostics?.searchProfile ?? null,
     checkpointPlacement,
+    boardUse: {
+      zeroRouteInfluenceCount,
+      weakTraversedCount,
+      sandwichedMissingSideCount
+    },
     opening: {
       traffic: first.averageTrafficPenalty ?? 0,
       overlap: first.averageOverlapPenalty ?? 0,
@@ -401,6 +425,30 @@ export function buildCourseNoteConcepts(evidence) {
       evidence.checkpointPlacement.score ?? 6,
       "Checkpoint Pacing",
       evidence.checkpointPlacement.text
+    ));
+  }
+
+  const sandwichedMissingSideCount = Number(evidence.boardUse?.sandwichedMissingSideCount) || 0;
+  if (sandwichedMissingSideCount > 0) {
+    concepts.push(concept(
+      "sandwiched-side-use",
+      9.4,
+      "Sandwiched Dock Use",
+      sandwichedMissingSideCount === 1
+        ? "One side of the Sandwiched Dock has no checkpoints, so it is not part of the intended checkpoint progression and may see little direct race use. Its boards are kept because they preserve the sandwich and can still affect nearby play. You can omit them for table space, but doing so removes the intended Sandwiched Dock structure and may change the course."
+        : "The Sandwiched Dock sides have no checkpoints, so they are not part of the intended checkpoint progression and may see little direct race use. Their boards are kept because they preserve the sandwich and can still affect nearby play. You can omit them for table space, but doing so removes the intended Sandwiched Dock structure and may change the course."
+    ));
+  }
+
+  const zeroRouteInfluenceCount = Number(evidence.boardUse?.zeroRouteInfluenceCount) || 0;
+  if (zeroRouteInfluenceCount > 0) {
+    concepts.push(concept(
+      "indirect-board-use",
+      8.2 + Math.min(0.6, Math.max(0, zeroRouteInfluenceCount - 1) * 0.2),
+      "Board Use",
+      zeroRouteInfluenceCount === 1
+        ? "One board is unlikely to be traversed directly, but it still influences nearby play through hazards, alternate space, or the shape of the racing line. If table space is tight, you can omit it, though the course may play a little differently."
+        : "Some boards are unlikely to be traversed directly, but they still influence nearby play through hazards, alternate space, or the shape of the racing line. If table space is tight, you can omit them, though the course may play a little differently."
     ));
   }
 
@@ -634,7 +682,7 @@ export function renderCourseNotes(concepts, evidence, options = {}) {
 export function buildCourseNotesHtml(scenario, fitNotes = [], options = {}) {
   if (!scenario) return "";
 
-  const cacheKey = "player-facing-checkpoint-advisory-deadband-v47e";
+  const cacheKey = "player-facing-board-influence-v49k";
   let scenarioCache = notesCache.get(scenario);
   if (!scenarioCache) {
     scenarioCache = new Map();
