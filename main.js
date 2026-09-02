@@ -55,7 +55,7 @@ const versionedPath = (path) => `${path}${VERSION_SUFFIX}`;
 
 const [
   { render },
-  { analyzeCourse, analyzeFullCourse, analyzeFullCourseCooperative, analyzeFlagLeg, buildStartOccupancyMap, clearAnalysisCaches, evaluateFullCourseFocusPaymentCurveUnderOccupancy, evaluateRouteUpgradePotential, estimateInitialUpgradeOpportunitiesRemaining, getAnalysisTelemetrySnapshot, getCourseMaxEnergy, getCourseStartingEnergy, getCourseStartingUpgradeCards, getRouteEnergyEconomyConfig, getRouteEnergyGainUtility, getRouteMarginalEnergyUtility, getRouteUpgradePotential, recomputeFirstLegPressure, resetAnalysisTelemetry, ROUTE_ENERGY_ECONOMY_DEFAULTS, scoreFlagArea, summarizeDamageShadowForRoute, summarizeIntrinsicRouteForecastConfidence, summarizePowerUpOpportunityBenchmark, summarizeProgramSequencePressure, summarizePowerUpProgramFeasibility },
+  { ANALYZE_BUILD_ID, analyzeCourse, analyzeFullCourse, analyzeFullCourseCooperative, analyzeFlagLeg, buildStartOccupancyMap, clearAnalysisCaches, evaluateFullCourseFocusPaymentCurveUnderOccupancy, evaluateRouteUpgradePotential, estimateInitialUpgradeOpportunitiesRemaining, getAnalysisTelemetrySnapshot, getCourseMaxEnergy, getCourseStartingEnergy, getCourseStartingUpgradeCards, getRouteEnergyEconomyConfig, getRouteEnergyGainUtility, getRouteMarginalEnergyUtility, getRouteUpgradePotential, recomputeFirstLegPressure, resetAnalysisTelemetry, ROUTE_ENERGY_ECONOMY_DEFAULTS, scoreFlagArea, summarizeDamageShadowForRoute, summarizeIntrinsicRouteForecastConfidence, summarizePowerUpOpportunityBenchmark, summarizeProgramSequencePressure, summarizePowerUpProgramFeasibility },
   {
     buildMainFootprintTiles,
     buildResolvedMap,
@@ -108,6 +108,10 @@ const [
 // identifiers, not ordinary comments. They may appear in saved/debug output and
 // should only be renamed alongside an explicit migration or schema decision.
 
+const analyzeBuildIdSafe = typeof ANALYZE_BUILD_ID === "string" && ANALYZE_BUILD_ID
+  ? ANALYZE_BUILD_ID
+  : "pre-v49m/unknown";
+
 // Cache clearing is a performance optimization, not a correctness requirement.
 // Keep startup/generation working if the browser temporarily resolves an older
 // analyze.js module that does not expose this helper.
@@ -134,7 +138,7 @@ const getAnalysisTelemetrySnapshotSafe = typeof getAnalysisTelemetrySnapshot ===
     slowestSearch: null,
     totalsByKind: {},
     cooperativeSearchTotals: { searches: 0, slices: 0, pausedMs: 0, maxSliceWorkMs: 0 },
-    cooperativeIteratorTotals: { slices: 0, workMs: 0, browserYields: 0, maxSliceMs: 0 },
+    cooperativeIteratorTotals: { slices: 0, workMs: 0, browserYields: 0, browserPausedMs: 0, maxSliceMs: 0 },
     physicalCacheTotals: { hits: 0, misses: 0 },
     dynamicArchivePhysicalCacheTotals: null,
     cheapProgramAvailabilityTotals: null,
@@ -1486,6 +1490,18 @@ function nextFrame() {
     requestAnimationFrame(() => {
       window.setTimeout(resolve, 0);
     });
+  });
+}
+
+function nextEventLoopTurn() {
+  if (
+    typeof globalThis !== "undefined" &&
+    typeof globalThis.scheduler?.yield === "function"
+  ) {
+    return globalThis.scheduler.yield();
+  }
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, 0);
   });
 }
 
@@ -14057,8 +14073,10 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
       cooperativeYield: options.cooperativeYield,
       cooperativeYieldIntervalMs: options.cooperativeYieldIntervalMs,
       contextualCooperativeSearchSlices: Boolean(options.contextualCooperativeSearchSlices),
-      contextualCooperativeSearchSlicePops:
-        options.contextualCooperativeSearchSlicePops,
+      contextualCooperativeSearchSliceMs:
+        options.contextualCooperativeSearchSliceMs,
+      contextualCooperativeSearchCheckPops:
+        options.contextualCooperativeSearchCheckPops,
       shouldStopRequested: options.shouldStopRequested,
       contextualFastCardState: options.contextualFastCardState !== false,
       skipTraffic: Boolean(options.skipTraffic || !trafficEnabled),
@@ -15208,52 +15226,6 @@ function overlayHasCheckpointActiveFeatures(overlayPlacement, pieceMap, checkpoi
   ));
 }
 
-function getPlacedOverlayTiles(overlayPlacement, pieceMap) {
-  const piece = pieceMap[overlayPlacement.pieceId];
-  if (!piece) {
-    return [];
-  }
-
-  return placePiece(piece, overlayPlacement).tiles;
-}
-
-function placementHasLaserFeature(overlayPlacement, pieceMap) {
-  return getPlacedOverlayTiles(overlayPlacement, pieceMap).some((tile) => (
-    (tile.features || []).some((feature) => feature.type === "laser")
-  ));
-}
-
-function placementsAreLaserLinked(sourcePlacement, candidatePlacement, pieceMap) {
-  const sourceTiles = getPlacedOverlayTiles(sourcePlacement, pieceMap);
-  const candidateFeatureMap = new Map(
-    getPlacedOverlayTiles(candidatePlacement, pieceMap).map((tile) => [`${tile.x},${tile.y}`, tile.features || []])
-  );
-
-  return sourceTiles.some((tile) => {
-    const lasers = (tile.features || []).filter((feature) => feature.type === "laser");
-    return lasers.some((laser) => {
-      const sides = [laser.dir, getOppositeSide(laser.dir)];
-      return sides.some((side) => {
-        if (tileHasLaserSupportBlock(tile.features || [], side, { includeLowerLedge: true })) {
-          return false;
-        }
-
-        const delta = CARDINAL_DIRS[side];
-        const neighborFeatures = candidateFeatureMap.get(`${tile.x + delta.dx},${tile.y + delta.dy}`);
-        if (!neighborFeatures) {
-          return false;
-        }
-
-        return (
-          tileHasLaserSupportBlock(tile.features || [], side, { includeLowerLedge: true }) ||
-          tileHasLaserSupportBlock(neighborFeatures, getOppositeSide(side), { includeLowerLedge: true }) ||
-          tileHasLaserInDirection(neighborFeatures, laser.dir)
-        );
-      });
-    });
-  });
-}
-
 function pruneIrrelevantOverlayPlacements(overlayPlacements, pieceMap, sequence, usableStarts, checkpoints, options = {}) {
   if (!overlayPlacements?.length) {
     return {
@@ -15272,38 +15244,9 @@ function pruneIrrelevantOverlayPlacements(overlayPlacements, pieceMap, sequence,
     ) &&
     overlayTouchesTrackedPlay(placement, pieceMap, routeTileKeys, checkpoints, 2)
   ));
-  const keptPlacements = [...initiallyKept];
-  const keptKeys = new Set(keptPlacements.map((placement) => `${placement.pieceId}@${placement.x},${placement.y},${placement.rotation ?? 0}`));
-
-  let changed = true;
-  while (changed) {
-    changed = false;
-    overlayPlacements.forEach((placement) => {
-      const placementKey = `${placement.pieceId}@${placement.x},${placement.y},${placement.rotation ?? 0}`;
-      if (keptKeys.has(placementKey) || !placementHasLaserFeature(placement, pieceMap)) {
-        return;
-      }
-
-      const linkedToKeptLaser = keptPlacements.some((keptPlacement) => (
-        placementHasLaserFeature(keptPlacement, pieceMap) &&
-        (
-          placementsAreLaserLinked(keptPlacement, placement, pieceMap) ||
-          placementsAreLaserLinked(placement, keptPlacement, pieceMap)
-        )
-      ));
-      if (!linkedToKeptLaser) {
-        return;
-      }
-
-      keptPlacements.push(placement);
-      keptKeys.add(placementKey);
-      changed = true;
-    });
-  }
-
   return {
-    overlayPlacements: keptPlacements,
-    pruned: keptPlacements.length !== overlayPlacements.length
+    overlayPlacements: initiallyKept,
+    pruned: initiallyKept.length !== overlayPlacements.length
   };
 }
 
@@ -15374,27 +15317,7 @@ function pruneUnusedBoardPlacements(boardPlacements, overlayPlacements, pieceMap
         localInfluenceRadius
       );
     });
-    const laserCanReachTrackedPlay = placePiece(piece, placement).tiles.some((tile) => (
-      (tile.features || []).some((feature) => {
-        if (feature.type !== "laser" || !CARDINAL_DIRS[feature.dir]) {
-          return false;
-        }
-        const delta = CARDINAL_DIRS[feature.dir];
-        for (const key of routeTileKeys) {
-          const [targetX, targetY] = key.split(",").map(Number);
-          const dx = targetX - tile.x;
-          const dy = targetY - tile.y;
-          if (delta.dx !== 0 && dy === 0 && Math.sign(dx) === Math.sign(delta.dx)) {
-            return true;
-          }
-          if (delta.dy !== 0 && dx === 0 && Math.sign(dy) === Math.sign(delta.dy)) {
-            return true;
-          }
-        }
-        return false;
-      })
-    ));
-    if (nearTrackedPlay || supportsRelevantOverlay || laserCanReachTrackedPlay) {
+    if (nearTrackedPlay || supportsRelevantOverlay) {
       usedBoards.add(index);
     }
   });
@@ -17091,11 +17014,17 @@ function buildScenarioCopySummary(scenario) {
     if (diagnostics.routeSearchTotalsByKind) {
       lines.push(`Route kinds: ${formatRouteSearchKindBreakdown(diagnostics.routeSearchTotalsByKind)}`);
     }
+    const analyzerBuild = diagnostics.analyzeBuildId ?? analyzeBuildIdSafe;
+    lines.push(`Analyzer build: ${analyzerBuild}`);
     if (diagnostics.cooperativeIteratorTotals) {
       const cooperative = diagnostics.cooperativeIteratorTotals;
       const searchSlices = diagnostics.cooperativeSearchTotals ?? {};
       lines.push(
-        `Cooperative yielding v49l: max uninterrupted ${formatGenerationDuration(cooperative.maxSliceMs ?? 0)}, ${cooperative.browserYields ?? 0} browser yield(s), ${cooperative.slices ?? 0} iterator slice(s); resumable physical search ${searchSlices.searches ?? 0} search(es)/${searchSlices.slices ?? 0} slice boundary(ies), max search work slice ${formatGenerationDuration(searchSlices.maxSliceWorkMs ?? 0)}.`
+        `Cooperative yielding v49o: max uninterrupted ${formatGenerationDuration(cooperative.maxSliceMs ?? 0)} (${cooperative.maxSlicePhase ?? "unknown"}${cooperative.maxSliceSearchKind ? `/${cooperative.maxSliceSearchKind}` : ""}), ${cooperative.browserYields ?? 0} browser yield(s) / ${formatGenerationDuration(cooperative.browserPausedMs ?? 0)} paused, ${cooperative.slices ?? 0} iterator slice(s); resumable physical search ${searchSlices.searches ?? 0} search(es)/${searchSlices.slices ?? 0} useful boundary(ies), ${cooperative.routeSearchBrowserYields ?? 0} route-slice handoff(s), ${formatGenerationDuration(searchSlices.pausedMs ?? 0)} suspended, max search work slice ${formatGenerationDuration(searchSlices.maxSliceWorkMs ?? 0)}.`
+      );
+    } else {
+      lines.push(
+        `Cooperative yielding v49o: telemetry unavailable from analyzer build ${analyzerBuild}.`
       );
     }
     if ((diagnostics.resumeTotals?.searches ?? 0) > 0) {
@@ -17711,6 +17640,8 @@ function buildScenarioBenchmarkSummary(scenario) {
     "Rejected construction fingerprints:",
     "Generation:",
     "Route kinds:",
+    "Analyzer build:",
+    "Cooperative yielding ",
     "Resumable widening ",
     "Search profile:",
     "Slowest:",
@@ -18240,6 +18171,14 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     scenario.generationDiagnostics
       ? `Generation timing: total ${formatGenerationDuration(scenario.generationDiagnostics.totalMs)}, routeSearch ${formatGenerationDuration(scenario.generationDiagnostics.routeSearchMs)}, searches ${scenario.generationDiagnostics.routeSearches}, expansions ${scenario.generationDiagnostics.routeExpansions}, capped ${scenario.generationDiagnostics.cappedRouteSearches}, mode ${scenario.generationDiagnostics.generationModeLabel ?? formatGenerationModeLabel(getScenarioGenerationMode(scenario))}, softBudget ${scenario.generationDiagnostics.softExpansionBudget ?? getGenerationModeProfile({ generationMode: getScenarioGenerationMode(scenario) }).softExpansionBudget}`
       : "Generation timing: n/a",
+    `Analyzer build: ${scenario.generationDiagnostics?.analyzeBuildId ?? analyzeBuildIdSafe}`,
+    scenario.generationDiagnostics?.cooperativeIteratorTotals
+      ? (() => {
+        const cooperative = scenario.generationDiagnostics.cooperativeIteratorTotals;
+        const searchSlices = scenario.generationDiagnostics.cooperativeSearchTotals ?? {};
+        return `Cooperative yielding v49o: max uninterrupted ${formatGenerationDuration(cooperative.maxSliceMs ?? 0)} (${cooperative.maxSlicePhase ?? "unknown"}${cooperative.maxSliceSearchKind ? `/${cooperative.maxSliceSearchKind}` : ""}), ${cooperative.browserYields ?? 0} browser yield(s) / ${formatGenerationDuration(cooperative.browserPausedMs ?? 0)} paused, ${cooperative.slices ?? 0} iterator slice(s); resumable physical search ${searchSlices.searches ?? 0} search(es)/${searchSlices.slices ?? 0} useful boundary(ies), ${cooperative.routeSearchBrowserYields ?? 0} route-slice handoff(s), ${formatGenerationDuration(searchSlices.pausedMs ?? 0)} suspended, max search work slice ${formatGenerationDuration(searchSlices.maxSliceWorkMs ?? 0)}.`;
+      })()
+      : `Cooperative yielding v49o: telemetry unavailable from analyzer build ${scenario.generationDiagnostics?.analyzeBuildId ?? analyzeBuildIdSafe}.`,
     scenario.generationDiagnostics
       ? `Qualifying candidate pool: ${scenario.generationDiagnostics.acceptableCandidatesFound ?? 0}/${scenario.generationDiagnostics.acceptableCandidateTarget ?? 1}; scores ${(scenario.generationDiagnostics.acceptableCandidateScores ?? []).join(", ") || "none"}; near-best ${(scenario.generationDiagnostics.nearBestCandidateScores ?? []).join(", ") || "none"}; selected ${scenario.generationDiagnostics.selectedCandidateScore ?? "n/a"}; soft-fit limit ${scenario.generationDiagnostics.softCandidateRetentionLimit ?? SOFT_CANDIDATE_RETENTION_LIMIT}`
       : "Qualifying candidate pool: n/a",
@@ -18480,7 +18419,8 @@ let generationOverlayState = {
 // takes precedence whenever the generator has a checkpoint-known work estimate.
 const GENERATION_ROUTE_PROGRESS_DISPLAY_INTERVAL_MS = 700;
 const GENERATION_COOPERATIVE_YIELD_INTERVAL_MS = 75;
-const GENERATION_COOPERATIVE_SEARCH_SLICE_POPS = 24;
+const GENERATION_COOPERATIVE_SEARCH_SLICE_MS = 75;
+const GENERATION_COOPERATIVE_SEARCH_CHECK_POPS = 16;
 
 const GENERATION_SLOW_STAGE_MS = Object.freeze({
   building: 4200,
@@ -21260,25 +21200,30 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
           cooperativeYield: typeof shouldStopDuringAnalysis === "function"
             ? async (progress) => {
               const now = generationNow();
-              if (
+              const shouldRenderProgress = Boolean(
                 typeof onCooperativeProgress === "function" &&
                 now - lastCooperativeRouteProgressDisplayAt >= GENERATION_ROUTE_PROGRESS_DISPLAY_INTERVAL_MS
-              ) {
+              );
+              if (shouldRenderProgress) {
                 lastCooperativeRouteProgressDisplayAt = now;
                 onCooperativeProgress(
                   formatCooperativeRouteProgressStage(progress),
                   evaluationsUsed,
                   generationStageContext
                 );
+                await nextFrame();
+              } else {
+                await nextEventLoopTurn();
               }
-              await nextFrame();
             }
             : null,
           cooperativeYieldIntervalMs: GENERATION_COOPERATIVE_YIELD_INTERVAL_MS,
           contextualCooperativeSearchSlices:
             typeof shouldStopDuringAnalysis === "function",
-          contextualCooperativeSearchSlicePops:
-            GENERATION_COOPERATIVE_SEARCH_SLICE_POPS,
+          contextualCooperativeSearchSliceMs:
+            GENERATION_COOPERATIVE_SEARCH_SLICE_MS,
+          contextualCooperativeSearchCheckPops:
+            GENERATION_COOPERATIVE_SEARCH_CHECK_POPS,
           // v49j: preserve the current evaluation index through async full-course
           // stage callbacks. Passing reportStage directly lets its default local
           // evaluation (1) overwrite the overlay during checkpoint retry 2+, making
@@ -22918,6 +22863,7 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
     generationDiagnostics.cappedRouteSearches = telemetry.cappedSearches ?? 0;
     generationDiagnostics.slowestRouteSearch = telemetry.slowestSearch ?? null;
     generationDiagnostics.routeSearchTotalsByKind = telemetry.totalsByKind ?? null;
+    generationDiagnostics.analyzeBuildId = analyzeBuildIdSafe;
     generationDiagnostics.physicalCacheTotals = telemetry.physicalCacheTotals ?? null;
     generationDiagnostics.dynamicArchivePhysicalCacheTotals =
       telemetry.dynamicArchivePhysicalCacheTotals ?? null;

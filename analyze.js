@@ -1,4 +1,5 @@
 // Robo Rally Course Randomizer - route analysis and scoring runtime
+export const ANALYZE_BUILD_ID = "v49o";
 const ASSET_VERSION = new URL(import.meta.url).searchParams.get("v") ?? "";
 const VERSION_SUFFIX = ASSET_VERSION ? `?v=${encodeURIComponent(ASSET_VERSION)}` : "";
 const versionedPath = (path) => `${path}${VERSION_SUFFIX}`;
@@ -833,7 +834,11 @@ const ANALYSIS_TELEMETRY = {
   cooperativeIteratorSlices: 0,
   cooperativeIteratorWorkMs: 0,
   cooperativeBrowserYields: 0,
-  cooperativeMaxIteratorSliceMs: 0
+  cooperativeBrowserPausedMs: 0,
+  cooperativeRouteSearchBrowserYields: 0,
+  cooperativeMaxIteratorSliceMs: 0,
+  cooperativeMaxIteratorSlicePhase: "none",
+  cooperativeMaxIteratorSliceSearchKind: null
 };
 const DYNAMIC_ARCHIVE_CACHE_TELEMETRY = {
   requests: 0,
@@ -871,7 +876,11 @@ export function resetAnalysisTelemetry() {
   ANALYSIS_TELEMETRY.cooperativeIteratorSlices = 0;
   ANALYSIS_TELEMETRY.cooperativeIteratorWorkMs = 0;
   ANALYSIS_TELEMETRY.cooperativeBrowserYields = 0;
+  ANALYSIS_TELEMETRY.cooperativeBrowserPausedMs = 0;
+  ANALYSIS_TELEMETRY.cooperativeRouteSearchBrowserYields = 0;
   ANALYSIS_TELEMETRY.cooperativeMaxIteratorSliceMs = 0;
+  ANALYSIS_TELEMETRY.cooperativeMaxIteratorSlicePhase = "none";
+  ANALYSIS_TELEMETRY.cooperativeMaxIteratorSliceSearchKind = null;
   DYNAMIC_ARCHIVE_CACHE_TELEMETRY.requests = 0;
   DYNAMIC_ARCHIVE_CACHE_TELEMETRY.hits = 0;
   DYNAMIC_ARCHIVE_CACHE_TELEMETRY.misses = 0;
@@ -1148,7 +1157,11 @@ export function getAnalysisTelemetrySnapshot() {
       slices: ANALYSIS_TELEMETRY.cooperativeIteratorSlices,
       workMs: Number(ANALYSIS_TELEMETRY.cooperativeIteratorWorkMs.toFixed(2)),
       browserYields: ANALYSIS_TELEMETRY.cooperativeBrowserYields,
-      maxSliceMs: Number(ANALYSIS_TELEMETRY.cooperativeMaxIteratorSliceMs.toFixed(2))
+      browserPausedMs: Number(ANALYSIS_TELEMETRY.cooperativeBrowserPausedMs.toFixed(2)),
+      routeSearchBrowserYields: ANALYSIS_TELEMETRY.cooperativeRouteSearchBrowserYields,
+      maxSliceMs: Number(ANALYSIS_TELEMETRY.cooperativeMaxIteratorSliceMs.toFixed(2)),
+      maxSlicePhase: ANALYSIS_TELEMETRY.cooperativeMaxIteratorSlicePhase,
+      maxSliceSearchKind: ANALYSIS_TELEMETRY.cooperativeMaxIteratorSliceSearchKind
     },
     physicalCacheTotals: {
       hits: physicalCacheHits,
@@ -14369,13 +14382,20 @@ function* enumeratePhysicalTimingLegTemplatesSteps(
 ) {
   const telemetryStartedAt = analysisTelemetryNow();
   const cooperativeSearchSlices = Boolean(options.contextualCooperativeSearchSlices);
-  const requestedCooperativeSlicePops = Number(
+  const requestedCooperativeCheckPops = Number(
+    options.contextualCooperativeSearchCheckPops ??
     options.contextualCooperativeSearchSlicePops
   );
-  const cooperativeSlicePops = Number.isFinite(requestedCooperativeSlicePops)
-    ? Math.max(1, Math.floor(requestedCooperativeSlicePops))
-    : 24;
-  let nextCooperativeSlicePop = cooperativeSlicePops;
+  const cooperativeCheckPops = Number.isFinite(requestedCooperativeCheckPops)
+    ? Math.max(1, Math.floor(requestedCooperativeCheckPops))
+    : 16;
+  const requestedCooperativeSliceMs = Number(
+    options.contextualCooperativeSearchSliceMs
+  );
+  const cooperativeSliceMs = Number.isFinite(requestedCooperativeSliceMs)
+    ? Math.max(1, requestedCooperativeSliceMs)
+    : 75;
+  let nextCooperativeTimeCheckPop = cooperativeCheckPops;
   let cooperativeSliceCount = 0;
   let cooperativePausedMs = 0;
   let cooperativeMaxSliceWorkMs = 0;
@@ -14866,26 +14886,30 @@ function* enumeratePhysicalTimingLegTemplatesSteps(
     profilePoppedNodes += 1;
     if (
       cooperativeSearchSlices &&
-      profilePoppedNodes >= nextCooperativeSlicePop
+      profilePoppedNodes >= nextCooperativeTimeCheckPop
     ) {
-      const suspendedAt = analysisTelemetryNow();
-      cooperativeMaxSliceWorkMs = Math.max(
-        cooperativeMaxSliceWorkMs,
-        suspendedAt - cooperativeSliceWorkStartedAt
-      );
-      cooperativeSliceCount += 1;
-      nextCooperativeSlicePop = profilePoppedNodes + cooperativeSlicePops;
-      yield {
-        phase: "route-search-slice",
-        searchKind: resumedExhaustive
-          ? (options.contextualResumeTelemetryKind ?? options.contextualTelemetryKind ?? "estimated-physical-leg-exhaustive")
-          : (options.contextualTelemetryKind ?? "contextual-physical-template"),
-        expansions: workExpansions,
-        poppedNodes: profilePoppedNodes
-      };
-      const resumedAt = analysisTelemetryNow();
-      cooperativePausedMs += Math.max(0, resumedAt - suspendedAt);
-      cooperativeSliceWorkStartedAt = resumedAt;
+      nextCooperativeTimeCheckPop = profilePoppedNodes + cooperativeCheckPops;
+      const checkedAt = analysisTelemetryNow();
+      if (checkedAt - cooperativeSliceWorkStartedAt >= cooperativeSliceMs) {
+        cooperativeMaxSliceWorkMs = Math.max(
+          cooperativeMaxSliceWorkMs,
+          checkedAt - cooperativeSliceWorkStartedAt
+        );
+        cooperativeSliceCount += 1;
+        yield {
+          phase: "route-search-slice",
+          searchKind: resumedExhaustive
+            ? (options.contextualResumeTelemetryKind ?? options.contextualTelemetryKind ?? "estimated-physical-leg-exhaustive")
+            : (options.contextualTelemetryKind ?? "contextual-physical-template"),
+          expansions: workExpansions,
+          poppedNodes: profilePoppedNodes,
+          targetSliceMs: cooperativeSliceMs
+        };
+        const resumedAt = analysisTelemetryNow();
+        cooperativePausedMs += Math.max(0, resumedAt - checkedAt);
+        cooperativeSliceWorkStartedAt = resumedAt;
+        nextCooperativeTimeCheckPop = profilePoppedNodes + cooperativeCheckPops;
+      }
     }
 
     let blockStartedAt = profileNow();
@@ -18387,8 +18411,10 @@ function* analyzeFullCourseContextualSteps(
           contextualResumeTelemetryKind: resumeTelemetryKind,
           contextualResumeExhaustiveOnMiss: Boolean(resumeExhaustiveOnMiss),
           contextualCooperativeSearchSlices: Boolean(options.contextualCooperativeSearchSlices),
-          contextualCooperativeSearchSlicePops:
-            options.contextualCooperativeSearchSlicePops
+          contextualCooperativeSearchSliceMs:
+            options.contextualCooperativeSearchSliceMs,
+          contextualCooperativeSearchCheckPops:
+            options.contextualCooperativeSearchCheckPops
         }
       );
     }
@@ -21452,10 +21478,15 @@ export async function analyzeFullCourseCooperative(tileMap, starts, flags, optio
     const sliceMs = Math.max(0, analysisTelemetryNow() - sliceStartedAt);
     ANALYSIS_TELEMETRY.cooperativeIteratorSlices += 1;
     ANALYSIS_TELEMETRY.cooperativeIteratorWorkMs += sliceMs;
-    ANALYSIS_TELEMETRY.cooperativeMaxIteratorSliceMs = Math.max(
-      ANALYSIS_TELEMETRY.cooperativeMaxIteratorSliceMs,
-      sliceMs
-    );
+    if (sliceMs > ANALYSIS_TELEMETRY.cooperativeMaxIteratorSliceMs) {
+      ANALYSIS_TELEMETRY.cooperativeMaxIteratorSliceMs = sliceMs;
+      ANALYSIS_TELEMETRY.cooperativeMaxIteratorSlicePhase = nextStep.done
+        ? "complete"
+        : String(nextStep.value?.phase ?? "boundary");
+      ANALYSIS_TELEMETRY.cooperativeMaxIteratorSliceSearchKind = nextStep.done
+        ? null
+        : (nextStep.value?.searchKind ?? null);
+    }
     return nextStep;
   };
   let step = advanceIterator();
@@ -21470,9 +21501,21 @@ export async function analyzeFullCourseCooperative(tileMap, starts, flags, optio
     completedProgressCounts.set(progressKey, completedCount);
 
     const now = analysisTelemetryNow();
-    if (cooperativeYield && now - lastBrowserYieldAt >= yieldIntervalMs) {
+    const routeSearchSlice = progress.phase === "route-search-slice";
+    if (
+      cooperativeYield &&
+      (routeSearchSlice || now - lastBrowserYieldAt >= yieldIntervalMs)
+    ) {
       ANALYSIS_TELEMETRY.cooperativeBrowserYields += 1;
+      if (routeSearchSlice) {
+        ANALYSIS_TELEMETRY.cooperativeRouteSearchBrowserYields += 1;
+      }
+      const browserYieldStartedAt = analysisTelemetryNow();
       await cooperativeYield({ ...progress, completedCount });
+      ANALYSIS_TELEMETRY.cooperativeBrowserPausedMs += Math.max(
+        0,
+        analysisTelemetryNow() - browserYieldStartedAt
+      );
       lastBrowserYieldAt = analysisTelemetryNow();
     }
     if (shouldStopRequested()) {
