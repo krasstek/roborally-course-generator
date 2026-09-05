@@ -1,5 +1,6 @@
+// VERSION START: v49ad-hotspot-local-reroute
 // Robo Rally Course Randomizer - route analysis and scoring runtime
-export const ANALYZE_BUILD_ID = "v49o";
+export const ANALYZE_BUILD_ID = "v49ad-hotspot-local-reroute";
 const ASSET_VERSION = new URL(import.meta.url).searchParams.get("v") ?? "";
 const VERSION_SUFFIX = ASSET_VERSION ? `?v=${encodeURIComponent(ASSET_VERSION)}` : "";
 const versionedPath = (path) => `${path}${VERSION_SUFFIX}`;
@@ -1331,6 +1332,25 @@ export function clearAnalysisCaches() {
   PROGRAM_EXACT_AVAILABILITY_CACHE.clear();
   ROLLING_PROGRAM_SIGNATURE_IDS.clear();
   nextRollingProgramSignatureId = 1;
+  DAMAGE_ECONOMY_EFFECTIVE_STATE_CACHE.clear();
+  DAMAGE_ECONOMY_PROGRAM_CACHE.clear();
+  DAMAGE_ECONOMY_SPAM_DRAW_CACHE.clear();
+  DAMAGE_ECONOMY_ROUTE_SUMMARY_CACHE = new WeakMap();
+  DAMAGE_ECONOMY_TRAFFIC_ROUTE_SUMMARY_CACHE = new WeakMap();
+  DAMAGE_ECONOMY_TELEMETRY.effectiveStateLookups = 0;
+  DAMAGE_ECONOMY_TELEMETRY.effectiveStateCacheHits = 0;
+  DAMAGE_ECONOMY_TELEMETRY.effectiveStateCacheMisses = 0;
+  DAMAGE_ECONOMY_TELEMETRY.programLookups = 0;
+  DAMAGE_ECONOMY_TELEMETRY.programCacheHits = 0;
+  DAMAGE_ECONOMY_TELEMETRY.programCacheMisses = 0;
+  DAMAGE_ECONOMY_TELEMETRY.spamDrawLookups = 0;
+  DAMAGE_ECONOMY_TELEMETRY.spamDrawCacheHits = 0;
+  DAMAGE_ECONOMY_TELEMETRY.spamDrawCacheMisses = 0;
+  DAMAGE_ECONOMY_TELEMETRY.routeSummaryLookups = 0;
+  DAMAGE_ECONOMY_TELEMETRY.routeSummaryCacheHits = 0;
+  DAMAGE_ECONOMY_TELEMETRY.routeSummaryCacheMisses = 0;
+  DAMAGE_ECONOMY_TELEMETRY.shutdownScoringReplayCount = 0;
+  DAMAGE_ECONOMY_TELEMETRY.shutdownScoringReplayTurns = 0;
 }
 
 function tileKey(x, y) {
@@ -4511,6 +4531,462 @@ export function simulateAction(tileMap, startState, action, options = {}) {
 }
 
 
+// DAMAGE_ECONOMY_FOUNDATION_BEGIN
+// v49ab-damage9-pressure-reroute production-economy foundation. This remains a route
+// difficulty/fairness estimator, not a literal deck/hand/register simulator.
+// The state deliberately separates three consequences that were incorrectly
+// collapsed in the withdrawn v49t prototype:
+//   * persistent SPAM total burden;
+//   * the expected subset of SPAM retained in hand;
+//   * transient next-turn Haywire clog pressure.
+//
+// Fractions remain authoritative for accumulation and relief. Expensive card
+// calculations use rounded effective SPAM counts so 0.68/0.99/1.47 do not create
+// separate cache universes unnecessarily. Haywire is different: damage received
+// in one register has an exact probability of producing at least one Haywire,
+// capped at one meaningful Haywire for that damage register. Those five capped
+// probabilities form a turn-level clog-count distribution for the NEXT game turn.
+// Haywire then expires after that programming turn; it is not persistent damage.
+//
+// The raw chronology still keeps the five routed movement cards as the route
+// approximation even when damage would physically occupy
+// registers. Passive SPAM affects deck/hand supply, while SPAM contributes
+// control-clog only when the model actually spends it through forced or elective
+// relief. Haywire and SPAM-play clog then share one nonlinear control-loss curve.
+// The 5-RE Shutdown value is now a scoring abstraction, not a forecasted literal
+// Shutdown decision. A separate auxiliary replay accumulates damage-economy RE in
+// segments; whenever a segment reaches the five-register Shutdown region and more
+// programming remains, it records one 5-RE shutdown-equivalent episode, clears only
+// that scoring replay's damage state, and continues. The raw chronology remains
+// untouched; only the compressed shutdown-equivalent result is used for routing.
+export const DAMAGE_ECONOMY_MODEL_ID = "damage-economy-v9-pressure-restored-iterative-routing";
+const DAMAGE_ECONOMY_SPAM_SHARE = 23 / 40;
+const DAMAGE_ECONOMY_HAYWIRE_SHARE = 17 / 40;
+const DAMAGE_ECONOMY_SHUTDOWN_REFERENCE_RE = REGISTER_COUNT;
+const DAMAGE_ECONOMY_EFFECTIVE_STATE_CACHE = new Map();
+const DAMAGE_ECONOMY_EFFECTIVE_STATE_CACHE_LIMIT = 512;
+const DAMAGE_ECONOMY_PROGRAM_CACHE = new Map();
+const DAMAGE_ECONOMY_PROGRAM_CACHE_LIMIT = 16000;
+const DAMAGE_ECONOMY_SPAM_DRAW_CACHE = new Map();
+const DAMAGE_ECONOMY_SPAM_DRAW_CACHE_LIMIT = 8000;
+let DAMAGE_ECONOMY_ROUTE_SUMMARY_CACHE = new WeakMap();
+let DAMAGE_ECONOMY_TRAFFIC_ROUTE_SUMMARY_CACHE = new WeakMap();
+const DAMAGE_ECONOMY_TELEMETRY = {
+  effectiveStateLookups: 0,
+  effectiveStateCacheHits: 0,
+  effectiveStateCacheMisses: 0,
+  programLookups: 0,
+  programCacheHits: 0,
+  programCacheMisses: 0,
+  spamDrawLookups: 0,
+  spamDrawCacheHits: 0,
+  spamDrawCacheMisses: 0,
+  routeSummaryLookups: 0,
+  routeSummaryCacheHits: 0,
+  routeSummaryCacheMisses: 0,
+  shutdownScoringReplayCount: 0,
+  shutdownScoringReplayTurns: 0
+};
+
+function roundDamageEconomyPressure(value) {
+  return Math.max(0, Math.round(Number(value) || 0));
+}
+
+function getDamageEconomyVariantProfile(options = {}) {
+  // Centralized variant seam. Hooks marked implemented below are implemented only
+  // inside this observational damage ledger unless they were already authoritative
+  // physical mechanics elsewhere. Deferred hooks stay visible so promotion cannot
+  // silently bypass them later.
+  const activeHooks = [
+    options.moreDeadlyGame ? "moreDeadlyGame" : null,
+    options.lessSpammyGame ? "lessSpammyGame" : null,
+    options.criticalSpam ? "criticalSpam" : null,
+    options.criticalHaywire ? "criticalHaywire" : null,
+    options.permanentShutdown ? "permanentShutdown" : null,
+    options.factoryRejects ? "factoryRejects" : null,
+    options.repairStations ? "repairStations" : null,
+    options.cuttingFloor ? "cuttingFloor" : null,
+    options.flamingOil ? "flamingOil" : null,
+    options.setToKill ? "setToKill" : null,
+    options.setToStun ? "setToStun" : null
+  ].filter(Boolean);
+  const implementedHooks = [
+    options.moreDeadlyGame ? "moreDeadlyGame" : null,
+    options.cuttingFloor ? "cuttingFloor" : null,
+    options.factoryRejects ? "factoryRejects" : null,
+    options.criticalHaywire ? "criticalHaywire" : null,
+    options.lessSpammyGame ? "lessSpammyGame" : null,
+    options.criticalSpam ? "criticalSpam" : null
+  ].filter(Boolean);
+  const deferredHooks = activeHooks.filter((id) => !implementedHooks.includes(id));
+  return {
+    activeHooks,
+    implementedHooks,
+    deferredHooks,
+    spamShare: DAMAGE_ECONOMY_SPAM_SHARE,
+    haywireShare: DAMAGE_ECONOMY_HAYWIRE_SHARE,
+    handSize: options.factoryRejects ? 7 : PROGRAM_EXACT_HAND_SIZE,
+    criticalHaywireCountsAgainstHand: Boolean(options.criticalHaywire),
+    spamFilter: Boolean(options.lessSpammyGame),
+    criticalSpam: Boolean(options.criticalSpam)
+  };
+}
+
+function getDamageEconomyHaywireEventProbability(damageUnits) {
+  const units = Math.max(0, Number(damageUnits) || 0);
+  if (units <= 0) return 0;
+  // n certain damage draws in one register can create at most one meaningful
+  // Haywire clog for the next game turn. Probabilistic robot-laser hits are
+  // composed separately as Bernoulli opportunities rather than exponentiating a
+  // fractional expected-damage total.
+  return clamp(1 - ((1 - DAMAGE_ECONOMY_HAYWIRE_SHARE) ** units), 0, 1);
+}
+
+function combineDamageEconomyProbability(existing, added) {
+  const a = clamp(Number(existing) || 0, 0, 1);
+  const b = clamp(Number(added) || 0, 0, 1);
+  return clamp(1 - (1 - a) * (1 - b), 0, 1);
+}
+
+function getDamageEconomyExpectedCount(distribution = []) {
+  return distribution.reduce((sum, probability, count) => (
+    sum + (Number(probability) || 0) * count
+  ), 0);
+}
+
+function createDamageEconomyState() {
+  return {
+    activeTurn: 1,
+    spamTotal: 0,
+    spamHeld: 0,
+    pendingSpam: 0,
+    activeHaywireDistribution: [1, 0, 0, 0, 0, 0],
+    pendingHaywireRegisterRisks: Array(REGISTER_COUNT).fill(0)
+  };
+}
+
+function advanceDamageEconomyToTurn(state, turn) {
+  const targetTurn = Math.max(1, Math.floor(Number(turn) || 1));
+  while (state.activeTurn < targetTurn) {
+    // Damage received in Turn N cannot affect its already-chosen program. At the
+    // next programming boundary SPAM joins the persistent circulating burden and
+    // Haywire becomes the one-turn clog distribution derived from the capped
+    // damage-register risks. A further empty boundary expires Haywire naturally.
+    state.spamTotal += state.pendingSpam;
+    state.pendingSpam = 0;
+    state.activeHaywireDistribution = getDamageShadowPoissonBinomialDistribution(
+      state.pendingHaywireRegisterRisks
+    );
+    state.pendingHaywireRegisterRisks = Array(REGISTER_COUNT).fill(0);
+    state.activeTurn += 1;
+  }
+  state.spamHeld = Math.min(state.spamTotal, Math.max(0, state.spamHeld));
+  return state;
+}
+
+function applyExpectedDamageToEconomyState(
+  state,
+  damageUnits,
+  register,
+  haywireEventProbabilityOverride = null
+) {
+  const units = Math.max(0, Number(damageUnits) || 0);
+  if (units <= 0) {
+    return { spamAdded: 0, haywireRegisterRiskAdded: 0, haywireRegisterRiskAfter: 0 };
+  }
+  const safeRegister = Math.max(1, Math.min(
+    REGISTER_COUNT,
+    Math.floor(Number(register) || 1)
+  ));
+  const spamAdded = units * DAMAGE_ECONOMY_SPAM_SHARE;
+  const eventHaywireRisk = Number.isFinite(Number(haywireEventProbabilityOverride))
+    ? clamp(Number(haywireEventProbabilityOverride), 0, 1)
+    : getDamageEconomyHaywireEventProbability(units);
+  const index = safeRegister - 1;
+  const before = state.pendingHaywireRegisterRisks[index] || 0;
+  const after = combineDamageEconomyProbability(before, eventHaywireRisk);
+  state.pendingSpam += spamAdded;
+  state.pendingHaywireRegisterRisks[index] = after;
+  return {
+    spamAdded,
+    haywireRegisterRiskAdded: Math.max(0, after - before),
+    haywireRegisterRiskAfter: after
+  };
+}
+
+function getDamageEconomyRegisterHaywireEventProbability(
+  deterministicDamageUnits,
+  robotLaserHitProbabilities = []
+) {
+  const deterministicRisk = getDamageEconomyHaywireEventProbability(
+    Math.max(0, Number(deterministicDamageUnits) || 0)
+  );
+  let noRobotHaywireProbability = 1;
+  for (const hitProbabilityRaw of robotLaserHitProbabilities || []) {
+    const hitProbability = clamp(Number(hitProbabilityRaw) || 0, 0, 1);
+    noRobotHaywireProbability *= 1 - DAMAGE_ECONOMY_HAYWIRE_SHARE * hitProbability;
+  }
+  const robotLaserRisk = clamp(1 - noRobotHaywireProbability, 0, 1);
+  return combineDamageEconomyProbability(deterministicRisk, robotLaserRisk);
+}
+
+function getDamageEconomyEffectiveSpamState(state, options = {}) {
+  const profile = getDamageEconomyVariantProfile(options);
+  const held = Math.min(profile.handSize, roundDamageEconomyPressure(state?.spamHeld));
+  const circulatingFraction = Math.max(
+    0,
+    (Number(state?.spamTotal) || 0) - (Number(state?.spamHeld) || 0)
+  );
+  const circulating = roundDamageEconomyPressure(circulatingFraction);
+  const key = `${held}|${circulating}|h${profile.handSize}`;
+  DAMAGE_ECONOMY_TELEMETRY.effectiveStateLookups += 1;
+  if (DAMAGE_ECONOMY_EFFECTIVE_STATE_CACHE.has(key)) {
+    DAMAGE_ECONOMY_TELEMETRY.effectiveStateCacheHits += 1;
+    return DAMAGE_ECONOMY_EFFECTIVE_STATE_CACHE.get(key);
+  }
+  DAMAGE_ECONOMY_TELEMETRY.effectiveStateCacheMisses += 1;
+  const value = Object.freeze({
+    heldSpam: held,
+    circulatingSpam: circulating,
+    effectiveTotalSpam: held + circulating,
+    baseHandSize: profile.handSize
+  });
+  if (DAMAGE_ECONOMY_EFFECTIVE_STATE_CACHE.size >= DAMAGE_ECONOMY_EFFECTIVE_STATE_CACHE_LIMIT) {
+    const oldest = DAMAGE_ECONOMY_EFFECTIVE_STATE_CACHE.keys().next().value;
+    if (oldest !== undefined) DAMAGE_ECONOMY_EFFECTIVE_STATE_CACHE.delete(oldest);
+  }
+  DAMAGE_ECONOMY_EFFECTIVE_STATE_CACHE.set(key, value);
+  return value;
+}
+
+function getDamageEconomySpamDrawDistributionInteger(baseDeckSize, spamCount, drawSlots) {
+  const safeBaseDeckSize = Math.max(0, Math.floor(Number(baseDeckSize) || 0));
+  const safeSpamCount = Math.max(0, Math.floor(Number(spamCount) || 0));
+  const deckSize = safeBaseDeckSize + safeSpamCount;
+  const safeDrawSlots = Math.max(0, Math.min(
+    Math.floor(Number(drawSlots) || 0),
+    deckSize
+  ));
+  const key = `${safeBaseDeckSize}|${safeSpamCount}|d${safeDrawSlots}`;
+  DAMAGE_ECONOMY_TELEMETRY.spamDrawLookups += 1;
+  if (DAMAGE_ECONOMY_SPAM_DRAW_CACHE.has(key)) {
+    DAMAGE_ECONOMY_TELEMETRY.spamDrawCacheHits += 1;
+    return DAMAGE_ECONOMY_SPAM_DRAW_CACHE.get(key);
+  }
+  DAMAGE_ECONOMY_TELEMETRY.spamDrawCacheMisses += 1;
+  const totalWays = chooseSmall(deckSize, safeDrawSlots);
+  const distribution = Array(safeDrawSlots + 1).fill(0);
+  for (let spamDrawn = 0; spamDrawn <= safeDrawSlots; spamDrawn += 1) {
+    const normalDrawn = safeDrawSlots - spamDrawn;
+    if (spamDrawn > safeSpamCount || normalDrawn > safeBaseDeckSize) continue;
+    distribution[spamDrawn] = totalWays > 0
+      ? chooseSmall(safeSpamCount, spamDrawn) *
+        chooseSmall(safeBaseDeckSize, normalDrawn) / totalWays
+      : (safeDrawSlots === 0 ? 1 : 0);
+  }
+  if (safeDrawSlots === 0) distribution[0] = 1;
+  const value = Object.freeze({
+    drawSlots: safeDrawSlots,
+    deckSize,
+    distribution: Object.freeze(distribution)
+  });
+  if (DAMAGE_ECONOMY_SPAM_DRAW_CACHE.size >= DAMAGE_ECONOMY_SPAM_DRAW_CACHE_LIMIT) {
+    const oldest = DAMAGE_ECONOMY_SPAM_DRAW_CACHE.keys().next().value;
+    if (oldest !== undefined) DAMAGE_ECONOMY_SPAM_DRAW_CACHE.delete(oldest);
+  }
+  DAMAGE_ECONOMY_SPAM_DRAW_CACHE.set(key, value);
+  return value;
+}
+
+function getDamageEconomyProgramAvailabilityProbabilityInteger(
+  previousCode,
+  actionIds = [],
+  circulatingSpam = 0,
+  heldSpam = 0,
+  targetHandSize = PROGRAM_EXACT_HAND_SIZE
+) {
+  const safePreviousCode = Math.max(0, Math.floor(Number(previousCode) || 0));
+  const safeCirculatingSpam = Math.max(0, Math.floor(Number(circulatingSpam) || 0));
+  const safeHeldSpam = Math.max(0, Math.floor(Number(heldSpam) || 0));
+  const safeTargetHandSize = Math.max(0, Math.floor(Number(targetHandSize) || 0));
+  const actions = Array.isArray(actionIds) ? actionIds : [];
+  if (!actions.length) return 1;
+  const key = `${safePreviousCode}|${actions.join(".")}|c${safeCirculatingSpam}|held${safeHeldSpam}|h${safeTargetHandSize}|floor5`;
+  DAMAGE_ECONOMY_TELEMETRY.programLookups += 1;
+  if (DAMAGE_ECONOMY_PROGRAM_CACHE.has(key)) {
+    DAMAGE_ECONOMY_TELEMETRY.programCacheHits += 1;
+    return DAMAGE_ECONOMY_PROGRAM_CACHE.get(key);
+  }
+  DAMAGE_ECONOMY_TELEMETRY.programCacheMisses += 1;
+
+  const baseDeckSize = getExactProgramDeckCounts(safePreviousCode)
+    .reduce((sum, count) => sum + count, 0);
+  const deckSize = baseDeckSize + safeCirculatingSpam;
+  const drawSlots = Math.max(0, Math.min(
+    safeTargetHandSize - safeHeldSpam,
+    deckSize
+  ));
+  const spamDraw = getDamageEconomySpamDrawDistributionInteger(
+    baseDeckSize,
+    safeCirculatingSpam,
+    drawSlots
+  );
+  let probability = 0;
+  spamDraw.distribution.forEach((spamProbability, spamDrawn) => {
+    if (spamProbability <= 0) return;
+    const actualNormalCards = Math.max(0, drawSlots - spamDrawn);
+    // The route abstraction always retains five intended movement cards. When
+    // damage would leave fewer than five normal cards, the deficit is represented
+    // separately as forced SPAM relief/clog rather than making the routed program
+    // itself disappear. Therefore card-supply probability never samples fewer
+    // than five normal cards from the base deck.
+    const modeledNormalCards = Math.min(
+      baseDeckSize,
+      Math.max(REGISTER_COUNT, actualNormalCards)
+    );
+    const totalBaseWays = chooseSmall(baseDeckSize, modeledNormalCards);
+    const successfulBaseWays = getDamageShadowBaseProgramSuccessfulWays(
+      safePreviousCode,
+      actions,
+      modeledNormalCards
+    );
+    const conditionalProbability = totalBaseWays > 0
+      ? clamp(successfulBaseWays / totalBaseWays, 0, 1)
+      : 0;
+    probability += spamProbability * conditionalProbability;
+  });
+  probability = clamp(probability, 0, 1);
+  if (DAMAGE_ECONOMY_PROGRAM_CACHE.size >= DAMAGE_ECONOMY_PROGRAM_CACHE_LIMIT) {
+    const oldest = DAMAGE_ECONOMY_PROGRAM_CACHE.keys().next().value;
+    if (oldest !== undefined) DAMAGE_ECONOMY_PROGRAM_CACHE.delete(oldest);
+  }
+  DAMAGE_ECONOMY_PROGRAM_CACHE.set(key, probability);
+  return probability;
+}
+
+function getDamageEconomyProgrammingSummary(
+  previousCode,
+  actionIds,
+  state,
+  options = {}
+) {
+  const profile = getDamageEconomyVariantProfile(options);
+  const effectiveSpam = getDamageEconomyEffectiveSpamState(state, options);
+  const actions = Array.isArray(actionIds) ? actionIds : [];
+  const programRegisters = Math.max(0, Math.min(REGISTER_COUNT, actions.length));
+  const haywireDistribution = Array.isArray(state?.activeHaywireDistribution)
+    ? state.activeHaywireDistribution
+    : [1, 0, 0, 0, 0, 0];
+  const expectedHaywireClogs = getDamageEconomyExpectedCount(haywireDistribution);
+  const baseDeckSize = getExactProgramDeckCounts(previousCode)
+    .reduce((sum, count) => sum + count, 0);
+
+  const cleanProgramProbability = getDamageEconomyProgramAvailabilityProbabilityInteger(
+    previousCode,
+    actions,
+    0,
+    0,
+    profile.handSize
+  );
+  let damagedProgramProbability = 0;
+  let expectedSpamDrawn = 0;
+  let expectedFreshDrawSlots = 0;
+  let expectedForcedSpamReliefInitiations = 0;
+  const forcedSpamHaywireJointDistribution = Array.from(
+    { length: REGISTER_COUNT + 1 },
+    () => Array(REGISTER_COUNT + 1).fill(0)
+  );
+
+  haywireDistribution.forEach((haywireProbability, haywireCountRaw) => {
+    if (haywireProbability <= 0) return;
+    const haywireCount = Math.min(REGISTER_COUNT, haywireCountRaw);
+    const targetHandSize = Math.max(
+      0,
+      profile.handSize - (profile.criticalHaywireCountsAgainstHand ? haywireCount : 0)
+    );
+    const drawSlots = Math.max(0, Math.min(
+      targetHandSize - effectiveSpam.heldSpam,
+      baseDeckSize + effectiveSpam.circulatingSpam
+    ));
+    expectedFreshDrawSlots += haywireProbability * drawSlots;
+    damagedProgramProbability += haywireProbability *
+      getDamageEconomyProgramAvailabilityProbabilityInteger(
+        previousCode,
+        actions,
+        effectiveSpam.circulatingSpam,
+        effectiveSpam.heldSpam,
+        targetHandSize
+      );
+
+    const spamDraw = getDamageEconomySpamDrawDistributionInteger(
+      baseDeckSize,
+      effectiveSpam.circulatingSpam,
+      drawSlots
+    );
+    spamDraw.distribution.forEach((spamProbability, spamDrawn) => {
+      if (spamProbability <= 0) return;
+      const joint = haywireProbability * spamProbability;
+      expectedSpamDrawn += joint * spamDrawn;
+      const normalCardsInHand = Math.max(0, drawSlots - spamDrawn);
+      // Always keep five intended routed cards. If SPAM pressure would leave fewer
+      // than five normal cards, the shortfall is not a missing route card: it is an
+      // automatic SPAM play/relief expectation for this turn, which is charged as
+      // SPAM clog later together with any elective relief and Haywire.
+      const forcedSpamRelief = Math.min(
+        REGISTER_COUNT,
+        effectiveSpam.heldSpam + spamDrawn,
+        Math.max(0, REGISTER_COUNT - normalCardsInHand)
+      );
+      expectedForcedSpamReliefInitiations += joint * forcedSpamRelief;
+      forcedSpamHaywireJointDistribution[haywireCount][forcedSpamRelief] += joint;
+    });
+  });
+
+  const cleanPenaltyScore = getDamageShadowAvailabilityPenaltyFromProbability(
+    cleanProgramProbability
+  );
+  const damagedPenaltyScore = getDamageShadowAvailabilityPenaltyFromProbability(
+    damagedProgramProbability
+  );
+  const spamSupplyScore = (
+    Number.isFinite(cleanPenaltyScore) && Number.isFinite(damagedPenaltyScore)
+  )
+    ? Math.max(0, damagedPenaltyScore - cleanPenaltyScore)
+    : 0;
+  const spamSupplyRegisterEquivalents = spamSupplyScore / REGISTER_TEMPO_COST;
+
+  return {
+    baseHandSize: profile.handSize,
+    baseDeckSize,
+    effectiveHeldSpam: effectiveSpam.heldSpam,
+    effectiveCirculatingSpam: effectiveSpam.circulatingSpam,
+    effectiveTotalSpam: effectiveSpam.effectiveTotalSpam,
+    expectedFreshDrawSlots,
+    expectedSpamDrawn,
+    expectedSpamInHand: Math.max(0, (Number(state?.spamHeld) || 0) + expectedSpamDrawn),
+    expectedHaywireClogs,
+    haywireDistribution: [...haywireDistribution],
+    expectedForcedSpamReliefInitiations,
+    forcedSpamHaywireJointDistribution: forcedSpamHaywireJointDistribution.map(
+      (row) => [...row]
+    ),
+    cleanProgramProbability,
+    damagedProgramProbability,
+    spamSupplyRegisterEquivalents
+  };
+}
+
+export function getDamageEconomyTelemetrySnapshot() {
+  return {
+    ...DAMAGE_ECONOMY_TELEMETRY,
+    effectiveStateCacheSize: DAMAGE_ECONOMY_EFFECTIVE_STATE_CACHE.size,
+    programCacheSize: DAMAGE_ECONOMY_PROGRAM_CACHE.size,
+    spamDrawCacheSize: DAMAGE_ECONOMY_SPAM_DRAW_CACHE.size
+  };
+}
+// DAMAGE_ECONOMY_FOUNDATION_END
+
+
 // DAMAGE_SHADOW_BEGIN
 // Dev-only post-hoc diagnostic. This replays already-selected route transitions
 // twice with identical route context: first as an unsuppressed control replay,
@@ -4610,8 +5086,16 @@ const DAMAGE_SHADOW_EXPECTED_HAYWIRE_SHARE = 0.5;
 // assumptions for browser validation. Older hill-curve/composition references stay
 // intact as regression comparisons and still do not affect production scoring.
 const DAMAGE_SHADOW_CANDIDATE_RELIEF_TIMING_ALLOWANCE = Object.freeze([
-  0.30, 0.40, 0.55, 0.75, 1.00
+  0.08, 0.30, 0.65, 0.95, 1.00
 ]);
+const DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT = 2;
+const DAMAGE_ECONOMY_RELIEF_FORCED_ROTATION_PENALTY = 0.15;
+const DAMAGE_ECONOMY_RELIEF_FORCED_MOVEMENT_PENALTY = 0.12;
+const DAMAGE_ECONOMY_RELIEF_CONVEYOR_STEP_BONUS = 0.06;
+const DAMAGE_ECONOMY_RELIEF_CONVEYOR_BONUS_MAX = 0.18;
+const DAMAGE_ECONOMY_RELIEF_FORWARD_DISTANCE_WEIGHTS = Object.freeze([1, 0.60, 0.35]);
+const DAMAGE_ECONOMY_RELIEF_WALL_BONUS_BY_DISTANCE = Object.freeze([0.32, 0.18, 0.08]);
+const DAMAGE_ECONOMY_RELIEF_FORWARD_HAZARD_PENALTY_MAX = 0.55;
 const DAMAGE_SHADOW_CANDIDATE_RELIEF_FORWARD_CATASTROPHIC_MAX = 0.60;
 const DAMAGE_SHADOW_CANDIDATE_RELIEF_ORIENTATION_CATASTROPHIC_MAX = 0.45;
 const DAMAGE_SHADOW_CANDIDATE_RELIEF_FORWARD_HAZARD_MAX = 0.30;
@@ -4657,6 +5141,129 @@ function getDamageShadowClogRegisterEquivalents(clogCount) {
   return interpolateDamageShadowCurve(clogCount, DAMAGE_SHADOW_CLOG_RE_BY_COUNT.map(
     (value, count) => [count, value]
   ));
+}
+
+function getDamageEconomyClogRegisterEquivalents(clogLoad) {
+  const load = Math.max(0, Number(clogLoad) || 0);
+  if (load <= REGISTER_COUNT) {
+    return getDamageShadowClogRegisterEquivalents(load);
+  }
+  // The old 0..5 anchors describe one turn of increasingly uncontrolled
+  // registers. SPAM relief can deliberately surrender more than one register-
+  // equivalent of control per played SPAM, so the active economy must not flatten
+  // at five. Continue from the last observed slope (5.4 -> 7.5 = +2.1 RE) rather
+  // than inventing a second nonlinear family beyond the established anchors.
+  return DAMAGE_SHADOW_CLOG_RE_BY_COUNT[REGISTER_COUNT] +
+    (load - REGISTER_COUNT) *
+    (DAMAGE_SHADOW_CLOG_RE_BY_COUNT[REGISTER_COUNT] -
+      DAMAGE_SHADOW_CLOG_RE_BY_COUNT[REGISTER_COUNT - 1]);
+}
+
+function getDamageEconomyAdjustedForcedSpamHaywireJointDistribution(
+  jointDistribution = [],
+  targetExpectedForcedSpamPlays = 0
+) {
+  const baseExpected = (jointDistribution || []).reduce(
+    (sum, row) => sum + (row || []).reduce(
+      (rowSum, probability, forcedSpamPlays) => (
+        rowSum + (Number(probability) || 0) * forcedSpamPlays
+      ),
+      0
+    ),
+    0
+  );
+  const target = Math.max(0, Number(targetExpectedForcedSpamPlays) || 0);
+  if (!(baseExpected > 0) || target >= baseExpected - 1e-9) {
+    return (jointDistribution || []).map((row) => [...(row || [])]);
+  }
+  const keepProbability = clamp(target / baseExpected, 0, 1);
+  const adjusted = Array.from(
+    { length: REGISTER_COUNT + 1 },
+    () => Array(REGISTER_COUNT + 1).fill(0)
+  );
+  (jointDistribution || []).forEach((row, haywireCount) => {
+    (row || []).forEach((probabilityRaw, forcedSpamPlays) => {
+      const probability = Math.max(0, Number(probabilityRaw) || 0);
+      if (probability <= 0) return;
+      for (let kept = 0; kept <= forcedSpamPlays; kept += 1) {
+        const conditional = chooseSmall(forcedSpamPlays, kept) *
+          (keepProbability ** kept) *
+          ((1 - keepProbability) ** (forcedSpamPlays - kept));
+        adjusted[haywireCount][kept] += probability * conditional;
+      }
+    });
+  });
+  return adjusted;
+}
+
+function getDamageEconomyCombinedClogSummary(
+  forcedSpamHaywireJointDistribution = [],
+  electiveSpamPlayDistribution = [1]
+) {
+  const joint = Array.isArray(forcedSpamHaywireJointDistribution) &&
+    forcedSpamHaywireJointDistribution.length
+    ? forcedSpamHaywireJointDistribution
+    : [[1]];
+  const elective = Array.isArray(electiveSpamPlayDistribution) &&
+    electiveSpamPlayDistribution.length
+    ? electiveSpamPlayDistribution
+    : [1];
+  const spamPlayCountDistribution = Array(REGISTER_COUNT + 1).fill(0);
+  let expectedSpamPlayInitiations = 0;
+  let expectedControlClogLoad = 0;
+  let clogRegisterEquivalents = 0;
+  let probabilityFourPlusClogs = 0;
+  let probabilityFivePlusClogs = 0;
+
+  joint.forEach((forcedRow, haywireCount) => {
+    (forcedRow || []).forEach((jointProbabilityRaw, forcedSpamPlays) => {
+      const jointProbability = Math.max(0, Number(jointProbabilityRaw) || 0);
+      if (jointProbability <= 0) return;
+      elective.forEach((electiveProbabilityRaw, electiveSpamPlays) => {
+        const electiveProbability = Math.max(0, Number(electiveProbabilityRaw) || 0);
+        if (electiveProbability <= 0) return;
+        const probability = jointProbability * electiveProbability;
+        const spamPlayCount = Math.min(
+          REGISTER_COUNT,
+          forcedSpamPlays + electiveSpamPlays
+        );
+        const spamClogLoad = spamPlayCount * DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT;
+        const controlClogLoad = haywireCount + spamClogLoad;
+        spamPlayCountDistribution[spamPlayCount] += probability;
+        expectedSpamPlayInitiations += probability * spamPlayCount;
+        expectedControlClogLoad += probability * controlClogLoad;
+        clogRegisterEquivalents += probability *
+          getDamageEconomyClogRegisterEquivalents(controlClogLoad);
+        if (controlClogLoad >= 4) probabilityFourPlusClogs += probability;
+        if (controlClogLoad >= 5) probabilityFivePlusClogs += probability;
+      });
+    });
+  });
+
+  const probabilityMass = spamPlayCountDistribution.reduce(
+    (sum, probability) => sum + probability,
+    0
+  );
+  if (probabilityMass > 0 && Math.abs(probabilityMass - 1) > 1e-9) {
+    spamPlayCountDistribution.forEach((probability, index) => {
+      spamPlayCountDistribution[index] = probability / probabilityMass;
+    });
+    expectedSpamPlayInitiations /= probabilityMass;
+    expectedControlClogLoad /= probabilityMass;
+    clogRegisterEquivalents /= probabilityMass;
+    probabilityFourPlusClogs /= probabilityMass;
+    probabilityFivePlusClogs /= probabilityMass;
+  }
+
+  return {
+    spamClogLoad: expectedSpamPlayInitiations * DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT,
+    expectedSpamPlayInitiations,
+    spamPlayCountDistribution,
+    expectedControlClogLoad,
+    clogRegisterEquivalents,
+    probabilityFourPlusClogs: clamp(probabilityFourPlusClogs, 0, 1),
+    probabilityFivePlusClogs: clamp(probabilityFivePlusClogs, 0, 1)
+  };
 }
 
 function getDamageShadowPoissonBinomialDistribution(probabilities = []) {
@@ -5165,6 +5772,178 @@ function getDamageShadowCandidateRegisterReliefProfile(
   };
 }
 
+// v49v production-candidate SPAM relief deliberately does NOT simulate random
+// replacement-card outcomes. The damage economy already prices loss of control
+// through held/deck pressure and the joint SPAM/Haywire clog distribution. Relief
+// therefore answers only whether this register is a plausible tactical disposal
+// point on the selected route: later registers are easier to sacrifice, while
+// actual conveyor/gear complexity makes the opportunity less forgiving. Straight
+// conveyor continuity can still help. This keeps the useful route/register shape
+// from the older shadow without a speculative mini-simulation of SPAM results.
+function getDamageEconomyForwardReliefContext(
+  tileMap,
+  transition,
+  options = {},
+  absoluteAction = 1
+) {
+  const start = transition?.from;
+  const dir = start?.facing;
+  if (!tileMap || !start || !DIRS[dir]) {
+    return {
+      wallBonus: 0,
+      wallDistance: null,
+      forwardHazardPenalty: 0,
+      forwardHazardScore: 0
+    };
+  }
+  const registerOptions = {
+    ...options,
+    registerIndex: (Math.max(1, absoluteAction) - 1) % REGISTER_COUNT,
+    contextualSkipRecoveryAwarePressure: true
+  };
+  let wallBonus = 0;
+  let wallDistance = null;
+  let forwardHazardPenalty = 0;
+  let forwardHazardScore = 0;
+  let from = { x: start.x, y: start.y };
+
+  for (let index = 0; index < DAMAGE_ECONOMY_RELIEF_FORWARD_DISTANCE_WEIGHTS.length; index += 1) {
+    const distance = index + 1;
+    const weight = DAMAGE_ECONOMY_RELIEF_FORWARD_DISTANCE_WEIGHTS[index];
+    const to = {
+      x: from.x + DIRS[dir].dx,
+      y: from.y + DIRS[dir].dy
+    };
+    if (isBoundaryBlockedByWalls(tileMap, from, to, dir)) {
+      wallDistance = distance;
+      wallBonus = DAMAGE_ECONOMY_RELIEF_WALL_BONUS_BY_DISTANCE[index] ?? 0;
+      break;
+    }
+
+    const moveCheck = canMoveBetween(tileMap, from, to, dir, registerOptions);
+    if (!moveCheck.ok) {
+      if (moveCheck.crash) {
+        forwardHazardScore += REGISTER_TEMPO_COST * 2 * weight;
+        forwardHazardPenalty += DAMAGE_ECONOMY_RELIEF_FORWARD_HAZARD_PENALTY_MAX * weight;
+      }
+      break;
+    }
+    const tile = tileMap.get(tileKey(to.x, to.y));
+    if (!tile) break;
+
+    let landingHazardScore = Math.max(0, getTilePenalty(tile, registerOptions));
+    landingHazardScore += Math.max(0, Number(moveCheck.ledgeDamage) || 0);
+    landingHazardScore += getPitPressurePenalty(tileMap, to, registerOptions, true);
+    landingHazardScore += getLedgePressurePenalty(tileMap, to, registerOptions);
+    landingHazardScore += getDamageShadowActiveFlamethrowerCount(tile, registerOptions) *
+      Math.max(0, getFlamethrowerDamagePenalty(registerOptions));
+    if (hasActiveFeature(tile, "crusher", registerOptions)) {
+      landingHazardScore = Math.max(landingHazardScore, REGISTER_TEMPO_COST * 2);
+    }
+    forwardHazardScore += landingHazardScore * weight;
+    forwardHazardPenalty += Math.min(
+      DAMAGE_ECONOMY_RELIEF_FORWARD_HAZARD_PENALTY_MAX * weight,
+      landingHazardScore / (REGISTER_TEMPO_COST * 4) * weight
+    );
+    from = to;
+  }
+
+  return {
+    wallBonus: Number(Math.min(0.5, wallBonus).toFixed(4)),
+    wallDistance,
+    forwardHazardPenalty: Number(Math.min(
+      DAMAGE_ECONOMY_RELIEF_FORWARD_HAZARD_PENALTY_MAX,
+      forwardHazardPenalty
+    ).toFixed(4)),
+    forwardHazardScore: Number(forwardHazardScore.toFixed(3))
+  };
+}
+
+function getDamageEconomyRegisterReliefProfile(
+  tileMap,
+  transition,
+  plannedReplay,
+  options,
+  absoluteAction
+) {
+  const register = getRegisterPosition(absoluteAction);
+  const timingAllowance = DAMAGE_SHADOW_CANDIDATE_RELIEF_TIMING_ALLOWANCE[register - 1] ?? 0;
+  if (!transition?.from || !plannedReplay?.to || plannedReplay?.rebooted || plannedReplay?.crashed) {
+    return {
+      timingAllowance,
+      boardOpportunity: 0,
+      conveyorMovementBonus: 0,
+      forcedRotationPenalty: 0,
+      forcedMovementPenalty: 0,
+      wallBonus: 0,
+      wallDistance: null,
+      forwardHazardPenalty: 0,
+      forwardHazardScore: 0,
+      conveyorTurns: 0,
+      travelDirection: null,
+      method: "selected-route-register-opportunity-v2"
+    };
+  }
+
+  const conveyorSteps = (plannedReplay?.conveyorSteps || []).filter(
+    (step) => step?.phase !== "current"
+  );
+  const currentSteps = (plannedReplay?.conveyorSteps || []).filter(
+    (step) => step?.phase === "current"
+  );
+  const conveyorTurns = conveyorSteps.filter((step) => Boolean(step?.turned)).length;
+  const gearTurns = plannedReplay?.gearTurned ? 1 : 0;
+  const pusherEvents = (plannedReplay?.boardEvents || []).filter(
+    (event) => event?.type === "pusher"
+  ).length;
+  const conveyorMovementBonus = Math.min(
+    DAMAGE_ECONOMY_RELIEF_CONVEYOR_BONUS_MAX,
+    conveyorSteps.length * DAMAGE_ECONOMY_RELIEF_CONVEYOR_STEP_BONUS
+  );
+  const forcedRotationPenalty = Math.min(
+    0.45,
+    (conveyorTurns + gearTurns) * DAMAGE_ECONOMY_RELIEF_FORCED_ROTATION_PENALTY
+  );
+  const forcedMovementPenalty = Math.min(
+    0.36,
+    (currentSteps.length + pusherEvents) * DAMAGE_ECONOMY_RELIEF_FORCED_MOVEMENT_PENALTY
+  );
+  const forwardContext = getDamageEconomyForwardReliefContext(
+    tileMap,
+    transition,
+    options,
+    absoluteAction
+  );
+
+  const boardOpportunity = clamp(
+    timingAllowance +
+      conveyorMovementBonus +
+      forwardContext.wallBonus -
+      forcedRotationPenalty -
+      forcedMovementPenalty -
+      forwardContext.forwardHazardPenalty,
+    0,
+    1
+  );
+
+  return {
+    timingAllowance,
+    boardOpportunity: Number(boardOpportunity.toFixed(4)),
+    conveyorMovementBonus: Number(conveyorMovementBonus.toFixed(4)),
+    forcedRotationPenalty: Number(forcedRotationPenalty.toFixed(4)),
+    forcedMovementPenalty: Number(forcedMovementPenalty.toFixed(4)),
+    wallBonus: forwardContext.wallBonus,
+    wallDistance: forwardContext.wallDistance,
+    forwardHazardPenalty: forwardContext.forwardHazardPenalty,
+    forwardHazardScore: forwardContext.forwardHazardScore,
+    conveyorTurns,
+    currentSteps: currentSteps.length,
+    pusherEvents,
+    travelDirection: getDamageShadowCandidateTravelDirection(plannedReplay),
+    method: "selected-route-register-opportunity-v2"
+  };
+}
+
 function getDamageShadowCandidateTrafficReliefPenalty(record) {
   const effectiveInteractionScore = Math.max(
     0,
@@ -5400,6 +6179,1381 @@ function getDamageShadowRealizedDamageForTransition(
   };
 }
 
+
+
+function cloneDamageEconomyState(state) {
+  return {
+    activeTurn: Math.max(1, Math.floor(Number(state?.activeTurn) || 1)),
+    spamTotal: Math.max(0, Number(state?.spamTotal) || 0),
+    spamHeld: Math.max(0, Number(state?.spamHeld) || 0),
+    pendingSpam: Math.max(0, Number(state?.pendingSpam) || 0),
+    activeHaywireDistribution: Array.isArray(state?.activeHaywireDistribution)
+      ? [...state.activeHaywireDistribution]
+      : [1, 0, 0, 0, 0, 0],
+    pendingHaywireRegisterRisks: Array.isArray(state?.pendingHaywireRegisterRisks)
+      ? [...state.pendingHaywireRegisterRisks]
+      : Array(REGISTER_COUNT).fill(0)
+  };
+}
+
+function clearDamageEconomyStateAtProgrammingBoundary(state) {
+  const cleared = cloneDamageEconomyState(state);
+  cleared.spamTotal = 0;
+  cleared.spamHeld = 0;
+  cleared.pendingSpam = 0;
+  cleared.activeHaywireDistribution = [1, 0, 0, 0, 0, 0];
+  cleared.pendingHaywireRegisterRisks = Array(REGISTER_COUNT).fill(0);
+  return cleared;
+}
+
+function getDamageEconomyReliefOpportunityByAbsoluteAction(transitionRecords = []) {
+  const opportunities = new Map();
+  let previousTravelDirection = null;
+  let previousTravelAbsoluteAction = null;
+  let directionRunLength = 0;
+  for (const record of transitionRecords) {
+    const travelDirection = record?.reliefProfile?.travelDirection ?? null;
+    const absoluteAction = Number(record?.absoluteAction) || 0;
+    if (
+      travelDirection &&
+      travelDirection === previousTravelDirection &&
+      previousTravelAbsoluteAction !== null &&
+      absoluteAction === previousTravelAbsoluteAction + 1
+    ) {
+      directionRunLength += 1;
+    } else {
+      directionRunLength = travelDirection ? 1 : 0;
+    }
+    previousTravelDirection = travelDirection;
+    previousTravelAbsoluteAction = absoluteAction;
+    const continuityBonus = record?.reliefProfile?.boardOpportunity > 0 && directionRunLength > 1
+      ? Math.min(
+        DAMAGE_SHADOW_CANDIDATE_RELIEF_CONTINUITY_BONUS_MAX,
+        (directionRunLength - 1) * 0.05
+      )
+      : 0;
+    opportunities.set(absoluteAction, Math.min(
+      1,
+      Math.max(0, Number(record?.reliefProfile?.boardOpportunity) || 0) + continuityBonus
+    ));
+  }
+  return opportunities;
+}
+
+function replayDamageEconomyShutdownEquivalentScore({
+  maxRouteTurn,
+  selectedProgramTurns,
+  recordsByTurn,
+  robotLaserDamageByAbsoluteAction,
+  robotLaserHitProbabilitiesByAbsoluteAction,
+  reliefOpportunityByAbsoluteAction,
+  options = {}
+}) {
+  const profile = getDamageEconomyVariantProfile(options);
+  let state = createDamageEconomyState();
+  DAMAGE_ECONOMY_TELEMETRY.shutdownScoringReplayCount += 1;
+
+  const programmedTurns = [...selectedProgramTurns.entries()]
+    .filter(([, program]) => (program?.actionIds || []).length > 0)
+    .map(([turn]) => Number(turn))
+    .filter(Number.isFinite)
+    .sort((left, right) => left - right);
+  const lastProgramTurn = programmedTurns.length ? programmedTurns.at(-1) : 0;
+
+  let shutdownEquivalentEpisodeCount = 0;
+  let shutdownEquivalentRegisterEquivalents = 0;
+  let segmentRawRegisterEquivalents = 0;
+  let shutdownThreatPeakSegmentRegisterEquivalents = 0;
+  const shutdownEquivalentEpisodeTurns = [];
+  const turnScoring = [];
+
+  for (let turn = 1; turn <= maxRouteTurn; turn += 1) {
+    advanceDamageEconomyToTurn(state, turn);
+    const programTurn = selectedProgramTurns.get(turn) ?? {
+      actionIds: [],
+      programCardIds: [],
+      absoluteActions: []
+    };
+    const actionIds = programTurn.actionIds || [];
+    if (!actionIds.length) continue;
+    DAMAGE_ECONOMY_TELEMETRY.shutdownScoringReplayTurns += 1;
+
+    const previousProgram = selectedProgramTurns.get(turn - 1) ?? null;
+    const previousProgramCode = previousProgram
+      ? getDamageShadowProgramCodeFromLiteralCards(previousProgram.programCardIds)
+      : 0;
+    const programming = getDamageEconomyProgrammingSummary(
+      previousProgramCode,
+      actionIds,
+      state,
+      options
+    );
+    const spamHandAtProgramming = Math.min(
+      profile.handSize,
+      Math.max(0, state.spamHeld + programming.expectedSpamDrawn)
+    );
+    let spamInHandRemaining = spamHandAtProgramming;
+    const forcedSpamReliefInitiations = Math.min(
+      state.spamTotal,
+      spamInHandRemaining,
+      Math.max(0, Number(programming.expectedForcedSpamReliefInitiations) || 0)
+    );
+    if (forcedSpamReliefInitiations > 0.0005) {
+      const forcedCirculatingSpam = Math.max(0, state.spamTotal - spamInHandRemaining);
+      const forcedSpamChainYield = Math.max(
+        1,
+        getDamageShadowExpectedSpamChainYield(
+          programming.baseDeckSize,
+          forcedCirculatingSpam
+        )
+      );
+      spamInHandRemaining = Math.max(0, spamInHandRemaining - forcedSpamReliefInitiations);
+      if (!profile.criticalSpam) {
+        state.spamTotal = Math.max(
+          0,
+          state.spamTotal - Math.min(
+            state.spamTotal,
+            forcedSpamReliefInitiations * forcedSpamChainYield
+          )
+        );
+      }
+    }
+
+    const electiveReliefInitiationProbabilities = [];
+    for (const record of recordsByTurn.get(turn) || []) {
+      const { transition, realized, absoluteAction, register } = record;
+      const reliefOpportunity = Math.max(
+        0,
+        Number(reliefOpportunityByAbsoluteAction.get(absoluteAction)) || 0
+      );
+      let reliefInitiation = 0;
+      if (spamInHandRemaining > 0.0005 && reliefOpportunity > 0.0005) {
+        reliefInitiation = Math.min(1, reliefOpportunity, spamInHandRemaining);
+        const currentCirculatingSpam = Math.max(0, state.spamTotal - spamInHandRemaining);
+        const chainYield = Math.max(
+          1,
+          getDamageShadowExpectedSpamChainYield(
+            programming.baseDeckSize,
+            currentCirculatingSpam
+          )
+        );
+        spamInHandRemaining = Math.max(0, spamInHandRemaining - reliefInitiation);
+        if (!profile.criticalSpam) {
+          state.spamTotal = Math.max(
+            0,
+            state.spamTotal - Math.min(state.spamTotal, reliefInitiation * chainYield)
+          );
+        }
+      }
+      electiveReliefInitiationProbabilities.push(reliefInitiation);
+
+      if (transition?.rebooted) {
+        const rebootSpamDisposalCapacity = Math.max(0, REGISTER_COUNT - register);
+        const rebootSpamRemoved = Math.min(
+          state.spamTotal,
+          spamInHandRemaining,
+          rebootSpamDisposalCapacity
+        );
+        if (rebootSpamRemoved > 0) {
+          spamInHandRemaining = Math.max(0, spamInHandRemaining - rebootSpamRemoved);
+          state.spamTotal = Math.max(0, state.spamTotal - rebootSpamRemoved);
+        }
+        state.activeHaywireDistribution = [1, 0, 0, 0, 0, 0];
+      }
+
+      const robotLaserExpectedDamage = (!transition?.rebooted && !transition?.crashed)
+        ? Math.max(0, Number(robotLaserDamageByAbsoluteAction.get(absoluteAction)) || 0)
+        : 0;
+      const robotLaserHitProbabilities =
+        robotLaserHitProbabilitiesByAbsoluteAction.get(absoluteAction) || [];
+      const haywireEventProbability = getDamageEconomyRegisterHaywireEventProbability(
+        realized.totalDamageUnits,
+        robotLaserHitProbabilities
+      );
+      applyExpectedDamageToEconomyState(
+        state,
+        realized.totalDamageUnits + robotLaserExpectedDamage,
+        register,
+        haywireEventProbability
+      );
+    }
+
+    const spamHeldBeforeFilter = Math.min(state.spamTotal, spamInHandRemaining);
+    state.spamHeld = profile.spamFilter ? 0 : spamHeldBeforeFilter;
+    const electiveSpamPlayDistribution = getDamageShadowPoissonBinomialDistribution(
+      electiveReliefInitiationProbabilities
+    );
+    const forcedSpamHaywireJointDistribution =
+      getDamageEconomyAdjustedForcedSpamHaywireJointDistribution(
+        programming.forcedSpamHaywireJointDistribution,
+        forcedSpamReliefInitiations
+      );
+    const combinedClog = getDamageEconomyCombinedClogSummary(
+      forcedSpamHaywireJointDistribution,
+      electiveSpamPlayDistribution
+    );
+    const turnDamageEconomyRegisterEquivalents =
+      programming.spamSupplyRegisterEquivalents + combinedClog.clogRegisterEquivalents;
+
+    segmentRawRegisterEquivalents += turnDamageEconomyRegisterEquivalents;
+    shutdownThreatPeakSegmentRegisterEquivalents = Math.max(
+      shutdownThreatPeakSegmentRegisterEquivalents,
+      segmentRawRegisterEquivalents
+    );
+
+    const hasFutureProgramming = turn < lastProgramTurn;
+    const episodeTriggered = (
+      hasFutureProgramming &&
+      segmentRawRegisterEquivalents >= DAMAGE_ECONOMY_SHUTDOWN_REFERENCE_RE
+    );
+    turnScoring.push({
+      turn,
+      segmentRawRegisterEquivalents: Number(segmentRawRegisterEquivalents.toFixed(3)),
+      episodeTriggered
+    });
+
+    if (episodeTriggered) {
+      shutdownEquivalentEpisodeCount += 1;
+      shutdownEquivalentRegisterEquivalents += DAMAGE_ECONOMY_SHUTDOWN_REFERENCE_RE;
+      shutdownEquivalentEpisodeTurns.push(turn);
+      state = clearDamageEconomyStateAtProgrammingBoundary(state);
+      segmentRawRegisterEquivalents = 0;
+    }
+  }
+
+  const shutdownResidualRegisterEquivalents = segmentRawRegisterEquivalents;
+  const shutdownEquivalentDamageScoreRegisterEquivalents =
+    shutdownEquivalentRegisterEquivalents + shutdownResidualRegisterEquivalents;
+  const shutdownThreatLevel = shutdownEquivalentEpisodeCount > 0
+    ? "high"
+    : shutdownThreatPeakSegmentRegisterEquivalents >=
+        DAMAGE_ECONOMY_SHUTDOWN_REFERENCE_RE * 0.8
+      ? "elevated"
+      : "low";
+
+  return {
+    shutdownEquivalentEpisodeCount,
+    shutdownEquivalentEpisodeTurns,
+    shutdownEquivalentRegisterEquivalents: Number(
+      shutdownEquivalentRegisterEquivalents.toFixed(3)
+    ),
+    shutdownResidualRegisterEquivalents: Number(
+      shutdownResidualRegisterEquivalents.toFixed(3)
+    ),
+    shutdownEquivalentDamageScoreRegisterEquivalents: Number(
+      shutdownEquivalentDamageScoreRegisterEquivalents.toFixed(3)
+    ),
+    shutdownThreatPeakSegmentRegisterEquivalents: Number(
+      shutdownThreatPeakSegmentRegisterEquivalents.toFixed(3)
+    ),
+    shutdownThreatLevel,
+    turnScoring
+  };
+}
+
+// v49ab-damage9-pressure-reroute shared exact damage-economy replay. The same chronology is
+// still exposed in Dev View, but its shutdown-equivalent RE now also participates
+// in exact full-course route comparison. Route-local realized damage is translated
+// before traffic; confidence-weighted robot-laser damage is translated only in the
+// later common-traffic comparison. Search legality, cheap physical discovery, card
+// legality and search budgets remain unchanged.
+export function summarizeDamageEconomyFoundationForRoute(
+  tileMap,
+  route,
+  options = {},
+  trafficContext = null
+) {
+  if (!tileMap || !route) return null;
+
+  const profile = getDamageEconomyVariantProfile(options);
+  const cacheSignature = [
+    profile.handSize,
+    profile.criticalHaywireCountsAgainstHand ? 1 : 0,
+    profile.spamFilter ? 1 : 0,
+    profile.criticalSpam ? 1 : 0,
+    options.moreDeadlyGame ? 1 : 0,
+    options.cuttingFloor ? 1 : 0,
+    options.recoveryRule ?? "normal"
+  ].join("|");
+  DAMAGE_ECONOMY_TELEMETRY.routeSummaryLookups += 1;
+  let activeRouteSummaryCache = DAMAGE_ECONOMY_ROUTE_SUMMARY_CACHE;
+  if (trafficContext && typeof trafficContext === "object") {
+    activeRouteSummaryCache = DAMAGE_ECONOMY_TRAFFIC_ROUTE_SUMMARY_CACHE.get(trafficContext);
+    if (!activeRouteSummaryCache) {
+      activeRouteSummaryCache = new WeakMap();
+      DAMAGE_ECONOMY_TRAFFIC_ROUTE_SUMMARY_CACHE.set(trafficContext, activeRouteSummaryCache);
+    }
+  }
+  const cached = activeRouteSummaryCache.get(route);
+  if (cached?.signature === cacheSignature) {
+    DAMAGE_ECONOMY_TELEMETRY.routeSummaryCacheHits += 1;
+    return cached.summary;
+  }
+  DAMAGE_ECONOMY_TELEMETRY.routeSummaryCacheMisses += 1;
+
+  const trafficRanged = getDamageShadowTrafficRangedRegisterInputs(
+    tileMap,
+    route,
+    trafficContext,
+    options
+  );
+  const robotLaserDamageByAbsoluteAction = new Map(
+    (trafficRanged?.records || []).map((record) => [
+      record.absoluteAction,
+      Math.max(0, Number(record.expectedDamageUnits) || 0)
+    ])
+  );
+  const robotLaserHitProbabilitiesByAbsoluteAction = new Map(
+    (trafficRanged?.records || []).map((record) => [
+      record.absoluteAction,
+      ROTATION_ORDER.map((dir) => clamp(
+        Number(record?.expectedHitProbabilityByDirection?.[dir]) || 0,
+        0,
+        1
+      ))
+    ])
+  );
+
+  const legs = Array.isArray(route.legRoutes) && route.legRoutes.length
+    ? route.legRoutes
+    : [route];
+  const selectedProgramTurns = getDamageShadowSelectedProgramTurns(legs);
+  const transitionRecords = [];
+  let previousAbsoluteAction = 0;
+  for (const [legIndex, leg] of legs.entries()) {
+    const transitions = Array.isArray(leg?.transitions) ? leg.transitions : [];
+    let elapsedAbsoluteActions = Math.max(
+      0,
+      Number(leg?.absoluteStartAction) || previousAbsoluteAction
+    );
+    for (const [legActionIndex, transition] of transitions.entries()) {
+      const absoluteAction = getTransitionAbsoluteAction(
+        transition,
+        elapsedAbsoluteActions + 1
+      );
+      const turn = Math.floor((absoluteAction - 1) / REGISTER_COUNT) + 1;
+      const register = getRegisterPosition(absoluteAction);
+      const realized = getDamageShadowRealizedDamageForTransition(
+        tileMap,
+        transition,
+        options,
+        absoluteAction
+      );
+      const reliefProfile = getDamageEconomyRegisterReliefProfile(
+        tileMap,
+        transition,
+        transition,
+        options,
+        absoluteAction
+      );
+      transitionRecords.push({
+        legIndex,
+        legAction: legActionIndex + 1,
+        absoluteAction,
+        turn,
+        register,
+        transition,
+        realized,
+        reliefProfile
+      });
+      elapsedAbsoluteActions = transition?.rebooted
+        ? getRebootEndedAbsoluteActions(absoluteAction)
+        : absoluteAction;
+      previousAbsoluteAction = Math.max(previousAbsoluteAction, elapsedAbsoluteActions);
+    }
+  }
+
+  const recordsByTurn = new Map();
+  transitionRecords.forEach((record) => {
+    if (!recordsByTurn.has(record.turn)) recordsByTurn.set(record.turn, []);
+    recordsByTurn.get(record.turn).push(record);
+  });
+  for (const records of recordsByTurn.values()) {
+    records.sort((a, b) => a.absoluteAction - b.absoluteAction);
+  }
+
+  const maxRouteTurn = Math.max(
+    1,
+    ...transitionRecords.map((record) => record.turn),
+    ...selectedProgramTurns.keys()
+  );
+  const reliefOpportunityByAbsoluteAction =
+    getDamageEconomyReliefOpportunityByAbsoluteAction(transitionRecords);
+  const state = createDamageEconomyState();
+  const turns = [];
+  const events = [];
+  let totalDamageUnits = 0;
+  let deterministicDamageUnits = 0;
+  let robotLaserExpectedDamageUnits = 0;
+  let boardLaserDamageUnits = 0;
+  let flamethrowerDamageUnits = 0;
+  let ledgeDamageUnits = 0;
+  let rebootDamageUnits = 0;
+  let totalSpamAdded = 0;
+  let totalSpamRemoved = 0;
+  let totalSpamReliefInitiations = 0;
+  let totalForcedSpamReliefInitiations = 0;
+  let totalElectiveSpamReliefInitiations = 0;
+  let totalSpamChainExtraRemoved = 0;
+  let totalRebootSpamRemoved = 0;
+  let totalRebootSpamDisposalCapacity = 0;
+  let totalRebootHaywireCleared = 0;
+  let rebootReliefCount = 0;
+  let totalSpamSupplyRegisterEquivalents = 0;
+  let totalClogRegisterEquivalents = 0;
+  let totalDamageEconomyRegisterEquivalents = 0;
+  let maxTurnDamageEconomyRegisterEquivalents = 0;
+  let maxSpamTotal = 0;
+  let maxSpamHeld = 0;
+  let maxExpectedHaywireClogs = 0;
+  let maxExpectedTotalClogs = 0;
+
+  for (let turn = 1; turn <= maxRouteTurn; turn += 1) {
+    advanceDamageEconomyToTurn(state, turn);
+    const programTurn = selectedProgramTurns.get(turn) ?? {
+      actionIds: [],
+      programCardIds: [],
+      absoluteActions: []
+    };
+    const actionIds = programTurn.actionIds || [];
+    const programRegisters = actionIds.length;
+    if (!programRegisters) continue;
+    const previousProgram = selectedProgramTurns.get(turn - 1) ?? null;
+    const previousProgramCode = previousProgram
+      ? getDamageShadowProgramCodeFromLiteralCards(previousProgram.programCardIds)
+      : 0;
+    const programming = getDamageEconomyProgrammingSummary(
+      previousProgramCode,
+      actionIds,
+      state,
+      options
+    );
+    const spamTotalAtProgramming = state.spamTotal;
+    const spamHeldCarry = state.spamHeld;
+    const spamCirculatingAtProgramming = Math.max(0, spamTotalAtProgramming - spamHeldCarry);
+    const haywireExpectedAtProgramming = programming.expectedHaywireClogs;
+    const spamHandAtProgramming = Math.min(
+      profile.handSize,
+      Math.max(0, spamHeldCarry + programming.expectedSpamDrawn)
+    );
+    let spamInHandRemaining = spamHandAtProgramming;
+    const forcedSpamReliefInitiations = Math.min(
+      state.spamTotal,
+      spamInHandRemaining,
+      Math.max(0, Number(programming.expectedForcedSpamReliefInitiations) || 0)
+    );
+    let forcedSpamChainYield = 0;
+    let forcedSpamRemoved = 0;
+    if (forcedSpamReliefInitiations > 0.0005) {
+      const forcedCirculatingSpam = Math.max(0, state.spamTotal - spamInHandRemaining);
+      forcedSpamChainYield = Math.max(
+        1,
+        getDamageShadowExpectedSpamChainYield(
+          programming.baseDeckSize,
+          forcedCirculatingSpam
+        )
+      );
+      spamInHandRemaining = Math.max(0, spamInHandRemaining - forcedSpamReliefInitiations);
+      if (!profile.criticalSpam) {
+        forcedSpamRemoved = Math.min(
+          state.spamTotal,
+          forcedSpamReliefInitiations * forcedSpamChainYield
+        );
+        state.spamTotal = Math.max(0, state.spamTotal - forcedSpamRemoved);
+      }
+    }
+    let turnElectiveReliefInitiations = 0;
+    let turnSpamRemoved = forcedSpamRemoved;
+    let turnSpamChainExtraRemoved = Math.max(
+      0,
+      forcedSpamRemoved - forcedSpamReliefInitiations
+    );
+    let turnRebootSpamRemoved = 0;
+    let turnRebootSpamDisposalCapacity = 0;
+    let turnRebootHaywireCleared = 0;
+    let turnRebootRegister = 0;
+    let turnReliefOpportunity = 0;
+    let turnBoardDamageUnits = 0;
+    let turnRobotLaserExpectedDamageUnits = 0;
+    let pendingSpamAddedThisTurn = 0;
+    let pendingHaywireRiskAddedThisTurn = 0;
+    const registerEvents = [];
+    const electiveReliefInitiationProbabilities = [];
+
+    for (const record of recordsByTurn.get(turn) || []) {
+      const { transition, realized, reliefProfile, absoluteAction, register } = record;
+      const reliefOpportunity = Math.max(
+        0,
+        Number(reliefOpportunityByAbsoluteAction.get(absoluteAction)) || 0
+      );
+      // Haywire no longer suppresses the probability of choosing a SPAM relief
+      // opportunity. Its interaction with SPAM is more faithfully represented by
+      // the shared nonlinear control-clog cost after SPAM plays are known.
+      turnReliefOpportunity += reliefOpportunity;
+
+      let reliefInitiation = 0;
+      let chainYield = 0;
+      let totalRemovedThisRegister = 0;
+      if (spamInHandRemaining > 0.0005 && reliefOpportunity > 0.0005) {
+        reliefInitiation = Math.min(1, reliefOpportunity, spamInHandRemaining);
+        const currentCirculatingSpam = Math.max(0, state.spamTotal - spamInHandRemaining);
+        chainYield = Math.max(
+          1,
+          getDamageShadowExpectedSpamChainYield(
+            programming.baseDeckSize,
+            currentCirculatingSpam
+          )
+        );
+        spamInHandRemaining = Math.max(0, spamInHandRemaining - reliefInitiation);
+        if (!profile.criticalSpam) {
+          totalRemovedThisRegister = Math.min(
+            state.spamTotal,
+            reliefInitiation * chainYield
+          );
+          state.spamTotal = Math.max(0, state.spamTotal - totalRemovedThisRegister);
+        }
+        turnElectiveReliefInitiations += reliefInitiation;
+        turnSpamRemoved += totalRemovedThisRegister;
+        turnSpamChainExtraRemoved += Math.max(
+          0,
+          totalRemovedThisRegister - reliefInitiation
+        );
+      }
+      electiveReliefInitiationProbabilities.push(reliefInitiation);
+
+      let rebootSpamRemoved = 0;
+      let rebootSpamDisposalCapacity = 0;
+      let rebootHaywireCleared = 0;
+      if (transition?.rebooted) {
+        // The selected exact route knows this reboot will happen. We still do not
+        // simulate literal SPAM cards in registers; instead, the skipped trailing
+        // registers are abstract disposal capacity for SPAM plausibly already in
+        // hand. This removes only pre-existing SPAM from the persistent burden.
+        // It does NOT clear circulating/deck SPAM wholesale.
+        rebootSpamDisposalCapacity = Math.max(0, REGISTER_COUNT - register);
+        rebootSpamRemoved = Math.min(
+          state.spamTotal,
+          spamInHandRemaining,
+          rebootSpamDisposalCapacity
+        );
+        if (rebootSpamRemoved > 0) {
+          spamInHandRemaining = Math.max(0, spamInHandRemaining - rebootSpamRemoved);
+          state.spamTotal = Math.max(0, state.spamTotal - rebootSpamRemoved);
+        }
+
+        // Reboot clears damage already occupying registers. In the estimator that
+        // is the active Haywire clog for this programmed turn. It has already paid
+        // its programming/control cost, so this is diagnostic cleanup rather than
+        // a retroactive refund. Same-turn pending damage remains in deck/discard
+        // abstraction and is NOT cleared. Reboot's own fresh damage is added below.
+        rebootHaywireCleared = haywireExpectedAtProgramming;
+        state.activeHaywireDistribution = [1, 0, 0, 0, 0, 0];
+        turnRebootRegister = register;
+        turnRebootSpamRemoved += rebootSpamRemoved;
+        turnRebootSpamDisposalCapacity += rebootSpamDisposalCapacity;
+        turnRebootHaywireCleared = Math.max(
+          turnRebootHaywireCleared,
+          rebootHaywireCleared
+        );
+        totalRebootSpamRemoved += rebootSpamRemoved;
+        totalRebootSpamDisposalCapacity += rebootSpamDisposalCapacity;
+        totalRebootHaywireCleared += rebootHaywireCleared;
+        rebootReliefCount += 1;
+      }
+
+      // Robot lasers occur in the same late register phase as board lasers. A pit,
+      // active trapdoor or crusher has already removed/rebooted the robot before
+      // that phase, so no robot-laser exposure stacks onto a terminal transition.
+      const robotLaserExpectedDamage = (!transition?.rebooted && !transition?.crashed)
+        ? Math.max(0, Number(robotLaserDamageByAbsoluteAction.get(absoluteAction)) || 0)
+        : 0;
+      const combinedDamageUnits = realized.totalDamageUnits + robotLaserExpectedDamage;
+      const pendingSpamBefore = state.pendingSpam;
+      const pendingHaywireBefore = state.pendingHaywireRegisterRisks[register - 1] || 0;
+      const robotLaserHitProbabilities =
+        robotLaserHitProbabilitiesByAbsoluteAction.get(absoluteAction) || [];
+      const haywireEventProbability = getDamageEconomyRegisterHaywireEventProbability(
+        realized.totalDamageUnits,
+        robotLaserHitProbabilities
+      );
+      const added = applyExpectedDamageToEconomyState(
+        state,
+        combinedDamageUnits,
+        register,
+        haywireEventProbability
+      );
+      pendingSpamAddedThisTurn += added.spamAdded;
+      pendingHaywireRiskAddedThisTurn += added.haywireRegisterRiskAdded;
+      totalDamageUnits += combinedDamageUnits;
+      deterministicDamageUnits += realized.totalDamageUnits;
+      robotLaserExpectedDamageUnits += robotLaserExpectedDamage;
+      turnRobotLaserExpectedDamageUnits += robotLaserExpectedDamage;
+      boardLaserDamageUnits += realized.boardLaserDamageUnits;
+      flamethrowerDamageUnits += realized.flamethrowerDamageUnits;
+      ledgeDamageUnits += realized.ledgeDamageUnits;
+      rebootDamageUnits += realized.rebootDamageUnits;
+      totalSpamAdded += added.spamAdded;
+
+      const eventSourceTypes = [...(realized.sourceTypes || [])];
+      if (robotLaserExpectedDamage > 0.0005) eventSourceTypes.push("robot-laser-expected");
+      const event = {
+        absoluteAction,
+        turn,
+        register,
+        action: transition?.action ?? null,
+        rebooted: Boolean(transition?.rebooted),
+        sourceTypes: eventSourceTypes,
+        deterministicDamageUnits: Number(realized.totalDamageUnits.toFixed(4)),
+        robotLaserExpectedDamageUnits: Number(robotLaserExpectedDamage.toFixed(4)),
+        robotLaserHitProbabilities: robotLaserHitProbabilities.map(
+          (value) => Number(value.toFixed(4))
+        ),
+        haywireEventProbability: Number(haywireEventProbability.toFixed(4)),
+        damageUnits: Number(combinedDamageUnits.toFixed(4)),
+        reliefOpportunity: Number(reliefOpportunity.toFixed(4)),
+        reliefInitiation: Number(reliefInitiation.toFixed(4)),
+        spamChainYield: Number(chainYield.toFixed(4)),
+        reliefWallBonus: Number(reliefProfile?.wallBonus || 0),
+        reliefWallDistance: reliefProfile?.wallDistance ?? null,
+        reliefForwardHazardPenalty: Number(reliefProfile?.forwardHazardPenalty || 0),
+        reliefForwardHazardScore: Number(reliefProfile?.forwardHazardScore || 0),
+        reliefConveyorMovementBonus: Number(reliefProfile?.conveyorMovementBonus || 0),
+        reliefForcedRotationPenalty: Number(reliefProfile?.forcedRotationPenalty || 0),
+        reliefForcedMovementPenalty: Number(reliefProfile?.forcedMovementPenalty || 0),
+        spamRemoved: Number(totalRemovedThisRegister.toFixed(4)),
+        rebootSpamDisposalCapacity: Number(rebootSpamDisposalCapacity.toFixed(4)),
+        rebootSpamRemoved: Number(rebootSpamRemoved.toFixed(4)),
+        rebootHaywireCleared: Number(rebootHaywireCleared.toFixed(4)),
+        pendingSpamBefore: Number(pendingSpamBefore.toFixed(4)),
+        spamAdded: Number(added.spamAdded.toFixed(4)),
+        pendingSpamAfter: Number(state.pendingSpam.toFixed(4)),
+        pendingHaywireRegisterRiskBefore: Number(pendingHaywireBefore.toFixed(4)),
+        haywireRegisterRiskAdded: Number(added.haywireRegisterRiskAdded.toFixed(4)),
+        pendingHaywireRegisterRiskAfter: Number(added.haywireRegisterRiskAfter.toFixed(4))
+      };
+      events.push(event);
+      registerEvents.push(event);
+    }
+
+    const turnSpamReliefInitiations =
+      forcedSpamReliefInitiations + turnElectiveReliefInitiations;
+    totalSpamReliefInitiations += turnSpamReliefInitiations;
+    totalForcedSpamReliefInitiations += forcedSpamReliefInitiations;
+    totalElectiveSpamReliefInitiations += turnElectiveReliefInitiations;
+    totalSpamRemoved += turnSpamRemoved + turnRebootSpamRemoved;
+    totalSpamChainExtraRemoved += turnSpamChainExtraRemoved;
+
+    // SPAM that was plausibly in hand and neither tactically played nor assigned
+    // to skipped post-reboot registers remains held. SPAM Filter is different: it
+    // moves all unprogrammed SPAM back to discard at
+    // the end of programming, so held burden becomes zero while total burden is
+    // unchanged. Critical SPAM likewise moves a played SPAM out of hand but does
+    // not remove it from total burden; normal SPAM play removes it from both.
+    const spamHeldBeforeFilter = Math.min(state.spamTotal, spamInHandRemaining);
+    state.spamHeld = profile.spamFilter ? 0 : spamHeldBeforeFilter;
+
+    const pendingHaywireDistribution = getDamageShadowPoissonBinomialDistribution(
+      state.pendingHaywireRegisterRisks
+    );
+    const pendingHaywireExpected = getDamageEconomyExpectedCount(
+      pendingHaywireDistribution
+    );
+    const electiveSpamPlayDistribution = getDamageShadowPoissonBinomialDistribution(
+      electiveReliefInitiationProbabilities
+    );
+    const forcedSpamHaywireJointDistribution =
+      getDamageEconomyAdjustedForcedSpamHaywireJointDistribution(
+        programming.forcedSpamHaywireJointDistribution,
+        forcedSpamReliefInitiations
+      );
+    const combinedClog = getDamageEconomyCombinedClogSummary(
+      forcedSpamHaywireJointDistribution,
+      electiveSpamPlayDistribution
+    );
+    const turnDamageEconomyRE =
+      programming.spamSupplyRegisterEquivalents +
+      combinedClog.clogRegisterEquivalents;
+    totalSpamSupplyRegisterEquivalents += programming.spamSupplyRegisterEquivalents;
+    totalClogRegisterEquivalents += combinedClog.clogRegisterEquivalents;
+    totalDamageEconomyRegisterEquivalents += turnDamageEconomyRE;
+    maxTurnDamageEconomyRegisterEquivalents = Math.max(
+      maxTurnDamageEconomyRegisterEquivalents,
+      turnDamageEconomyRE
+    );
+    maxSpamTotal = Math.max(maxSpamTotal, state.spamTotal + state.pendingSpam);
+    maxSpamHeld = Math.max(maxSpamHeld, state.spamHeld);
+    maxExpectedHaywireClogs = Math.max(
+      maxExpectedHaywireClogs,
+      programming.expectedHaywireClogs,
+      pendingHaywireExpected
+    );
+    maxExpectedTotalClogs = Math.max(
+      maxExpectedTotalClogs,
+      combinedClog.expectedControlClogLoad
+    );
+
+    turns.push({
+      turn,
+      programRegisters,
+      previousProgramCode,
+      baseDeckSize: programming.baseDeckSize,
+      baseHandSize: programming.baseHandSize,
+      spamTotalAtProgramming: Number(spamTotalAtProgramming.toFixed(4)),
+      spamHeldAtProgramming: Number(spamHeldCarry.toFixed(4)),
+      spamCirculatingAtProgramming: Number(spamCirculatingAtProgramming.toFixed(4)),
+      effectiveHeldSpam: programming.effectiveHeldSpam,
+      effectiveCirculatingSpam: programming.effectiveCirculatingSpam,
+      expectedFreshDrawSlots: Number(programming.expectedFreshDrawSlots.toFixed(3)),
+      expectedSpamDrawn: Number(programming.expectedSpamDrawn.toFixed(3)),
+      expectedSpamInHand: Number(programming.expectedSpamInHand.toFixed(3)),
+      cleanProgramProbability: Number(programming.cleanProgramProbability.toFixed(5)),
+      damagedProgramProbability: Number(programming.damagedProgramProbability.toFixed(5)),
+      spamSupplyRegisterEquivalents: Number(
+        programming.spamSupplyRegisterEquivalents.toFixed(3)
+      ),
+      expectedHaywireClogs: Number(programming.expectedHaywireClogs.toFixed(3)),
+      forcedSpamReliefInitiations: Number(forcedSpamReliefInitiations.toFixed(3)),
+      electiveSpamReliefInitiations: Number(turnElectiveReliefInitiations.toFixed(3)),
+      spamPlayInitiations: Number(turnSpamReliefInitiations.toFixed(3)),
+      spamPlayClogWeight: DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT,
+      spamPlayClogLoad: Number(combinedClog.spamClogLoad.toFixed(3)),
+      spamPlayCountDistribution: combinedClog.spamPlayCountDistribution.map(
+        (value) => Number(value.toFixed(4))
+      ),
+      expectedTotalControlClogLoad: Number(combinedClog.expectedControlClogLoad.toFixed(3)),
+      clogRegisterEquivalents: Number(combinedClog.clogRegisterEquivalents.toFixed(3)),
+      damageEconomyRegisterEquivalents: Number(turnDamageEconomyRE.toFixed(3)),
+      probabilityFourPlusClogs: Number(combinedClog.probabilityFourPlusClogs.toFixed(4)),
+      probabilityFivePlusClogs: Number(combinedClog.probabilityFivePlusClogs.toFixed(4)),
+      reliefOpportunity: Number(turnReliefOpportunity.toFixed(3)),
+      reliefInitiations: Number(turnSpamReliefInitiations.toFixed(3)),
+      forcedSpamRemoved: Number(forcedSpamRemoved.toFixed(3)),
+      forcedSpamChainYield: Number(forcedSpamChainYield.toFixed(4)),
+      spamRemoved: Number(turnSpamRemoved.toFixed(3)),
+      spamChainExtraRemoved: Number(turnSpamChainExtraRemoved.toFixed(3)),
+      rebootRegister: turnRebootRegister || null,
+      rebootSpamDisposalCapacity: Number(turnRebootSpamDisposalCapacity.toFixed(3)),
+      rebootSpamRemoved: Number(turnRebootSpamRemoved.toFixed(3)),
+      rebootHaywireCleared: Number(turnRebootHaywireCleared.toFixed(3)),
+      spamHeldBeforeFilter: Number(spamHeldBeforeFilter.toFixed(3)),
+      spamHeldAtTurnEnd: Number(state.spamHeld.toFixed(3)),
+      spamTotalBeforeNewDamage: Number(state.spamTotal.toFixed(3)),
+      deterministicDamageUnits: Number(
+        registerEvents.reduce((sum, event) => sum + (Number(event.deterministicDamageUnits) || 0), 0).toFixed(3)
+      ),
+      robotLaserExpectedDamageUnits: Number(turnRobotLaserExpectedDamageUnits.toFixed(3)),
+      totalDamageUnits: Number(
+        registerEvents.reduce((sum, event) => sum + (Number(event.damageUnits) || 0), 0).toFixed(3)
+      ),
+      pendingSpamAddedThisTurn: Number(pendingSpamAddedThisTurn.toFixed(3)),
+      pendingSpamAtTurnEnd: Number(state.pendingSpam.toFixed(3)),
+      pendingHaywireRegisterRisks: state.pendingHaywireRegisterRisks.map(
+        (value) => Number(value.toFixed(4))
+      ),
+      pendingHaywireExpectedForNextTurn: Number(pendingHaywireExpected.toFixed(3)),
+      pendingHaywireRiskAddedThisTurn: Number(pendingHaywireRiskAddedThisTurn.toFixed(3)),
+      criticalHaywireHandRule: profile.criticalHaywireCountsAgainstHand,
+      spamFilterApplied: profile.spamFilter,
+      criticalSpamApplied: profile.criticalSpam,
+      registerEvents
+    });
+  }
+
+  const shutdownScoring = replayDamageEconomyShutdownEquivalentScore({
+    maxRouteTurn,
+    selectedProgramTurns,
+    recordsByTurn,
+    robotLaserDamageByAbsoluteAction,
+    robotLaserHitProbabilitiesByAbsoluteAction,
+    reliefOpportunityByAbsoluteAction,
+    options
+  });
+  const shutdownTurnScoringByTurn = new Map(
+    (shutdownScoring.turnScoring || []).map((entry) => [entry.turn, entry])
+  );
+  turns.forEach((turnSummary) => {
+    const scoring = shutdownTurnScoringByTurn.get(turnSummary.turn);
+    turnSummary.shutdownThreatSegmentRegisterEquivalents =
+      scoring?.segmentRawRegisterEquivalents ?? 0;
+    turnSummary.shutdownEquivalentEpisodeAfterTurn =
+      Boolean(scoring?.episodeTriggered);
+  });
+
+  const activeHaywireExpected = getDamageEconomyExpectedCount(
+    state.activeHaywireDistribution
+  );
+  const terminalPendingHaywireDistribution = getDamageShadowPoissonBinomialDistribution(
+    state.pendingHaywireRegisterRisks
+  );
+  const terminalPendingHaywireExpected = getDamageEconomyExpectedCount(
+    terminalPendingHaywireDistribution
+  );
+  const telemetry = getDamageEconomyTelemetrySnapshot();
+  const summary = {
+    method: DAMAGE_ECONOMY_MODEL_ID,
+    observationalOnly: false,
+    scoringActive: true,
+    routingActive: true,
+    spamShare: Number(profile.spamShare.toFixed(4)),
+    haywireShare: Number(profile.haywireShare.toFixed(4)),
+    shutdownReferenceRegisterEquivalents: DAMAGE_ECONOMY_SHUTDOWN_REFERENCE_RE,
+    shutdownContextualRiskModeled: false,
+    shutdownEquivalentScoringModeled: true,
+    activeVariantHooks: profile.activeHooks,
+    implementedVariantHooks: profile.implementedHooks,
+    deferredVariantHooks: profile.deferredHooks,
+    baseHandSize: profile.handSize,
+    totalDamageUnits: Number(totalDamageUnits.toFixed(3)),
+    deterministicDamageUnits: Number(deterministicDamageUnits.toFixed(3)),
+    robotLaserExpectedDamageUnits: Number(robotLaserExpectedDamageUnits.toFixed(3)),
+    robotLaserTrafficAvailable: Boolean(trafficRanged),
+    robotLaserTrafficOccupancyModel: trafficRanged?.occupancyModel ?? null,
+    robotLaserTrafficConfidenceMean: trafficRanged?.confidenceMean ?? null,
+    boardLaserDamageUnits: Number(boardLaserDamageUnits.toFixed(3)),
+    flamethrowerDamageUnits: Number(flamethrowerDamageUnits.toFixed(3)),
+    ledgeDamageUnits: Number(ledgeDamageUnits.toFixed(3)),
+    rebootDamageUnits: Number(rebootDamageUnits.toFixed(3)),
+    totalSpamAdded: Number(totalSpamAdded.toFixed(3)),
+    totalSpamRemoved: Number(totalSpamRemoved.toFixed(3)),
+    totalSpamReliefInitiations: Number(totalSpamReliefInitiations.toFixed(3)),
+    totalForcedSpamReliefInitiations: Number(totalForcedSpamReliefInitiations.toFixed(3)),
+    totalElectiveSpamReliefInitiations: Number(totalElectiveSpamReliefInitiations.toFixed(3)),
+    spamPlayClogWeight: DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT,
+    totalSpamChainExtraRemoved: Number(totalSpamChainExtraRemoved.toFixed(3)),
+    totalRebootSpamRemoved: Number(totalRebootSpamRemoved.toFixed(3)),
+    totalRebootSpamDisposalCapacity: Number(totalRebootSpamDisposalCapacity.toFixed(3)),
+    totalRebootHaywireCleared: Number(totalRebootHaywireCleared.toFixed(3)),
+    rebootReliefCount,
+    spamReliefMethod: "five-card-floor-forced-plus-additive-register-relief-forward-safety-v2",
+    spamClogMethod: "distributed-spam-play-count-weight2-plus-haywire-joint-nonlinear",
+    rebootReliefMethod: "selected-route-skipped-register-capacity-active-haywire-clear",
+    totalSpamSupplyRegisterEquivalents: Number(
+      totalSpamSupplyRegisterEquivalents.toFixed(3)
+    ),
+    totalClogRegisterEquivalents: Number(totalClogRegisterEquivalents.toFixed(3)),
+    totalDamageEconomyRegisterEquivalents: Number(
+      totalDamageEconomyRegisterEquivalents.toFixed(3)
+    ),
+    maxTurnDamageEconomyRegisterEquivalents: Number(
+      maxTurnDamageEconomyRegisterEquivalents.toFixed(3)
+    ),
+    shutdownEquivalentEpisodeCount: shutdownScoring.shutdownEquivalentEpisodeCount,
+    shutdownEquivalentEpisodeTurns: shutdownScoring.shutdownEquivalentEpisodeTurns,
+    shutdownEquivalentRegisterEquivalents:
+      shutdownScoring.shutdownEquivalentRegisterEquivalents,
+    shutdownResidualRegisterEquivalents:
+      shutdownScoring.shutdownResidualRegisterEquivalents,
+    shutdownEquivalentDamageScoreRegisterEquivalents:
+      shutdownScoring.shutdownEquivalentDamageScoreRegisterEquivalents,
+    shutdownThreatPeakSegmentRegisterEquivalents:
+      shutdownScoring.shutdownThreatPeakSegmentRegisterEquivalents,
+    shutdownThreatLevel: shutdownScoring.shutdownThreatLevel,
+    damageAvoidanceSignal: shutdownScoring.shutdownEquivalentEpisodeCount > 0
+      ? "shutdown-equivalent-route-danger"
+      : shutdownScoring.shutdownThreatLevel === "elevated"
+        ? "elevated-shutdown-threat"
+        : "below-shutdown-threat",
+    maxSpamTotal: Number(maxSpamTotal.toFixed(3)),
+    maxSpamHeld: Number(maxSpamHeld.toFixed(3)),
+    maxExpectedHaywireClogs: Number(maxExpectedHaywireClogs.toFixed(3)),
+    maxExpectedTotalClogs: Number(maxExpectedTotalClogs.toFixed(3)),
+    finalSpamTotal: Number(state.spamTotal.toFixed(4)),
+    finalSpamHeld: Number(state.spamHeld.toFixed(4)),
+    finalSpamCirculating: Number(Math.max(0, state.spamTotal - state.spamHeld).toFixed(4)),
+    finalActiveHaywireExpectedClogs: Number(activeHaywireExpected.toFixed(4)),
+    finalPendingSpam: Number(state.pendingSpam.toFixed(4)),
+    finalPendingHaywireExpectedClogs: Number(terminalPendingHaywireExpected.toFixed(4)),
+    finalPendingHaywireRegisterRisks: state.pendingHaywireRegisterRisks.map(
+      (value) => Number(value.toFixed(4))
+    ),
+    turns,
+    events,
+    ...telemetry
+  };
+  activeRouteSummaryCache.set(route, {
+    signature: cacheSignature,
+    summary
+  });
+  return summary;
+}
+
+// v49ab: exact-route damage scoring replaces only the legacy score attached to
+// damage that actually occurred. Counterfactual hazard pressure remains in the
+// intrinsic route score: a laser square passed safely, a nearby pit, timed machinery
+// fragility, etc. are still useful route-risk signals even when no damage card is
+// added. Reboot lost-register/discontinuity costs likewise remain separate.
+function getLegacyRealizedDirectDamageScoreForRoute(tileMap, route, options = {}) {
+  if (!tileMap || !route) return 0;
+  const legs = Array.isArray(route.legRoutes) && route.legRoutes.length
+    ? route.legRoutes
+    : [route];
+  let score = 0;
+  let previousAbsoluteAction = Math.max(0, Number(route?.absoluteStartAction) || 0);
+
+  for (const leg of legs) {
+    let elapsedAbsoluteActions = Math.max(
+      0,
+      Number(leg?.absoluteStartAction) || previousAbsoluteAction
+    );
+    for (const transition of leg?.transitions || []) {
+      const absoluteAction = getTransitionAbsoluteAction(
+        transition,
+        elapsedAbsoluteActions + 1
+      );
+      const registerOptions = {
+        ...options,
+        registerIndex: (Math.max(1, absoluteAction) - 1) % REGISTER_COUNT
+      };
+
+      // Active flamethrowers deal one damage on each actual entry/pass-through.
+      for (const point of transition?.traversed || []) {
+        if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
+        const tile = tileMap.get(tileKey(point.x, point.y));
+        score += getDamageShadowActiveFlamethrowerCount(tile, registerOptions) *
+          getFlamethrowerDamagePenalty(registerOptions);
+      }
+
+      // Ledge direct damage historically entered route.hazard in raw damage units.
+      const movementPoints = [transition?.from, ...(transition?.traversed || [])]
+        .filter((point) => point && Number.isFinite(point.x) && Number.isFinite(point.y));
+      for (let index = 1; index < movementPoints.length; index += 1) {
+        const from = movementPoints[index - 1];
+        const to = movementPoints[index];
+        const dx = to.x - from.x;
+        const dy = to.y - from.y;
+        const dir = dx === 1 && dy === 0
+          ? "E"
+          : dx === -1 && dy === 0
+            ? "W"
+            : dx === 0 && dy === 1
+              ? "S"
+              : dx === 0 && dy === -1
+                ? "N"
+                : null;
+        if (!dir) continue;
+        const toTile = tileMap.get(tileKey(to.x, to.y));
+        if (
+          toTile &&
+          getLedgeSides(toTile).has(OPPOSITE[dir]) &&
+          !hasRampForDir(toTile, OPPOSITE[dir])
+        ) {
+          score += isWater(toTile) ? 1 : 2;
+        }
+      }
+
+      if (transition?.rebooted) {
+        score += getRebootDamagePenalty(options);
+      } else if (!transition?.crashed && transition?.to) {
+        const finalTile = tileMap.get(tileKey(transition.to.x, transition.to.y));
+        for (const feature of finalTile?.features || []) {
+          if (feature.type === "laser") {
+            score += Math.max(0, getTilePenaltyForFeature(feature, {
+              batteryActive: isBatteryActive(options),
+              rebootDamagePenalty: getRebootDamagePenalty(options),
+              playerCount: options.playerCount,
+              cuttingFloor: options.cuttingFloor,
+              flamingOil: options.flamingOil,
+              repulsorOverdrive: options.repulsorOverdrive,
+              upgradeWorld: options.upgradeWorld,
+              lessSpammyGame: options.lessSpammyGame,
+              criticalSpam: options.criticalSpam,
+              criticalHaywire: options.criticalHaywire,
+              permanentShutdown: options.permanentShutdown
+            }));
+          }
+        }
+        score += getDamageShadowActiveFlamethrowerCount(finalTile, registerOptions) *
+          getFlamethrowerDamagePenalty(registerOptions);
+      }
+
+      elapsedAbsoluteActions = transition?.rebooted
+        ? getRebootEndedAbsoluteActions(absoluteAction)
+        : absoluteAction;
+      previousAbsoluteAction = Math.max(previousAbsoluteAction, elapsedAbsoluteActions);
+    }
+  }
+
+  return Number(Math.max(0, score).toFixed(3));
+}
+
+function applyIntrinsicDamageEconomyRoutingScore(tileMap, route, options = {}) {
+  if (!route || !tileMap) return route;
+  if (route.damageRoutingModel === "v49ab-shutdown-equivalent") return route;
+
+  const legacyScore = Number.isFinite(Number(route.legacyScoreBeforeDamageRouting))
+    ? Number(route.legacyScoreBeforeDamageRouting)
+    : Number(route.score);
+  if (!Number.isFinite(legacyScore)) return route;
+
+  const summary = summarizeDamageEconomyFoundationForRoute(tileMap, route, options, null);
+  const shutdownEquivalentRE = Math.max(
+    0,
+    Number(summary?.shutdownEquivalentDamageScoreRegisterEquivalents) || 0
+  );
+  const replacementDamageScore = shutdownEquivalentRE * REGISTER_TEMPO_COST;
+  const legacyRealizedDirectDamageScore = getLegacyRealizedDirectDamageScoreForRoute(
+    tileMap,
+    route,
+    options
+  );
+  const adjustmentScore = replacementDamageScore - legacyRealizedDirectDamageScore;
+  const adjustedScore = legacyScore + adjustmentScore;
+
+  route.legacyScoreBeforeDamageRouting = Number(legacyScore.toFixed(2));
+  route.intrinsicDamageLegacyRealizedDirectScore = Number(
+    legacyRealizedDirectDamageScore.toFixed(3)
+  );
+  route.intrinsicDamageShutdownEquivalentRegisterEquivalents = Number(
+    shutdownEquivalentRE.toFixed(3)
+  );
+  route.intrinsicDamageReplacementScore = Number(replacementDamageScore.toFixed(3));
+  route.intrinsicDamageRoutingAdjustmentScore = Number(adjustmentScore.toFixed(3));
+  route.damageRoutingModel = "v49ab-shutdown-equivalent";
+  route.score = Number(adjustedScore.toFixed(2));
+  return route;
+}
+
+function getRouteLegIndexForAbsoluteAction(route, absoluteAction) {
+  const target = Math.max(1, Math.floor(Number(absoluteAction) || 1));
+  const legs = getTrafficLegs(route);
+  let nearestIndex = 0;
+  for (let legIndex = 0; legIndex < legs.length; legIndex += 1) {
+    const leg = legs[legIndex];
+    const transitions = Array.isArray(leg?.transitions) ? leg.transitions : [];
+    let elapsed = Math.max(0, Number(leg?.absoluteStartAction) || 0);
+    for (const transition of transitions) {
+      const executed = getTransitionAbsoluteAction(transition, elapsed + 1);
+      if (executed === target) return legIndex;
+      if (executed <= target) nearestIndex = legIndex;
+      elapsed = transition?.rebooted
+        ? getRebootEndedAbsoluteActions(executed)
+        : executed;
+    }
+  }
+  return Math.min(Math.max(0, nearestIndex), Math.max(0, legs.length - 1));
+}
+
+function getDamageEconomyAlternatePressureByLeg(
+  route,
+  summary,
+  intrinsicShutdownRE,
+  robotLaserIncrementRE
+) {
+  const legs = getTrafficLegs(route);
+  const pressure = legs.map((_, legIndex) => ({
+    legIndex,
+    deterministicDamageUnits: 0,
+    robotLaserExpectedDamageUnits: 0,
+    allocatedIntrinsicRegisterEquivalents: 0,
+    allocatedRobotLaserRegisterEquivalents: 0,
+    shutdownThreatPeakSegmentRegisterEquivalents: 0,
+    shutdownEquivalentEpisodeCount: 0,
+    pressureRegisterEquivalents: 0
+  }));
+  if (!pressure.length || !summary) return pressure;
+
+  for (const event of summary.events || []) {
+    const legIndex = getRouteLegIndexForAbsoluteAction(
+      route,
+      event?.absoluteAction
+    );
+    const entry = pressure[legIndex];
+    if (!entry) continue;
+    entry.deterministicDamageUnits += Math.max(
+      0,
+      Number(event?.deterministicDamageUnits) || 0
+    );
+    entry.robotLaserExpectedDamageUnits += Math.max(
+      0,
+      Number(event?.robotLaserExpectedDamageUnits) || 0
+    );
+  }
+
+  const totalDeterministic = pressure.reduce(
+    (sum, entry) => sum + entry.deterministicDamageUnits,
+    0
+  );
+  const totalRobotLaser = pressure.reduce(
+    (sum, entry) => sum + entry.robotLaserExpectedDamageUnits,
+    0
+  );
+  pressure.forEach((entry) => {
+    if (totalDeterministic > 0) {
+      entry.allocatedIntrinsicRegisterEquivalents =
+        Math.max(0, Number(intrinsicShutdownRE) || 0) *
+        entry.deterministicDamageUnits / totalDeterministic;
+    }
+    if (totalRobotLaser > 0) {
+      entry.allocatedRobotLaserRegisterEquivalents =
+        Math.max(0, Number(robotLaserIncrementRE) || 0) *
+        entry.robotLaserExpectedDamageUnits / totalRobotLaser;
+    }
+  });
+
+  // The shutdown ledger is nonlinear and cannot be honestly decomposed into
+  // additive per-leg score. For optional-search demand only, attach the live
+  // segment pressure to the leg containing that programming turn. A true episode
+  // therefore supplies a full 5-RE hard-pressure anchor. Final route scoring never
+  // uses this attribution; it still replays the complete route chronologically.
+  for (const turn of summary.turns || []) {
+    const registerEvents = Array.isArray(turn?.registerEvents)
+      ? turn.registerEvents
+      : [];
+    if (!registerEvents.length) continue;
+    const lastEvent = registerEvents.at(-1);
+    const legIndex = getRouteLegIndexForAbsoluteAction(
+      route,
+      lastEvent?.absoluteAction
+    );
+    const entry = pressure[legIndex];
+    if (!entry) continue;
+    entry.shutdownThreatPeakSegmentRegisterEquivalents = Math.max(
+      entry.shutdownThreatPeakSegmentRegisterEquivalents,
+      Math.max(0, Number(turn?.shutdownThreatSegmentRegisterEquivalents) || 0)
+    );
+    if (turn?.shutdownEquivalentEpisodeAfterTurn) {
+      entry.shutdownEquivalentEpisodeCount += 1;
+    }
+  }
+
+  return pressure.map((entry) => {
+    const allocatedRE =
+      entry.allocatedIntrinsicRegisterEquivalents +
+      entry.allocatedRobotLaserRegisterEquivalents;
+    const statePressureRE = entry.shutdownEquivalentEpisodeCount > 0
+      ? DAMAGE_ECONOMY_SHUTDOWN_REFERENCE_RE
+      : entry.shutdownThreatPeakSegmentRegisterEquivalents;
+    return {
+      ...entry,
+      deterministicDamageUnits: Number(entry.deterministicDamageUnits.toFixed(3)),
+      robotLaserExpectedDamageUnits: Number(entry.robotLaserExpectedDamageUnits.toFixed(3)),
+      allocatedIntrinsicRegisterEquivalents: Number(
+        entry.allocatedIntrinsicRegisterEquivalents.toFixed(3)
+      ),
+      allocatedRobotLaserRegisterEquivalents: Number(
+        entry.allocatedRobotLaserRegisterEquivalents.toFixed(3)
+      ),
+      shutdownThreatPeakSegmentRegisterEquivalents: Number(
+        entry.shutdownThreatPeakSegmentRegisterEquivalents.toFixed(3)
+      ),
+      pressureRegisterEquivalents: Number(
+        Math.max(allocatedRE, statePressureRE).toFixed(3)
+      )
+    };
+  });
+}
+
+function getDamageEconomyAlternateHotspotsByLeg(
+  route,
+  summary,
+  intrinsicShutdownRE,
+  robotLaserIncrementRE
+) {
+  const legs = getTrafficLegs(route);
+  const hotspots = legs.map((_, legIndex) => ({ legIndex, registers: [] }));
+  if (!hotspots.length || !summary) return hotspots;
+
+  const events = Array.isArray(summary.events) ? summary.events : [];
+  const totalDeterministic = events.reduce(
+    (sum, event) => sum + Math.max(0, Number(event?.deterministicDamageUnits) || 0),
+    0
+  );
+  const totalRobotLaser = events.reduce(
+    (sum, event) => sum + Math.max(0, Number(event?.robotLaserExpectedDamageUnits) || 0),
+    0
+  );
+  const byAbsoluteAction = new Map();
+  const getEntry = (absoluteAction) => {
+    const key = Math.max(0, Math.floor(Number(absoluteAction) || 0));
+    if (!key) return null;
+    let entry = byAbsoluteAction.get(key);
+    if (!entry) {
+      entry = {
+        absoluteAction: key,
+        allocatedDamageRegisterEquivalents: 0,
+        shutdownStateRegisterEquivalents: 0,
+        pressureRegisterEquivalents: 0
+      };
+      byAbsoluteAction.set(key, entry);
+    }
+    return entry;
+  };
+
+  for (const event of events) {
+    const entry = getEntry(event?.absoluteAction);
+    if (!entry) continue;
+    const deterministic = Math.max(0, Number(event?.deterministicDamageUnits) || 0);
+    const robotLaser = Math.max(0, Number(event?.robotLaserExpectedDamageUnits) || 0);
+    if (totalDeterministic > 0) {
+      entry.allocatedDamageRegisterEquivalents +=
+        Math.max(0, Number(intrinsicShutdownRE) || 0) * deterministic / totalDeterministic;
+    }
+    if (totalRobotLaser > 0) {
+      entry.allocatedDamageRegisterEquivalents +=
+        Math.max(0, Number(robotLaserIncrementRE) || 0) * robotLaser / totalRobotLaser;
+    }
+  }
+
+  // The nonlinear shutdown state is a location hint, not a decomposition of final
+  // route cost. Anchor each turn's state pressure to the register where that turn
+  // acquired the most damage; if the turn has no damaging register, use its last
+  // register. This gives local rerouting a chance to branch before the source of
+  // pressure instead of placing every warning only at the programming boundary.
+  for (const turn of summary.turns || []) {
+    const registerEvents = Array.isArray(turn?.registerEvents)
+      ? turn.registerEvents
+      : [];
+    if (!registerEvents.length) continue;
+    const strongestDamageEvent = registerEvents.reduce((best, event) => {
+      const eventDamage =
+        Math.max(0, Number(event?.deterministicDamageUnits) || 0) +
+        Math.max(0, Number(event?.robotLaserExpectedDamageUnits) || 0);
+      const bestDamage = best
+        ? Math.max(0, Number(best?.deterministicDamageUnits) || 0) +
+          Math.max(0, Number(best?.robotLaserExpectedDamageUnits) || 0)
+        : -1;
+      return eventDamage > bestDamage ? event : best;
+    }, null);
+    const strongestDamage = strongestDamageEvent
+      ? Math.max(0, Number(strongestDamageEvent?.deterministicDamageUnits) || 0) +
+        Math.max(0, Number(strongestDamageEvent?.robotLaserExpectedDamageUnits) || 0)
+      : 0;
+    const anchor = strongestDamage > 0
+      ? strongestDamageEvent
+      : registerEvents.at(-1);
+    const entry = getEntry(anchor?.absoluteAction ?? registerEvents.at(-1)?.absoluteAction);
+    if (!entry) continue;
+    const statePressure = turn?.shutdownEquivalentEpisodeAfterTurn
+      ? DAMAGE_ECONOMY_SHUTDOWN_REFERENCE_RE
+      : Math.max(0, Number(turn?.shutdownThreatSegmentRegisterEquivalents) || 0);
+    entry.shutdownStateRegisterEquivalents = Math.max(
+      entry.shutdownStateRegisterEquivalents,
+      statePressure
+    );
+  }
+
+  for (const entry of byAbsoluteAction.values()) {
+    entry.pressureRegisterEquivalents = Math.max(
+      entry.allocatedDamageRegisterEquivalents,
+      entry.shutdownStateRegisterEquivalents
+    );
+    const legIndex = getRouteLegIndexForAbsoluteAction(route, entry.absoluteAction);
+    const legEntry = hotspots[legIndex];
+    if (!legEntry) continue;
+    legEntry.registers.push({
+      absoluteAction: entry.absoluteAction,
+      allocatedDamageRegisterEquivalents: Number(
+        entry.allocatedDamageRegisterEquivalents.toFixed(3)
+      ),
+      shutdownStateRegisterEquivalents: Number(
+        entry.shutdownStateRegisterEquivalents.toFixed(3)
+      ),
+      pressureRegisterEquivalents: Number(entry.pressureRegisterEquivalents.toFixed(3))
+    });
+  }
+  hotspots.forEach((entry) => entry.registers.sort(
+    (left, right) => left.absoluteAction - right.absoluteAction
+  ));
+  return hotspots;
+}
+
+function getDamageEconomyTrafficRoutingBreakdown(
+  tileMap,
+  route,
+  traffic,
+  analyses,
+  focusIndex,
+  flags,
+  options = {}
+) {
+  const legacyTraffic = traffic || { ranged: 0, nearby: 0, competition: 0, total: 0 };
+  const intrinsicShutdownRE = Math.max(
+    0,
+    Number(route?.intrinsicDamageShutdownEquivalentRegisterEquivalents) || 0
+  );
+  const trafficContext = {
+    analyses: (analyses || []).filter((analysis) => analysis?.fullCourseRoute),
+    focusIndex,
+    flags: flags || [],
+    routeMixtureByIndex: options.trafficRouteMixtureByIndex ?? null,
+    occupancyModel: options.trafficRouteMixtureByIndex
+      ? "common-quality-weighted-route-mixture-field"
+      : "common-quality-weighted-field"
+  };
+  const summary = summarizeDamageEconomyFoundationForRoute(
+    tileMap,
+    route,
+    options,
+    trafficContext
+  );
+  const fullShutdownRE = Math.max(
+    intrinsicShutdownRE,
+    Number(summary?.shutdownEquivalentDamageScoreRegisterEquivalents) || 0
+  );
+  // Additional robot-laser exposure can never become a routing benefit merely
+  // because relief timing makes the nonlinear expected burden numerically dip.
+  const robotLaserIncrementRE = Math.max(0, fullShutdownRE - intrinsicShutdownRE);
+  const robotLaserDamageScore = robotLaserIncrementRE * REGISTER_TEMPO_COST;
+  const legacyRangedScore = Math.max(0, Number(legacyTraffic.ranged) || 0);
+  const legacyTotal = Math.max(0, Number(legacyTraffic.total) || 0);
+  const robotLaserExpectedDamageUnits = Math.max(
+    0,
+    Number(summary?.robotLaserExpectedDamageUnits) || 0
+  );
+  // Production ranged traffic contains both expected physical laser consequence
+  // and broader line-of-fire threat. Replace only the physical-damage proxy; keep
+  // the residual threat exactly as a separate traffic consequence.
+  const legacyRobotLaserDamageProxyScore = Math.min(
+    legacyRangedScore,
+    robotLaserExpectedDamageUnits * getStandardRobotLaserCost()
+  );
+  const residualRangedThreatScore = Math.max(
+    0,
+    legacyRangedScore - legacyRobotLaserDamageProxyScore
+  );
+  const adjustedRangedScore = residualRangedThreatScore + robotLaserDamageScore;
+  const adjustedTotal = Math.max(
+    0,
+    legacyTotal - legacyRobotLaserDamageProxyScore + robotLaserDamageScore
+  );
+  const damageEconomyAlternatePressureByLeg =
+    getDamageEconomyAlternatePressureByLeg(
+      route,
+      summary,
+      intrinsicShutdownRE,
+      robotLaserIncrementRE
+    );
+  const damageEconomyAlternateHotspotsByLeg = options.includeTrafficAlternateHotspots
+    ? getDamageEconomyAlternateHotspotsByLeg(
+      route,
+      summary,
+      intrinsicShutdownRE,
+      robotLaserIncrementRE
+    )
+    : [];
+
+  return {
+    ...legacyTraffic,
+    legacyRanged: Number(legacyRangedScore.toFixed(3)),
+    legacyTotal: Number(legacyTotal.toFixed(3)),
+    legacyRobotLaserDamageProxyScore: Number(
+      legacyRobotLaserDamageProxyScore.toFixed(3)
+    ),
+    residualRangedThreatScore: Number(residualRangedThreatScore.toFixed(3)),
+    ranged: Number(adjustedRangedScore.toFixed(3)),
+    total: Number(adjustedTotal.toFixed(3)),
+    damageEconomyRobotLaserIncrementRegisterEquivalents: Number(
+      robotLaserIncrementRE.toFixed(3)
+    ),
+    damageEconomyFullShutdownEquivalentRegisterEquivalents: Number(
+      fullShutdownRE.toFixed(3)
+    ),
+    damageEconomyAlternatePressureByLeg,
+    damageEconomyAlternateHotspotsByLeg,
+    damageEconomyTrafficRoutingActive: true
+  };
+}
+
 // Physical robot-laser exposure uses the same occupancy/temporal uncertainty
 // geometry as traffic, but deliberately strips route-score consequence weights.
 // A predicted shooter either has line of sight from a cardinal direction or it
@@ -5503,13 +7657,12 @@ function getDamageShadowTrafficRangedRegisterInputs(
     occupancyOptions,
     (analysis) => analysis.fullCourseRoute
   );
-  const fullOtherEntries = analyses
-    .filter((analysis) => analysis.index !== focusIndex && analysis.fullCourseRoute)
-    .map((analysis) => ({
-      route: analysis.fullCourseRoute,
-      occupancyWeight: occupancyByIndex.get(analysis.index) ?? 0
-    }))
-    .filter((entry) => entry.occupancyWeight > 0);
+  const fullOtherEntries = buildTrafficRouteMixtureEntries(
+    analyses,
+    focusIndex,
+    occupancyByIndex,
+    trafficContext?.routeMixtureByIndex ?? null
+  );
 
   const productionReplay = getExpectedTrafficBreakdown(
     tileMap,
@@ -5532,7 +7685,7 @@ function getDamageShadowTrafficRangedRegisterInputs(
       confidenceMean: 1,
       confidenceEnd: 1,
       occupancyTotal: Number([...occupancyByIndex.values()].reduce((a, b) => a + b, 0).toFixed(3)),
-      occupancyModel: trafficContext?.occupancyModel ?? "common-quality-weighted-field"
+      occupancyModel: trafficContext?.occupancyModel ?? "common-quality-weighted-route-mixture-field"
     };
   }
 
@@ -5605,8 +7758,20 @@ function getDamageShadowTrafficRangedRegisterInputs(
       const registerCompetition = Math.min(competitionByRegister[index], damageUnit);
       const registerRawInteraction = registerRanged + registerNearby + registerCompetition;
       let registerExpectedHits = 0;
-      for (const dir of ROTATION_ORDER) {
-        registerExpectedHits += Math.min(shotByRegisterFacing[index][dir], 1);
+      const registerExpectedHitProbabilityByDirection = Object.fromEntries(
+        ROTATION_ORDER.map((dir) => [dir, 0])
+      );
+      const focusTransition = routeLeg.transitions?.[index] ?? null;
+      if (!focusTransition?.rebooted && !focusTransition?.crashed) {
+        for (const dir of ROTATION_ORDER) {
+          const cappedExpectedHit = Math.min(shotByRegisterFacing[index][dir], 1);
+          registerExpectedHits += cappedExpectedHit;
+          registerExpectedHitProbabilityByDirection[dir] = clamp(
+            cappedExpectedHit * confidence * legWeight,
+            0,
+            1
+          );
+        }
       }
       const weightedRawRanged = registerRanged * legWeight;
       const weightedEffectiveRanged = registerRanged * confidence * legWeight;
@@ -5637,6 +7802,12 @@ function getDamageShadowTrafficRangedRegisterInputs(
         effectiveCompetitionScore: Number(weightedEffectiveCompetition.toFixed(4)),
         effectiveInteractionScore: Number(weightedEffectiveInteraction.toFixed(4)),
         expectedDamageUnits: Number(registerExpectedDamageUnits.toFixed(4)),
+        expectedHitProbabilityByDirection: Object.fromEntries(
+          ROTATION_ORDER.map((dir) => [
+            dir,
+            Number(registerExpectedHitProbabilityByDirection[dir].toFixed(4))
+          ])
+        ),
         confidence: Number(confidence.toFixed(4)),
         legWeight
       });
@@ -5665,7 +7836,7 @@ function getDamageShadowTrafficRangedRegisterInputs(
     confidenceMean: Number((confidenceRegisters ? confidenceSum / confidenceRegisters : 1).toFixed(4)),
     confidenceEnd: Number((carriedConfidence ?? 1).toFixed(4)),
     occupancyTotal: Number([...occupancyByIndex.values()].reduce((a, b) => a + b, 0).toFixed(3)),
-    occupancyModel: trafficContext?.occupancyModel ?? "common-quality-weighted-field"
+    occupancyModel: trafficContext?.occupancyModel ?? "common-quality-weighted-route-mixture-field"
   };
 }
 
@@ -12056,6 +14227,31 @@ function getForecastBoardChaosPressure(transition = {}) {
   return Math.min(2.2, Math.log1p(raw));
 }
 
+function getTrafficAlternateHardPressureStrength(pressureRegisterEquivalents = 0) {
+  // Search-demand only. A full Shutdown-sized damage state is enough to restore
+  // optional reroute effort even when the traffic forecast itself is far down the
+  // uncertainty curve. This does NOT increase final traffic confidence or alter
+  // candidate gain: hard pressure changes whether/how hard we look, not how much
+  // we trust a speculative future once found.
+  return clamp(
+    Math.max(0, Number(pressureRegisterEquivalents) || 0) /
+      DAMAGE_ECONOMY_SHUTDOWN_REFERENCE_RE,
+    0,
+    1
+  );
+}
+
+function restoreTrafficAlternateEffortForPressure(
+  baseEffortScale,
+  pressureRegisterEquivalents
+) {
+  const base = clamp(Number(baseEffortScale) || 0, 0, 1);
+  const pressure = getTrafficAlternateHardPressureStrength(
+    pressureRegisterEquivalents
+  );
+  return clamp(base + (1 - base) * pressure, base, 1);
+}
+
 function getTrafficAlternateEffortScale(confidence, options = {}) {
   const floor = clamp(
     Number.isFinite(Number(options.contextualTrafficAlternateUncertaintyEffortFloor))
@@ -12303,7 +14499,8 @@ function getExpectedTrafficBreakdownForLeg(
       rawTotal: 0,
       confidenceStart: Number(confidence.toFixed(3)),
       confidenceMean: Number(confidence.toFixed(3)),
-      confidenceEnd: Number(confidence.toFixed(3))
+      confidenceEnd: Number(confidence.toFixed(3)),
+      byRegister: []
     };
   }
 
@@ -12324,7 +14521,8 @@ function getExpectedTrafficBreakdownForLeg(
       rawTotal: 0,
       confidenceStart: Number(confidence.toFixed(3)),
       confidenceMean: Number(confidence.toFixed(3)),
-      confidenceEnd: Number(confidence.toFixed(3))
+      confidenceEnd: Number(confidence.toFixed(3)),
+      byRegister: []
     };
   }
 
@@ -12358,6 +14556,7 @@ function getExpectedTrafficBreakdownForLeg(
   const confidenceStart = getTrafficInitialForecastConfidence(route, options);
   let confidence = confidenceStart;
   let confidenceSum = 0;
+  const byRegister = [];
 
   for (let index = 0; index < timelineA.length; index += 1) {
     let registerRanged = 0;
@@ -12375,6 +14574,11 @@ function getExpectedTrafficBreakdownForLeg(
     const registerNearby = Math.min(nearbyByRegister[index], damageUnit * 3.25);
     const registerCompetition = Math.min(competitionByRegister[index], damageUnit);
     const registerRaw = registerRanged + registerNearby + registerCompetition;
+    const registerEffectiveRanged = registerRanged * confidence;
+    const registerEffectiveNearby = registerNearby * confidence;
+    const registerEffectiveCompetition = registerCompetition * confidence;
+    const registerEffectiveTotal =
+      registerEffectiveRanged + registerEffectiveNearby + registerEffectiveCompetition;
 
     rawRanged += registerRanged;
     rawNearby += registerNearby;
@@ -12383,9 +14587,9 @@ function getExpectedTrafficBreakdownForLeg(
     // v33 uncertainty curve: traffic at this register is trusted according to the
     // confidence on arrival. The interaction then reduces confidence only for
     // later registers, so congestion never discounts itself retroactively.
-    ranged += registerRanged * confidence;
-    nearby += registerNearby * confidence;
-    competition += registerCompetition * confidence;
+    ranged += registerEffectiveRanged;
+    nearby += registerEffectiveNearby;
+    competition += registerEffectiveCompetition;
     confidenceSum += confidence;
 
     const executedAbsoluteAction = timelineA[index]?.absoluteRegister ??
@@ -12393,6 +14597,19 @@ function getExpectedTrafficBreakdownForLeg(
         route.transitions?.[index],
         Math.max(0, Number(route?.absoluteStartAction) || 0) + index + 1
       );
+    // v49ad: retain the already-computed register-local traffic signal so optional
+    // hotspot rerouting can branch near the heated register. This is diagnostic/
+    // search-location data only; aggregate production traffic scoring is unchanged.
+    byRegister.push({
+      index,
+      absoluteAction: executedAbsoluteAction,
+      confidence: Number(confidence.toFixed(4)),
+      ranged: Number(registerEffectiveRanged.toFixed(4)),
+      nearby: Number(registerEffectiveNearby.toFixed(4)),
+      competition: Number(registerEffectiveCompetition.toFixed(4)),
+      total: Number(registerEffectiveTotal.toFixed(4)),
+      rawTotal: Number(registerRaw.toFixed(4))
+    });
     confidence = advanceTrafficForecastConfidenceForTransition(
       confidence,
       route.transitions?.[index]?.hazard,
@@ -12416,7 +14633,8 @@ function getExpectedTrafficBreakdownForLeg(
     rawTotal: Number(rawTotal.toFixed(2)),
     confidenceStart: Number(confidenceStart.toFixed(3)),
     confidenceMean: Number((confidenceSum / timelineA.length).toFixed(3)),
-    confidenceEnd: Number(confidence.toFixed(3))
+    confidenceEnd: Number(confidence.toFixed(3)),
+    byRegister
   };
 }
 
@@ -12589,6 +14807,267 @@ function allocateCappedOccupancy(items, targetCount, weightForItem) {
   }
 
   return result;
+}
+
+
+const TRAFFIC_ROUTE_MIXTURE_TEMPERATURE_RE = 1;
+const TRAFFIC_ROUTE_MIXTURE_MIN_RELATIVE_WEIGHT = 0.03;
+
+function getTrafficRouteMixtureQuality(route, qualityByRoute = null) {
+  if (qualityByRoute instanceof Map && qualityByRoute.has(route)) {
+    const explicit = Number(qualityByRoute.get(route));
+    if (Number.isFinite(explicit)) return explicit;
+  }
+  const fallback = Number(route?.score);
+  return Number.isFinite(fallback) ? fallback : Infinity;
+}
+
+function getTrafficRouteFamilyKey(route) {
+  const timeline = getRegisterTimeline(route);
+  if (!timeline.length) return getRoutePathKey(route);
+  return timeline.map((point) => (
+    `${point.absoluteRegister}:${point.after?.x ?? "?"},${point.after?.y ?? "?"},${point.facing ?? "?"}`
+  )).join("|");
+}
+
+function buildTrafficRouteMixture(
+  analysis,
+  _flags,
+  qualityByRoute = null
+) {
+  const originalRoutes = Array.isArray(analysis?.fullCourseRoutes)
+    ? analysis.fullCourseRoutes.filter(Boolean)
+    : [];
+  if (!originalRoutes.length) {
+    return {
+      model: "quality-weighted-route-families",
+      candidateCount: 0,
+      familyCount: 0,
+      effectiveRouteCount: 0,
+      alternateShare: 0,
+      entries: []
+    };
+  }
+
+  // A route family is one exact traffic trajectory: same register chronology,
+  // position and facing. Card/program witnesses that produce that same traffic
+  // trajectory do not gain extra occupancy merely because search rediscovered
+  // them. A local geometric OR timing divergence remains a separate family,
+  // because either can materially change multiplayer interaction.
+  const familyByPath = new Map();
+  originalRoutes.forEach((route, routeIndex) => {
+    const routeKey = getTrafficRouteFamilyKey(route);
+    const qualityScore = getTrafficRouteMixtureQuality(route, qualityByRoute);
+    const existing = familyByPath.get(routeKey);
+    if (!existing) {
+      familyByPath.set(routeKey, {
+        route,
+        routeIndex,
+        routeKey,
+        qualityScore,
+        memberCount: 1
+      });
+      return;
+    }
+    existing.memberCount += 1;
+    if (qualityScore < existing.qualityScore) {
+      existing.route = route;
+      existing.routeIndex = routeIndex;
+      existing.qualityScore = qualityScore;
+    }
+  });
+  const families = [...familyByPath.values()].sort((left, right) => (
+    left.qualityScore - right.qualityScore ||
+    left.routeKey.localeCompare(right.routeKey)
+  ));
+
+  const bestQuality = families[0]?.qualityScore ?? Infinity;
+  const temperatureScore = Math.max(
+    0.001,
+    TRAFFIC_ROUTE_MIXTURE_TEMPERATURE_RE * REGISTER_TEMPO_COST
+  );
+  const weighted = families.map((family, index) => {
+    const relativeWeight = index === 0
+      ? 1
+      : Math.exp(-Math.max(0, family.qualityScore - bestQuality) / temperatureScore);
+    return {
+      ...family,
+      relativeWeight
+    };
+  });
+  const retained = weighted.filter((entry, index) => (
+    index === 0 || entry.relativeWeight >= TRAFFIC_ROUTE_MIXTURE_MIN_RELATIVE_WEIGHT
+  ));
+  const totalWeight = retained.reduce(
+    (sum, entry) => sum + entry.relativeWeight,
+    0
+  ) || 1;
+  const entries = retained.map((entry) => ({
+    routeIndex: entry.routeIndex,
+    routeKey: entry.routeKey,
+    weight: entry.relativeWeight / totalWeight,
+    qualityScore: entry.qualityScore,
+    familySize: entry.memberCount
+  }));
+  const primaryWeight = entries.length
+    ? Math.max(...entries.map((entry) => entry.weight))
+    : 1;
+  const inverseConcentration = entries.reduce(
+    (sum, entry) => sum + entry.weight * entry.weight,
+    0
+  );
+
+  return {
+    model: "quality-weighted-route-families",
+    candidateCount: originalRoutes.length,
+    familyCount: families.length,
+    retainedFamilyCount: entries.length,
+    effectiveRouteCount: inverseConcentration > 0 ? 1 / inverseConcentration : 0,
+    alternateShare: Math.max(0, 1 - primaryWeight),
+    entries
+  };
+}
+
+function trafficRouteMixturesDiffer(left, right) {
+  const toMap = (mixture) => new Map(
+    (mixture?.entries || []).map((entry) => [
+      entry.routeKey ?? String(entry.routeIndex ?? ""),
+      Number(entry.weight) || 0
+    ])
+  );
+  const leftMap = toMap(left);
+  const rightMap = toMap(right);
+  const keys = new Set([...leftMap.keys(), ...rightMap.keys()]);
+  let delta = 0;
+  for (const key of keys) {
+    delta += Math.abs((leftMap.get(key) ?? 0) - (rightMap.get(key) ?? 0));
+  }
+  return delta > 0.01;
+}
+
+function getTrafficRouteMixtureForAnalysis(
+  analysis,
+  routeMixtureByIndex = null
+) {
+  const explicit = routeMixtureByIndex instanceof Map
+    ? routeMixtureByIndex.get(analysis.index)
+    : null;
+  if (explicit?.entries?.length) return explicit;
+  if (analysis?.trafficRouteMixture?.entries?.length) {
+    return analysis.trafficRouteMixture;
+  }
+  const route = analysis?.fullCourseRoute ?? analysis?.fullCourseRoutes?.[0] ?? null;
+  return route
+    ? {
+      model: "single-representative-route",
+      candidateCount: 1,
+      familyCount: 1,
+      retainedFamilyCount: 1,
+      effectiveRouteCount: 1,
+      alternateShare: 0,
+      entries: [{
+        routeIndex: Array.isArray(analysis?.fullCourseRoutes)
+          ? analysis.fullCourseRoutes.indexOf(route)
+          : 0,
+        routeKey: getRoutePathKey(route),
+        weight: 1,
+        qualityScore: Number(route.score) || 0,
+        familySize: 1
+      }]
+    }
+    : {
+      model: "single-representative-route",
+      candidateCount: 0,
+      familyCount: 0,
+      retainedFamilyCount: 0,
+      effectiveRouteCount: 0,
+      alternateShare: 0,
+      entries: []
+    };
+}
+
+function buildTrafficRouteMixtureEntries(
+  analyses,
+  focusIndex,
+  occupancyByIndex,
+  routeMixtureByIndex = null
+) {
+  const entries = [];
+  for (const analysis of analyses || []) {
+    if (!analysis || analysis.index === focusIndex) continue;
+    const startOccupancy = Math.max(
+      0,
+      Number(occupancyByIndex?.get?.(analysis.index)) || 0
+    );
+    if (startOccupancy <= 0) continue;
+    const mixture = getTrafficRouteMixtureForAnalysis(
+      analysis,
+      routeMixtureByIndex
+    );
+    for (const routeEntry of mixture.entries || []) {
+      const routeWeight = Math.max(0, Number(routeEntry.weight) || 0);
+      const route = Number.isInteger(routeEntry.routeIndex)
+        ? analysis?.fullCourseRoutes?.[routeEntry.routeIndex] ?? null
+        : null;
+      if (!route || routeWeight <= 0) continue;
+      entries.push({
+        route,
+        occupancyWeight: startOccupancy * routeWeight,
+        startIndex: analysis.index,
+        routeMixtureWeight: routeWeight
+      });
+    }
+  }
+  return entries;
+}
+
+function summarizeTrafficRouteMixtures(analyses, routeMixtureByIndex = null) {
+  const mixtures = (analyses || [])
+    .map((analysis) => getTrafficRouteMixtureForAnalysis(
+      analysis,
+      routeMixtureByIndex
+    ))
+    .filter((mixture) => mixture.entries?.length);
+  if (!mixtures.length) {
+    return {
+      model: "quality-weighted-route-families",
+      startCount: 0,
+      candidateCount: 0,
+      familyCount: 0,
+      retainedFamilyCount: 0,
+      averageFamiliesPerStart: 0,
+      averageRetainedFamiliesPerStart: 0,
+      averageEffectiveRouteCount: 0,
+      averageAlternateShare: 0,
+      maximumAlternateShare: 0
+    };
+  }
+  const sum = (field) => mixtures.reduce(
+    (total, mixture) => total + (Number(mixture[field]) || 0),
+    0
+  );
+  return {
+    model: "quality-weighted-route-families",
+    startCount: mixtures.length,
+    candidateCount: sum("candidateCount"),
+    familyCount: sum("familyCount"),
+    retainedFamilyCount: sum("retainedFamilyCount"),
+    averageFamiliesPerStart: Number(
+      (sum("familyCount") / mixtures.length).toFixed(3)
+    ),
+    averageRetainedFamiliesPerStart: Number(
+      (sum("retainedFamilyCount") / mixtures.length).toFixed(3)
+    ),
+    averageEffectiveRouteCount: Number(
+      (sum("effectiveRouteCount") / mixtures.length).toFixed(3)
+    ),
+    averageAlternateShare: Number(
+      (sum("alternateShare") / mixtures.length).toFixed(3)
+    ),
+    maximumAlternateShare: Number(
+      Math.max(...mixtures.map((mixture) => Number(mixture.alternateShare) || 0)).toFixed(3)
+    )
+  };
 }
 
 function getExplicitOccupancyWeight(occupancyByIndex, index) {
@@ -12907,6 +15386,21 @@ function selectFullCourseRoutesForStarts(tileMap, startAnalyses, flags, options 
           qualityScore: Number(analysis.fullCourseRoutes?.[0]?.score ?? analysis.fullCourseRoute?.score ?? 0)
         }))
       },
+      routeMixtureByIndex: new Map(
+        reachable.map((analysis) => [
+          analysis.index,
+          buildTrafficRouteMixture(analysis, flags)
+        ])
+      ),
+      routeMixtureField: summarizeTrafficRouteMixtures(
+        reachable,
+        new Map(
+          reachable.map((analysis) => [
+            analysis.index,
+            buildTrafficRouteMixture(analysis, flags)
+          ])
+        )
+      ),
       candidateDiagnostics: reachable.map((analysis) => (
         summarizeFullCourseCandidateDiversity(
           analysis,
@@ -12928,6 +15422,12 @@ function selectFullCourseRoutesForStarts(tileMap, startAnalyses, flags, options 
   let selectedByIndex = new Map(
     reachable.map((analysis) => [analysis.index, analysis.fullCourseRoutes[0]])
   );
+  let routeMixtureByIndex = new Map(
+    reachable.map((analysis) => [
+      analysis.index,
+      buildTrafficRouteMixture(analysis, flags)
+    ])
+  );
 
   for (let pass = 0; pass < maxPasses; pass += 1) {
     actualPasses = pass + 1;
@@ -12940,6 +15440,8 @@ function selectFullCourseRoutesForStarts(tileMap, startAnalyses, flags, options 
     // traffic while earlier starts saw the old field.
     const frozenSelectedByIndex = new Map(selectedByIndex);
     const proposedSelectedByIndex = new Map(selectedByIndex);
+    const frozenRouteMixtureByIndex = new Map(routeMixtureByIndex);
+    const proposedRouteMixtureByIndex = new Map(routeMixtureByIndex);
 
     for (const analysis of reachable) {
       const occupancyByIndex = buildConditionalOccupancyMap(
@@ -12949,16 +15451,15 @@ function selectFullCourseRoutesForStarts(tileMap, startAnalyses, flags, options 
         options,
         (other) => frozenSelectedByIndex.get(other.index)
       );
-      const otherRouteEntries = reachable
-        .filter((other) => other.index !== analysis.index)
-        .map((other) => ({
-          route: frozenSelectedByIndex.get(other.index),
-          occupancyWeight: occupancyByIndex.get(other.index) ?? 0
-        }))
-        .filter((entry) => entry.route && entry.occupancyWeight > 0);
+      const otherRouteEntries = buildTrafficRouteMixtureEntries(
+        reachable,
+        analysis.index,
+        occupancyByIndex,
+        frozenRouteMixtureByIndex
+      );
 
       const baselineRoute = analysis.fullCourseRoutes[0];
-      const baselineTraffic = getExpectedTrafficBreakdown(
+      const baselineTrafficLegacy = getExpectedTrafficBreakdown(
         tileMap,
         baselineRoute,
         otherRouteEntries,
@@ -12968,12 +15469,34 @@ function selectFullCourseRoutesForStarts(tileMap, startAnalyses, flags, options 
           playerCount
         }
       );
+      const frozenTrafficAnalyses = reachable.map((entry) => ({
+        ...entry,
+        fullCourseRoute: frozenSelectedByIndex.get(entry.index) ?? entry.fullCourseRoute,
+        trafficRouteMixture:
+          frozenRouteMixtureByIndex.get(entry.index) ?? entry.trafficRouteMixture ?? null
+      }));
+      const baselineTraffic = getDamageEconomyTrafficRoutingBreakdown(
+        tileMap,
+        baselineRoute,
+        baselineTrafficLegacy,
+        frozenTrafficAnalyses,
+        analysis.index,
+        flags,
+        {
+          ...options,
+          playerCount,
+          trafficRouteMixtureByIndex: frozenRouteMixtureByIndex
+        }
+      );
       const baselineStrategicValue = baselineRoute.score + baselineTraffic.total;
       let bestRoute = baselineRoute;
       let bestValue = baselineStrategicValue;
+      const mixtureQualityByRoute = new Map([
+        [baselineRoute, baselineStrategicValue]
+      ]);
 
       for (const candidate of analysis.fullCourseRoutes.slice(1)) {
-        const traffic = getExpectedTrafficBreakdown(
+        const trafficLegacy = getExpectedTrafficBreakdown(
           tileMap,
           candidate,
           otherRouteEntries,
@@ -12983,8 +15506,22 @@ function selectFullCourseRoutesForStarts(tileMap, startAnalyses, flags, options 
             playerCount
           }
         );
+        const traffic = getDamageEconomyTrafficRoutingBreakdown(
+          tileMap,
+          candidate,
+          trafficLegacy,
+          frozenTrafficAnalyses,
+          analysis.index,
+          flags,
+          {
+            ...options,
+            playerCount,
+            trafficRouteMixtureByIndex: frozenRouteMixtureByIndex
+          }
+        );
         const rawGap = Math.max(0, candidate.score - baselineRoute.score);
         const strategicValue = candidate.score + traffic.total;
+        mixtureQualityByRoute.set(candidate, strategicValue + rawGap * 0.04);
         const strategicGain = baselineStrategicValue - strategicValue;
         if (strategicGain < minimumUsefulTrafficGain) {
           continue;
@@ -13004,9 +15541,23 @@ function selectFullCourseRoutesForStarts(tileMap, startAnalyses, flags, options 
         changed = true;
         routeSwitches += 1;
       }
+
+      const proposedMixture = buildTrafficRouteMixture(
+        analysis,
+        flags,
+        mixtureQualityByRoute
+      );
+      proposedRouteMixtureByIndex.set(analysis.index, proposedMixture);
+      if (trafficRouteMixturesDiffer(
+        frozenRouteMixtureByIndex.get(analysis.index),
+        proposedMixture
+      )) {
+        changed = true;
+      }
     }
 
     selectedByIndex = proposedSelectedByIndex;
+    routeMixtureByIndex = proposedRouteMixtureByIndex;
     if (!changed) {
       break;
     }
@@ -13031,17 +15582,22 @@ function selectFullCourseRoutesForStarts(tileMap, startAnalyses, flags, options 
       options,
       (other) => selectedByIndex.get(other.index)
     );
-    const otherRouteEntries = reachable
-      .filter((other) => other.index !== analysis.index)
-      .map((other) => ({
-        route: selectedByIndex.get(other.index),
-        occupancyWeight: occupancyByIndex.get(other.index) ?? 0
-      }))
-      .filter((entry) => entry.route && entry.occupancyWeight > 0);
+    const otherRouteEntries = buildTrafficRouteMixtureEntries(
+      reachable,
+      analysis.index,
+      occupancyByIndex,
+      routeMixtureByIndex
+    );
 
     const baselineScore = analysis.fullCourseRoutes[0]?.score ?? 0;
+    const finalTrafficAnalyses = reachable.map((entry) => ({
+      ...entry,
+      fullCourseRoute: selectedByIndex.get(entry.index) ?? entry.fullCourseRoute,
+      trafficRouteMixture:
+        routeMixtureByIndex.get(entry.index) ?? entry.trafficRouteMixture ?? null
+    }));
     const candidateEvaluations = analysis.fullCourseRoutes.map((candidate, routeIndex) => {
-      const traffic = getExpectedTrafficBreakdown(
+      const trafficLegacy = getExpectedTrafficBreakdown(
         tileMap,
         candidate,
         otherRouteEntries,
@@ -13049,6 +15605,19 @@ function selectFullCourseRoutesForStarts(tileMap, startAnalyses, flags, options 
         {
           ...options,
           playerCount
+        }
+      );
+      const traffic = getDamageEconomyTrafficRoutingBreakdown(
+        tileMap,
+        candidate,
+        trafficLegacy,
+        finalTrafficAnalyses,
+        analysis.index,
+        flags,
+        {
+          ...options,
+          playerCount,
+          trafficRouteMixtureByIndex: routeMixtureByIndex
         }
       );
       const rawGap = Math.max(0, candidate.score - baselineScore);
@@ -13134,6 +15703,10 @@ function selectFullCourseRoutesForStarts(tileMap, startAnalyses, flags, options 
       }))
       .sort((left, right) => left.index - right.index)
   };
+  const routeMixtureField = summarizeTrafficRouteMixtures(
+    reachable,
+    routeMixtureByIndex
+  );
 
   return {
     starts: startAnalyses.map((analysis) => {
@@ -13155,16 +15728,31 @@ function selectFullCourseRoutesForStarts(tileMap, startAnalyses, flags, options 
         fullCourseTrafficPenalty: breakdown.total,
         fullCourseTrafficRawPenalty: breakdown.rawTotal ?? breakdown.total,
         fullCourseTrafficRanged: breakdown.ranged,
+        fullCourseTrafficLegacyRanged: breakdown.legacyRanged ?? breakdown.ranged,
+        fullCourseTrafficLegacyPenalty: breakdown.legacyTotal ?? breakdown.total,
+        fullCourseTrafficLegacyRobotLaserDamageProxyScore:
+          breakdown.legacyRobotLaserDamageProxyScore ?? 0,
+        fullCourseTrafficResidualRangedThreatScore:
+          breakdown.residualRangedThreatScore ?? 0,
+        fullCourseTrafficDamageEconomyRobotLaserIncrementRegisterEquivalents:
+          breakdown.damageEconomyRobotLaserIncrementRegisterEquivalents ?? 0,
+        fullCourseTrafficDamageEconomyFullShutdownEquivalentRegisterEquivalents:
+          breakdown.damageEconomyFullShutdownEquivalentRegisterEquivalents ??
+          selectedRoute.intrinsicDamageShutdownEquivalentRegisterEquivalents ?? 0,
         fullCourseTrafficNearby: breakdown.nearby,
         fullCourseTrafficCompetition: breakdown.competition,
         fullCourseTrafficForecastConfidence: breakdown.confidenceMean ?? 1,
         fullCourseTrafficForecastConfidenceEnd: breakdown.confidenceEnd ?? 1,
-        fullCourseRouteIndex: analysis.fullCourseRoutes.indexOf(selectedRoute)
+        fullCourseRouteIndex: analysis.fullCourseRoutes.indexOf(selectedRoute),
+        trafficRouteMixture:
+          routeMixtureByIndex.get(analysis.index) ?? analysis.trafficRouteMixture ?? null
       };
     }),
     selectionPasses: actualPasses,
     routeSwitches,
     commonOccupancyField,
+    routeMixtureByIndex,
+    routeMixtureField,
     averageTrafficPenalty: Number(average(trafficValues).toFixed(2)),
     maxTrafficPenalty: trafficValues.length
       ? Number(Math.max(...trafficValues).toFixed(2))
@@ -17747,6 +20335,7 @@ function analyzeSeededFullCourseContextual(tileMap, starts, flags, options = {})
     const fullCourseRoutes = sourceRoutes
       .map(cloneContextualFullRouteForReuse)
       .filter(Boolean)
+      .map((route) => applyIntrinsicDamageEconomyRoutingScore(tileMap, route, options))
       .sort((left, right) => left.score - right.score);
     const fullCourseRoute = fullCourseRoutes[0] ?? null;
 
@@ -17963,6 +20552,9 @@ function analyzeSeededFullCourseContextual(tileMap, starts, flags, options = {})
         alternateBestGain: 0,
         candidateDiagnostics: selection.candidateDiagnostics ?? [],
         commonOccupancyField: selection.commonOccupancyField ?? null,
+        routeMixtureField: selection.routeMixtureField ?? null,
+        routeMixtureModel: selection.routeMixtureField?.model ??
+          "quality-weighted-route-families",
         legAwareOverlap: true,
         contextualLegRoutes: true,
         seededRoutes: true,
@@ -18085,9 +20677,23 @@ function* analyzeFullCourseContextualSteps(
   let trafficAlternateDownstreamRebuildFailures = 0;
   let trafficAlternateEffectiveDemandLegs = 0;
   let trafficAlternateExploratoryDemandLegs = 0;
+  let trafficAlternatePressureDemandLegs = 0;
+  let trafficAlternatePressureRestoredLegs = 0;
+  let trafficAlternatePressureRegisterEquivalentsSum = 0;
+  let trafficAlternatePressureRegisterEquivalentsCount = 0;
+  let trafficAlternateMaximumPressureRegisterEquivalents = 0;
+  let trafficAlternateBaseEffortScaleSum = 0;
+  let trafficAlternateEffortRestorationSum = 0;
   let trafficAlternateEffortScaleSum = 0;
   let trafficAlternateEffortScaleCount = 0;
   let trafficAlternateMinimumEffortScale = 1;
+  let trafficAlternateHotspotLocalSearches = 0;
+  let trafficAlternateHotspotFallbackLegStarts = 0;
+  let trafficAlternateHotspotPrefixActionsSum = 0;
+  let trafficAlternateHotspotPrefixActionsCount = 0;
+  let trafficAlternateHotspotMaximumPrefixActions = 0;
+  let trafficAlternateHotspotTwoRegisterLookbacks = 0;
+  let trafficMaxNewSearchesTotal = 0;
   let trafficExplorationUncertaintyShare = 0;
   let trafficExplorationConfidenceFloor = 1;
   const trafficAlternateDemandByLeg = flags.map(() => 0);
@@ -20181,9 +22787,9 @@ function* analyzeFullCourseContextualSteps(
       estimatedPrimaryRouting: true
     });
 
-    // v35 traffic feedback -----------------------------------------------------
+    // v49ab pressure-restored iterative traffic feedback -------------------------
     // The intrinsic route is always completed and exactly realized first. Traffic
-    // then operates in frozen exploration epochs. All modes use the same final
+    // then operates in frozen feedback rounds. All modes use the same final
     // confidence-weighted traffic value and the same minimum useful gain. Slower
     // modes may spend effort on high raw congestion somewhat beyond Standard's
     // confidence horizon, but that relaxed value is search-demand only and can
@@ -20215,6 +22821,18 @@ function* analyzeFullCourseContextualSteps(
         0,
         Math.floor(Number(options.contextualTrafficAlternateMaxNewSearchesPerEpoch) || 0)
       );
+      const explicitTrafficMaxNewSearchesTotal = Number(
+        options.contextualTrafficAlternateMaxNewSearchesTotal
+      );
+      trafficMaxNewSearchesTotal = Math.max(
+        0,
+        Math.floor(
+          Number.isFinite(explicitTrafficMaxNewSearchesTotal)
+            ? explicitTrafficMaxNewSearchesTotal
+            : trafficMaxNewSearchesPerEpoch * Math.max(1, trafficEpochLimit)
+        )
+      );
+      let trafficNewSearchesTotal = 0;
       const trafficCachedProbeMargin = Math.max(
         0,
         Number(options.contextualTrafficAlternateCachedProbeMargin) || 0
@@ -20241,6 +22859,7 @@ function* analyzeFullCourseContextualSteps(
         const fullCourseRoutes = entry.partials
           .map((partial) => stitchContextualLegs(partial.legs, flags))
           .filter(Boolean)
+          .map((route) => applyIntrinsicDamageEconomyRoutingScore(tileMap, route, baseRouteOptions))
           .sort((left, right) => left.score - right.score);
         const fullCourseRoute = fullCourseRoutes[0] ?? null;
         return buildStartAnalysisForSelectedFullRoute({
@@ -20332,8 +22951,11 @@ function* analyzeFullCourseContextualSteps(
           cardSolution,
           baseRouteOptions
         );
-        const fullRoute = realized?.legs?.length === flags.length
+        const stitchedFullRoute = realized?.legs?.length === flags.length
           ? stitchContextualLegs(realized.legs, flags)
+          : null;
+        const fullRoute = stitchedFullRoute
+          ? applyIntrinsicDamageEconomyRoutingScore(tileMap, stitchedFullRoute, baseRouteOptions)
           : null;
         const validation = fullRoute ? summarizeRouteAgainUsage(fullRoute) : null;
         if (
@@ -20381,9 +23003,27 @@ function* analyzeFullCourseContextualSteps(
         trafficEpochsExecuted += 1;
         let epochNewSearches = 0;
         let epochCandidatesAdded = 0;
+        const remainingFeedbackRounds = Math.max(1, trafficEpochLimit - epoch);
+        const remainingNewSearchBudget = Math.max(
+          0,
+          trafficMaxNewSearchesTotal - trafficNewSearchesTotal
+        );
+        const epochNewSearchLimit = Math.min(
+          trafficMaxNewSearchesPerEpoch,
+          Math.ceil(remainingNewSearchBudget / remainingFeedbackRounds)
+        );
         const selectedRouteByIndex = new Map(
           frozenStarts.map((analysis) => [analysis.index, analysis.fullCourseRoute])
         );
+        const frozenRouteMixtureByIndex =
+          frozenSelection.routeMixtureByIndex instanceof Map
+            ? frozenSelection.routeMixtureByIndex
+            : new Map(
+              frozenStarts.map((analysis) => [
+                analysis.index,
+                buildTrafficRouteMixture(analysis, flags)
+              ])
+            );
 
         // Traffic-only Dev experiments still run the same confidence-weighted
         // occupancy epoch, but stop before cached-witness or new-geometry work.
@@ -20398,7 +23038,8 @@ function* analyzeFullCourseContextualSteps(
           startIndex,
           startupSpinUp = false,
           excludedPathKeys = [],
-          effortScale = 1
+          effortScale = 1,
+          forbiddenFirstActions = []
         ) {
           const dynamicGoal = dynamicGoals[legIndex] ?? null;
           const namespace = options.recoveryRule === "home_reboot"
@@ -20410,13 +23051,13 @@ function* analyzeFullCourseContextualSteps(
             dynamicGoal,
             namespace,
             startupSpinUp,
-            [],
+            forbiddenFirstActions,
             excludedPathKeys
           );
           const cached = estimatedLegCache.has(cacheKey);
           if (
             !cached &&
-            epochNewSearches >= trafficMaxNewSearchesPerEpoch
+            epochNewSearches >= epochNewSearchLimit
           ) {
             return null;
           }
@@ -20427,13 +23068,14 @@ function* analyzeFullCourseContextualSteps(
             start,
             startIndex,
             startupSpinUp,
-            [],
+            forbiddenFirstActions,
             excludedPathKeys,
             "traffic",
             effortScale
           );
           const spent = Math.max(0, estimatedLegSearches - searchesBefore);
           epochNewSearches += spent;
+          trafficNewSearchesTotal += spent;
           trafficAlternateNewSearches += spent;
           if (spent > 0 && !route) trafficAlternateSearchNoRoutes += 1;
           return route;
@@ -20512,6 +23154,162 @@ function* analyzeFullCourseContextualSteps(
           return realizeTrafficEstimatedCourse(estimatedLegs, initialContext);
         }
 
+        const getTrafficHotspotPivot = (
+          baselineLeg,
+          trafficBreakdown,
+          damageHotspotEntry
+        ) => {
+          const transitions = Array.isArray(baselineLeg?.transitions)
+            ? baselineLeg.transitions
+            : [];
+          if (!transitions.length) {
+            return {
+              hotspotIndex: 0,
+              pivotIndex: 0,
+              hotspotPressureRegisterEquivalents: 0,
+              fallbackLegStart: true,
+              lookbackRegisters: 0
+            };
+          }
+          const trafficByRegister = Array.isArray(trafficBreakdown?.byRegister)
+            ? trafficBreakdown.byRegister
+            : [];
+          const damageByAbsoluteAction = new Map(
+            (damageHotspotEntry?.registers || []).map((entry) => [
+              Math.max(0, Math.floor(Number(entry?.absoluteAction) || 0)),
+              Math.max(0, Number(entry?.pressureRegisterEquivalents) || 0)
+            ])
+          );
+          let elapsed = Math.max(0, Number(baselineLeg.absoluteStartAction) || 0);
+          const points = transitions.map((transition, index) => {
+            const absoluteAction = getTransitionAbsoluteAction(transition, elapsed + 1);
+            elapsed = transition?.rebooted
+              ? getRebootEndedAbsoluteActions(absoluteAction)
+              : absoluteAction;
+            const trafficRegister = trafficByRegister[index] ?? null;
+            const trafficRegisterEquivalents = Math.max(
+              0,
+              Number(trafficRegister?.total) || 0
+            ) / REGISTER_TEMPO_COST;
+            const damageRegisterEquivalents =
+              damageByAbsoluteAction.get(absoluteAction) ?? 0;
+            return {
+              index,
+              absoluteAction,
+              trafficRegisterEquivalents,
+              damageRegisterEquivalents,
+              // Robot-laser exposure appears in both traffic and the damage ledger.
+              // Max, rather than sum, avoids using that overlap twice merely to
+              // choose a search pivot. Non-damage congestion can still win locally.
+              pressureRegisterEquivalents: Math.max(
+                trafficRegisterEquivalents,
+                damageRegisterEquivalents
+              )
+            };
+          });
+          const maximumPressure = Math.max(
+            0,
+            ...points.map((entry) => entry.pressureRegisterEquivalents)
+          );
+          if (maximumPressure <= 0) {
+            return {
+              hotspotIndex: 0,
+              pivotIndex: 0,
+              hotspotPressureRegisterEquivalents: 0,
+              fallbackLegStart: true,
+              lookbackRegisters: 0
+            };
+          }
+          // Prefer the earliest point in the hottest 10% band. That gives a local
+          // detour a little lead time rather than reacting only after the peak.
+          const hotspot = points.find(
+            (entry) => entry.pressureRegisterEquivalents >= maximumPressure * 0.9
+          ) ?? points[0];
+          const lookbackRegisters = hotspot.damageRegisterEquivalents >=
+            DAMAGE_ECONOMY_SHUTDOWN_REFERENCE_RE - 0.0005
+            ? 2
+            : 1;
+          const pivotIndex = Math.max(0, hotspot.index - lookbackRegisters);
+          return {
+            hotspotIndex: hotspot.index,
+            pivotIndex,
+            hotspotPressureRegisterEquivalents: hotspot.pressureRegisterEquivalents,
+            fallbackLegStart: false,
+            lookbackRegisters
+          };
+        };
+
+        const getTrafficPivotEstimatedContext = (
+          baselineLeg,
+          legStartContext,
+          pivotIndex
+        ) => {
+          const transitions = Array.isArray(baselineLeg?.transitions)
+            ? baselineLeg.transitions
+            : [];
+          const actions = Array.isArray(baselineLeg?.localActionIds)
+            ? baselineLeg.localActionIds
+            : transitions.map((transition) => transition?.action).filter(Boolean);
+          const pivot = Math.max(0, Math.min(
+            transitions.length,
+            Math.floor(Number(pivotIndex) || 0)
+          ));
+          if (pivot === 0) {
+            return {
+              ...legStartContext,
+              state: cloneState(legStartContext.state),
+              dynamicArchivePoint: legStartContext.dynamicArchivePoint
+                ? { ...legStartContext.dynamicArchivePoint }
+                : null
+            };
+          }
+          const prefixTransitions = transitions.slice(0, pivot);
+          const prefixActions = actions.slice(0, pivot);
+          const guidanceContext = getEstimatedContextAfterActionPrefix(
+            legStartContext,
+            prefixActions,
+            prefixTransitions
+          );
+          const pivotState = cloneState(prefixTransitions.at(-1)?.to ?? baselineLeg.initialState);
+          const pivotAbsoluteActions = getElapsedAbsoluteActionsAfterTransitions(
+            transitions,
+            baselineLeg.absoluteStartAction ?? legStartContext.absoluteActions,
+            pivot
+          );
+          const prefixRoute = buildEstimatedPhysicalRouteFromTransitions(
+            baselineLeg.initialState,
+            prefixTransitions,
+            baselineLeg.absoluteStartAction ?? legStartContext.absoluteActions,
+            pivotState,
+            null,
+            {
+              ...baseRouteOptions,
+              dynamicArchivePointStart: legStartContext.dynamicArchivePoint ?? null,
+              dynamicArchivePointEnd: guidanceContext.dynamicArchivePoint ?? null
+            }
+          );
+          const prefixEconomy = replayContextualRouteEnergyForContext(
+            tileMap,
+            prefixRoute,
+            legStartContext,
+            baseRouteOptions
+          );
+          const prefixHazard = prefixTransitions.reduce(
+            (sum, transition) => sum + Math.max(0, Number(transition?.hazard) || 0),
+            0
+          );
+          return {
+            ...guidanceContext,
+            state: pivotState,
+            absoluteActions: pivotAbsoluteActions,
+            hazardExposure:
+              Math.max(0, Number(legStartContext?.hazardExposure) || 0) + prefixHazard,
+            energyReserve: Number.isFinite(Number(prefixEconomy?.routeEnergyShadowReserveEnd))
+              ? Number(prefixEconomy.routeEnergyShadowReserveEnd)
+              : legStartContext?.energyReserve ?? null
+          };
+        };
+
         for (const analysis of frozenStarts) {
           const baselineRoute = selectedRouteByIndex.get(analysis.index);
           if (!baselineRoute?.legRoutes?.length) continue;
@@ -20522,19 +23320,38 @@ function* analyzeFullCourseContextualSteps(
             options,
             (other) => selectedRouteByIndex.get(other.index)
           );
-          const otherRouteEntries = frozenStarts
-            .filter((other) => other.index !== analysis.index)
-            .map((other) => ({
-              route: selectedRouteByIndex.get(other.index),
-              occupancyWeight: occupancyByIndex.get(other.index) ?? 0
-            }))
-            .filter((entry) => entry.route && entry.occupancyWeight > 0);
+          const otherRouteEntries = buildTrafficRouteMixtureEntries(
+            frozenStarts,
+            analysis.index,
+            occupancyByIndex,
+            frozenRouteMixtureByIndex
+          );
           const baselineBreakdown = getExpectedTrafficBreakdown(
             tileMap,
             baselineRoute,
             otherRouteEntries,
             flags,
             options
+          );
+          const frozenTrafficAnalyses = frozenStarts.map((entry) => ({
+            ...entry,
+            fullCourseRoute: selectedRouteByIndex.get(entry.index) ?? entry.fullCourseRoute,
+            trafficRouteMixture:
+              frozenRouteMixtureByIndex.get(entry.index) ?? entry.trafficRouteMixture ?? null
+          }));
+          const baselineRoutingTraffic = getDamageEconomyTrafficRoutingBreakdown(
+            tileMap,
+            baselineRoute,
+            baselineBreakdown,
+            frozenTrafficAnalyses,
+            analysis.index,
+            flags,
+            {
+              ...options,
+              playerCount,
+              trafficRouteMixtureByIndex: frozenRouteMixtureByIndex,
+              includeTrafficAlternateHotspots: true
+            }
           );
           const legBreakdowns = baselineBreakdown.byLeg || [];
           const demandedLegs = legBreakdowns
@@ -20557,26 +23374,60 @@ function* analyzeFullCourseContextualSteps(
                 ? weightedTraffic +
                   (weightedRawTraffic - weightedTraffic) * trafficExplorationUncertaintyShare
                 : weightedTraffic;
+              const pressureEntry =
+                baselineRoutingTraffic.damageEconomyAlternatePressureByLeg?.[legIndex] ?? null;
+              const pressureRegisterEquivalents = Math.max(
+                0,
+                Number(pressureEntry?.pressureRegisterEquivalents) || 0
+              );
+              const pressureStrength = getTrafficAlternateHardPressureStrength(
+                pressureRegisterEquivalents
+              );
+              // A full 5-RE shutdown-sized state can restore enough demand to
+              // investigate a late leg even when ordinary confidence-weighted
+              // traffic has decayed below the threshold. This is demand-only: the
+              // candidate's gain below still uses the unchanged confidence-weighted
+              // traffic and full exact damage replay.
+              const pressureDemandScore = pressureStrength * trafficDemandThreshold;
+              const dynamicDemandTraffic = explorationTraffic + pressureDemandScore;
               const demandKind = weightedTraffic >= trafficDemandThreshold
                 ? "effective"
                 : explorationTraffic >= trafficDemandThreshold
                   ? "exploratory"
-                  : null;
-              const effortScale = getTrafficAlternateEffortScale(confidence, options);
+                  : dynamicDemandTraffic >= trafficDemandThreshold
+                    ? "pressure"
+                    : null;
+              const baseEffortScale = getTrafficAlternateEffortScale(confidence, options);
+              const effortScale = restoreTrafficAlternateEffortForPressure(
+                baseEffortScale,
+                pressureRegisterEquivalents
+              );
+              const hotspot = getTrafficHotspotPivot(
+                baselineRoute.legRoutes?.[legIndex] ?? null,
+                breakdown,
+                baselineRoutingTraffic.damageEconomyAlternateHotspotsByLeg?.[legIndex] ?? null
+              );
               return {
                 legIndex,
                 breakdown,
                 weightedTraffic,
                 weightedRawTraffic,
                 explorationTraffic,
+                dynamicDemandTraffic,
+                pressureDemandScore,
+                pressureRegisterEquivalents,
+                pressureStrength,
+                hotspot,
                 demandKind,
+                baseEffortScale,
                 effortScale,
-                effortPriority: explorationTraffic * effortScale
+                effortPriority: dynamicDemandTraffic * effortScale
               };
             })
             .filter((entry) => entry.demandKind)
             .sort((left, right) => (
               right.effortPriority - left.effortPriority ||
+              right.dynamicDemandTraffic - left.dynamicDemandTraffic ||
               right.explorationTraffic - left.explorationTraffic ||
               right.weightedTraffic - left.weightedTraffic
             ))
@@ -20586,14 +23437,31 @@ function* analyzeFullCourseContextualSteps(
           trafficAlternateDemandLegs += demandedLegs.length;
           demandedLegs.forEach((entry) => {
             trafficAlternateDemandByLeg[entry.legIndex] += 1;
+            trafficAlternateBaseEffortScaleSum += entry.baseEffortScale;
+            trafficAlternateEffortRestorationSum += Math.max(
+              0,
+              entry.effortScale - entry.baseEffortScale
+            );
             trafficAlternateEffortScaleSum += entry.effortScale;
             trafficAlternateEffortScaleCount += 1;
+            trafficAlternatePressureRegisterEquivalentsSum +=
+              entry.pressureRegisterEquivalents;
+            trafficAlternatePressureRegisterEquivalentsCount += 1;
+            trafficAlternateMaximumPressureRegisterEquivalents = Math.max(
+              trafficAlternateMaximumPressureRegisterEquivalents,
+              entry.pressureRegisterEquivalents
+            );
+            if (entry.effortScale > entry.baseEffortScale + 0.0005) {
+              trafficAlternatePressureRestoredLegs += 1;
+            }
             trafficAlternateMinimumEffortScale = Math.min(
               trafficAlternateMinimumEffortScale,
               entry.effortScale
             );
             if (entry.demandKind === "exploratory") {
               trafficAlternateExploratoryDemandLegs += 1;
+            } else if (entry.demandKind === "pressure") {
+              trafficAlternatePressureDemandLegs += 1;
             } else {
               trafficAlternateEffectiveDemandLegs += 1;
             }
@@ -20642,11 +23510,11 @@ function* analyzeFullCourseContextualSteps(
               .filter(Boolean)
               .filter((route) => getEstimatedRouteIdentity(route) !== baselineLegId)
               .sort((left, right) => left.score - right.score);
-            // v35: the already-paid arrival-class witnesses are the cheap divergence
-            // probe. A meaningfully different cached route that is clearly poor under
-            // the frozen traffic field is evidence against spending another full leg
-            // search in Standard. This is only an optional-breadth decision; it never
-            // changes intrinsic reachability or exact card legality.
+            // Reuse already-paid whole-leg witnesses as cheap evidence. In v49ad a
+            // poor whole-leg witness may suppress another leg-start search, but it may
+            // NOT veto a true mid-leg hotspot suffix: that is a different geometry
+            // question. This remains optional breadth only and never changes physical
+            // reachability or exact card legality.
             const divergentCachedWitnesses = cachedWitnesses.filter((route) => (
               routeSimilarity(baselineLeg, route, flags[legIndex]) <=
               trafficCachedProbeMaxSimilarity
@@ -20672,15 +23540,28 @@ function* analyzeFullCourseContextualSteps(
                 trafficAlternateDuplicateRejects += 1;
                 return null;
               }
-              const candidateTraffic = getExpectedTrafficBreakdown(
+              const candidateTrafficLegacy = getExpectedTrafficBreakdown(
                 tileMap,
                 realized.route,
                 otherRouteEntries,
                 flags,
                 options
               );
+              const candidateTraffic = getDamageEconomyTrafficRoutingBreakdown(
+                tileMap,
+                realized.route,
+                candidateTrafficLegacy,
+                frozenTrafficAnalyses,
+                analysis.index,
+                flags,
+                {
+                  ...options,
+                  playerCount,
+                  trafficRouteMixtureByIndex: frozenRouteMixtureByIndex
+                }
+              );
               const gain = (
-                baselineRoute.score + baselineBreakdown.total
+                baselineRoute.score + baselineRoutingTraffic.total
               ) - (
                 realized.route.score + candidateTraffic.total
               );
@@ -20700,27 +23581,80 @@ function* analyzeFullCourseContextualSteps(
               if (Number.isFinite(gain)) cachedProbeBestGain = Math.max(cachedProbeBestGain, gain);
             }
 
+            const pressureAdjustedProbeMargin =
+              trafficCachedProbeMargin +
+              demanded.pressureStrength * trafficMinimumGain;
             const cachedProbeClearlyPoor = Boolean(
+              (demanded.hotspot?.pivotIndex ?? 0) === 0 &&
               divergentCachedWitnesses.length > 0 &&
               Number.isFinite(cachedProbeBestGain) &&
-              cachedProbeBestGain < trafficMinimumGain - trafficCachedProbeMargin
+              cachedProbeBestGain < trafficMinimumGain - pressureAdjustedProbeMargin
             );
             if (cachedProbeClearlyPoor) {
               trafficAlternateCachedProbeStops += 1;
             } else if (
               bestGain < trafficMinimumGain &&
-              epochNewSearches < trafficMaxNewSearchesPerEpoch
+              epochNewSearches < epochNewSearchLimit
             ) {
               trafficAlternateEscalations += 1;
-              const alternate = yield* fetchTrafficEstimatedLeg(
+              const hotspot = demanded.hotspot ?? {
+                hotspotIndex: 0,
+                pivotIndex: 0,
+                fallbackLegStart: true,
+                lookbackRegisters: 0
+              };
+              const pivotIndex = Math.max(
+                0,
+                Math.min(
+                  baselineLeg.transitions?.length ?? 0,
+                  Math.floor(Number(hotspot.pivotIndex) || 0)
+                )
+              );
+              const pivotContext = getTrafficPivotEstimatedContext(
+                baselineLeg,
                 legStartContext,
+                pivotIndex
+              );
+              const baselineActions = Array.isArray(baselineLeg.localActionIds)
+                ? baselineLeg.localActionIds
+                : (baselineLeg.transitions || []).map((transition) => transition?.action).filter(Boolean);
+              const baselinePivotAction = baselineActions[pivotIndex] ?? null;
+              const forbiddenFirstActions = baselinePivotAction
+                ? [baselinePivotAction]
+                : [];
+              trafficAlternateHotspotLocalSearches += 1;
+              trafficAlternateHotspotPrefixActionsSum += pivotIndex;
+              trafficAlternateHotspotPrefixActionsCount += 1;
+              trafficAlternateHotspotMaximumPrefixActions = Math.max(
+                trafficAlternateHotspotMaximumPrefixActions,
+                pivotIndex
+              );
+              if (hotspot.fallbackLegStart) {
+                trafficAlternateHotspotFallbackLegStarts += 1;
+              }
+              if (hotspot.lookbackRegisters >= 2) {
+                trafficAlternateHotspotTwoRegisterLookbacks += 1;
+              }
+              const suffix = yield* fetchTrafficEstimatedLeg(
+                pivotContext,
                 legIndex,
                 startEntry.start,
                 analysis.index,
-                Boolean(legIndex === 0 && options.startupSpinUp),
-                [...attemptedLegIds],
-                demanded.effortScale
+                Boolean(legIndex === 0 && pivotIndex === 0 && options.startupSpinUp),
+                [],
+                demanded.effortScale,
+                forbiddenFirstActions
               );
+              const alternate = suffix
+                ? combineEstimatedPhysicalRouteSuffix(
+                  baselineLeg,
+                  pivotIndex,
+                  suffix,
+                  flags[legIndex],
+                  dynamicGoals[legIndex] ?? null,
+                  baseRouteOptions
+                )
+                : null;
               yield* evaluateReplacement(alternate);
             }
           }
@@ -21119,6 +24053,7 @@ function* analyzeFullCourseContextualSteps(
         if (!legal) finalProgrammingValidationFailures += 1;
         return legal;
       })
+      .map((route) => applyIntrinsicDamageEconomyRoutingScore(tileMap, route, baseRouteOptions))
       .sort((left, right) => left.score - right.score);
     const fullCourseRoute = fullCourseRoutes[0] ?? null;
 
@@ -21334,12 +24269,41 @@ function* analyzeFullCourseContextualSteps(
         trafficAlternateDownstreamRebuildFailures,
         trafficAlternateEffectiveDemandLegs,
         trafficAlternateExploratoryDemandLegs,
+        trafficAlternatePressureDemandLegs,
+        trafficAlternatePressureRestoredLegs,
+        trafficAlternateAveragePressureRegisterEquivalents:
+          trafficAlternatePressureRegisterEquivalentsCount
+            ? Number((trafficAlternatePressureRegisterEquivalentsSum /
+              trafficAlternatePressureRegisterEquivalentsCount).toFixed(3))
+            : 0,
+        trafficAlternateMaximumPressureRegisterEquivalents: Number(
+          trafficAlternateMaximumPressureRegisterEquivalents.toFixed(3)
+        ),
+        trafficAlternateAverageBaseEffortScale: trafficAlternateEffortScaleCount
+          ? Number((trafficAlternateBaseEffortScaleSum / trafficAlternateEffortScaleCount).toFixed(3))
+          : 1,
+        trafficAlternateAverageEffortRestoration: trafficAlternateEffortScaleCount
+          ? Number((trafficAlternateEffortRestorationSum / trafficAlternateEffortScaleCount).toFixed(3))
+          : 0,
+        trafficAlternateMaxNewSearchesTotal: trafficMaxNewSearchesTotal,
         trafficAlternateAverageEffortScale: trafficAlternateEffortScaleCount
           ? Number((trafficAlternateEffortScaleSum / trafficAlternateEffortScaleCount).toFixed(3))
           : 1,
         trafficAlternateMinimumEffortScale: trafficAlternateEffortScaleCount
           ? Number(trafficAlternateMinimumEffortScale.toFixed(3))
           : 1,
+        trafficAlternateHotspotLocalSearches,
+        trafficAlternateHotspotFallbackLegStarts,
+        trafficAlternateHotspotAveragePrefixActions: trafficAlternateHotspotPrefixActionsCount
+          ? Number((trafficAlternateHotspotPrefixActionsSum /
+            trafficAlternateHotspotPrefixActionsCount).toFixed(2))
+          : 0,
+        trafficAlternateHotspotMaximumPrefixActions,
+        trafficAlternateHotspotTwoRegisterLookbacks,
+        // Telemetry-only duplicate of the lightweight scalar route-mixture summary.
+        // The authoritative traffic field remains selection.routeMixtureField; this copy
+        // lets Dev/Copy Summary survive scenario-summary reshaping without carrying routes.
+        trafficRouteMixtureField: selection.routeMixtureField ?? null,
         trafficExplorationUncertaintyShare,
         trafficExplorationConfidenceFloor,
         trafficAlternateDemandByLeg: trafficAlternateDemandByLeg.map((count, legIndex) => ({
@@ -21410,16 +24374,42 @@ function* analyzeFullCourseContextualSteps(
         alternateBestGain: Number(trafficAlternateBestGain.toFixed(2)),
         alternateEffectiveDemandLegs: trafficAlternateEffectiveDemandLegs,
         alternateExploratoryDemandLegs: trafficAlternateExploratoryDemandLegs,
+        alternatePressureDemandLegs: trafficAlternatePressureDemandLegs,
+        alternatePressureRestoredLegs: trafficAlternatePressureRestoredLegs,
+        alternateAveragePressureRegisterEquivalents:
+          trafficAlternatePressureRegisterEquivalentsCount
+            ? Number((trafficAlternatePressureRegisterEquivalentsSum /
+              trafficAlternatePressureRegisterEquivalentsCount).toFixed(3))
+            : 0,
+        alternateMaximumPressureRegisterEquivalents: Number(
+          trafficAlternateMaximumPressureRegisterEquivalents.toFixed(3)
+        ),
+        alternateAverageBaseEffortScale: trafficAlternateEffortScaleCount
+          ? Number((trafficAlternateBaseEffortScaleSum / trafficAlternateEffortScaleCount).toFixed(3))
+          : 1,
+        alternateAverageEffortRestoration: trafficAlternateEffortScaleCount
+          ? Number((trafficAlternateEffortRestorationSum / trafficAlternateEffortScaleCount).toFixed(3))
+          : 0,
+        alternateMaxNewSearchesTotal: trafficMaxNewSearchesTotal,
         alternateAverageEffortScale: trafficAlternateEffortScaleCount
           ? Number((trafficAlternateEffortScaleSum / trafficAlternateEffortScaleCount).toFixed(3))
           : 1,
         alternateMinimumEffortScale: trafficAlternateEffortScaleCount
           ? Number(trafficAlternateMinimumEffortScale.toFixed(3))
           : 1,
+        alternateHotspotLocalSearches: trafficAlternateHotspotLocalSearches,
+        alternateHotspotFallbackLegStarts: trafficAlternateHotspotFallbackLegStarts,
+        alternateHotspotAveragePrefixActions: trafficAlternateHotspotPrefixActionsCount
+          ? Number((trafficAlternateHotspotPrefixActionsSum /
+            trafficAlternateHotspotPrefixActionsCount).toFixed(2))
+          : 0,
+        alternateHotspotMaximumPrefixActions: trafficAlternateHotspotMaximumPrefixActions,
+        alternateHotspotTwoRegisterLookbacks: trafficAlternateHotspotTwoRegisterLookbacks,
         explorationUncertaintyShare: trafficExplorationUncertaintyShare,
         explorationConfidenceFloor: trafficExplorationConfidenceFloor,
         candidateDiagnostics: selection.candidateDiagnostics ?? [],
         commonOccupancyField: selection.commonOccupancyField ?? null,
+        routeMixtureField: selection.routeMixtureField ?? null,
         legAwareOverlap: true,
         contextualLegRoutes: true,
         openingRoutesPerStart: options.contextualOpeningRoutes ?? CONTEXTUAL_OPENING_ROUTES,
@@ -21617,7 +24607,9 @@ export function analyzeFullCourse(tileMap, starts, flags, options = {}) {
     })).sort((left, right) => left.score - right.score);
     const preparedRoutes = rawRoutes
       .map((route) => prepareFullCourseCandidate(route, flags))
-      .filter(Boolean);
+      .filter(Boolean)
+      .map((route) => applyIntrinsicDamageEconomyRoutingScore(tileMap, route, routeOptions))
+      .sort((left, right) => left.score - right.score);
     return diverseSearch
       ? selectCorridorDiverseFullCourseRoutes(preparedRoutes, flags, maxRoutes)
       : selectDistinctRoutes(preparedRoutes, flags.at(-1), maxRoutes);
@@ -21728,6 +24720,7 @@ export function analyzeFullCourse(tileMap, starts, flags, options = {}) {
         confidenceWeighted: true,
         candidateDiagnostics: selection.candidateDiagnostics ?? [],
         commonOccupancyField: selection.commonOccupancyField ?? null,
+        routeMixtureField: selection.routeMixtureField ?? null,
         legAwareOverlap: true,
         perRobotOverlapDamping: true,
         oncomingTraffic: true,
@@ -21779,33 +24772,39 @@ export function evaluateFullCourseFocusPaymentCurveUnderOccupancy(
     )
   );
   const payments = Array.from({ length: maxPayment + 1 }, (_, payment) => payment);
-  const selectedOtherRoutes = analyses
-    .filter((analysis) => analysis.index !== focusIndex)
-    .map((analysis) => ({
-      route: analysis.fullCourseRoute ?? analysis.fullCourseRoutes[0],
-      occupancyWeight: getExplicitOccupancyWeight(
-        occupancyByIndex,
-        analysis.index
-      )
+  const pricingRouteMixtureByIndex = new Map(
+    analyses.map((analysis) => [
+      analysis.index,
+      getTrafficRouteMixtureForAnalysis(analysis)
+    ])
+  );
+  const selectedOtherRoutes = buildTrafficRouteMixtureEntries(
+    analyses,
+    focusIndex,
+    new Map(
+      analyses.map((analysis) => [
+        analysis.index,
+        getExplicitOccupancyWeight(occupancyByIndex, analysis.index)
+      ])
+    ),
+    pricingRouteMixtureByIndex
+  );
+
+  const otherFirstLegRoutes = selectedOtherRoutes
+    .map((entry) => ({
+      route: entry.route?.legRoutes?.[0] ?? null,
+      occupancyWeight: entry.occupancyWeight
     }))
     .filter((entry) => entry.route && entry.occupancyWeight > 0);
 
-  const otherFirstLegRoutes = analyses
-    .filter((analysis) => analysis.index !== focusIndex)
-    .map((analysis) => ({
-      route: (
-        analysis.fullCourseRoute ??
-        analysis.fullCourseRoutes[0]
-      )?.legRoutes?.[0],
-      occupancyWeight: getExplicitOccupancyWeight(
-        occupancyByIndex,
-        analysis.index
-      )
-    }))
-    .filter((entry) => entry.route && entry.occupancyWeight > 0);
-
+  const pricingTrafficAnalyses = analyses.map((analysis) => ({
+    ...analysis,
+    fullCourseRoute: analysis.fullCourseRoute ?? analysis.fullCourseRoutes?.[0] ?? null,
+    trafficRouteMixture:
+      pricingRouteMixtureByIndex.get(analysis.index) ?? analysis.trafficRouteMixture ?? null
+  }));
   const candidates = focus.fullCourseRoutes.map((candidate, routeIndex) => {
-    const traffic = getExpectedTrafficBreakdown(
+    const trafficLegacy = getExpectedTrafficBreakdown(
       tileMap,
       candidate,
       selectedOtherRoutes,
@@ -21813,6 +24812,19 @@ export function evaluateFullCourseFocusPaymentCurveUnderOccupancy(
       {
         ...options,
         occupancyByIndex
+      }
+    );
+    const traffic = getDamageEconomyTrafficRoutingBreakdown(
+      tileMap,
+      candidate,
+      trafficLegacy,
+      pricingTrafficAnalyses,
+      focusIndex,
+      flags,
+      {
+        ...options,
+        occupancyByIndex,
+        trafficRouteMixtureByIndex: pricingRouteMixtureByIndex
       }
     );
     const firstLegRoute = candidate?.legRoutes?.[0] ?? null;
@@ -21953,7 +24965,8 @@ export function recomputeFirstLegPressure(tileMap, firstLeg, options = {}) {
       averageTrafficByLeg: selection.averageTrafficByLeg ?? [],
       confidenceWeighted: true,
       candidateDiagnostics: selection.candidateDiagnostics ?? [],
-      commonOccupancyField: selection.commonOccupancyField ?? null
+      commonOccupancyField: selection.commonOccupancyField ?? null,
+      routeMixtureField: selection.routeMixtureField ?? null
     };
     expectedLegAnalyses = buildExpectedLegAnalysesFromFullRoutes(
       startAnalyses.filter((analysis) => !excludedIndices.has(analysis.index)),
@@ -22133,3 +25146,4 @@ export function analyzeFlagLeg(tileMap, from, goal, options = {}) {
     }
   };
 }
+// VERSION END: v49ad-hotspot-local-reroute

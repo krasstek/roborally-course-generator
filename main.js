@@ -1,3 +1,4 @@
+// VERSION START: v49ad-hotspot-local-reroute
 // Robo Rally Course Randomizer - production runtime
 // Mobile browsers may auto-detect number-like rule text and restyle it as a
 // tappable link even though the app emitted ordinary text. Keep rules/course
@@ -55,7 +56,7 @@ const versionedPath = (path) => `${path}${VERSION_SUFFIX}`;
 
 const [
   { render },
-  { ANALYZE_BUILD_ID, analyzeCourse, analyzeFullCourse, analyzeFullCourseCooperative, analyzeFlagLeg, buildStartOccupancyMap, clearAnalysisCaches, evaluateFullCourseFocusPaymentCurveUnderOccupancy, evaluateRouteUpgradePotential, estimateInitialUpgradeOpportunitiesRemaining, getAnalysisTelemetrySnapshot, getCourseMaxEnergy, getCourseStartingEnergy, getCourseStartingUpgradeCards, getRouteEnergyEconomyConfig, getRouteEnergyGainUtility, getRouteMarginalEnergyUtility, getRouteUpgradePotential, recomputeFirstLegPressure, resetAnalysisTelemetry, ROUTE_ENERGY_ECONOMY_DEFAULTS, scoreFlagArea, summarizeDamageShadowForRoute, summarizeIntrinsicRouteForecastConfidence, summarizePowerUpOpportunityBenchmark, summarizeProgramSequencePressure, summarizePowerUpProgramFeasibility },
+  { ANALYZE_BUILD_ID, analyzeCourse, analyzeFullCourse, analyzeFullCourseCooperative, analyzeFlagLeg, buildStartOccupancyMap, clearAnalysisCaches, evaluateFullCourseFocusPaymentCurveUnderOccupancy, evaluateRouteUpgradePotential, estimateInitialUpgradeOpportunitiesRemaining, getAnalysisTelemetrySnapshot, getDamageEconomyTelemetrySnapshot, getCourseMaxEnergy, getCourseStartingEnergy, getCourseStartingUpgradeCards, getRouteEnergyEconomyConfig, getRouteEnergyGainUtility, getRouteMarginalEnergyUtility, getRouteUpgradePotential, recomputeFirstLegPressure, resetAnalysisTelemetry, ROUTE_ENERGY_ECONOMY_DEFAULTS, scoreFlagArea, summarizeDamageEconomyFoundationForRoute, summarizeDamageShadowForRoute, summarizeIntrinsicRouteForecastConfidence, summarizePowerUpOpportunityBenchmark, summarizeProgramSequencePressure, summarizePowerUpProgramFeasibility },
   {
     buildMainFootprintTiles,
     buildResolvedMap,
@@ -93,7 +94,7 @@ const [
     applyVariantScenarioState,
     buildVariantBundle
   },
-  { buildCourseNotesHtml, clearCourseNotesCache, getCheckpointPlacementAdvisory }
+  { buildCourseNoteFacts, buildCourseNotesHtml, clearCourseNotesCache, getCheckpointPlacementAdvisory }
 ] = await Promise.all([
   import(versionedPath("./render.js")),
   import(versionedPath("./analyze.js")),
@@ -284,6 +285,7 @@ const GENERATION_MODE_PROFILES = Object.freeze({
     trafficEnabled: true,
     trafficEpochs: 0,
     trafficAlternateMaxNewSearchesPerEpoch: 0,
+    trafficAlternateMaxNewSearchesTotal: 0,
     trafficAlternateExpansions: 0,
     trafficAlternateMaxActions: 0,
     trafficAlternateCachedProbeMargin: 0,
@@ -308,6 +310,7 @@ const GENERATION_MODE_PROFILES = Object.freeze({
     trafficEpochs: 1,
     // Fast may accept a useful already-paid witness, but never opens new geometry.
     trafficAlternateMaxNewSearchesPerEpoch: 0,
+    trafficAlternateMaxNewSearchesTotal: 0,
     trafficAlternateExpansions: 0,
     trafficAlternateMaxActions: 0,
     trafficAlternateCachedProbeMargin: 0,
@@ -330,8 +333,12 @@ const GENERATION_MODE_PROFILES = Object.freeze({
     fullCourseExpansions: 44000,
     primaryWitnessRoutes: 2,
     trafficEnabled: true,
-    trafficEpochs: 1,
+    // v49ab adds one frozen-field reroute/recompute round. The total new-search
+    // allowance remains the old Standard maximum of six and is reserved across
+    // rounds, so iteration does not silently multiply the geometry budget.
+    trafficEpochs: 2,
     trafficAlternateMaxNewSearchesPerEpoch: 6,
+    trafficAlternateMaxNewSearchesTotal: 6,
     trafficAlternateExpansions: 320,
     trafficAlternateMaxActions: 30,
     trafficAlternateCachedProbeMargin: 0.75,
@@ -353,8 +360,9 @@ const GENERATION_MODE_PROFILES = Object.freeze({
     fullCourseExpansions: 52000,
     primaryWitnessRoutes: 3,
     trafficEnabled: true,
-    trafficEpochs: 2,
+    trafficEpochs: 3,
     trafficAlternateMaxNewSearchesPerEpoch: 10,
+    trafficAlternateMaxNewSearchesTotal: 20,
     trafficAlternateExpansions: 450,
     trafficAlternateMaxActions: 34,
     trafficAlternateCachedProbeMargin: 0.40,
@@ -378,8 +386,9 @@ const GENERATION_MODE_PROFILES = Object.freeze({
     fullCourseExpansions: 68000,
     primaryWitnessRoutes: 4,
     trafficEnabled: true,
-    trafficEpochs: 3,
+    trafficEpochs: 4,
     trafficAlternateMaxNewSearchesPerEpoch: 16,
+    trafficAlternateMaxNewSearchesTotal: 48,
     trafficAlternateExpansions: 600,
     trafficAlternateMaxActions: 36,
     trafficAlternateCachedProbeMargin: 0.15,
@@ -3265,25 +3274,15 @@ function updateSetupSummary(scenario) {
     return;
   }
   const noteParts = [];
+  const courseNoteFacts = buildCourseNoteFacts(presentationScenario);
+  const difficultyMismatch = courseNoteFacts.targetMismatch.difficulty;
+  const lengthMismatch = courseNoteFacts.targetMismatch.length;
   const difficultyFit = presentationMetrics.difficultyFit ?? 0;
   const lengthFit = presentationMetrics.lengthFit ?? 0;
   const requestedDifficulty = scenario.preferences.difficulty;
-  const moderateDifficultyThreshold = requestedDifficulty === "easy" ? 20 : 14;
   const strongDifficultyThreshold = requestedDifficulty === "easy" ? 48 : 42;
-  const difficultyStrength = difficultyFit >= strongDifficultyThreshold
-    ? "a lot"
-    : difficultyFit >= moderateDifficultyThreshold
-      ? "somewhat"
-      : difficultyFit > 0
-        ? "slightly"
-        : null;
-  const lengthStrength = lengthFit >= 24
-    ? "a lot"
-    : lengthFit >= 14
-      ? "somewhat"
-      : lengthFit > 0
-        ? "slightly"
-        : null;
+  const difficultyStrength = difficultyMismatch.strength;
+  const lengthStrength = lengthMismatch.strength;
   const epicUpperLength = getLengthThresholds().epic[1];
   const epicVeryLong = (
     scenario.preferences.length === "epic" &&
@@ -3292,14 +3291,14 @@ function updateSetupSummary(scenario) {
     presentationMetrics.lengthFitRaw > epicUpperLength
   );
 
-  if (scenario.preferences.difficulty !== "any" && difficultyStrength) {
-    noteParts.push(presentationMetrics.difficultyDirection === "low"
+  if (difficultyMismatch.active && difficultyStrength) {
+    noteParts.push(difficultyMismatch.direction === "low"
       ? `${difficultyStrength} easier`
       : `${difficultyStrength} harder`);
   }
 
-  if (scenario.preferences.length !== "any" && lengthStrength && !epicVeryLong) {
-    noteParts.push(presentationMetrics.lengthDirection === "low"
+  if (lengthMismatch.active && lengthStrength && !epicVeryLong) {
+    noteParts.push(lengthMismatch.direction === "low"
       ? `${lengthStrength} shorter`
       : `${lengthStrength} longer`);
   }
@@ -3309,30 +3308,16 @@ function updateSetupSummary(scenario) {
     lengthFit >= 24 ||
     (noteParts.length > 0 && (Number(presentationMetrics?.fitScore) || 0) >= 30)
   );
-  const checkpointPlacementAdvisory = getCheckpointPlacementAdvisory(presentationScenario);
+  const checkpointPlacementAdvisory = courseNoteFacts.checkpointPlacement;
   const epicLengthSentence = epicVeryLong
     ? " This course is very long, even for an Epic game."
     : "";
   const checkpointPlacementSentence = checkpointPlacementAdvisory?.active
     ? ` ${checkpointPlacementAdvisory.bannerText}`
     : "";
-  const boardUseBoards = Array.isArray(presentationMetrics.meaningfulBoardUse?.boards)
-    ? presentationMetrics.meaningfulBoardUse.boards
-    : [];
-  const sandwichedMissingSideCount = scenario.sandwichedDock
-    ? Number(presentationMetrics.sandwichedDockUse?.missingSideCount) || 0
-    : 0;
-  const zeroRouteInfluenceBoardCount = scenario.sandwichedDock
-    ? 0
-    : boardUseBoards.filter((board) => board?.weakUse && (Number(board?.uniqueRouteTiles) || 0) === 0).length;
-  const sandwichedMissingBoardIndices = new Set(
-    presentationMetrics.sandwichedDockUse?.missingSideBoardIndices ?? []
-  );
-  const weakTraversedBoardCount = boardUseBoards.filter((board) => (
-    board?.weakUse &&
-    (Number(board?.uniqueRouteTiles) || 0) > 0 &&
-    !sandwichedMissingBoardIndices.has(board?.boardIndex)
-  )).length;
+  const sandwichedMissingSideCount = courseNoteFacts.boardUse.sandwichedMissingSideCount;
+  const zeroRouteInfluenceBoardCount = courseNoteFacts.boardUse.zeroRouteInfluenceCount;
+  const weakTraversedBoardCount = courseNoteFacts.boardUse.weakTraversedCount;
   const weakBoardCount = zeroRouteInfluenceBoardCount + weakTraversedBoardCount + sandwichedMissingSideCount;
   const zeroRouteInfluenceSentence = zeroRouteInfluenceBoardCount > 0
     ? ` ${zeroRouteInfluenceBoardCount === 1
@@ -3350,15 +3335,8 @@ function updateSetupSummary(scenario) {
       : "Some boards get very little direct use."}`
     : "";
   const boardUseSentence = `${sandwichedUseSentence}${zeroRouteInfluenceSentence}${weakTraversedSentence}`;
-  const extraDocksRequestMismatch = Boolean(
-    scenario.generationBestMatch &&
-    isVariantForced(scenario.preferences ?? {}, "extraDocks") &&
-    !scenario.extraDocks
-  );
-  const competitiveSoftMismatch = Boolean(
-    scenario.competitiveMode &&
-    (presentationMetrics?.softFailures ?? []).includes("competitive-start-balance")
-  );
+  const extraDocksRequestMismatch = courseNoteFacts.extraDocksRequestMismatch;
+  const competitiveSoftMismatch = courseNoteFacts.competitiveSoftMismatch;
   const competitiveMismatchSentence = competitiveSoftMismatch
     ? " Competitive starting positions are somewhat uneven."
     : "";
@@ -3401,7 +3379,7 @@ function updateSetupSummary(scenario) {
     fitNoteEl.classList.add("hidden");
   }
 
-  const autoOpenExplanation = noteParts.length > 0 || checkpointPlacementAdvisory?.active || sandwichedMissingSideCount > 0;
+  const autoOpenExplanation = courseNoteFacts.autoOpenExplanation;
   const explanationVisible = Boolean(
     courseExplanationState.userPinnedOpen ||
     (
@@ -14035,6 +14013,9 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
       contextualTrafficAlternateMaxNewSearchesPerEpoch:
         options.contextualTrafficAlternateMaxNewSearchesPerEpoch ??
         generationProfile.trafficAlternateMaxNewSearchesPerEpoch,
+      contextualTrafficAlternateMaxNewSearchesTotal:
+        options.contextualTrafficAlternateMaxNewSearchesTotal ??
+        generationProfile.trafficAlternateMaxNewSearchesTotal,
       contextualTrafficAlternateExpansions:
         options.contextualTrafficAlternateExpansions ?? generationProfile.trafficAlternateExpansions,
       contextualTrafficAlternateMaxActions:
@@ -14120,6 +14101,9 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
       trafficAlternateMaxNewSearchesPerEpoch:
         options.contextualTrafficAlternateMaxNewSearchesPerEpoch ??
         generationProfile.trafficAlternateMaxNewSearchesPerEpoch,
+      trafficAlternateMaxNewSearchesTotal:
+        options.contextualTrafficAlternateMaxNewSearchesTotal ??
+        generationProfile.trafficAlternateMaxNewSearchesTotal,
       trafficAlternateExpansions:
         options.contextualTrafficAlternateExpansions ?? generationProfile.trafficAlternateExpansions,
       trafficAlternateMaxActions:
@@ -16718,6 +16702,22 @@ function classifyCandidate(sequence, preferences, context = {}) {
       : lengthFitRaw >= lengthThresholds[preferences.length][1]
         ? "high"
         : "matched";
+  const difficultyTargetBand = preferences.difficulty === "any"
+    ? null
+    : {
+      min: difficultyThresholds[preferences.difficulty][0],
+      maxExclusive: Number.isFinite(difficultyThresholds[preferences.difficulty][1])
+        ? difficultyThresholds[preferences.difficulty][1]
+        : null
+    };
+  const lengthTargetBand = preferences.length === "any"
+    ? null
+    : {
+      min: lengthThresholds[preferences.length][0],
+      maxExclusive: Number.isFinite(lengthThresholds[preferences.length][1])
+        ? lengthThresholds[preferences.length][1]
+        : null
+    };
   const fairnessPenalty = preferences.competitiveMode
     ? 0
     : fairnessStdDev >= 14 ? fairnessStdDev - 14 : 0;
@@ -16835,9 +16835,11 @@ function classifyCandidate(sequence, preferences, context = {}) {
     lengthFitRaw,
     difficultyFit,
     difficultyDirection,
+    difficultyTargetBand,
     lengthMetrics,
     lengthFit,
     lengthDirection,
+    lengthTargetBand,
     fairnessStdDev,
     competitiveBlockImpact,
     checkpointPressure,
@@ -17037,7 +17039,7 @@ function buildScenarioCopySummary(scenario) {
       const search = diagnostics.searchProfile;
       lines.push(
         currentNormalEstimateModel
-          ? `Search profile: ${diagnostics.generationModeLabel ?? formatGenerationModeLabel(getScenarioGenerationMode(scenario))}; attempts ${diagnostics.maxAttempts ?? scenarioMaxAttempts}${diagnostics.emergencyAttemptReserve ? ` +${diagnostics.emergencyAttemptReserve} emergency only if no fallback` : ""}, preflight audition ${Math.min(Number(search.preflightOpeningExpansions) || 700, 700)}/${Math.min(Number(search.preflightLaterExpansions) || 600, 600)}exp, primary witnesses ${search.primaryWitnessRoutes ?? "?"}, primary ${search.physicalTemplateExpansions ?? 700}exp/${search.physicalTemplateMaxActions ?? 36}a + resumable exhaustive-on-miss, traffic ${search.trafficEnabled ? `${search.trafficEpochs ?? 0} exploration epoch(s), alternates ${search.trafficAlternatesEnabled ? "on" : "off"}, common judgement demand≥${search.trafficAlternateDemandThreshold ?? NORMAL_TRAFFIC_ALTERNATE_DEMAND_THRESHOLD}/gain≥${search.trafficAlternateMinGain ?? NORMAL_TRAFFIC_ALTERNATE_MIN_GAIN}, bounded new-search ${search.trafficAlternateMaxNewSearchesPerEpoch ?? 0}/epoch @${search.trafficAlternateExpansions ?? 0}exp/${search.trafficAlternateMaxActions ?? 0}a, uncertainty effort floor ${search.trafficAlternateUncertaintyEffortFloor ?? 1}/curve ${search.trafficAlternateUncertaintyEffortExponent ?? 1}, explore-gap ${Math.round((search.trafficExplorationUncertaintyShare ?? 0) * 100)}% above conf ${search.trafficExplorationConfidenceFloor ?? 1}${search.devRouteModelOverrideActive ? ", Dev override" : ""}` : `off${search.devRouteModelOverrideActive ? " (Dev override)" : ""}`}`
+          ? `Search profile: ${diagnostics.generationModeLabel ?? formatGenerationModeLabel(getScenarioGenerationMode(scenario))}; attempts ${diagnostics.maxAttempts ?? scenarioMaxAttempts}${diagnostics.emergencyAttemptReserve ? ` +${diagnostics.emergencyAttemptReserve} emergency only if no fallback` : ""}, preflight audition ${Math.min(Number(search.preflightOpeningExpansions) || 700, 700)}/${Math.min(Number(search.preflightLaterExpansions) || 600, 600)}exp, primary witnesses ${search.primaryWitnessRoutes ?? "?"}, primary ${search.physicalTemplateExpansions ?? 700}exp/${search.physicalTemplateMaxActions ?? 36}a + resumable exhaustive-on-miss, traffic ${search.trafficEnabled ? `${search.trafficEpochs ?? 0} feedback round(s), alternates ${search.trafficAlternatesEnabled ? "on" : "off"}, common judgement demand≥${search.trafficAlternateDemandThreshold ?? NORMAL_TRAFFIC_ALTERNATE_DEMAND_THRESHOLD}/gain≥${search.trafficAlternateMinGain ?? NORMAL_TRAFFIC_ALTERNATE_MIN_GAIN}, bounded new-search round ceiling ${search.trafficAlternateMaxNewSearchesPerEpoch ?? 0}, ${search.trafficAlternateMaxNewSearchesTotal ?? 0} total @${search.trafficAlternateExpansions ?? 0}exp/${search.trafficAlternateMaxActions ?? 0}a, uncertainty effort floor ${search.trafficAlternateUncertaintyEffortFloor ?? 1}/curve ${search.trafficAlternateUncertaintyEffortExponent ?? 1}, explore-gap ${Math.round((search.trafficExplorationUncertaintyShare ?? 0) * 100)}% above conf ${search.trafficExplorationConfidenceFloor ?? 1}${search.devRouteModelOverrideActive ? ", Dev override" : ""}` : `off${search.devRouteModelOverrideActive ? " (Dev override)" : ""}`}`
           : scenario.competitiveMode
             ? `Search profile: ${diagnostics.generationModeLabel ?? formatGenerationModeLabel(getScenarioGenerationMode(scenario))}; Competitive shares the regular route foundation and replaces only Normal pruning with sequential strategic blocks; attempts ${diagnostics.maxAttempts ?? scenarioMaxAttempts}, traffic ${search.trafficEnabled ? "on" : "off"}`
             : (scenario.payToWin || scenario.subsidizedStarts)
@@ -17431,12 +17433,20 @@ function buildScenarioCopySummary(scenario) {
       );
       if ((contextualProfile?.trafficFeedbackLoopEnabled || contextualCache.trafficEpochsExecuted > 0) && routeStrategy) {
         lines.push(
-          `Traffic feedback v35: epochs ${contextualCache.trafficEpochsExecuted ?? 0}/${contextualProfile?.trafficEpochs ?? 0}, demand ${contextualCache.trafficAlternateDemandStarts ?? 0} start-visits/${contextualCache.trafficAlternateDemandLegs ?? 0} legs (${contextualCache.trafficAlternateEffectiveDemandLegs ?? 0} effective/${contextualCache.trafficAlternateExploratoryDemandLegs ?? 0} exploratory), cached divergence checks ${contextualCache.trafficAlternateCachedWitnessChecks ?? 0}, probe-stops ${contextualCache.trafficAlternateCachedProbeStops ?? 0}, escalations ${contextualCache.trafficAlternateEscalations ?? 0}, new bounded searches ${contextualCache.trafficAlternateNewSearches ?? 0} (${contextualCache.trafficAlternateSearchNoRoutes ?? 0} no-route), exact alt checks/rejects ${contextualCache.trafficAlternateExactChecks ?? 0}/${contextualCache.trafficAlternateExactRejects ?? 0} [card ${contextualCache.trafficAlternateCardRejects ?? 0}, validation ${contextualCache.trafficAlternateValidationRejects ?? 0}], duplicates ${contextualCache.trafficAlternateDuplicateRejects ?? 0}, low-gain ${contextualCache.trafficAlternateLowGainRejects ?? 0}, downstream-miss ${contextualCache.trafficAlternateDownstreamRebuildFailures ?? 0}, candidates added ${contextualCache.trafficAlternateCandidatesAdded ?? 0}, best combined gain ${contextualCache.trafficAlternateBestGain ?? 0}; exploration gap ${(contextualCache.trafficExplorationUncertaintyShare ?? 0) * 100}% above conf ${contextualCache.trafficExplorationConfidenceFloor ?? 1}; traffic raw/effective avg ${routeStrategy.averageRawPenalty ?? 0}/${routeStrategy.averagePenalty ?? 0}, forecast confidence mean/min ${routeStrategy.averageForecastConfidence ?? 1}/${routeStrategy.minimumForecastConfidence ?? 1}`
+          `Traffic feedback v49ad: rounds ${contextualCache.trafficEpochsExecuted ?? 0}/${contextualProfile?.trafficEpochs ?? 0}, demand ${contextualCache.trafficAlternateDemandStarts ?? 0} start-visits/${contextualCache.trafficAlternateDemandLegs ?? 0} legs (${contextualCache.trafficAlternateEffectiveDemandLegs ?? 0} effective/${contextualCache.trafficAlternateExploratoryDemandLegs ?? 0} exploratory/${contextualCache.trafficAlternatePressureDemandLegs ?? 0} pressure), pressure-restored ${contextualCache.trafficAlternatePressureRestoredLegs ?? 0} leg(s), pressure RE avg/max ${contextualCache.trafficAlternateAveragePressureRegisterEquivalents ?? 0}/${contextualCache.trafficAlternateMaximumPressureRegisterEquivalents ?? 0}, effort base→used avg ${contextualCache.trafficAlternateAverageBaseEffortScale ?? 1}→${contextualCache.trafficAlternateAverageEffortScale ?? 1}, hotspot-local ${contextualCache.trafficAlternateHotspotLocalSearches ?? 0} search(es), prefix kept avg/max ${contextualCache.trafficAlternateHotspotAveragePrefixActions ?? 0}/${contextualCache.trafficAlternateHotspotMaximumPrefixActions ?? 0}, leg-start fallback ${contextualCache.trafficAlternateHotspotFallbackLegStarts ?? 0}, 2-reg lookback ${contextualCache.trafficAlternateHotspotTwoRegisterLookbacks ?? 0}, cached divergence checks ${contextualCache.trafficAlternateCachedWitnessChecks ?? 0}, probe-stops ${contextualCache.trafficAlternateCachedProbeStops ?? 0}, escalations ${contextualCache.trafficAlternateEscalations ?? 0}, new bounded searches ${contextualCache.trafficAlternateNewSearches ?? 0}/${contextualCache.trafficAlternateMaxNewSearchesTotal ?? contextualProfile?.trafficAlternateMaxNewSearchesTotal ?? 0} total-cap (${contextualCache.trafficAlternateSearchNoRoutes ?? 0} no-route), exact alt checks/rejects ${contextualCache.trafficAlternateExactChecks ?? 0}/${contextualCache.trafficAlternateExactRejects ?? 0} [card ${contextualCache.trafficAlternateCardRejects ?? 0}, validation ${contextualCache.trafficAlternateValidationRejects ?? 0}], duplicates ${contextualCache.trafficAlternateDuplicateRejects ?? 0}, low-gain ${contextualCache.trafficAlternateLowGainRejects ?? 0}, downstream-miss ${contextualCache.trafficAlternateDownstreamRebuildFailures ?? 0}, candidates added ${contextualCache.trafficAlternateCandidatesAdded ?? 0}, best combined gain ${contextualCache.trafficAlternateBestGain ?? 0}; exploration gap ${(contextualCache.trafficExplorationUncertaintyShare ?? 0) * 100}% above conf ${contextualCache.trafficExplorationConfidenceFloor ?? 1}; traffic raw/effective avg ${routeStrategy.averageRawPenalty ?? 0}/${routeStrategy.averagePenalty ?? 0}, forecast confidence mean/min ${routeStrategy.averageForecastConfidence ?? 1}/${routeStrategy.minimumForecastConfidence ?? 1}`
         );
         const commonOccupancy = routeStrategy.commonOccupancyField ?? null;
         if (commonOccupancy?.weights?.length) {
           lines.push(
             `Traffic start occupancy: ${commonOccupancy.method ?? "common-field"}, players ${commonOccupancy.playerCount ?? scenario.playerCount ?? "?"}, available starts ${commonOccupancy.startCount ?? commonOccupancy.weights.length}, total weight ${commonOccupancy.totalWeight ?? "?"}; ${commonOccupancy.weights.map((entry) => `#${entry.index + 1} ${entry.weight} @q${entry.qualityScore}`).join(", ")}`
+          );
+        }
+        const routeMixture = routeStrategy.routeMixtureField
+          ?? contextualCache.trafficRouteMixtureField
+          ?? null;
+        if (routeMixture?.startCount) {
+          lines.push(
+            `Traffic route mixture v49ac: ${routeMixture.model ?? "quality-weighted-route-families"}, starts ${routeMixture.startCount}, candidates/families/retained ${routeMixture.candidateCount ?? 0}/${routeMixture.familyCount ?? 0}/${routeMixture.retainedFamilyCount ?? 0}, families avg ${routeMixture.averageFamiliesPerStart ?? 0}, effective routes avg ${routeMixture.averageEffectiveRouteCount ?? 0}, alternate occupancy share avg/max ${routeMixture.averageAlternateShare ?? 0}/${routeMixture.maximumAlternateShare ?? 0}; same-traffic-trajectory witnesses are one family and each start keeps its fixed total occupancy`
           );
         }
         const trafficHorizonText = (routeStrategy.averageTrafficByLeg ?? [])
@@ -17614,6 +17624,11 @@ function buildScenarioCopySummary(scenario) {
     lines.push(`Soft mismatches: ${scenario.metrics.softFailures.join(", ")}; fit ${scenario.metrics.fitScore ?? "n/a"}/${scenario.metrics.softFitLimit ?? SOFT_CANDIDATE_RETENTION_LIMIT}`);
   }
 
+  lines.push(...buildDamageFoundationReportLines(scenario, {
+    includePerStart: false,
+    includeEventStream: false
+  }));
+
   lines.push(...buildDamageShadowReportLines(scenario, {
     includePerStart: false,
     includeEventStream: false
@@ -17668,8 +17683,10 @@ function buildScenarioBenchmarkSummary(scenario) {
     "Course scores:",
     "Estimate→realize:",
     "Traffic feedback ",
+    "Traffic route mixture ",
     "Programming supply:",
-    "Damage economy candidate ",
+    "Damage economy v9:",
+    "Damage foundation ",
     "Exact reboot chronology "
   ];
   return fullSummary
@@ -17679,11 +17696,201 @@ function buildScenarioBenchmarkSummary(scenario) {
 }
 
 
+// DAMAGE_ECONOMY_FOUNDATION_BEGIN
+// v49ac-traffic-mixture Dev presentation for the routing-active damage economy.
+// Raw damage chronology remains visible for plausibility inspection, while the
+// shutdown-equivalent RE score now participates in exact candidate comparison.
+// Route-local realized damage replaces its legacy direct proxy; robot-laser damage
+// replaces the legacy ranged traffic proxy in the later traffic comparison.
+function getDamageFoundationScenarioOptions(scenario) {
+  const productionEnergy =
+    scenario?.sequence?.firstLeg?.summary?.coursePreflight?.routeAwareBatteryScoring ?? null;
+  return {
+    ...(scenario?.preferences ?? {}),
+    routeAwareBatteryScoring: Boolean(productionEnergy?.active),
+    routeEnergyHorizonTurns: productionEnergy?.horizonTurns ?? null,
+    routeEnergyRegisterScore: productionEnergy?.registerScore ?? null,
+    recoveryRule: scenario?.recoveryRule,
+    moreDeadlyGame: Boolean(scenario?.moreDeadlyGame),
+    lessSpammyGame: Boolean(scenario?.lessSpammyGame),
+    criticalSpam: Boolean(scenario?.criticalSpam),
+    criticalHaywire: Boolean(scenario?.criticalHaywire),
+    permanentShutdown: Boolean(scenario?.permanentShutdown),
+    factoryRejects: Boolean(scenario?.factoryRejects),
+    repairStations: Boolean(scenario?.repairStations),
+    cuttingFloor: Boolean(scenario?.cuttingFloor),
+    flamingOil: Boolean(scenario?.flamingOil),
+    repulsorOverdrive: Boolean(scenario?.repulsorOverdrive),
+    upgradeWorld: Boolean(scenario?.upgradeWorld),
+    lighterGame: Boolean(scenario?.lighterGame),
+    setToKill: Boolean(scenario?.setToKill),
+    setToStun: Boolean(scenario?.setToStun),
+    trafficGraceRegisters: scenario?.virtualBots ? 5 : 0,
+    boardRects: scenario?.boardRects ?? [],
+    rebootTokens: scenario?.rebootTokens ?? [],
+    playerCount: scenario?.preferences?.playerCount ?? scenario?.playerCount ?? 4
+  };
+}
+
+
+const DAMAGE_FOUNDATION_TRAFFIC_CONTEXT_CACHE = new WeakMap();
+
+function getDamageFoundationTrafficContext(scenario, startIndex) {
+  if (!scenario || !Number.isInteger(startIndex)) return null;
+  let byStart = DAMAGE_FOUNDATION_TRAFFIC_CONTEXT_CACHE.get(scenario);
+  if (!byStart) {
+    byStart = new Map();
+    DAMAGE_FOUNDATION_TRAFFIC_CONTEXT_CACHE.set(scenario, byStart);
+  }
+  if (byStart.has(startIndex)) return byStart.get(startIndex);
+
+  // Match the production routing-active full-course traffic field: every currently
+  // reachable exact start participates in the common player-count occupancy model.
+  // v49ab uses the same field for robot-laser damage in route comparison and Dev replay.
+  const analyses = (scenario?.sequence?.firstLeg?.starts ?? [])
+    .filter((entry) => entry?.reachable && entry?.fullCourseRoute);
+  if (!analyses.some((entry) => entry.index === startIndex)) {
+    byStart.set(startIndex, null);
+    return null;
+  }
+
+  const pricingEntries =
+    scenario?.sequence?.firstLeg?.summary?.payToWin?.pricingEntries ?? [];
+  const occupancyQualityScoreByIndex =
+    (scenario.payToWin || scenario.subsidizedStarts) && pricingEntries.length
+      ? new Map(pricingEntries.map((entry) => {
+        const early = Number(entry.postPaymentFullScore);
+        const late = Number(entry.latePostPaymentFullScore);
+        const score = Number.isFinite(early) && Number.isFinite(late)
+          ? (early + late) / 2
+          : Number.isFinite(early)
+            ? early
+            : Number.isFinite(late)
+              ? late
+              : Number(entry.fullScore);
+        return [entry.index, score];
+      }))
+      : null;
+
+  const context = {
+    analyses,
+    focusIndex: startIndex,
+    flags: getPlayableCheckpoints(
+      scenario.checkpoints,
+      scenario.virtualBots
+    ),
+    storedRangedScore: Number(
+      analyses.find((entry) => entry.index === startIndex)?.fullCourseTrafficRanged
+    ) || 0,
+    occupancyQualityScoreByIndex,
+    occupancyModel: (scenario.payToWin || scenario.subsidizedStarts)
+      ? "start-energy-post-adjustment-common-field"
+      : "common-quality-weighted-field"
+  };
+  byStart.set(startIndex, context);
+  return context;
+}
+
+function buildDamageFoundationReportLines(scenario, options = {}) {
+  if (!isDevViewEnabled() || typeof summarizeDamageEconomyFoundationForRoute !== "function") {
+    return [];
+  }
+  const includePerStart = options.includePerStart !== false;
+  const includeEventStream = options.includeEventStream !== false;
+  const tileMap = scenario?.goalTileMap;
+  const starts = (scenario?.sequence?.firstLeg?.starts ?? [])
+    .filter((entry) => entry?.reachable && entry?.fullCourseRoute);
+  if (!tileMap || !starts.length) {
+    return ["Damage economy v9: unavailable (no selected full-course routes)"];
+  }
+
+  const damageOptions = getDamageFoundationScenarioOptions(scenario);
+  const entries = starts.map((startAnalysis) => ({
+    startIndex: startAnalysis.index,
+    foundation: summarizeDamageEconomyFoundationForRoute(
+      tileMap,
+      startAnalysis.fullCourseRoute,
+      damageOptions,
+      getDamageFoundationTrafficContext(scenario, startAnalysis.index)
+    )
+  })).filter((entry) => entry.foundation);
+  if (!entries.length) return ["Damage economy v9: unavailable (replay failed)"];
+
+  const sum = (key) => Number(entries.reduce(
+    (total, entry) => total + (Number(entry.foundation?.[key]) || 0),
+    0
+  ).toFixed(3));
+  const mean = (key) => Number((sum(key) / Math.max(1, entries.length)).toFixed(3));
+  const max = (key) => Math.max(...entries.map(
+    (entry) => Number(entry.foundation?.[key]) || 0
+  ));
+  const deferredHooks = [...new Set(entries.flatMap(
+    (entry) => entry.foundation?.deferredVariantHooks ?? []
+  ))];
+  const implementedHooks = [...new Set(entries.flatMap(
+    (entry) => entry.foundation?.implementedVariantHooks ?? []
+  ))];
+  const telemetry = typeof getDamageEconomyTelemetrySnapshot === "function"
+    ? getDamageEconomyTelemetrySnapshot()
+    : entries.at(-1)?.foundation ?? {};
+  const selectedRouteMean = (key) => Number((starts.reduce(
+    (total, entry) => total + (Number(entry?.fullCourseRoute?.[key]) || 0),
+    0
+  ) / Math.max(1, starts.length)).toFixed(3));
+  const selectedTrafficMean = (key) => Number((starts.reduce(
+    (total, entry) => total + (Number(entry?.[key]) || 0),
+    0
+  ) / Math.max(1, starts.length)).toFixed(3));
+  const lines = [
+    `Damage economy v9: ROUTING ACTIVE; damage input avg ${mean("totalDamageUnits")} = deterministic ${mean("deterministicDamageUnits")} + robot-laser expected ${mean("robotLaserExpectedDamageUnits")}; persistent SPAM total/held final avg ${mean("finalSpamTotal")}/${mean("finalSpamHeld")}; transient Haywire max expected clog avg ${mean("maxExpectedHaywireClogs")}; raw economy RE avg total ${mean("totalDamageEconomyRegisterEquivalents")} [supply ${mean("totalSpamSupplyRegisterEquivalents")}, control-clog ${mean("totalClogRegisterEquivalents")}], max-turn ${Number((entries.reduce((t,e)=>t+(Number(e.foundation?.maxTurnDamageEconomyRegisterEquivalents)||0),0)/Math.max(1,entries.length)).toFixed(3))}; SPAM plays avg forced/elective ${mean("totalForcedSpamReliefInitiations")}/${mean("totalElectiveSpamReliefInitiations")}, removed avg ${mean("totalSpamRemoved")} (reboot ${mean("totalRebootSpamRemoved")}, capacity ${mean("totalRebootSpamDisposalCapacity")}); shutdown-equivalent scoring avg ${mean("shutdownEquivalentDamageScoreRegisterEquivalents")} RE = ${mean("shutdownEquivalentRegisterEquivalents")} episode RE + ${mean("shutdownResidualRegisterEquivalents")} residual, ${sum("shutdownEquivalentEpisodeCount")} episode(s) across ${entries.length} route(s), high/elevated threat ${entries.filter((entry)=>entry.foundation?.shutdownThreatLevel === "high").length}/${entries.filter((entry)=>entry.foundation?.shutdownThreatLevel === "elevated").length}; selected-route intrinsic damage adjustment avg ${selectedRouteMean("intrinsicDamageRoutingAdjustmentScore")} score [shutdown ${selectedRouteMean("intrinsicDamageShutdownEquivalentRegisterEquivalents")} RE replacing legacy realized-direct ${selectedRouteMean("intrinsicDamageLegacyRealizedDirectScore")} score]; traffic robot-laser damage increment avg ${selectedTrafficMean("fullCourseTrafficDamageEconomyRobotLaserIncrementRegisterEquivalents")} RE, legacy expected-hit proxy ${selectedTrafficMean("fullCourseTrafficLegacyRobotLaserDamageProxyScore")} score replaced while residual ranged threat ${selectedTrafficMean("fullCourseTrafficResidualRangedThreatScore")} score is retained; exact candidate re-ranking active; traffic/damage pressure can restore late alternate demand/effort without changing final confidence; frozen traffic reroute rounds recompute after added candidates; cheap primary search graph/budgets unchanged; scoring replay ${telemetry.shutdownScoringReplayCount ?? 0} route(s)/${telemetry.shutdownScoringReplayTurns ?? 0} turn(s); relief coefficients unchanged from v49x; state cache ${telemetry.effectiveStateCacheHits ?? 0}/${telemetry.effectiveStateLookups ?? 0}, program cache ${telemetry.programCacheHits ?? 0}/${telemetry.programLookups ?? 0}, draw cache ${telemetry.spamDrawCacheHits ?? 0}/${telemetry.spamDrawLookups ?? 0}, route replay cache ${telemetry.routeSummaryCacheHits ?? 0}/${telemetry.routeSummaryLookups ?? 0}; implemented hooks ${implementedHooks.length ? implementedHooks.join(",") : "none"}, deferred ${deferredHooks.length ? deferredHooks.join(",") : "none"}`
+  ];
+
+  if (includePerStart) {
+    entries.forEach((entry) => {
+      const d = entry.foundation;
+      lines.push(
+        `Damage economy start #${entry.startIndex + 1}: input ${d.totalDamageUnits} = deterministic ${d.deterministicDamageUnits} [board laser ${d.boardLaserDamageUnits}, flamer ${d.flamethrowerDamageUnits}, ledge ${d.ledgeDamageUnits}, reboot ${d.rebootDamageUnits}] + robot laser expected ${d.robotLaserExpectedDamageUnits}; SPAM added/removed ${d.totalSpamAdded}/${d.totalSpamRemoved} [reboot ${d.totalRebootSpamRemoved}, reboot capacity ${d.totalRebootSpamDisposalCapacity}], final total/held/circulating ${d.finalSpamTotal}/${d.finalSpamHeld}/${d.finalSpamCirculating}; raw RE supply/clog/total ${d.totalSpamSupplyRegisterEquivalents}/${d.totalClogRegisterEquivalents}/${d.totalDamageEconomyRegisterEquivalents}; Shutdown threat ${d.shutdownThreatLevel}, scoring ${d.shutdownEquivalentDamageScoreRegisterEquivalents} RE = ${d.shutdownEquivalentEpisodeCount}x${d.shutdownReferenceRegisterEquivalents} + residual ${d.shutdownResidualRegisterEquivalents}; selected route intrinsic adjustment ${starts.find((start)=>start.index===entry.startIndex)?.fullCourseRoute?.intrinsicDamageRoutingAdjustmentScore ?? 0} score, robot-laser traffic increment ${starts.find((start)=>start.index===entry.startIndex)?.fullCourseTrafficDamageEconomyRobotLaserIncrementRegisterEquivalents ?? 0} RE; variants implemented ${d.implementedVariantHooks?.join(",") || "none"}, deferred ${d.deferredVariantHooks?.join(",") || "none"}`
+      );
+    });
+  }
+
+  if (includeEventStream) {
+    entries.forEach((entry) => {
+      (entry.foundation?.turns ?? [])
+        .filter((turn) => (
+          turn.spamTotalAtProgramming > 0 ||
+          turn.expectedHaywireClogs > 0 ||
+          turn.pendingSpamAddedThisTurn > 0 ||
+          turn.reliefInitiations > 0 ||
+          turn.rebootRegister
+        ))
+        .forEach((turn) => {
+          lines.push(
+            `Damage economy turn start #${entry.startIndex + 1} T${turn.turn}: SPAM total ${turn.spamTotalAtProgramming}, held ${turn.spamHeldAtProgramming}, circulating ${turn.spamCirculatingAtProgramming} -> effective held/circ ${turn.effectiveHeldSpam}/${turn.effectiveCirculatingSpam}; hand ${turn.baseHandSize}, fresh draw ${turn.expectedFreshDrawSlots}, expected newly drawn/in-hand SPAM ${turn.expectedSpamDrawn}/${turn.expectedSpamInHand}; program P clean/damaged ${turn.cleanProgramProbability}/${turn.damagedProgramProbability}; Haywire clog ${turn.expectedHaywireClogs}; SPAM plays forced/elective ${turn.forcedSpamReliefInitiations}/${turn.electiveSpamReliefInitiations} @2 clog each, play-count P0..P5 ${turn.spamPlayCountDistribution.join("/")} -> expected SPAM clog ${turn.spamPlayClogLoad}, combined control-clog ${turn.expectedTotalControlClogLoad} -> clog RE ${turn.clogRegisterEquivalents}; supply RE ${turn.spamSupplyRegisterEquivalents}; total RE ${turn.damageEconomyRegisterEquivalents}; Shutdown scoring segment ${turn.shutdownThreatSegmentRegisterEquivalents} RE${turn.shutdownEquivalentEpisodeAfterTurn ? " -> shutdown-equivalent episode" : ""}; damage this turn ${turn.totalDamageUnits} = deterministic ${turn.deterministicDamageUnits} + robot-laser expected ${turn.robotLaserExpectedDamageUnits}; relief opportunity/initiation/removal ${turn.reliefOpportunity}/${turn.reliefInitiations}/${turn.spamRemoved} [forced removed ${turn.forcedSpamRemoved}]; reboot ${turn.rebootRegister ? `R${turn.rebootRegister}, SPAM dump ${turn.rebootSpamRemoved}/${turn.rebootSpamDisposalCapacity}, active-H clear ${turn.rebootHaywireCleared}` : "none"}; held end ${turn.spamHeldAtTurnEnd}; pending next S/H ${turn.pendingSpamAtTurnEnd}/${turn.pendingHaywireExpectedForNextTurn} [register H risks ${turn.pendingHaywireRegisterRisks.join("/")}]`
+          );
+        });
+      (entry.foundation?.events ?? [])
+        .filter((event) => (
+          event.damageUnits > 0 || event.reliefInitiation > 0 || event.rebooted
+        ))
+        .forEach((event) => {
+          lines.push(
+            `Damage economy event start #${entry.startIndex + 1} T${event.turn}R${event.register} a${event.absoluteAction}: tactical relief ${event.reliefInitiation} (opp ${event.reliefOpportunity}, chain ${event.spamChainYield}x, removed ${event.spamRemoved}; wall +${event.reliefWallBonus}${event.reliefWallDistance ? `@${event.reliefWallDistance}` : ""}, forward hazard -${event.reliefForwardHazardPenalty}, conveyor +${event.reliefConveyorMovementBonus}, rotation -${event.reliefForcedRotationPenalty}, forced move -${event.reliefForcedMovementPenalty});${event.rebooted ? ` REBOOT clears active-H ${event.rebootHaywireCleared}, SPAM dump ${event.rebootSpamRemoved}/${event.rebootSpamDisposalCapacity};` : ""} damage ${event.damageUnits} = deterministic ${event.deterministicDamageUnits} + robot-laser expected ${event.robotLaserExpectedDamageUnits} [${event.sourceTypes?.join("+") || "none"}], robot-hit p by N/E/S/W ${event.robotLaserHitProbabilities?.join("/") || "0/0/0/0"}, H-event p ${event.haywireEventProbability} -> +SPAM ${event.spamAdded}, pending H-register risk +${event.haywireRegisterRiskAdded} -> ${event.pendingHaywireRegisterRiskAfter}`
+          );
+        });
+    });
+  }
+
+  return lines;
+}
+
+// DAMAGE_ECONOMY_FOUNDATION_END
+
 // DAMAGE_SHADOW_BEGIN
 // Dev-only presentation of the post-hoc route replay exported by analyze.js.
 // Nothing in generation, classification, traffic, calibration, or player-facing
-// Course Notes reads these values. Delete this block, the report call below, and
-// the analyze.js DAMAGE_SHADOW block to remove the shadow completely.
+// Course Notes reads these values. Delete this block, its report call below, and
+// the analyze.js DAMAGE_SHADOW block to remove the old shadow completely.
 function buildDamageShadowReportLines(scenario, options = {}) {
   if (!isDevViewEnabled() || typeof summarizeDamageShadowForRoute !== "function") {
     return [];
@@ -17908,8 +18115,8 @@ function buildDamageShadowReportLines(scenario, options = {}) {
     `Relief reference v1: route-only/base-rule SPAM-disposal opportunity from the best register each game turn; applies relief before that turn's new realized damage and credits at most ${Math.max(...entries.map((entry) => Number(entry.shadow?.reliefMaxLoadUnitsPerTurn) || 1))} load unit/turn. Candidate turns ${sum("reliefCandidateTurnCount")}; relief used ${sum("reliefAppliedTurnCount")}; avg/max best opportunity ${mean("meanBestReliefOpportunity")}/${Math.max(...entries.map((entry) => Number(entry.shadow?.maxBestReliefOpportunity) || 0)).toFixed(2)}; best-register catastrophic-risk turns ${sum("bestReliefCatastrophicTurnCount")}; potential/applied relief ${sum("totalReliefPotentialUnits")}/${sum("totalReliefAppliedUnits")} load units; final relieved load/burden avg ${mean("finalRelievedDamageLoad")}/${mean("finalRelievedBurdenRegisterEquivalents")}R.`,
     `Expected composition v2: provisional ${Math.round(mean("expectedSpamShare") * 100)}/${Math.round(mean("expectedHaywireShare") * 100)} persistent-SPAM-like/transient-Haywire-like split applied to realized route damage. Persistent input avg ${mean("totalExpectedPersistentInputUnits")}; route relief leaves persistent load/burden avg ${mean("finalPersistentDamageLoad")}/${mean("finalPersistentBurdenRegisterEquivalents")}R. Transient state clears each game turn: ${sum("transientDamageTurnCount")} realized-damage turn(s), expected affected registers avg/max ${mean("meanTransientExpectedAffectedRegisters")}/${Math.max(...entries.map((entry) => Number(entry.shadow?.maxTransientExpectedAffectedRegisters) || 0)).toFixed(2)}, P(2+ distinct) avg/max ${mean("meanTransientProbabilityAtLeastTwo")}/${Math.max(...entries.map((entry) => Number(entry.shadow?.maxTransientProbabilityAtLeastTwo) || 0)).toFixed(2)}, excess multi-register pressure avg/max ${mean("meanTransientExcessMultiRegisterPressure")}/${Math.max(...entries.map((entry) => Number(entry.shadow?.maxTransientExcessMultiRegisterPressure) || 0)).toFixed(2)}.`,
     `Traffic damage composition v2: ${trafficStateEntries.length} retained route(s); occupancy ${trafficOccupancyModels.join("/") || "n/a"}, expected other-robot mass avg ${trafficStateMean("trafficOccupancyTotal")}; production-function replay ${trafficStateMean("trafficRangedProductionReplayScore")} vs stored ${trafficStateMean("trafficRangedStoredScore")} (max context/stored drift ${Number(trafficStateMaxAbsProductionStoredDrift.toFixed(3))}); register shadow ${trafficStateMean("trafficRangedEffectiveScoreRecomputed")} vs production replay (max reconstruction drift ${Number(trafficStateMaxAbsRegisterReplayDrift.toFixed(3))}; direct-vs-stored max ${Number(trafficStateMaxAbsDrift.toFixed(3))}); expected robot-laser input avg ${trafficStateMean("trafficExpectedDamageUnits")} damage-equivalent(s). Combined board+robot persistent load/burden avg ${trafficStateMean("combinedPersistentDamageLoad")}/${trafficStateMean("combinedPersistentBurdenRegisterEquivalents")}R, traffic marginal persistent burden ${trafficStateMean("trafficMarginalPersistentBurdenRegisterEquivalents")}R; combined transient affected registers avg/max ${trafficStateMean("combinedMeanTransientExpectedAffectedRegisters")}/${trafficStateMax("combinedMaxTransientExpectedAffectedRegisters").toFixed(2)}, P(2+) avg/max ${trafficStateMean("combinedMeanTransientProbabilityAtLeastTwo")}/${trafficStateMax("combinedMaxTransientProbabilityAtLeastTwo").toFixed(2)}. Nearby/displacement and competition stay separate and continue influencing congestion plus forecast confidence.`,
-    `Damage economy candidate v3 / turn ledger v1: ${candidateEntries.length} ${trafficStateEntries.length ? "retained board+traffic" : "board-only"} route(s); diagnostic only, new damage applies next programming turn. Damage-economy RE avg ${candidateMean("candidateTotalDamageEconomyRegisterEquivalents")} [SPAM program-supply ${candidateMean("candidateTotalSpamSupplyRegisterEquivalents")}, nonlinear clog ${candidateMean("candidateTotalClogRegisterEquivalents")}]; clean/SPAM-diluted program probability mean ${candidateMean("candidateMeanCleanProgramProbability")}/${candidateMean("candidateMeanSpamProgramProbability")}. Expected clogs avg-route H/forced-SPAM/total ${candidateMean("candidateTotalExpectedHaywireClogs")}/${candidateMean("candidateTotalExpectedForcedSpamClogs")}/${candidateMean("candidateTotalExpectedClogs")}; worst turn expected clogs ${candidateMax("candidateMaxExpectedClogs").toFixed(2)}, clog RE ${candidateMax("candidateMaxClogRegisterEquivalents").toFixed(2)}, P(4+)/P(full) ${candidateMax("candidateMaxProbabilityFourPlusClogs").toFixed(2)}/${candidateMax("candidateMaxProbabilityFullClog").toFixed(2)}; clog anchors ${candidateClogAnchors.join("/") || "n/a"} RE for 0..5 clogs. Max programming-time burden SPAM/Haywire ${candidateMax("candidateMaxSpamBurdenAtProgramming").toFixed(2)}/${candidateMax("candidateMaxHaywireBurdenAtProgramming").toFixed(2)}.`,
-    `Damage economy relief v3: stationary-hand approximation, no literal deck/reshuffle chronology. Positive registers ${candidateSum("candidatePositiveReliefRegisterCount")}, traffic-zeroed ${candidateSum("candidateTrafficSuppressedReliefRegisterCount")}; opportunity ${candidateSum("candidateTotalReliefOpportunity")}, expected SPAM initiations/removal ${candidateSum("candidateTotalReliefInitiations")}/${candidateSum("candidateTotalReliefExpectedRemoval")}, mean SPAM-chain yield ${candidateMean("candidateMeanReliefChainYield")}x, extra removal from SPAM->SPAM chains ${candidateSum("candidateSpamChainExtraRemoved")}; forced reboots clearing Haywire ${candidateSum("candidateRebootHaywireClearCount")} turn(s)/${candidateSum("candidateExpectedHaywireClearedByReboot")} expected pending Haywire; final SPAM avg ${candidateMean("candidateFinalSpamBurden")}, terminal next-turn Haywire avg ${candidateMean("candidateTerminalHaywireBurden")}.${candidateUnsupportedVariants.length ? ` Base-rule shadow does not yet apply optional damage variants: ${candidateUnsupportedVariants.join(", ")}.` : ""}`,
+    `Legacy damage shadow candidate v3 / turn ledger v1 (obsolete 50/50/state assumptions): ${candidateEntries.length} ${trafficStateEntries.length ? "retained board+traffic" : "board-only"} route(s); diagnostic only, new damage applies next programming turn. Damage-economy RE avg ${candidateMean("candidateTotalDamageEconomyRegisterEquivalents")} [SPAM program-supply ${candidateMean("candidateTotalSpamSupplyRegisterEquivalents")}, nonlinear clog ${candidateMean("candidateTotalClogRegisterEquivalents")}]; clean/SPAM-diluted program probability mean ${candidateMean("candidateMeanCleanProgramProbability")}/${candidateMean("candidateMeanSpamProgramProbability")}. Expected clogs avg-route H/forced-SPAM/total ${candidateMean("candidateTotalExpectedHaywireClogs")}/${candidateMean("candidateTotalExpectedForcedSpamClogs")}/${candidateMean("candidateTotalExpectedClogs")}; worst turn expected clogs ${candidateMax("candidateMaxExpectedClogs").toFixed(2)}, clog RE ${candidateMax("candidateMaxClogRegisterEquivalents").toFixed(2)}, P(4+)/P(full) ${candidateMax("candidateMaxProbabilityFourPlusClogs").toFixed(2)}/${candidateMax("candidateMaxProbabilityFullClog").toFixed(2)}; clog anchors ${candidateClogAnchors.join("/") || "n/a"} RE for 0..5 clogs. Max programming-time burden SPAM/Haywire ${candidateMax("candidateMaxSpamBurdenAtProgramming").toFixed(2)}/${candidateMax("candidateMaxHaywireBurdenAtProgramming").toFixed(2)}.`,
+    `Legacy damage shadow relief v3: stationary-hand approximation, no literal deck/reshuffle chronology. Positive registers ${candidateSum("candidatePositiveReliefRegisterCount")}, traffic-zeroed ${candidateSum("candidateTrafficSuppressedReliefRegisterCount")}; opportunity ${candidateSum("candidateTotalReliefOpportunity")}, expected SPAM initiations/removal ${candidateSum("candidateTotalReliefInitiations")}/${candidateSum("candidateTotalReliefExpectedRemoval")}, mean SPAM-chain yield ${candidateMean("candidateMeanReliefChainYield")}x, extra removal from SPAM->SPAM chains ${candidateSum("candidateSpamChainExtraRemoved")}; forced reboots clearing Haywire ${candidateSum("candidateRebootHaywireClearCount")} turn(s)/${candidateSum("candidateExpectedHaywireClearedByReboot")} expected pending Haywire; final SPAM avg ${candidateMean("candidateFinalSpamBurden")}, terminal next-turn Haywire avg ${candidateMean("candidateTerminalHaywireBurden")}.${candidateUnsupportedVariants.length ? ` Base-rule shadow does not yet apply optional damage variants: ${candidateUnsupportedVariants.join(", ")}.` : ""}`,
     ...(candidatePeakTurns.length ? [
       `Damage turn peaks: ${candidatePeakTurns.map(({ startIndex, turn }) => (
         `#${startIndex + 1} T${turn.turn} ${turn.damageEconomyRegisterEquivalents}RE [supply ${turn.spamSupplyRegisterEquivalents}, clog ${turn.clogRegisterEquivalents}; clogs H/S/total ${turn.expectedHaywireClogs}/${turn.expectedForcedSpamClogs}/${turn.expectedTotalClogs}; P ${turn.cleanProgramProbability}->${turn.spamProgramProbability}; S ${turn.spamAtProgramming}; relief ${turn.reliefInitiations} init/${turn.expectedSpamRemoved} removed @chain ${turn.expectedSpamChainYieldAtStart}; dmg B/T ${turn.boardDamageUnits}/${turn.trafficDamageUnits}${turn.rebooted ? `; reboot R${turn.rebootRegister}, H-clear ${turn.haywireClearedByReboot}` : ""}]`
@@ -18183,7 +18390,7 @@ function buildScenarioReport(scenario, selectedLegIndex) {
       ? `Qualifying candidate pool: ${scenario.generationDiagnostics.acceptableCandidatesFound ?? 0}/${scenario.generationDiagnostics.acceptableCandidateTarget ?? 1}; scores ${(scenario.generationDiagnostics.acceptableCandidateScores ?? []).join(", ") || "none"}; near-best ${(scenario.generationDiagnostics.nearBestCandidateScores ?? []).join(", ") || "none"}; selected ${scenario.generationDiagnostics.selectedCandidateScore ?? "n/a"}; soft-fit limit ${scenario.generationDiagnostics.softCandidateRetentionLimit ?? SOFT_CANDIDATE_RETENTION_LIMIT}`
       : "Qualifying candidate pool: n/a",
     scenario.generationDiagnostics?.searchProfile
-      ? `Generation search profile: attempts ${scenario.generationDiagnostics.maxAttempts ?? getScenarioGenerationMaxAttempts(scenario)}, preflight ${scenario.generationDiagnostics.searchProfile.preflightOpeningExpansions}/${scenario.generationDiagnostics.searchProfile.preflightLaterExpansions}, witnesses ${scenario.generationDiagnostics.searchProfile.primaryWitnessRoutes ?? "?"}, traffic ${scenario.generationDiagnostics.searchProfile.trafficEnabled ? `${scenario.generationDiagnostics.searchProfile.trafficEpochs ?? 0} exploration epoch(s), new-search cap ${scenario.generationDiagnostics.searchProfile.trafficAlternateMaxNewSearchesPerEpoch ?? 0}/epoch, uncertainty effort floor ${scenario.generationDiagnostics.searchProfile.trafficAlternateUncertaintyEffortFloor ?? 1}/curve ${scenario.generationDiagnostics.searchProfile.trafficAlternateUncertaintyEffortExponent ?? 1}, uncertainty exploration ${Math.round((scenario.generationDiagnostics.searchProfile.trafficExplorationUncertaintyShare ?? 0) * 100)}% above confidence ${scenario.generationDiagnostics.searchProfile.trafficExplorationConfidenceFloor ?? 1}` : "off"}`
+      ? `Generation search profile: attempts ${scenario.generationDiagnostics.maxAttempts ?? getScenarioGenerationMaxAttempts(scenario)}, preflight ${scenario.generationDiagnostics.searchProfile.preflightOpeningExpansions}/${scenario.generationDiagnostics.searchProfile.preflightLaterExpansions}, witnesses ${scenario.generationDiagnostics.searchProfile.primaryWitnessRoutes ?? "?"}, traffic ${scenario.generationDiagnostics.searchProfile.trafficEnabled ? `${scenario.generationDiagnostics.searchProfile.trafficEpochs ?? 0} feedback round(s), new-search round ceiling ${scenario.generationDiagnostics.searchProfile.trafficAlternateMaxNewSearchesPerEpoch ?? 0}, ${scenario.generationDiagnostics.searchProfile.trafficAlternateMaxNewSearchesTotal ?? 0} total, uncertainty effort floor ${scenario.generationDiagnostics.searchProfile.trafficAlternateUncertaintyEffortFloor ?? 1}/curve ${scenario.generationDiagnostics.searchProfile.trafficAlternateUncertaintyEffortExponent ?? 1}, uncertainty exploration ${Math.round((scenario.generationDiagnostics.searchProfile.trafficExplorationUncertaintyShare ?? 0) * 100)}% above confidence ${scenario.generationDiagnostics.searchProfile.trafficExplorationConfidenceFloor ?? 1}` : "off"}`
       : "Generation search profile: n/a",
     scenario.generationDiagnostics?.slowestRouteSearch
       ? `Slowest route search: ${scenario.generationDiagnostics.slowestRouteSearch.kind} ${formatGenerationDuration(scenario.generationDiagnostics.slowestRouteSearch.durationMs)}, expansions ${scenario.generationDiagnostics.slowestRouteSearch.expansions}/${scenario.generationDiagnostics.slowestRouteSearch.maxExpansions}, returned ${scenario.generationDiagnostics.slowestRouteSearch.returnedRoutes}`
@@ -18396,6 +18603,7 @@ function buildScenarioReport(scenario, selectedLegIndex) {
     );
   }
 
+  lines.push(...buildDamageFoundationReportLines(scenario));
   lines.push(...buildDamageShadowReportLines(scenario));
 
   return lines.map(roundCourseEvaluationNumbers).join("\n");
@@ -19125,9 +19333,63 @@ function formatRouteDetail(scenario, entry) {
   // so diagnostics must not resurrect the raw printed feature under a flag.
   const traceTileMap = scenario?.goalTileMap ?? null;
   const lines = [
-    `${entry.label}: ${route.actions} register${route.actions === 1 ? "" : "s"}, distance ${route.distance}, forced ${route.forcedDistance}, raw score ${route.score}`,
+    `${entry.label}: ${route.actions} register${route.actions === 1 ? "" : "s"}, distance ${route.distance}, forced ${route.forcedDistance}, route score ${route.score}${Number.isFinite(Number(route.legacyScoreBeforeDamageRouting)) ? ` (legacy before damage routing ${route.legacyScoreBeforeDamageRouting})` : ""}`,
     ...formatChronologicalRouteTrace(route, traceTileMap)
   ];
+
+  // v49ac-traffic-mixture: selected-route raw damage remains visible beside the
+  // chronological trace, while shutdown-equivalent RE is now also a route-selection
+  // input. The trace still does not pretend to know literal future hands/register cards.
+  if (traceTileMap && typeof summarizeDamageEconomyFoundationForRoute === "function") {
+    const damageEconomy = summarizeDamageEconomyFoundationForRoute(
+      traceTileMap,
+      route,
+      getDamageFoundationScenarioOptions(scenario),
+      getDamageFoundationTrafficContext(scenario, entry?.startAnalysis?.index)
+    );
+    if (damageEconomy) {
+      lines.push(
+        `Damage economy (${damageEconomy.method}, routing-active raw ledger): input ${damageEconomy.totalDamageUnits} = deterministic ${damageEconomy.deterministicDamageUnits} + robot-laser expected ${damageEconomy.robotLaserExpectedDamageUnits}; SPAM final total/held/circulating ${damageEconomy.finalSpamTotal}/${damageEconomy.finalSpamHeld}/${damageEconomy.finalSpamCirculating}; active/pending Haywire expected clog ${damageEconomy.finalActiveHaywireExpectedClogs}/${damageEconomy.finalPendingHaywireExpectedClogs}; raw damage-economy RE supply/clog/total ${damageEconomy.totalSpamSupplyRegisterEquivalents}/${damageEconomy.totalClogRegisterEquivalents}/${damageEconomy.totalDamageEconomyRegisterEquivalents}; max turn ${damageEconomy.maxTurnDamageEconomyRegisterEquivalents}; shutdown-equivalent scoring ${damageEconomy.shutdownEquivalentDamageScoreRegisterEquivalents} RE`
+      );
+      if (route.damageRoutingModel) {
+        lines.push(
+          `Damage routing: intrinsic shutdown-equivalent ${route.intrinsicDamageShutdownEquivalentRegisterEquivalents ?? 0} RE -> ${route.intrinsicDamageReplacementScore ?? 0} score, replacing ${route.intrinsicDamageLegacyRealizedDirectScore ?? 0} legacy realized-direct score; intrinsic adjustment ${route.intrinsicDamageRoutingAdjustmentScore ?? 0}. Robot-laser damage is added through the later traffic comparison.`
+        );
+      }
+      if (
+        damageEconomy.shutdownThreatLevel === "high" ||
+        damageEconomy.shutdownThreatLevel === "elevated"
+      ) {
+        const episodeText = damageEconomy.shutdownEquivalentEpisodeCount > 0
+          ? `${damageEconomy.shutdownEquivalentEpisodeCount} shutdown-equivalent episode(s) = ${damageEconomy.shutdownEquivalentRegisterEquivalents} RE${damageEconomy.shutdownEquivalentEpisodeTurns?.length ? ` after T${damageEconomy.shutdownEquivalentEpisodeTurns.join("/T")}` : ""}`
+          : "no full shutdown-equivalent episode";
+        lines.push(
+          `Shutdown threat: ${damageEconomy.shutdownThreatLevel.toUpperCase()} — ${episodeText}; residual ${damageEconomy.shutdownResidualRegisterEquivalents} RE; peak scoring segment ${damageEconomy.shutdownThreatPeakSegmentRegisterEquivalents}/${damageEconomy.shutdownReferenceRegisterEquivalents} RE. Scoring abstraction affects route comparison; no actual Shutdown is programmed.`
+        );
+      }
+      (damageEconomy.turns ?? [])
+        .filter((turn) => (
+          turn.spamTotalAtProgramming > 0 ||
+          turn.expectedHaywireClogs > 0 ||
+          turn.pendingSpamAddedThisTurn > 0 ||
+          turn.reliefInitiations > 0
+        ))
+        .forEach((turn) => {
+          lines.push(
+            `  Damage T${turn.turn} programming: SPAM total/held/circ ${turn.spamTotalAtProgramming}/${turn.spamHeldAtProgramming}/${turn.spamCirculatingAtProgramming} -> effective held/circ ${turn.effectiveHeldSpam}/${turn.effectiveCirculatingSpam}; hand ${turn.baseHandSize}, fresh draw ${turn.expectedFreshDrawSlots}; expected SPAM drawn/in-hand ${turn.expectedSpamDrawn}/${turn.expectedSpamInHand}; program P clean/damaged ${turn.cleanProgramProbability}/${turn.damagedProgramProbability}; H clog ${turn.expectedHaywireClogs}; SPAM forced/elective ${turn.forcedSpamReliefInitiations}/${turn.electiveSpamReliefInitiations}, P0..P5 ${turn.spamPlayCountDistribution.join("/")} -> expected SPAM clog ${turn.spamPlayClogLoad}, combined ${turn.expectedTotalControlClogLoad}; RE supply/clog/total ${turn.spamSupplyRegisterEquivalents}/${turn.clogRegisterEquivalents}/${turn.damageEconomyRegisterEquivalents}; Shutdown scoring segment ${turn.shutdownThreatSegmentRegisterEquivalents}${turn.shutdownEquivalentEpisodeAfterTurn ? " -> episode" : ""}`
+          );
+          if (
+            turn.reliefInitiations > 0 ||
+            turn.pendingSpamAddedThisTurn > 0 ||
+            turn.pendingHaywireExpectedForNextTurn > 0
+          ) {
+            lines.push(
+              `    Relief/damage: tactical opportunity ${turn.reliefOpportunity}, SPAM initiation/removal ${turn.reliefInitiations}/${turn.spamRemoved}; damage ${turn.totalDamageUnits} = deterministic ${turn.deterministicDamageUnits} + robot-laser expected ${turn.robotLaserExpectedDamageUnits}; reboot ${turn.rebootRegister ? `R${turn.rebootRegister}, SPAM dump ${turn.rebootSpamRemoved}/${turn.rebootSpamDisposalCapacity}, active-H clear ${turn.rebootHaywireCleared}` : "none"}; held end ${turn.spamHeldAtTurnEnd}; pending next SPAM/Haywire ${turn.pendingSpamAtTurnEnd}/${turn.pendingHaywireExpectedForNextTurn}; H register risks ${turn.pendingHaywireRegisterRisks.join("/")}`
+            );
+          }
+        });
+    }
+  }
   const literalProgramCards = (route.transitions || [])
     .map((transition) => {
       const cardId = transition?.programCard;
@@ -19146,6 +19408,22 @@ function formatRouteDetail(scenario, entry) {
   if (cardScarcityPenalty > 0 || programPlausibilityPenalty > 0) {
     lines.push(
       `Program availability pressure: scarcity ${cardScarcityPenalty.toFixed(2)}, combination ${programPlausibilityPenalty.toFixed(2)}`
+    );
+  }
+
+  if (
+    Number.isFinite(Number(route.routeEnergyShadowReserveStart)) ||
+    Number.isFinite(Number(route.routeEnergyShadowReserveEnd)) ||
+    Math.abs(Number(route.routeEnergyEconomyRewardScore) || 0) > 0.005
+  ) {
+    const startReserve = Number.isFinite(Number(route.routeEnergyShadowReserveStart))
+      ? Number(route.routeEnergyShadowReserveStart).toFixed(2)
+      : "n/a";
+    const endReserve = Number.isFinite(Number(route.routeEnergyShadowReserveEnd))
+      ? Number(route.routeEnergyShadowReserveEnd).toFixed(2)
+      : "n/a";
+    lines.push(
+      `Energy economy: reserve ${startReserve} → ${endReserve}; route utility ${Number(route.routeEnergyEconomyRewardScore || 0).toFixed(2)} score`
     );
   }
 
@@ -19619,7 +19897,7 @@ function ensureDevFastBaselineControls() {
     forcedControls.style.opacity = overrideActive ? "1" : "0.6";
     if (!overrideActive) {
       const newSearchText = state.alternatesEnabled
-        ? `${state.profile.trafficAlternateMaxNewSearchesPerEpoch ?? 0} bounded new search(es)/epoch`
+        ? `round ceiling ${state.profile.trafficAlternateMaxNewSearchesPerEpoch ?? 0}, ${state.profile.trafficAlternateMaxNewSearchesTotal ?? 0} total bounded new search(es)`
         : "no alternate discovery";
       note.textContent = `${state.label} controls generation: traffic ${state.trafficEnabled ? "on" : "off"}, traffic-driven alternatives ${state.alternatesEnabled ? "on" : "off"} (${newSearchText}). Dev View is observational.`;
       return;
@@ -21248,6 +21526,8 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
             NORMAL_TRAFFIC_ALTERNATE_MIN_GAIN,
           contextualTrafficAlternateMaxNewSearchesPerEpoch:
             generationModeProfile.trafficAlternateMaxNewSearchesPerEpoch,
+          contextualTrafficAlternateMaxNewSearchesTotal:
+            generationModeProfile.trafficAlternateMaxNewSearchesTotal,
           contextualTrafficAlternateExpansions:
             generationModeProfile.trafficAlternateExpansions,
           contextualTrafficAlternateMaxActions:
@@ -22073,8 +22353,10 @@ function buildScenarioPresentationSnapshot(scenario) {
     lengthFitRaw: metrics.lengthFitRaw ?? null,
     difficultyFit: metrics.difficultyFit ?? 0,
     difficultyDirection: metrics.difficultyDirection ?? "matched",
+    difficultyTargetBand: metrics.difficultyTargetBand ?? null,
     lengthFit: metrics.lengthFit ?? 0,
     lengthDirection: metrics.lengthDirection ?? "matched",
+    lengthTargetBand: metrics.lengthTargetBand ?? null,
     fitScore: metrics.fitScore ?? null,
     softFitLimit: metrics.softFitLimit ?? null,
     exactTargetMatch: metrics.exactTargetMatch ?? null,
@@ -22426,6 +22708,8 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     contextualTrafficAlternateMinGain: NORMAL_TRAFFIC_ALTERNATE_MIN_GAIN,
     contextualTrafficAlternateMaxNewSearchesPerEpoch:
       hydrationGenerationProfile.trafficAlternateMaxNewSearchesPerEpoch,
+    contextualTrafficAlternateMaxNewSearchesTotal:
+      hydrationGenerationProfile.trafficAlternateMaxNewSearchesTotal,
     contextualTrafficAlternateExpansions: hydrationGenerationProfile.trafficAlternateExpansions,
     contextualTrafficAlternateMaxActions: hydrationGenerationProfile.trafficAlternateMaxActions,
     contextualTrafficAlternateCachedProbeMargin:
@@ -22776,6 +23060,8 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
       trafficAlternateMinGain: NORMAL_TRAFFIC_ALTERNATE_MIN_GAIN,
       trafficAlternateMaxNewSearchesPerEpoch:
         generationProfile.trafficAlternateMaxNewSearchesPerEpoch,
+      trafficAlternateMaxNewSearchesTotal:
+        generationProfile.trafficAlternateMaxNewSearchesTotal,
       trafficAlternateExpansions: generationProfile.trafficAlternateExpansions,
       trafficAlternateMaxActions: generationProfile.trafficAlternateMaxActions,
       trafficAlternateCachedProbeMargin: generationProfile.trafficAlternateCachedProbeMargin,
@@ -22814,6 +23100,10 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
   generationDiagnostics.searchProfile.trafficAlternateMaxNewSearchesPerEpoch =
     diagnosticsEffectiveTrafficDrivenAlternates
       ? generationProfile.trafficAlternateMaxNewSearchesPerEpoch
+      : 0;
+  generationDiagnostics.searchProfile.trafficAlternateMaxNewSearchesTotal =
+    diagnosticsEffectiveTrafficDrivenAlternates
+      ? generationProfile.trafficAlternateMaxNewSearchesTotal
       : 0;
   generationDiagnostics.searchProfile.trafficAlternateExpansions =
     diagnosticsEffectiveTrafficDrivenAlternates ? generationProfile.trafficAlternateExpansions : 0;
@@ -24029,6 +24319,7 @@ function analyzeCalibrationPlacements(assets, sourceScenario, placements, option
     contextualTrafficAlternateDemandThreshold: NORMAL_TRAFFIC_ALTERNATE_DEMAND_THRESHOLD,
     contextualTrafficAlternateMinGain: NORMAL_TRAFFIC_ALTERNATE_MIN_GAIN,
     contextualTrafficAlternateMaxNewSearchesPerEpoch: profile.trafficAlternateMaxNewSearchesPerEpoch,
+    contextualTrafficAlternateMaxNewSearchesTotal: profile.trafficAlternateMaxNewSearchesTotal,
     contextualTrafficAlternateExpansions: profile.trafficAlternateExpansions,
     contextualTrafficAlternateMaxActions: profile.trafficAlternateMaxActions,
     contextualTrafficAlternateCachedProbeMargin: profile.trafficAlternateCachedProbeMargin,
@@ -24402,15 +24693,11 @@ if (typeof document !== "undefined") {
       return;
     }
 
-    const requestedDifficulty = currentScenario.preferences.difficulty;
-    const difficultyFit = currentScenario.metrics.difficultyFit ?? 0;
-    const lengthFit = currentScenario.metrics.lengthFit ?? 0;
-    const moderateDifficultyThreshold = requestedDifficulty === "easy" ? 20 : 14;
-    const autoOpen = (
-      currentScenario.generationBestMatch ||
-      (currentScenario.preferences.difficulty !== "any" && difficultyFit >= moderateDifficultyThreshold) ||
-      (currentScenario.preferences.length !== "any" && lengthFit >= 14)
-    );
+    const presentationMetrics = getScenarioPresentationMetrics(currentScenario);
+    const presentationScenario = presentationMetrics === currentScenario.metrics
+      ? currentScenario
+      : { ...currentScenario, metrics: presentationMetrics };
+    const autoOpen = buildCourseNoteFacts(presentationScenario).autoOpenExplanation;
     const currentlyVisible = Boolean(
       courseExplanationState.userPinnedOpen ||
       (
@@ -24581,3 +24868,4 @@ if (typeof document !== "undefined") {
   init().catch(console.error);
 
 }
+// VERSION END: v49ad-hotspot-local-reroute

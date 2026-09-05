@@ -69,6 +69,127 @@ const CHECKPOINT_PLACEMENT_ADVISORY_THRESHOLD = 6;
 const SHORT_CHECKPOINT_PLACEMENT_ADVISORY_THRESHOLD = 9;
 const CHECKPOINT_PLACEMENT_COMPONENT_NOTE_THRESHOLD = 1.5;
 
+function normalizeTargetBand(rawBand) {
+  if (!rawBand || !Number.isFinite(Number(rawBand.min))) return null;
+  const maxRaw = rawBand.maxExclusive;
+  const maxExclusive = maxRaw === null ? null : Number(maxRaw);
+  if (maxExclusive !== null && !Number.isFinite(maxExclusive)) return null;
+  return { min: Number(rawBand.min), maxExclusive };
+}
+
+function getTargetMismatchFact(scenario, kind) {
+  const metrics = scenario?.metrics ?? {};
+  const preferences = scenario?.preferences ?? {};
+  const isDifficulty = kind === "difficulty";
+  const requested = isDifficulty ? preferences.difficulty : preferences.length;
+  const guidanceOnly = isDifficulty
+    ? Boolean(preferences.targetGuidanceOnlyDifficulty)
+    : Boolean(preferences.targetGuidanceOnlyLength);
+  const rawValue = Number(isDifficulty
+    ? metrics.difficultyRaw
+    : (metrics.lengthFitRaw ?? metrics.lengthRaw));
+  const fit = Number(isDifficulty ? metrics.difficultyFit : metrics.lengthFit) || 0;
+  const fallbackDirection = isDifficulty
+    ? (metrics.difficultyDirection ?? "matched")
+    : (metrics.lengthDirection ?? "matched");
+  const band = normalizeTargetBand(isDifficulty
+    ? metrics.difficultyTargetBand
+    : metrics.lengthTargetBand);
+
+  if (requested === "any" || guidanceOnly) {
+    return { active: false, direction: "matched", strength: null, fit, rawValue, band };
+  }
+
+  let direction = fallbackDirection;
+  if (band && Number.isFinite(rawValue)) {
+    direction = rawValue < band.min
+      ? "low"
+      : (band.maxExclusive !== null && rawValue >= band.maxExclusive)
+        ? "high"
+        : "matched";
+  }
+
+  const active = direction === "low" || direction === "high";
+  if (!active) {
+    return { active: false, direction: "matched", strength: null, fit, rawValue, band };
+  }
+
+  const moderateThreshold = isDifficulty
+    ? (requested === "easy" ? 20 : 14)
+    : 14;
+  const strongThreshold = isDifficulty
+    ? (requested === "easy" ? 48 : 42)
+    : 24;
+  const strength = fit >= strongThreshold
+    ? "a lot"
+    : fit >= moderateThreshold
+      ? "somewhat"
+      : "slightly";
+
+  return { active: true, direction, strength, fit, rawValue, band };
+}
+
+function isForcedExtraDocksPreference(preferences = {}) {
+  if (preferences.extraDocks === true) return true;
+  return preferences.allowedVariantRules?.extraDocks === "forced";
+}
+
+export function buildCourseNoteFacts(scenario) {
+  const metrics = scenario?.metrics ?? {};
+  const boardUseBoards = Array.isArray(metrics.meaningfulBoardUse?.boards)
+    ? metrics.meaningfulBoardUse.boards
+    : [];
+  const sandwichedMissingSideCount = scenario?.sandwichedDock
+    ? Number(metrics.sandwichedDockUse?.missingSideCount) || 0
+    : 0;
+  const sandwichedMissingBoardIndices = new Set(
+    metrics.sandwichedDockUse?.missingSideBoardIndices ?? []
+  );
+  const zeroRouteInfluenceCount = scenario?.sandwichedDock
+    ? 0
+    : boardUseBoards.filter((board) => (
+      board?.weakUse && (Number(board?.uniqueRouteTiles) || 0) === 0
+    )).length;
+  const weakTraversedCount = boardUseBoards.filter((board) => (
+    board?.weakUse &&
+    (Number(board?.uniqueRouteTiles) || 0) > 0 &&
+    !sandwichedMissingBoardIndices.has(board?.boardIndex)
+  )).length;
+  const difficultyMismatch = getTargetMismatchFact(scenario, "difficulty");
+  const lengthMismatch = getTargetMismatchFact(scenario, "length");
+  const checkpointPlacement = getCheckpointPlacementAdvisory(scenario);
+  const extraDocksRequestMismatch = Boolean(
+    scenario?.generationBestMatch &&
+    isForcedExtraDocksPreference(scenario?.preferences ?? {}) &&
+    !scenario?.extraDocks
+  );
+  const competitiveSoftMismatch = Boolean(
+    scenario?.competitiveMode &&
+    (metrics.softFailures ?? []).includes("competitive-start-balance")
+  );
+
+  return {
+    targetMismatch: {
+      difficulty: difficultyMismatch,
+      length: lengthMismatch
+    },
+    checkpointPlacement,
+    boardUse: {
+      zeroRouteInfluenceCount,
+      weakTraversedCount,
+      sandwichedMissingSideCount
+    },
+    extraDocksRequestMismatch,
+    competitiveSoftMismatch,
+    autoOpenExplanation: Boolean(
+      difficultyMismatch.active ||
+      lengthMismatch.active ||
+      checkpointPlacement?.active ||
+      sandwichedMissingSideCount > 0
+    )
+  };
+}
+
 export function getCheckpointPlacementAdvisory(scenario) {
   const openingRoute = scenario?.metrics?.openingLegAnticlimax ?? null;
   const middleRoute = scenario?.metrics?.intermediateCheckpointPacing ?? null;
@@ -223,35 +344,18 @@ export function buildCourseNoteEvidence(scenario, fitNotes = []) {
     .sort((a, b) => b.pressure - a.pressure);
   const averageLegPressure = average(rankedLegs.map((entry) => entry.pressure));
   const programmingPressure = scenario?.metrics?.programmingPressure || {};
-  const checkpointPlacement = getCheckpointPlacementAdvisory(scenario);
-  const boardUseBoards = Array.isArray(scenario?.metrics?.meaningfulBoardUse?.boards)
-    ? scenario.metrics.meaningfulBoardUse.boards
-    : [];
-  const sandwichedMissingSideCount = scenario?.sandwichedDock
-    ? Number(scenario?.metrics?.sandwichedDockUse?.missingSideCount) || 0
-    : 0;
-  const zeroRouteInfluenceCount = scenario?.sandwichedDock
-    ? 0
-    : boardUseBoards.filter((board) => (
-      board?.weakUse && (Number(board?.uniqueRouteTiles) || 0) === 0
-    )).length;
-  const sandwichedMissingBoardIndices = new Set(
-    scenario?.metrics?.sandwichedDockUse?.missingSideBoardIndices ?? []
-  );
-  const weakTraversedCount = boardUseBoards.filter((board) => (
-    board?.weakUse &&
-    (Number(board?.uniqueRouteTiles) || 0) > 0 &&
-    !sandwichedMissingBoardIndices.has(board?.boardIndex)
-  )).length;
+  const facts = buildCourseNoteFacts(scenario);
+  const checkpointPlacement = facts.checkpointPlacement;
+  const { zeroRouteInfluenceCount, weakTraversedCount, sandwichedMissingSideCount } = facts.boardUse;
 
   return {
     fitNotes: [...fitNotes],
-    playerCount: scenario?.playerCount ?? scenario?.preferences?.playerCount ?? 0,
     difficultyRaw: scenario?.metrics?.difficultyRaw ?? 0,
     difficultyFit: scenario?.metrics?.difficultyFit ?? 0,
-    difficultyDirection: scenario?.metrics?.difficultyDirection ?? "matched",
+    difficultyDirection: facts.targetMismatch.difficulty.direction,
     lengthFit: scenario?.metrics?.lengthFit ?? 0,
-    lengthDirection: scenario?.metrics?.lengthDirection ?? "matched",
+    lengthDirection: facts.targetMismatch.length.direction,
+    targetMismatch: facts.targetMismatch,
     bestMatch: Boolean(scenario?.generationBestMatch),
     terminationReason: scenario?.generationTerminationReason ?? null,
     attempts: scenario?.attempts ?? 0,
@@ -499,41 +603,32 @@ export function buildCourseNoteConcepts(evidence) {
     }
   }
 
-  // STARTING SPACES: detailed residuals stay in Dev. Player-facing notes must
-  // never identify or recommend a numbered start. They may only mention a small
-  // remaining field-level imbalance and its broad character.
-  if (evidence.normalBalance?.active) {
-    const balance = evidence.normalBalance;
-    const residual = balance.startResiduals?.courseNoteCandidate?.active
+  // STARTING SPACES: detailed residuals stay in Dev. Player-facing notes only
+  // surface a meaningful minor residual. Ordinary pruning, trivial residuals,
+  // and the visible count of available starts are intentionally silent.
+  {
+    const balance = evidence.normalBalance?.active ? evidence.normalBalance : null;
+    const residualCandidate = balance?.startResiduals?.courseNoteCandidate?.active
       ? balance.startResiduals.courseNoteCandidate
       : null;
-    if (balance.pruned > 0 || residual) {
-      const parts = [];
-      if (balance.pruned > 0) {
-        parts.push("The available starting spaces are fairly close in strength.");
-      }
-      if (residual) {
-        const severity = residual.severity === "trivial" ? "A trivial" : "A minor";
-        const reasonText = {
-          traffic: "some starting spaces may see a little more robot traffic than others",
-          actions: "some starting spaces may require a little more programmed route work than others",
-          hazard: "some starting spaces may face slightly more hazard exposure than others",
-          conveyor: "some starting spaces may have to work a little harder through conveyors and forced movement than others",
-          forced: "some starting spaces may have to work a little harder around forced movement than others",
-          distance: "some starting spaces may have a slightly longer line through the course than others",
-          overall: "some starting spaces may require a little more effort through the course than others"
-        }[residual.reasonId] ?? "some starting spaces may require a little more effort through the course than others";
-        parts.push(`${severity} imbalance may remain: ${reasonText}.`);
-      }
-      const residualScore = residual ? Math.min(1.2, (Number(residual.strength) || 0) * 0.8) : 0;
-      const score = balance.pruned > 0
-        ? 5.8 + Math.min(1.6, balance.pruned * 0.35) + residualScore * 0.35
-        : 4.9 + residualScore;
+    const residual = residualCandidate?.severity === "minor" ? residualCandidate : null;
+
+    if (residual) {
+      const reasonText = {
+        traffic: "some starting spaces may see a little more robot traffic than others",
+        actions: "some starting spaces may require a little more programmed route work than others",
+        hazard: "some starting spaces may face slightly more hazard exposure than others",
+        conveyor: "some starting spaces may have to work a little harder through conveyors and forced movement than others",
+        forced: "some starting spaces may have to work a little harder around forced movement than others",
+        distance: "some starting spaces may have a slightly longer line through the course than others",
+        overall: "some starting spaces may require a little more effort through the course than others"
+      }[residual.reasonId] ?? "some starting spaces may require a little more effort through the course than others";
+      const residualScore = Math.min(1.2, (Number(residual.strength) || 0) * 0.8);
       concepts.push(concept(
         "start-balance",
-        score,
+        4.9 + residualScore,
         "Starting Spaces",
-        parts.join(" ")
+        `A minor imbalance may remain: ${reasonText}.`
       ));
     }
   }
@@ -682,7 +777,7 @@ export function renderCourseNotes(concepts, evidence, options = {}) {
 export function buildCourseNotesHtml(scenario, fitNotes = [], options = {}) {
   if (!scenario) return "";
 
-  const cacheKey = "player-facing-board-influence-v49k";
+  const cacheKey = "player-facing-shared-facts-v49p-restart";
   let scenarioCache = notesCache.get(scenario);
   if (!scenarioCache) {
     scenarioCache = new Map();
