@@ -1,3 +1,4 @@
+// VERSION START: v49ag-target-fit-hydration
 // Robo Rally Course Randomizer - player-facing course notes
 const notesCache = new WeakMap();
 
@@ -120,7 +121,20 @@ function getTargetMismatchFact(scenario, kind) {
   const strongThreshold = isDifficulty
     ? (requested === "easy" ? 48 : 42)
     : 24;
-  const strength = fit >= strongThreshold
+  const classifierGross = isDifficulty
+    ? Boolean(metrics.targetAcceptance?.grossDifficultyMismatch)
+    : Boolean(metrics.targetAcceptance?.grossLengthMismatch);
+  // Legacy/saved presentations may predate targetAcceptance telemetry. Preserve
+  // the player-visible category semantics directly for the important cliff that
+  // motivated v49ag: Intermediate -> Robots. Must. Die. is never "somewhat".
+  const intermediateToBrutal = Boolean(
+    isDifficulty &&
+    requested === "moderate" &&
+    direction === "high" &&
+    Number.isFinite(rawValue) &&
+    rawValue >= 180
+  );
+  const strength = classifierGross || intermediateToBrutal || fit >= strongThreshold
     ? "a lot"
     : fit >= moderateThreshold
       ? "somewhat"
@@ -799,3 +813,4 @@ export function clearCourseNotesCache(scenario = null) {
     notesCache.delete(scenario);
   }
 }
+// VERSION END: v49ag-target-fit-hydration

@@ -1,6 +1,6 @@
-// VERSION START: v49ad-hotspot-local-reroute
+// VERSION START: v49ai-traffic-evidence-reservoir
 // Robo Rally Course Randomizer - route analysis and scoring runtime
-export const ANALYZE_BUILD_ID = "v49ad-hotspot-local-reroute";
+export const ANALYZE_BUILD_ID = "v49ai-traffic-evidence-reservoir";
 const ASSET_VERSION = new URL(import.meta.url).searchParams.get("v") ?? "";
 const VERSION_SUFFIX = ASSET_VERSION ? `?v=${encodeURIComponent(ASSET_VERSION)}` : "";
 const versionedPath = (path) => `${path}${VERSION_SUFFIX}`;
@@ -14252,6 +14252,20 @@ function restoreTrafficAlternateEffortForPressure(
   return clamp(base + (1 - base) * pressure, base, 1);
 }
 
+function getTrafficAlternateSearchEnvelope(effortScale = 1, options = {}) {
+  const scale = clamp(Number(effortScale) || 1, 0.05, 1);
+  return {
+    maxExpansions: Math.max(
+      TRAFFIC_ALTERNATE_MIN_EXPANSIONS,
+      Math.floor((Number(options.contextualTrafficAlternateExpansions) || 320) * scale)
+    ),
+    maxActions: Math.max(
+      20,
+      Math.floor(Number(options.contextualTrafficAlternateMaxActions) || 30)
+    )
+  };
+}
+
 function getTrafficAlternateEffortScale(confidence, options = {}) {
   const floor = clamp(
     Number.isFinite(Number(options.contextualTrafficAlternateUncertaintyEffortFloor))
@@ -20668,6 +20682,12 @@ function* analyzeFullCourseContextualSteps(
   let trafficAlternateBeneficialCandidates = 0;
   let trafficAlternateBestGain = 0;
   let trafficAlternateCachedProbeStops = 0;
+  let trafficAlternateCachedUsefulStops = 0;
+  let trafficAlternateLocalCacheHits = 0;
+  let trafficAlternateRepeatedMissEvidenceChecks = 0;
+  let trafficAlternateRepeatedMissEvidenceStops = 0;
+  let trafficAlternateRepeatedMissEvidenceDeeperRetries = 0;
+  const trafficAlternateNegativeSearchEvidence = new Map();
   let trafficAlternateEscalations = 0;
   let trafficAlternateSearchNoRoutes = 0;
   let trafficAlternateCardRejects = 0;
@@ -20693,6 +20713,13 @@ function* analyzeFullCourseContextualSteps(
   let trafficAlternateHotspotPrefixActionsCount = 0;
   let trafficAlternateHotspotMaximumPrefixActions = 0;
   let trafficAlternateHotspotTwoRegisterLookbacks = 0;
+  // v49ae feedback convergence telemetry. Mode-specific round/search budgets remain
+  // hard safety ceilings only; the common loop can stop earlier when newly added
+  // route evidence does not materially change the rebuilt traffic field.
+  let trafficFeedbackStopReason = "not-run";
+  let trafficFeedbackConvergenceChecks = 0;
+  let trafficFeedbackConvergedRounds = 0;
+  const trafficFeedbackRoundSummaries = [];
   let trafficMaxNewSearchesTotal = 0;
   let trafficExplorationUncertaintyShare = 0;
   let trafficExplorationConfidenceFloor = 1;
@@ -21030,23 +21057,17 @@ function* analyzeFullCourseContextualSteps(
     // Traffic alternatives are optional breadth: a bounded miss simply means this
     // mode declines to spend more work on that alternate, never that the leg is
     // intrinsically unreachable.
-    const nominalEstimateExpansions = searchPurpose === "traffic"
-      ? Math.max(
-        TRAFFIC_ALTERNATE_MIN_EXPANSIONS,
-        Math.floor(
-          (Number(options.contextualTrafficAlternateExpansions) || 320) *
-          trafficEffortScale
-        )
-      )
+    const trafficSearchEnvelope = searchPurpose === "traffic"
+      ? getTrafficAlternateSearchEnvelope(trafficEffortScale, options)
+      : null;
+    const nominalEstimateExpansions = trafficSearchEnvelope
+      ? trafficSearchEnvelope.maxExpansions
       : Math.max(
         120,
         Math.floor(Number(options.contextualPhysicalTemplateExpansions) || 700)
       );
-    const nominalEstimateActions = searchPurpose === "traffic"
-      ? Math.max(
-        20,
-        Math.floor(Number(options.contextualTrafficAlternateMaxActions) || 30)
-      )
+    const nominalEstimateActions = trafficSearchEnvelope
+      ? trafficSearchEnvelope.maxActions
       : Math.max(
         20,
         Math.floor(Number(options.contextualPhysicalTemplateMaxActions) || 36)
@@ -22983,9 +23004,95 @@ function* analyzeFullCourseContextualSteps(
           .join("||")
       );
 
+      const getTrafficFeedbackFieldDelta = (beforeSelection, afterSelection) => {
+        const beforeStarts = new Map(
+          (beforeSelection?.starts || [])
+            .filter((analysis) => analysis?.reachable && analysis?.fullCourseRoute)
+            .map((analysis) => [analysis.index, analysis])
+        );
+        const afterStarts = new Map(
+          (afterSelection?.starts || [])
+            .filter((analysis) => analysis?.reachable && analysis?.fullCourseRoute)
+            .map((analysis) => [analysis.index, analysis])
+        );
+        const startIndices = new Set([...beforeStarts.keys(), ...afterStarts.keys()]);
+        let selectedRouteChanges = 0;
+        let mixtureWeightDelta = 0;
+        let maximumMixtureWeightDelta = 0;
+
+        const mixtureToMap = (mixture) => new Map(
+          (mixture?.entries || []).map((entry) => [
+            entry.routeKey ?? String(entry.routeIndex ?? ""),
+            Number(entry.weight) || 0
+          ])
+        );
+
+        for (const index of startIndices) {
+          const beforeRoute = beforeStarts.get(index)?.fullCourseRoute ?? null;
+          const afterRoute = afterStarts.get(index)?.fullCourseRoute ?? null;
+          if (getTrafficFullRouteIdentity(beforeRoute) !== getTrafficFullRouteIdentity(afterRoute)) {
+            selectedRouteChanges += 1;
+          }
+          const beforeMixture = mixtureToMap(
+            beforeSelection?.routeMixtureByIndex instanceof Map
+              ? beforeSelection.routeMixtureByIndex.get(index)
+              : null
+          );
+          const afterMixture = mixtureToMap(
+            afterSelection?.routeMixtureByIndex instanceof Map
+              ? afterSelection.routeMixtureByIndex.get(index)
+              : null
+          );
+          const mixtureKeys = new Set([...beforeMixture.keys(), ...afterMixture.keys()]);
+          let startDelta = 0;
+          for (const key of mixtureKeys) {
+            startDelta += Math.abs((beforeMixture.get(key) ?? 0) - (afterMixture.get(key) ?? 0));
+          }
+          mixtureWeightDelta += startDelta;
+          maximumMixtureWeightDelta = Math.max(maximumMixtureWeightDelta, startDelta);
+        }
+
+        const occupancyToMap = (selection) => new Map(
+          (selection?.commonOccupancyField?.weights || []).map((entry) => [
+            entry.index,
+            Number(entry.weight) || 0
+          ])
+        );
+        const beforeOccupancy = occupancyToMap(beforeSelection);
+        const afterOccupancy = occupancyToMap(afterSelection);
+        const occupancyKeys = new Set([...beforeOccupancy.keys(), ...afterOccupancy.keys()]);
+        let occupancyWeightDelta = 0;
+        for (const key of occupancyKeys) {
+          occupancyWeightDelta += Math.abs(
+            (beforeOccupancy.get(key) ?? 0) - (afterOccupancy.get(key) ?? 0)
+          );
+        }
+
+        const materialChange = Boolean(
+          selectedRouteChanges > 0 ||
+          maximumMixtureWeightDelta > 0.01 ||
+          occupancyWeightDelta > 0.01
+        );
+        return {
+          materialChange,
+          selectedRouteChanges,
+          mixtureWeightDelta: Number(mixtureWeightDelta.toFixed(4)),
+          maximumMixtureWeightDelta: Number(maximumMixtureWeightDelta.toFixed(4)),
+          occupancyWeightDelta: Number(occupancyWeightDelta.toFixed(4))
+        };
+      };
+
+      // v49ae reuses the convergence preview as the next round's frozen field.
+      // This makes the common evidence-based stop check effectively free of a
+      // duplicate select/traffic rebuild. Mode limits below remain ceilings only.
+      let preparedTrafficFeedbackRound = null;
+      trafficFeedbackStopReason = trafficEpochLimit > 0 ? "round-ceiling" : "no-rounds";
+
       for (let epoch = 0; epoch < trafficEpochLimit; epoch += 1) {
-        const temporaryAnalyses = makeTrafficTemporaryAnalyses();
-        const frozenSelection = selectFullCourseRoutesForStarts(
+        const preparedRound = preparedTrafficFeedbackRound;
+        preparedTrafficFeedbackRound = null;
+        const temporaryAnalyses = preparedRound?.analyses ?? makeTrafficTemporaryAnalyses();
+        const frozenSelection = preparedRound?.selection ?? selectFullCourseRoutesForStarts(
           tileMap,
           temporaryAnalyses,
           flags,
@@ -23003,6 +23110,8 @@ function* analyzeFullCourseContextualSteps(
         trafficEpochsExecuted += 1;
         let epochNewSearches = 0;
         let epochCandidatesAdded = 0;
+        let epochBestGain = 0;
+        const epochSearchesAtStart = trafficAlternateNewSearches;
         const remainingFeedbackRounds = Math.max(1, trafficEpochLimit - epoch);
         const remainingNewSearchBudget = Math.max(
           0,
@@ -23077,6 +23186,7 @@ function* analyzeFullCourseContextualSteps(
           epochNewSearches += spent;
           trafficNewSearchesTotal += spent;
           trafficAlternateNewSearches += spent;
+          if (cached && route && spent === 0) trafficAlternateLocalCacheHits += 1;
           if (spent > 0 && !route) trafficAlternateSearchNoRoutes += 1;
           return route;
         }
@@ -23592,11 +23702,12 @@ function* analyzeFullCourseContextualSteps(
             );
             if (cachedProbeClearlyPoor) {
               trafficAlternateCachedProbeStops += 1;
-            } else if (
-              bestGain < trafficMinimumGain &&
-              epochNewSearches < epochNewSearchLimit
-            ) {
-              trafficAlternateEscalations += 1;
+            } else if (bestGain >= trafficMinimumGain) {
+              // Existing paid geometry already supplies a useful alternate under the
+              // current frozen field. Do not spend a fresh hotspot search merely to
+              // rediscover that the start has viable route choice.
+              trafficAlternateCachedUsefulStops += 1;
+            } else if (epochNewSearches < epochNewSearchLimit) {
               const hotspot = demanded.hotspot ?? {
                 hotspotIndex: 0,
                 pivotIndex: 0,
@@ -23622,40 +23733,96 @@ function* analyzeFullCourseContextualSteps(
               const forbiddenFirstActions = baselinePivotAction
                 ? [baselinePivotAction]
                 : [];
-              trafficAlternateHotspotLocalSearches += 1;
-              trafficAlternateHotspotPrefixActionsSum += pivotIndex;
-              trafficAlternateHotspotPrefixActionsCount += 1;
-              trafficAlternateHotspotMaximumPrefixActions = Math.max(
-                trafficAlternateHotspotMaximumPrefixActions,
-                pivotIndex
-              );
-              if (hotspot.fallbackLegStart) {
-                trafficAlternateHotspotFallbackLegStarts += 1;
-              }
-              if (hotspot.lookbackRegisters >= 2) {
-                trafficAlternateHotspotTwoRegisterLookbacks += 1;
-              }
-              const suffix = yield* fetchTrafficEstimatedLeg(
-                pivotContext,
-                legIndex,
-                startEntry.start,
-                analysis.index,
-                Boolean(legIndex === 0 && pivotIndex === 0 && options.startupSpinUp),
-                [],
+              const searchEnvelope = getTrafficAlternateSearchEnvelope(
                 demanded.effortScale,
-                forbiddenFirstActions
+                options
               );
-              const alternate = suffix
-                ? combineEstimatedPhysicalRouteSuffix(
-                  baselineLeg,
-                  pivotIndex,
-                  suffix,
-                  flags[legIndex],
-                  dynamicGoals[legIndex] ?? null,
-                  baseRouteOptions
-                )
-                : null;
-              yield* evaluateReplacement(alternate);
+              // v49ai traffic-only negative evidence reservoir. A bounded optional
+              // miss is not a physical-unreachability verdict and never enters the
+              // shared route cache. It only records that this exact deterministic
+              // hotspot query has already been tried to at least this search depth.
+              // If a later round asks for more effort, the query is allowed to run
+              // again at the deeper envelope.
+              const negativeEvidenceKey = [
+                `start${analysis.index}`,
+                `leg${legIndex}`,
+                getTrafficFullRouteIdentity(baselineRoute),
+                baselineLegId,
+                `pivot${pivotIndex}`,
+                `ban${[...forbiddenFirstActions].sort().join(",") || "-"}`,
+                `a${searchEnvelope.maxActions}`
+              ].join("|");
+              const priorNegativeEvidence =
+                trafficAlternateNegativeSearchEvidence.get(negativeEvidenceKey) ?? null;
+              if (priorNegativeEvidence) {
+                trafficAlternateRepeatedMissEvidenceChecks += 1;
+              }
+              const repeatedMissCovered = Boolean(
+                priorNegativeEvidence &&
+                priorNegativeEvidence.maxExpansions >= searchEnvelope.maxExpansions &&
+                priorNegativeEvidence.maxActions >= searchEnvelope.maxActions
+              );
+              if (repeatedMissCovered) {
+                trafficAlternateRepeatedMissEvidenceStops += 1;
+              } else {
+                if (priorNegativeEvidence) {
+                  trafficAlternateRepeatedMissEvidenceDeeperRetries += 1;
+                }
+                trafficAlternateEscalations += 1;
+                trafficAlternateHotspotLocalSearches += 1;
+                trafficAlternateHotspotPrefixActionsSum += pivotIndex;
+                trafficAlternateHotspotPrefixActionsCount += 1;
+                trafficAlternateHotspotMaximumPrefixActions = Math.max(
+                  trafficAlternateHotspotMaximumPrefixActions,
+                  pivotIndex
+                );
+                if (hotspot.fallbackLegStart) {
+                  trafficAlternateHotspotFallbackLegStarts += 1;
+                }
+                if (hotspot.lookbackRegisters >= 2) {
+                  trafficAlternateHotspotTwoRegisterLookbacks += 1;
+                }
+                const searchesBeforeHotspot = trafficAlternateNewSearches;
+                const suffix = yield* fetchTrafficEstimatedLeg(
+                  pivotContext,
+                  legIndex,
+                  startEntry.start,
+                  analysis.index,
+                  Boolean(legIndex === 0 && pivotIndex === 0 && options.startupSpinUp),
+                  [],
+                  demanded.effortScale,
+                  forbiddenFirstActions
+                );
+                const hotspotSearchesSpent = Math.max(
+                  0,
+                  trafficAlternateNewSearches - searchesBeforeHotspot
+                );
+                if (!suffix && hotspotSearchesSpent > 0) {
+                  const existingEvidence =
+                    trafficAlternateNegativeSearchEvidence.get(negativeEvidenceKey) ?? null;
+                  trafficAlternateNegativeSearchEvidence.set(negativeEvidenceKey, {
+                    maxExpansions: Math.max(
+                      Number(existingEvidence?.maxExpansions) || 0,
+                      searchEnvelope.maxExpansions
+                    ),
+                    maxActions: Math.max(
+                      Number(existingEvidence?.maxActions) || 0,
+                      searchEnvelope.maxActions
+                    )
+                  });
+                }
+                const alternate = suffix
+                  ? combineEstimatedPhysicalRouteSuffix(
+                    baselineLeg,
+                    pivotIndex,
+                    suffix,
+                    flags[legIndex],
+                    dynamicGoals[legIndex] ?? null,
+                    baseRouteOptions
+                  )
+                  : null;
+                yield* evaluateReplacement(alternate);
+              }
             }
           }
 
@@ -23670,12 +23837,72 @@ function* analyzeFullCourseContextualSteps(
               trafficAlternateBestGain,
               bestGain
             );
+            epochBestGain = Math.max(epochBestGain, bestGain);
             epochCandidatesAdded += 1;
           }
           yield { phase: "traffic-start", startIndex: analysis.index, epoch };
         }
 
-        if (!epochCandidatesAdded) break;
+        const roundSummary = {
+          round: epoch + 1,
+          newSearches: trafficAlternateNewSearches - epochSearchesAtStart,
+          candidatesAdded: epochCandidatesAdded,
+          bestGain: Number(epochBestGain.toFixed(2)),
+          selectedRouteChanges: 0,
+          mixtureWeightDelta: 0,
+          occupancyWeightDelta: 0,
+          fieldChanged: false,
+          stopReason: null
+        };
+
+        if (!epochCandidatesAdded) {
+          trafficFeedbackStopReason = "no-new-candidate";
+          roundSummary.stopReason = trafficFeedbackStopReason;
+          trafficFeedbackRoundSummaries.push(roundSummary);
+          break;
+        }
+
+        if (epoch + 1 >= trafficEpochLimit) {
+          trafficFeedbackStopReason = "round-ceiling";
+          roundSummary.stopReason = trafficFeedbackStopReason;
+          trafficFeedbackRoundSummaries.push(roundSummary);
+          break;
+        }
+
+        const previewAnalyses = makeTrafficTemporaryAnalyses();
+        const previewSelection = selectFullCourseRoutesForStarts(
+          tileMap,
+          previewAnalyses,
+          flags,
+          {
+            ...options,
+            playerCount,
+            fullCourseTrafficPasses: 1
+          }
+        );
+        const fieldDelta = getTrafficFeedbackFieldDelta(
+          frozenSelection,
+          previewSelection
+        );
+        trafficFeedbackConvergenceChecks += 1;
+        roundSummary.selectedRouteChanges = fieldDelta.selectedRouteChanges;
+        roundSummary.mixtureWeightDelta = fieldDelta.mixtureWeightDelta;
+        roundSummary.occupancyWeightDelta = fieldDelta.occupancyWeightDelta;
+        roundSummary.fieldChanged = fieldDelta.materialChange;
+
+        if (!fieldDelta.materialChange) {
+          trafficFeedbackConvergedRounds += 1;
+          trafficFeedbackStopReason = "field-converged";
+          roundSummary.stopReason = trafficFeedbackStopReason;
+          trafficFeedbackRoundSummaries.push(roundSummary);
+          break;
+        }
+
+        trafficFeedbackRoundSummaries.push(roundSummary);
+        preparedTrafficFeedbackRound = {
+          analyses: previewAnalyses,
+          selection: previewSelection
+        };
       }
     }
 
@@ -24250,6 +24477,10 @@ function* analyzeFullCourseContextualSteps(
         cardRepairRepeatedCandidates,
         estimatedEnergyGuidance: options.contextualEstimatedEnergyGuidance !== false,
         trafficEpochsExecuted,
+        trafficFeedbackStopReason,
+        trafficFeedbackConvergenceChecks,
+        trafficFeedbackConvergedRounds,
+        trafficFeedbackRoundSummaries: trafficFeedbackRoundSummaries.map((entry) => ({ ...entry })),
         trafficAlternateDemandStarts,
         trafficAlternateDemandLegs,
         trafficAlternateCachedWitnessChecks,
@@ -24260,6 +24491,13 @@ function* analyzeFullCourseContextualSteps(
         trafficAlternateBeneficialCandidates,
         trafficAlternateBestGain: Number(trafficAlternateBestGain.toFixed(2)),
         trafficAlternateCachedProbeStops,
+        trafficAlternateCachedUsefulStops,
+        trafficAlternateLocalCacheHits,
+        trafficAlternateRepeatedMissEvidenceChecks,
+        trafficAlternateRepeatedMissEvidenceStops,
+        trafficAlternateRepeatedMissEvidenceDeeperRetries,
+        trafficAlternateRepeatedMissEvidenceEntries:
+          trafficAlternateNegativeSearchEvidence.size,
         trafficAlternateEscalations,
         trafficAlternateSearchNoRoutes,
         trafficAlternateCardRejects,
@@ -24364,6 +24602,10 @@ function* analyzeFullCourseContextualSteps(
         averageTrafficByLeg: selection.averageTrafficByLeg ?? [],
         confidenceWeighted: true,
         trafficEpochsExecuted,
+        feedbackStopReason: trafficFeedbackStopReason,
+        feedbackConvergenceChecks: trafficFeedbackConvergenceChecks,
+        feedbackConvergedRounds: trafficFeedbackConvergedRounds,
+        feedbackRoundSummaries: trafficFeedbackRoundSummaries.map((entry) => ({ ...entry })),
         alternateDemandStarts: trafficAlternateDemandStarts,
         alternateDemandLegs: trafficAlternateDemandLegs,
         alternateCachedWitnessChecks: trafficAlternateCachedWitnessChecks,
@@ -24372,6 +24614,14 @@ function* analyzeFullCourseContextualSteps(
         alternateExactRejects: trafficAlternateExactRejects,
         alternateCandidatesAdded: trafficAlternateCandidatesAdded,
         alternateBestGain: Number(trafficAlternateBestGain.toFixed(2)),
+        alternateCachedProbeStops: trafficAlternateCachedProbeStops,
+        alternateCachedUsefulStops: trafficAlternateCachedUsefulStops,
+        alternateLocalCacheHits: trafficAlternateLocalCacheHits,
+        alternateRepeatedMissEvidenceChecks: trafficAlternateRepeatedMissEvidenceChecks,
+        alternateRepeatedMissEvidenceStops: trafficAlternateRepeatedMissEvidenceStops,
+        alternateRepeatedMissEvidenceDeeperRetries:
+          trafficAlternateRepeatedMissEvidenceDeeperRetries,
+        alternateRepeatedMissEvidenceEntries: trafficAlternateNegativeSearchEvidence.size,
         alternateEffectiveDemandLegs: trafficAlternateEffectiveDemandLegs,
         alternateExploratoryDemandLegs: trafficAlternateExploratoryDemandLegs,
         alternatePressureDemandLegs: trafficAlternatePressureDemandLegs,
@@ -25146,4 +25396,4 @@ export function analyzeFlagLeg(tileMap, from, goal, options = {}) {
     }
   };
 }
-// VERSION END: v49ad-hotspot-local-reroute
+// VERSION END: v49ai-traffic-evidence-reservoir

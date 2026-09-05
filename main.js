@@ -1,4 +1,4 @@
-// VERSION START: v49ad-hotspot-local-reroute
+// VERSION START: v49ai-traffic-evidence-reservoir
 // Robo Rally Course Randomizer - production runtime
 // Mobile browsers may auto-detect number-like rule text and restyle it as a
 // tappable link even though the app emitted ordinary text. Keep rules/course
@@ -457,6 +457,13 @@ const VIRTUAL_BOT_EDGE_PROXIMITY_PENALTY = Object.freeze({
 // 45 is a modest tightening after the first empirical pass and remains exposed
 // in diagnostics so it can be tuned from real candidate distributions.
 const SOFT_CANDIDATE_RETENTION_LIMIT = 45;
+// v49ag: strong target-axis misses are non-compensatory for ordinary acceptance.
+// They remain eligible for clearly labelled closest-match fallback after the
+// search is exhausted; this is an acceptance gate, not a physical hard failure.
+// Keep these aligned with player-facing mismatch severity in course-notes.js.
+const TARGET_STRONG_DIFFICULTY_FIT = 42;
+const TARGET_STRONG_EASY_DIFFICULTY_FIT = 48;
+const TARGET_STRONG_LENGTH_FIT = 24;
 const NEAR_BEST_MIN_BIN_WIDTH = 2;
 
 // Extra Docks remains a special forced-request fallback until the later variant
@@ -2191,7 +2198,16 @@ function describeGenerationRejection(scenario, fallbackStage = "") {
   }
   const reasons = [...(scenario.metrics?.hardFailures ?? [])];
   if (!scenario.metrics?.hardFailures?.length && !scenario.metrics?.acceptable) {
-    reasons.push(`soft fit ${scenario.metrics?.fitScore ?? "n/a"}/${scenario.metrics?.softFitLimit ?? SOFT_CANDIDATE_RETENTION_LIMIT}`);
+    const targetAcceptance = scenario.metrics?.targetAcceptance ?? null;
+    if (targetAcceptance?.grossDifficultyMismatch || targetAcceptance?.grossLengthMismatch) {
+      const axes = [
+        targetAcceptance.grossDifficultyMismatch ? "difficulty" : null,
+        targetAcceptance.grossLengthMismatch ? "length" : null
+      ].filter(Boolean).join("+");
+      reasons.push(`strong target-axis mismatch ${axes}`);
+    } else {
+      reasons.push(`soft fit ${scenario.metrics?.fitScore ?? "n/a"}/${scenario.metrics?.softFitLimit ?? SOFT_CANDIDATE_RETENTION_LIMIT}`);
+    }
   }
   if (!scenario.preferences?.targetGuidanceOnlyDifficulty && (scenario.metrics?.difficultyFit ?? 0) > 0) {
     reasons.push(`difficulty ${scenario.metrics.difficultyDirection ?? "mismatch"}`);
@@ -3215,6 +3231,9 @@ function updateSetupSummary(scenario) {
     ? scenario
     : { ...scenario, metrics: presentationMetrics };
   const presentationUnavailable = Boolean(scenario.hydrationPresentationUnavailable);
+  const hydrationPending = Boolean(scenario.hydrationReanalysisPending);
+  const hydrationStopped = Boolean(scenario.hydrationReanalysisStopped);
+  const hydrationFailed = Boolean(scenario.hydrationReanalysisFailed);
   const actualDifficultyLabel = presentationUnavailable
     ? "Analysis unavailable"
     : formatActualDifficultyLabel(presentationMetrics?.difficultyRaw);
@@ -3260,9 +3279,17 @@ function updateSetupSummary(scenario) {
     : scenario.checkpoints.length;
   flagsEl.textContent = String(visibleCheckpointCount);
   if (presentationUnavailable) {
-    fitNoteEl.textContent = "This saved course could not be fully reanalyzed after reload. Regenerate to refresh its difficulty, length, and Course Notes.";
+    fitNoteEl.textContent = hydrationPending
+      ? "Reanalyzing this saved course. Its layout is available now; difficulty, length, and Course Notes will appear if the analysis completes."
+      : hydrationStopped
+        ? "Saved-course reanalysis was stopped. This older save has no stored difficulty, length, or Course Notes to show. Generating again creates a new course; it does not refresh this layout."
+        : "This saved course could not be fully reanalyzed after reload, and this older save has no stored difficulty, length, or Course Notes. Generating again creates a new course; it does not refresh this layout.";
     fitNoteEl.classList.remove("hidden");
-    const unavailableExplanation = "<div><strong>Course analysis:</strong> This saved course could not be fully reconstructed after reload. Regenerate to refresh its notes.</div>";
+    const unavailableExplanation = hydrationPending
+      ? "<div><strong>Course analysis:</strong> Reanalysis is in progress. The saved layout is shown immediately while the current routing model checks it.</div>"
+      : hydrationStopped
+        ? "<div><strong>Course analysis:</strong> Reanalysis was stopped. The saved layout is unchanged, but this older save has no stored analysis presentation.</div>"
+        : "<div><strong>Course analysis:</strong> The saved layout is unchanged, but its analysis could not be rebuilt and this older save has no stored presentation fallback.</div>";
     const explanationVisible = Boolean(
       courseExplanationState.userPinnedOpen ||
       courseExplanationState.manualClosedScenarioRef !== scenario
@@ -3274,6 +3301,16 @@ function updateSetupSummary(scenario) {
     return;
   }
   const noteParts = [];
+  if (scenario.hydrationPresentationFallback) {
+    fitNoteEl.textContent = hydrationPending
+      ? "Showing the saved course and its last-saved difficulty, length, and Course Notes while current analysis is rebuilt."
+      : hydrationStopped
+        ? "Saved-course reanalysis was stopped. The course shown is unchanged; difficulty, length, and Course Notes are the last-saved values."
+        : hydrationFailed
+          ? "The saved course is shown with its last-saved difficulty, length, and Course Notes because current analysis could not be rebuilt."
+          : "The saved course is shown with its last-saved difficulty, length, and Course Notes because current analysis was incomplete after reload.";
+    fitNoteEl.classList.remove("hidden");
+  }
   const courseNoteFacts = buildCourseNoteFacts(presentationScenario);
   const difficultyMismatch = courseNoteFacts.targetMismatch.difficulty;
   const lengthMismatch = courseNoteFacts.targetMismatch.length;
@@ -3341,7 +3378,22 @@ function updateSetupSummary(scenario) {
     ? " Competitive starting positions are somewhat uneven."
     : "";
 
-  if (scenario.generationBestMatch && (extraDocksRequestMismatch || noteParts.length || epicVeryLong || competitiveSoftMismatch)) {
+  if (scenario.hydrationPresentationFallback) {
+    // Keep the explicit last-saved-analysis notice above. A new generation would
+    // create a different course, so do not replace it with ordinary reroll advice.
+  } else if (scenario.hydrationAcceptanceDrift) {
+    fitNoteEl.textContent =
+      `This saved course was accepted when generated, but current reanalysis now places it outside the requested ` +
+      `${formatDifficultyLabel(scenario.preferences.difficulty)} / ${formatLengthLabel(scenario.preferences.length)} ordinary acceptance range. ` +
+      `The course itself is unchanged. Generating again creates a new course.`;
+    fitNoteEl.classList.remove("hidden");
+  } else if (scenario.hydrationAcceptanceImproved) {
+    fitNoteEl.textContent =
+      `This course was originally saved as a closest-match fallback. Current reanalysis now places it inside the requested ` +
+      `${formatDifficultyLabel(scenario.preferences.difficulty)} / ${formatLengthLabel(scenario.preferences.length)} acceptance range. ` +
+      `The course itself is unchanged.`;
+    fitNoteEl.classList.remove("hidden");
+  } else if (scenario.generationBestMatch && (extraDocksRequestMismatch || noteParts.length || epicVeryLong || competitiveSoftMismatch)) {
     const extraDocksMismatchText = extraDocksRequestMismatch
       ? " Extra Docks was required, but this course uses one docking bay."
       : "";
@@ -9210,6 +9262,61 @@ function pickFlags(flagCandidates, flagCount, boardPlacements, dockPlacements, p
     if (!isFirstFlagFarEnough(sampled[0], starts, firstFlagThresholds, preferences)) continue;
     if (requiresMovingTarget && !sampled.some((flag) => movingCandidates.has(`${flag.x},${flag.y}`))) continue;
     return sampled.map(({ x, y }) => ({ x, y }));
+  }
+
+  return null;
+}
+
+function makeGenerationStopRequestedError(message = "Generation stop requested at a safe boundary.") {
+  const error = new Error(message);
+  error.code = "ANALYSIS_STOP_REQUESTED";
+  return error;
+}
+
+async function pickFlagsCooperative(
+  flagCandidates,
+  flagCount,
+  boardPlacements,
+  dockPlacements,
+  pieceMap,
+  starts = [],
+  preferences = {},
+  control = {}
+) {
+  const firstFlagThresholds = getFirstFlagDistanceThresholds();
+  const { tileMap } = buildResolvedMap([...boardPlacements, ...(dockPlacements || [])], pieceMap);
+  const movingTargetTraceCache = preferences.movingTargets ? new Map() : null;
+  const movingCandidates = preferences.movingTargets
+    ? new Set(flagCandidates.filter((candidate) => getMovingCheckpointTrace(tileMap, candidate, movingTargetTraceCache, preferences).moving).map((candidate) => `${candidate.x},${candidate.y}`))
+    : null;
+  const requiresMovingTarget = Boolean(movingCandidates?.size);
+  const shouldStopRequested = typeof control.shouldStopRequested === "function"
+    ? control.shouldStopRequested
+    : () => false;
+  const cooperativeYield = typeof control.cooperativeYield === "function"
+    ? control.cooperativeYield
+    : null;
+  const yieldEvery = Math.max(1, Math.floor(Number(control.yieldEvery) || 12));
+
+  for (let attempt = 0; attempt < 250; attempt += 1) {
+    if (shouldStopRequested()) throw makeGenerationStopRequestedError();
+    const sampled = sampleFlagSequence(flagCandidates, flagCount, tileMap, starts, preferences, firstFlagThresholds, boardPlacements, pieceMap, movingTargetTraceCache);
+    if (
+      sampled.length === flagCount &&
+      isValidFlagSequence(sampled) &&
+      isFirstFlagFarEnough(sampled[0], starts, firstFlagThresholds, preferences) &&
+      (!requiresMovingTarget || sampled.some((flag) => movingCandidates.has(`${flag.x},${flag.y}`)))
+    ) {
+      return sampled.map(({ x, y }) => ({ x, y }));
+    }
+    if (cooperativeYield && (attempt + 1) % yieldEvery === 0) {
+      await cooperativeYield({
+        phase: "checkpoint-proposal-sampling",
+        attempts: attempt + 1,
+        maxAttempts: 250
+      });
+      if (shouldStopRequested()) throw makeGenerationStopRequestedError();
+    }
   }
 
   return null;
@@ -16068,6 +16175,56 @@ function bandDistance(value, band, thresholds) {
   return 0;
 }
 
+function getTargetAxisAcceptanceGate({
+  difficultyRaw,
+  difficultyFit,
+  difficultyDirection,
+  lengthFit,
+  lengthDirection,
+  preferences = {},
+  difficultyThresholds = getDifficultyThresholds()
+} = {}) {
+  const requestedDifficulty = preferences.difficulty ?? "any";
+  const requestedLength = preferences.length ?? "any";
+  const difficultyGuidanceOnly = Boolean(preferences.targetGuidanceOnlyDifficulty);
+  const lengthGuidanceOnly = Boolean(preferences.targetGuidanceOnlyLength);
+  const strongDifficultyThreshold = requestedDifficulty === "easy"
+    ? TARGET_STRONG_EASY_DIFFICULTY_FIT
+    : TARGET_STRONG_DIFFICULTY_FIT;
+
+  // Intermediate -> Robots. Must. Die. crosses a player-visible category cliff
+  // even though the raw distance from Intermediate's upper edge is only 25 at
+  // the R.M.D. floor. Treat that category jump as strong/non-compensatory.
+  const intermediateToBrutal = Boolean(
+    !difficultyGuidanceOnly &&
+    requestedDifficulty === "moderate" &&
+    difficultyDirection === "high" &&
+    Number.isFinite(Number(difficultyRaw)) &&
+    Number(difficultyRaw) >= Number(difficultyThresholds?.brutal?.[0] ?? Infinity)
+  );
+  const grossDifficultyMismatch = Boolean(
+    !difficultyGuidanceOnly &&
+    requestedDifficulty !== "any" &&
+    difficultyDirection !== "matched" &&
+    (Number(difficultyFit) >= strongDifficultyThreshold || intermediateToBrutal)
+  );
+  const grossLengthMismatch = Boolean(
+    !lengthGuidanceOnly &&
+    requestedLength !== "any" &&
+    lengthDirection !== "matched" &&
+    Number(lengthFit) >= TARGET_STRONG_LENGTH_FIT
+  );
+
+  return {
+    ordinaryAcceptable: !(grossDifficultyMismatch || grossLengthMismatch),
+    grossDifficultyMismatch,
+    grossLengthMismatch,
+    intermediateToBrutal,
+    strongDifficultyThreshold,
+    strongLengthThreshold: TARGET_STRONG_LENGTH_FIT
+  };
+}
+
 function shouldUseCompactLengthFit(preferences = {}) {
   return preferences.length === "short" && getTuningDifficulty(preferences.difficulty) === "hard";
 }
@@ -16825,7 +16982,20 @@ function classifyCandidate(sequence, preferences, context = {}) {
     sum + (Number(value) || 0)
   ), 0);
   const exactTargetMatch = difficultyFit === 0 && lengthFit === 0;
-  const acceptable = hardFailures.length === 0 && fitScore <= SOFT_CANDIDATE_RETENTION_LIMIT;
+  const targetAcceptance = getTargetAxisAcceptanceGate({
+    difficultyRaw,
+    difficultyFit,
+    difficultyDirection,
+    lengthFit,
+    lengthDirection,
+    preferences,
+    difficultyThresholds
+  });
+  const acceptable = Boolean(
+    hardFailures.length === 0 &&
+    targetAcceptance.ordinaryAcceptable &&
+    fitScore <= SOFT_CANDIDATE_RETENTION_LIMIT
+  );
 
   return {
     reachableStarts: reachableStarts.length,
@@ -16855,6 +17025,7 @@ function classifyCandidate(sequence, preferences, context = {}) {
     sandwichedDockUse,
     routeDrama,
     checkpointSpacingExpectation,
+    targetAcceptance,
     acceptable,
     exactTargetMatch,
     hardFailures,
@@ -16984,8 +17155,14 @@ function buildScenarioCopySummary(scenario) {
     `Sets: ${selectedSets}`,
     `Variants: ${variantImpact}`,
     `Result: ${resultLabel}`,
-    `Soft fit: ${scenario.metrics?.fitScore ?? "n/a"}/${scenario.metrics?.softFitLimit ?? SOFT_CANDIDATE_RETENTION_LIMIT}; exact D/L ${scenario.metrics?.exactTargetMatch ? "yes" : "no"}; components ${Object.entries(scenario.metrics?.fitComponents ?? {}).filter(([, value]) => Number(value) > 0).map(([key, value]) => `${key} ${value}`).join(", ") || "none"}; near-best ${(diagnostics?.nearBestCandidateScores ?? []).join(", ") || "none"}; selected ${diagnostics?.selectedCandidateScore ?? scenario.metrics?.fitScore ?? "n/a"}`
+    `Soft fit: ${scenario.metrics?.fitScore ?? "n/a"}/${scenario.metrics?.softFitLimit ?? SOFT_CANDIDATE_RETENTION_LIMIT}; axis gate D/L ${scenario.metrics?.targetAcceptance?.grossDifficultyMismatch ? "gross" : "ok"}/${scenario.metrics?.targetAcceptance?.grossLengthMismatch ? "gross" : "ok"}; exact D/L ${scenario.metrics?.exactTargetMatch ? "yes" : "no"}; components ${Object.entries(scenario.metrics?.fitComponents ?? {}).filter(([, value]) => Number(value) > 0).map(([key, value]) => `${key} ${value}`).join(", ") || "none"}; near-best ${(diagnostics?.nearBestCandidateScores ?? []).join(", ") || "none"}; selected ${diagnostics?.selectedCandidateScore ?? scenario.metrics?.fitScore ?? "n/a"}`
   ];
+
+  if (scenario.hydrationAcceptanceDrift) {
+    lines.push("Reload classification: originally accepted; current reanalysis is outside the requested ordinary target-acceptance envelope.");
+  } else if (scenario.hydrationAcceptanceImproved) {
+    lines.push("Reload classification: originally closest-match fallback; current reanalysis is now inside the requested ordinary target-acceptance envelope.");
+  }
 
   if (scenario.hydrationPresentationFallback) {
     lines.push("Reload presentation: saved accepted difficulty/length and Course Notes are shown because route reconstruction was incomplete.");
@@ -17039,7 +17216,7 @@ function buildScenarioCopySummary(scenario) {
       const search = diagnostics.searchProfile;
       lines.push(
         currentNormalEstimateModel
-          ? `Search profile: ${diagnostics.generationModeLabel ?? formatGenerationModeLabel(getScenarioGenerationMode(scenario))}; attempts ${diagnostics.maxAttempts ?? scenarioMaxAttempts}${diagnostics.emergencyAttemptReserve ? ` +${diagnostics.emergencyAttemptReserve} emergency only if no fallback` : ""}, preflight audition ${Math.min(Number(search.preflightOpeningExpansions) || 700, 700)}/${Math.min(Number(search.preflightLaterExpansions) || 600, 600)}exp, primary witnesses ${search.primaryWitnessRoutes ?? "?"}, primary ${search.physicalTemplateExpansions ?? 700}exp/${search.physicalTemplateMaxActions ?? 36}a + resumable exhaustive-on-miss, traffic ${search.trafficEnabled ? `${search.trafficEpochs ?? 0} feedback round(s), alternates ${search.trafficAlternatesEnabled ? "on" : "off"}, common judgement demand≥${search.trafficAlternateDemandThreshold ?? NORMAL_TRAFFIC_ALTERNATE_DEMAND_THRESHOLD}/gain≥${search.trafficAlternateMinGain ?? NORMAL_TRAFFIC_ALTERNATE_MIN_GAIN}, bounded new-search round ceiling ${search.trafficAlternateMaxNewSearchesPerEpoch ?? 0}, ${search.trafficAlternateMaxNewSearchesTotal ?? 0} total @${search.trafficAlternateExpansions ?? 0}exp/${search.trafficAlternateMaxActions ?? 0}a, uncertainty effort floor ${search.trafficAlternateUncertaintyEffortFloor ?? 1}/curve ${search.trafficAlternateUncertaintyEffortExponent ?? 1}, explore-gap ${Math.round((search.trafficExplorationUncertaintyShare ?? 0) * 100)}% above conf ${search.trafficExplorationConfidenceFloor ?? 1}${search.devRouteModelOverrideActive ? ", Dev override" : ""}` : `off${search.devRouteModelOverrideActive ? " (Dev override)" : ""}`}`
+          ? `Search profile: ${diagnostics.generationModeLabel ?? formatGenerationModeLabel(getScenarioGenerationMode(scenario))}; attempts ${diagnostics.maxAttempts ?? scenarioMaxAttempts}${diagnostics.emergencyAttemptReserve ? ` +${diagnostics.emergencyAttemptReserve} emergency only if no fallback` : ""}, preflight audition ${Math.min(Number(search.preflightOpeningExpansions) || 700, 700)}/${Math.min(Number(search.preflightLaterExpansions) || 600, 600)}exp, primary witnesses ${search.primaryWitnessRoutes ?? "?"}, primary ${search.physicalTemplateExpansions ?? 700}exp/${search.physicalTemplateMaxActions ?? 36}a + resumable exhaustive-on-miss, traffic ${search.trafficEnabled ? `${search.trafficEpochs ?? 0} feedback-round ceiling, convergence stop on, alternates ${search.trafficAlternatesEnabled ? "on" : "off"}, common judgement demand≥${search.trafficAlternateDemandThreshold ?? NORMAL_TRAFFIC_ALTERNATE_DEMAND_THRESHOLD}/gain≥${search.trafficAlternateMinGain ?? NORMAL_TRAFFIC_ALTERNATE_MIN_GAIN}, bounded new-search round ceiling ${search.trafficAlternateMaxNewSearchesPerEpoch ?? 0}, ${search.trafficAlternateMaxNewSearchesTotal ?? 0} safety-cap @${search.trafficAlternateExpansions ?? 0}exp/${search.trafficAlternateMaxActions ?? 0}a, uncertainty effort floor ${search.trafficAlternateUncertaintyEffortFloor ?? 1}/curve ${search.trafficAlternateUncertaintyEffortExponent ?? 1}, explore-gap ${Math.round((search.trafficExplorationUncertaintyShare ?? 0) * 100)}% above conf ${search.trafficExplorationConfidenceFloor ?? 1}${search.devRouteModelOverrideActive ? ", Dev override" : ""}` : `off${search.devRouteModelOverrideActive ? " (Dev override)" : ""}`}`
           : scenario.competitiveMode
             ? `Search profile: ${diagnostics.generationModeLabel ?? formatGenerationModeLabel(getScenarioGenerationMode(scenario))}; Competitive shares the regular route foundation and replaces only Normal pruning with sequential strategic blocks; attempts ${diagnostics.maxAttempts ?? scenarioMaxAttempts}, traffic ${search.trafficEnabled ? "on" : "off"}`
             : (scenario.payToWin || scenario.subsidizedStarts)
@@ -17433,7 +17610,7 @@ function buildScenarioCopySummary(scenario) {
       );
       if ((contextualProfile?.trafficFeedbackLoopEnabled || contextualCache.trafficEpochsExecuted > 0) && routeStrategy) {
         lines.push(
-          `Traffic feedback v49ad: rounds ${contextualCache.trafficEpochsExecuted ?? 0}/${contextualProfile?.trafficEpochs ?? 0}, demand ${contextualCache.trafficAlternateDemandStarts ?? 0} start-visits/${contextualCache.trafficAlternateDemandLegs ?? 0} legs (${contextualCache.trafficAlternateEffectiveDemandLegs ?? 0} effective/${contextualCache.trafficAlternateExploratoryDemandLegs ?? 0} exploratory/${contextualCache.trafficAlternatePressureDemandLegs ?? 0} pressure), pressure-restored ${contextualCache.trafficAlternatePressureRestoredLegs ?? 0} leg(s), pressure RE avg/max ${contextualCache.trafficAlternateAveragePressureRegisterEquivalents ?? 0}/${contextualCache.trafficAlternateMaximumPressureRegisterEquivalents ?? 0}, effort base→used avg ${contextualCache.trafficAlternateAverageBaseEffortScale ?? 1}→${contextualCache.trafficAlternateAverageEffortScale ?? 1}, hotspot-local ${contextualCache.trafficAlternateHotspotLocalSearches ?? 0} search(es), prefix kept avg/max ${contextualCache.trafficAlternateHotspotAveragePrefixActions ?? 0}/${contextualCache.trafficAlternateHotspotMaximumPrefixActions ?? 0}, leg-start fallback ${contextualCache.trafficAlternateHotspotFallbackLegStarts ?? 0}, 2-reg lookback ${contextualCache.trafficAlternateHotspotTwoRegisterLookbacks ?? 0}, cached divergence checks ${contextualCache.trafficAlternateCachedWitnessChecks ?? 0}, probe-stops ${contextualCache.trafficAlternateCachedProbeStops ?? 0}, escalations ${contextualCache.trafficAlternateEscalations ?? 0}, new bounded searches ${contextualCache.trafficAlternateNewSearches ?? 0}/${contextualCache.trafficAlternateMaxNewSearchesTotal ?? contextualProfile?.trafficAlternateMaxNewSearchesTotal ?? 0} total-cap (${contextualCache.trafficAlternateSearchNoRoutes ?? 0} no-route), exact alt checks/rejects ${contextualCache.trafficAlternateExactChecks ?? 0}/${contextualCache.trafficAlternateExactRejects ?? 0} [card ${contextualCache.trafficAlternateCardRejects ?? 0}, validation ${contextualCache.trafficAlternateValidationRejects ?? 0}], duplicates ${contextualCache.trafficAlternateDuplicateRejects ?? 0}, low-gain ${contextualCache.trafficAlternateLowGainRejects ?? 0}, downstream-miss ${contextualCache.trafficAlternateDownstreamRebuildFailures ?? 0}, candidates added ${contextualCache.trafficAlternateCandidatesAdded ?? 0}, best combined gain ${contextualCache.trafficAlternateBestGain ?? 0}; exploration gap ${(contextualCache.trafficExplorationUncertaintyShare ?? 0) * 100}% above conf ${contextualCache.trafficExplorationConfidenceFloor ?? 1}; traffic raw/effective avg ${routeStrategy.averageRawPenalty ?? 0}/${routeStrategy.averagePenalty ?? 0}, forecast confidence mean/min ${routeStrategy.averageForecastConfidence ?? 1}/${routeStrategy.minimumForecastConfidence ?? 1}`
+          `Traffic feedback v49ai: rounds ${contextualCache.trafficEpochsExecuted ?? 0}/${contextualProfile?.trafficEpochs ?? 0} ceiling, stop ${contextualCache.trafficFeedbackStopReason ?? "?"}, convergence checks/hits ${contextualCache.trafficFeedbackConvergenceChecks ?? 0}/${contextualCache.trafficFeedbackConvergedRounds ?? 0}, demand ${contextualCache.trafficAlternateDemandStarts ?? 0} start-visits/${contextualCache.trafficAlternateDemandLegs ?? 0} legs (${contextualCache.trafficAlternateEffectiveDemandLegs ?? 0} effective/${contextualCache.trafficAlternateExploratoryDemandLegs ?? 0} exploratory/${contextualCache.trafficAlternatePressureDemandLegs ?? 0} pressure), pressure-restored ${contextualCache.trafficAlternatePressureRestoredLegs ?? 0} leg(s), pressure RE avg/max ${contextualCache.trafficAlternateAveragePressureRegisterEquivalents ?? 0}/${contextualCache.trafficAlternateMaximumPressureRegisterEquivalents ?? 0}, effort base→used avg ${contextualCache.trafficAlternateAverageBaseEffortScale ?? 1}→${contextualCache.trafficAlternateAverageEffortScale ?? 1}, hotspot-local ${contextualCache.trafficAlternateHotspotLocalSearches ?? 0} search(es), prefix kept avg/max ${contextualCache.trafficAlternateHotspotAveragePrefixActions ?? 0}/${contextualCache.trafficAlternateHotspotMaximumPrefixActions ?? 0}, leg-start fallback ${contextualCache.trafficAlternateHotspotFallbackLegStarts ?? 0}, 2-reg lookback ${contextualCache.trafficAlternateHotspotTwoRegisterLookbacks ?? 0}, cached divergence checks ${contextualCache.trafficAlternateCachedWitnessChecks ?? 0}, probe-stops ${contextualCache.trafficAlternateCachedProbeStops ?? 0}, cache-useful ${contextualCache.trafficAlternateCachedUsefulStops ?? 0}, local-cache ${contextualCache.trafficAlternateLocalCacheHits ?? 0}, repeat-miss checks/stops ${contextualCache.trafficAlternateRepeatedMissEvidenceChecks ?? 0}/${contextualCache.trafficAlternateRepeatedMissEvidenceStops ?? 0}, deeper-retries ${contextualCache.trafficAlternateRepeatedMissEvidenceDeeperRetries ?? 0}, miss-evidence ${contextualCache.trafficAlternateRepeatedMissEvidenceEntries ?? 0}, escalations ${contextualCache.trafficAlternateEscalations ?? 0}, new bounded searches ${contextualCache.trafficAlternateNewSearches ?? 0}/${contextualCache.trafficAlternateMaxNewSearchesTotal ?? contextualProfile?.trafficAlternateMaxNewSearchesTotal ?? 0} safety-cap (${contextualCache.trafficAlternateSearchNoRoutes ?? 0} no-route), exact alt checks/rejects ${contextualCache.trafficAlternateExactChecks ?? 0}/${contextualCache.trafficAlternateExactRejects ?? 0} [card ${contextualCache.trafficAlternateCardRejects ?? 0}, validation ${contextualCache.trafficAlternateValidationRejects ?? 0}], duplicates ${contextualCache.trafficAlternateDuplicateRejects ?? 0}, low-gain ${contextualCache.trafficAlternateLowGainRejects ?? 0}, downstream-miss ${contextualCache.trafficAlternateDownstreamRebuildFailures ?? 0}, candidates added ${contextualCache.trafficAlternateCandidatesAdded ?? 0}, best combined gain ${contextualCache.trafficAlternateBestGain ?? 0}; round trace ${(contextualCache.trafficFeedbackRoundSummaries ?? []).map((entry) => `R${entry.round} s${entry.newSearches}/c${entry.candidatesAdded}/g${entry.bestGain}${entry.fieldChanged ? `/Δr${entry.selectedRouteChanges}/m${entry.mixtureWeightDelta}/o${entry.occupancyWeightDelta}` : ""}${entry.stopReason ? `/${entry.stopReason}` : ""}`).join(", ") || "none"}; exploration gap ${(contextualCache.trafficExplorationUncertaintyShare ?? 0) * 100}% above conf ${contextualCache.trafficExplorationConfidenceFloor ?? 1}; traffic raw/effective avg ${routeStrategy.averageRawPenalty ?? 0}/${routeStrategy.averagePenalty ?? 0}, forecast confidence mean/min ${routeStrategy.averageForecastConfidence ?? 1}/${routeStrategy.minimumForecastConfidence ?? 1}`
         );
         const commonOccupancy = routeStrategy.commonOccupancyField ?? null;
         if (commonOccupancy?.weights?.length) {
@@ -18625,12 +18802,16 @@ let generationOverlayState = {
 
 // UI responsiveness fallback thresholds. Calibrated route-work wording below
 // takes precedence whenever the generator has a checkpoint-known work estimate.
-const GENERATION_ROUTE_PROGRESS_DISPLAY_INTERVAL_MS = 700;
+// Player-facing route ticker is intentionally low-frequency. Cooperative browser
+// yields/search slices remain on their existing fast cadence below; only visible
+// text refreshes are throttled so the overlay feels alive without flickering.
+const GENERATION_ROUTE_PROGRESS_DISPLAY_INTERVAL_MS = 3200;
 const GENERATION_COOPERATIVE_YIELD_INTERVAL_MS = 75;
 const GENERATION_COOPERATIVE_SEARCH_SLICE_MS = 75;
 const GENERATION_COOPERATIVE_SEARCH_CHECK_POPS = 16;
 
 const GENERATION_SLOW_STAGE_MS = Object.freeze({
+  rehydrate: 2800,
   building: 4200,
   checkpoints: 3200,
   routes: 3200,
@@ -18670,6 +18851,7 @@ function getCalibratedRouteWorkOverlayHint(stage = "") {
 
 function classifyGenerationStage(stage = "", stageContext = null) {
   const raw = String(stage || "").toLowerCase();
+  if (raw.includes("reanalyzing saved course") || raw.includes("saved course reanalysis")) return "rehydrate";
   if (
     raw.includes("another course") || raw.includes("another checkpoint") ||
     raw.includes("no exact fit") || raw.includes("fallback") ||
@@ -18710,6 +18892,7 @@ function getGenerationSlowHint(key, stageContext = null) {
   if ((stageContext?.extraDocks || stageContext?.sandwichedDock) && (key === "routes" || key === "balance")) {
     return "Multiple starting areas give this layout more opening choices to compare.";
   }
+  if (key === "rehydrate") return "The saved layout is being checked with the current routing model. You can stop and keep its last-saved presentation.";
   if (key === "alternatives") return "This layout has several plausible ways through the busy parts.";
   if (key === "routes") return "This layout has some tricky routes to check.";
   if (key === "balance" || key === "economy" || key === "competitive") return "This setup has several starting choices to compare.";
@@ -18718,14 +18901,25 @@ function getGenerationSlowHint(key, stageContext = null) {
   return "This course is taking a little longer to check.";
 }
 
-function formatCooperativeRouteProgressStage(progress = {}) {
+function formatCooperativeRouteProgressStage(progress = {}, tickerStep = 0) {
   const completedCount = Math.max(1, Math.floor(Number(progress.completedCount) || 1));
   const checkedLabel = `${completedCount} starting space${completedCount === 1 ? "" : "s"} checked`;
 
   if (progress.phase === "route-search-slice") {
-    return String(progress.searchKind ?? "").includes("traffic")
-      ? "Comparing route options — checking a difficult route"
-      : "Checking routes — working through a difficult route";
+    const step = Math.max(0, Math.floor(Number(tickerStep) || 0));
+    const trafficSearch = String(progress.searchKind ?? "").includes("traffic");
+    const phrases = trafficSearch
+      ? [
+          "Route comparison is still active",
+          "Still checking a difficult alternative",
+          "Continuing through the current alternative"
+        ]
+      : [
+          "Route search is still active",
+          "Still checking a difficult route",
+          "Continuing through the current route"
+        ];
+    return `${trafficSearch ? "Comparing route options" : "Checking routes"} — ${phrases[step % phrases.length]}`;
   }
   if (progress.phase === "estimated-start") {
     return `Checking route possibilities — ${checkedLabel}`;
@@ -18757,7 +18951,10 @@ function getGenerationUserFacingState(stage = "", options = {}) {
 
   let heading = "Generating course";
   let activity = "Trying a course setup and checking that it plays well.";
-  if (key === "retry") {
+  if (key === "rehydrate") {
+    heading = "Reanalyzing saved course";
+    activity = "Rebuilding route, traffic, and balance analysis for the saved layout.";
+  } else if (key === "retry") {
     heading = "Trying another layout";
     activity = "The previous layout did not work out, so another one is being tried.";
   } else if (key === "building") {
@@ -18790,11 +18987,18 @@ function getGenerationUserFacingState(stage = "", options = {}) {
   }
 
   const rawStage = String(stage || "").toLowerCase();
+  const checkpointProposalMatch = String(stage || "").match(/proposal\s+(\d+)\s*\/\s*(\d+)/i);
   const checkedStartsMatch = String(stage || "").match(/(\d+) starting spaces? checked/i);
   const checkedStarts = checkedStartsMatch ? Number(checkedStartsMatch[1]) : null;
   const cleanupPassMatch = String(stage || "").match(/pass\s+(\d+)/i);
   const cleanupPass = cleanupPassMatch ? Number(cleanupPassMatch[1]) : null;
-  if (rawStage.includes("checking route possibilities") && checkedStarts) {
+  if (key === "rehydrate") {
+    const detail = String(stage || "").split("—").slice(1).join("—").trim();
+    activity = detail || "Rebuilding route, traffic, and balance analysis for the saved layout.";
+  } else if (rawStage.includes("choosing checkpoints") && checkpointProposalMatch) {
+    heading = "Placing checkpoints";
+    activity = `Checking checkpoint option ${Number(checkpointProposalMatch[1])} of ${Number(checkpointProposalMatch[2])} for this layout.`;
+  } else if (rawStage.includes("checking route possibilities") && checkedStarts) {
     heading = slow ? "Checking some tricky routes" : "Checking the routes";
     activity = `${checkedStarts} starting space${checkedStarts === 1 ? "" : "s"} checked for possible routes.`;
   } else if (rawStage.includes("verifying playable routes") && checkedStarts) {
@@ -18811,6 +19015,17 @@ function getGenerationUserFacingState(stage = "", options = {}) {
     const legNumber = legMatch ? Number(legMatch[1]) : null;
     heading = slow ? "Checking some tricky routes" : "Checking later routes";
     activity = `${checkedStarts} starting space${checkedStarts === 1 ? "" : "s"} checked${legNumber ? ` on route leg ${legNumber}` : ""}.`;
+  } else if (
+    rawStage.startsWith("checking routes —") ||
+    rawStage.startsWith("comparing route options —")
+  ) {
+    // Cooperative route-search slices are genuine liveness evidence, but they do
+    // not represent a percentage or completed-start count. Surface their restrained
+    // ticker text instead of collapsing back to the generic route-stage sentence.
+    const detail = String(stage || "").split("—").slice(1).join("—").trim();
+    if (detail) {
+      activity = `${detail.charAt(0).toUpperCase()}${detail.slice(1)}${/[.!?]$/.test(detail) ? "" : "."}`;
+    }
   } else if (rawStage.includes("balancing routed starting choices")) {
     heading = "Balancing the starts";
     activity = "Balancing the routed starting choices.";
@@ -18912,7 +19127,9 @@ function renderGeneratingOverlayState() {
 
   updateGeneratingOverlayText(headingEl, userState.heading);
   if (attemptEl) {
-    attemptEl.textContent = `Course attempt ${Math.max(1, generationOverlayState.attempt)} / ${generationOverlayState.maxAttempts}`;
+    attemptEl.textContent = generationOverlayState.semanticKey === "rehydrate"
+      ? "Saved course"
+      : `Course attempt ${Math.max(1, generationOverlayState.attempt)} / ${generationOverlayState.maxAttempts}`;
   }
   updateGeneratingOverlayText(activityEl, userState.activity);
   if (hintEl) {
@@ -20563,6 +20780,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     }
   };
   let lastCooperativeRouteProgressDisplayAt = Number.NEGATIVE_INFINITY;
+  let cooperativeRouteProgressTickerStep = 0;
 
   await reportStage("Building board and dock layout", 1);
 
@@ -20966,6 +21184,12 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     const seenCheckpointProposalKeys = new Set();
 
     for (let proposalIndex = 0; proposalIndex < checkpointProposalCount; proposalIndex += 1) {
+      if (checkpointProposalCount > 1) {
+        await reportStage(
+          `Choosing checkpoints — checkpoint try ${retry + 1} / ${retryBudget}; proposal ${proposalIndex + 1} / ${checkpointProposalCount}`,
+          evaluationsUsed
+        );
+      }
       const virtualEntryCandidate = virtualBots
         ? pickVirtualBotEntry(
           flagCandidates,
@@ -20985,15 +21209,31 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
           candidate.y !== virtualEntryCandidate.y
         ))
         : flagCandidates;
-      const pickedCheckpoints = pickFlags(
-        checkpointCandidatePool,
-        flagCount,
-        boardLayout.placements,
-        courseDockPlacements,
-        pieceMap,
-        virtualBots ? [virtualEntryCandidate] : setupStarts,
-        checkpointPreferences
-      );
+      const pickedCheckpoints = typeof shouldStopDuringAnalysis === "function"
+        ? await pickFlagsCooperative(
+          checkpointCandidatePool,
+          flagCount,
+          boardLayout.placements,
+          courseDockPlacements,
+          pieceMap,
+          virtualBots ? [virtualEntryCandidate] : setupStarts,
+          checkpointPreferences,
+          {
+            shouldStopRequested: shouldStopDuringAnalysis,
+            cooperativeYield: async () => {
+              await nextEventLoopTurn();
+            }
+          }
+        )
+        : pickFlags(
+          checkpointCandidatePool,
+          flagCount,
+          boardLayout.placements,
+          courseDockPlacements,
+          pieceMap,
+          virtualBots ? [virtualEntryCandidate] : setupStarts,
+          checkpointPreferences
+        );
       if (!pickedCheckpoints) continue;
 
       const virtualEntryFacing = virtualEntryCandidate && !startupSpinUp
@@ -21485,10 +21725,14 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
               if (shouldRenderProgress) {
                 lastCooperativeRouteProgressDisplayAt = now;
                 onCooperativeProgress(
-                  formatCooperativeRouteProgressStage(progress),
+                  formatCooperativeRouteProgressStage(
+                    progress,
+                    cooperativeRouteProgressTickerStep
+                  ),
                   evaluationsUsed,
                   generationStageContext
                 );
+                cooperativeRouteProgressTickerStep += 1;
                 await nextFrame();
               } else {
                 await nextEventLoopTurn();
@@ -22359,7 +22603,10 @@ function buildScenarioPresentationSnapshot(scenario) {
     lengthTargetBand: metrics.lengthTargetBand ?? null,
     fitScore: metrics.fitScore ?? null,
     softFitLimit: metrics.softFitLimit ?? null,
+    acceptable: Boolean(metrics.acceptable),
+    targetAcceptance: metrics.targetAcceptance ? { ...metrics.targetAcceptance } : null,
     exactTargetMatch: metrics.exactTargetMatch ?? null,
+    hardFailures: Array.isArray(metrics.hardFailures) ? [...metrics.hardFailures] : [],
     softFailures: Array.isArray(metrics.softFailures) ? [...metrics.softFailures] : [],
     lengthMetrics: {
       inputs: {
@@ -22391,6 +22638,45 @@ function isHydratedPresentationAnalysisComplete(sequence, metrics, playerCount, 
     String(failure).startsWith("leg-")
   ));
   return !structuralFailure;
+}
+
+function getSavedGenerationDisposition(snapshot = {}) {
+  const savedMetrics = snapshot.presentationMetrics ?? null;
+  const explicitBestMatch = typeof snapshot.generationBestMatch === "boolean"
+    ? snapshot.generationBestMatch
+    : null;
+  const terminationReason = snapshot.generationTerminationReason
+    ?? snapshot.generationDiagnostics?.terminationReason
+    ?? null;
+  const fitScore = Number(savedMetrics?.fitScore);
+  const softFitLimit = Number(savedMetrics?.softFitLimit);
+  const inferredAcceptableFromFit = Number.isFinite(fitScore) && Number.isFinite(softFitLimit)
+    ? fitScore <= softFitLimit
+    : null;
+  const savedAcceptable = typeof snapshot.generationAcceptedAtSave === "boolean"
+    ? snapshot.generationAcceptedAtSave
+    : typeof savedMetrics?.acceptable === "boolean"
+      ? savedMetrics.acceptable
+      : terminationReason === "extra-docks-fallback"
+        ? false
+        : terminationReason === "accepted"
+          ? true
+          : inferredAcceptableFromFit !== null
+            ? inferredAcceptableFromFit
+            : explicitBestMatch === true
+              ? false
+              : null;
+  const bestMatch = explicitBestMatch !== null
+    ? explicitBestMatch
+    : savedAcceptable !== null
+      ? !savedAcceptable
+      : Boolean(terminationReason && terminationReason !== "accepted");
+
+  return {
+    bestMatch: Boolean(bestMatch),
+    acceptedAtSave: savedAcceptable === null ? null : Boolean(savedAcceptable),
+    terminationReason
+  };
 }
 
 function serializeScenario(scenario) {
@@ -22435,6 +22721,12 @@ function serializeScenario(scenario) {
     rebootTokens: scenario.rebootTokens,
     activeStarts: scenario.activeStarts ?? [],
     constructionFingerprint: scenario.constructionFingerprint ?? null,
+    // Preserve the original generation disposition separately from whatever a
+    // future evaluator concludes when this exact saved layout is reanalyzed.
+    generationBestMatch: Boolean(scenario.generationBestMatch),
+    generationAcceptedAtSave: Boolean(scenario.metrics?.acceptable),
+    generationTerminationReason: scenario.generationTerminationReason ??
+      scenario.generationDiagnostics?.terminationReason ?? null,
     // Preserve accepted-course diagnostics across refresh. These values describe
     // how this already-generated course was found/evaluated; hydration should not
     // erase that history merely because it reconstructs route objects in memory.
@@ -22495,10 +22787,235 @@ function loadScenarioSnapshot() {
   }
 }
 
-function hydrateScenarioFromSnapshot(assets, snapshot) {
+function buildSavedScenarioPresentationShell(assets, snapshot, status = "pending") {
   if (!snapshot?.placements?.length || !snapshot?.checkpoints?.length || !snapshot?.preferences) {
     return null;
   }
+  const { pieceMap, imageMap } = assets;
+  const placements = snapshot.placements;
+  const checkpoints = snapshot.checkpoints;
+  const boardPlacements = placements.filter((placement) => {
+    const kind = pieceMap[placement.pieceId]?.kind;
+    return kind !== "dock" && !placement.overlay;
+  });
+  if (!boardPlacements.length) return null;
+  const overlayPlacements = placements.filter((placement) => placement.overlay);
+  const dockPlacements = getDockPlacementsFromScenarioPlacements(placements, pieceMap);
+  const boardRects = buildBoardRects(boardPlacements, pieceMap);
+  const recoveryRule = snapshot.recoveryRule ?? "reboot_tokens";
+  const virtualBots = Boolean(snapshot.virtualBots);
+  const noDocks = Boolean(snapshot.noDocks);
+  const sandwichedDock = Boolean(snapshot.sandwichedDock);
+  const startupSpinUp = Boolean(snapshot.startupSpinUp);
+  const hazardousFlags = Boolean(snapshot.hazardousFlags);
+  const movingTargets = Boolean(snapshot.movingTargets);
+  const lessDeadlyGame = Boolean(snapshot.lessDeadlyGame);
+  const { tileMap, starts } = buildResolvedMap(placements, pieceMap);
+  const flagZero = virtualBots ? checkpoints[0] : null;
+  const playableCheckpoints = getPlayableCheckpoints(checkpoints, virtualBots);
+  let goalTileMap;
+  if (virtualBots) {
+    const withFlagZero = applyFlagOverrides(tileMap, [flagZero], { hazardousFlags, movingTargets: false });
+    goalTileMap = applyFlagOverrides(withFlagZero, playableCheckpoints, { hazardousFlags, movingTargets });
+    goalTileMap = hideVirtualFlagZeroFeature(goalTileMap, flagZero);
+  } else {
+    goalTileMap = applyFlagOverrides(tileMap, checkpoints, { hazardousFlags, movingTargets });
+  }
+  const noDockStarts = snapshot.noDockStarts || [];
+  const rawResolvedActiveStarts = virtualBots
+    ? buildVirtualRobotStarts(flagZero, snapshot.preferences.playerCount, startupSpinUp)
+    : noDocks
+      ? filterStartsForGoals(noDockStarts, checkpoints)
+      : filterStartsForGoals(starts, checkpoints);
+  const resolvedActiveStarts = (!virtualBots && sandwichedDock && !startupSpinUp)
+    ? orientSandwichedDockStartsTowardCheckpoint(
+      rawResolvedActiveStarts,
+      dockPlacements,
+      pieceMap,
+      playableCheckpoints[0]
+    )
+    : rawResolvedActiveStarts;
+  const activeStarts = Array.isArray(snapshot.activeStarts) && snapshot.activeStarts.length
+    ? snapshot.activeStarts
+    : resolvedActiveStarts;
+  const preferredUsableIndices = Array.isArray(snapshot.validatedStartIndices) && snapshot.validatedStartIndices.length
+    ? snapshot.validatedStartIndices
+    : Array.isArray(snapshot.analysisStartIndices) && snapshot.analysisStartIndices.length
+      ? snapshot.analysisStartIndices
+      : activeStarts.map((_, index) => index);
+  const usableIndexSet = new Set(preferredUsableIndices.filter((index) => Number.isInteger(index)));
+  const placeholderStarts = activeStarts.map((start, index) => ({
+    index,
+    start,
+    reachable: usableIndexSet.has(index),
+    routes: [],
+    selectedRouteIndex: null,
+    selectedRoute: null,
+    fullCourseRoutes: [],
+    fullCourseRoute: null,
+    fullCourseRouteIndex: null,
+    fullCourseTrafficPenalty: 0
+  }));
+  const placeholderSummary = {
+    outliers: [],
+    contextualSearchMode: snapshot.contextualSearchMode ?? null
+  };
+  const firstLeg = {
+    starts: placeholderStarts,
+    summary: placeholderSummary,
+    expectedLegAnalyses: []
+  };
+  const legs = playableCheckpoints.map((_, index) => ({
+    from: index === 0 ? "dock" : index,
+    to: index + 1,
+    analysis: index === 0 ? firstLeg : { starts: placeholderStarts, summary: {} }
+  }));
+  const sequence = {
+    starts: activeStarts,
+    firstLeg,
+    legs,
+    movingTargetTimelines: [],
+    summary: {}
+  };
+  const savedPresentationMetrics = snapshot.presentationMetrics ?? null;
+  const metrics = {
+    ...(savedPresentationMetrics ?? {}),
+    reachableStarts: activeStarts.length,
+    usableStarts: [...usableIndexSet].sort((a, b) => a - b).map((index) => ({ index })),
+    hardFailures: []
+  };
+  const snapshotNoDockEdges = snapshot.noDockEdges ?? (snapshot.noDockEdge ? [snapshot.noDockEdge] : []);
+  const rebootTokens = snapshot.rebootTokens || (recoveryRule === "home_reboot"
+    ? placeHomeRebootTokens(dockPlacements, pieceMap, activeStarts, tileMap, checkpoints, { lessDeadlyGame })
+    : []);
+  const movingTargetTimelines = [];
+  const movingTargetReentryMarkers = collectMovingTargetReentryMarkers(tileMap, playableCheckpoints, movingTargets);
+  const hydrationPresentationFallback = Boolean(savedPresentationMetrics);
+  const hydrationPresentationUnavailable = !savedPresentationMetrics;
+  const savedGenerationDisposition = getSavedGenerationDisposition(snapshot);
+
+  return {
+    pieceMap,
+    imageMap,
+    placements,
+    overlayPlacements,
+    dockPlacements,
+    dockSummaries: buildDockSummaries(boardPlacements, dockPlacements, pieceMap),
+    checkpoints,
+    virtualBotEntry: flagZero ? { x: flagZero.x, y: flagZero.y, dir: flagZero.facing } : null,
+    rebootTokens,
+    goalTileMap,
+    activeStarts,
+    blockedStartIndices: Array.isArray(snapshot.blockedStartIndices) ? snapshot.blockedStartIndices : [],
+    validatedStartIndices: [...usableIndexSet].sort((a, b) => a - b),
+    analysisStartIndices: Array.isArray(snapshot.analysisStartIndices) ? snapshot.analysisStartIndices : activeStarts.map((_, index) => index),
+    startDisposition: snapshot.startDisposition ?? null,
+    playerCount: snapshot.preferences.playerCount,
+    actFast: Boolean(snapshot.actFast),
+    actFastMode: snapshot.actFastMode ?? null,
+    competitiveMode: Boolean(snapshot.competitiveMode),
+    payToWin: Boolean(snapshot.payToWin),
+    subsidizedStarts: Boolean(snapshot.subsidizedStarts),
+    noDocks,
+    sandwichedDock,
+    noDockEdge: snapshot.noDockEdge ?? snapshotNoDockEdges[0] ?? null,
+    noDockEdges: snapshotNoDockEdges,
+    noDockStarts,
+    extraDocks: Boolean(snapshot.extraDocks),
+    factoryRejects: Boolean(snapshot.factoryRejects),
+    recoveryRule,
+    lessDeadlyGame,
+    lessSpammyGame: Boolean(snapshot.lessSpammyGame),
+    criticalSpam: Boolean(snapshot.criticalSpam),
+    criticalHaywire: Boolean(snapshot.criticalHaywire),
+    permanentShutdown: Boolean(snapshot.permanentShutdown),
+    startupSpinUp,
+    virtualBots,
+    homeReboot: Boolean(snapshot.homeReboot || recoveryRule === "home_reboot"),
+    cuttingFloor: Boolean(snapshot.cuttingFloor),
+    moreDeadlyGame: Boolean(snapshot.moreDeadlyGame),
+    flamingOil: Boolean(snapshot.flamingOil),
+    repulsorOverdrive: Boolean(snapshot.repulsorOverdrive),
+    repairStations: Boolean(snapshot.repairStations),
+    upgradeWorld: Boolean(snapshot.upgradeWorld),
+    lighterGame: Boolean(snapshot.lighterGame),
+    classicSharedDeck: Boolean(snapshot.classicSharedDeck),
+    hazardousFlags,
+    movingTargets,
+    staggeredBoards: Boolean(snapshot.staggeredBoards),
+    lessForeshadowing: Boolean(snapshot.lessForeshadowing),
+    mainBoardIds: boardPlacements.map((placement) => placement.pieceId),
+    mainRotations: boardPlacements.map((placement) => placement.rotation),
+    boardCount: boardPlacements.length,
+    boardRects,
+    generationDiagnostics: snapshot.generationDiagnostics ?? null,
+    generationBestMatch: savedGenerationDisposition.bestMatch,
+    generationAcceptedAtSave: savedGenerationDisposition.acceptedAtSave,
+    generationTerminationReason: savedGenerationDisposition.terminationReason,
+    constructionFingerprint: snapshot.constructionFingerprint ?? null,
+    constructionGuidancePrior: snapshot.constructionGuidancePrior ?? null,
+    constructionGuidanceStages: snapshot.constructionGuidanceStages ?? null,
+    guidanceLevel: snapshot.guidanceLevel ?? 0,
+    variantComplexityBudget: snapshot.variantComplexityBudget ?? 0,
+    variantComplexityUsed: snapshot.variantComplexityUsed ?? 0,
+    sequence,
+    metrics,
+    savedPresentationMetrics,
+    savedCourseNotesHtml: snapshot.courseNotesHtml ?? null,
+    hydrationPresentationFallback,
+    hydrationPresentationUnavailable,
+    hydrationReanalysisPending: status === "pending",
+    hydrationReanalysisStopped: status === "stopped",
+    hydrationReanalysisFailed: status === "failed",
+    movingTargetStats: metrics.movingTargetStats ?? null,
+    movingTargetTimelines,
+    movingTargetReentryMarkers,
+    effectiveTargetPreferences: snapshot.effectiveTargetPreferences ?? null,
+    preferences: {
+      ...snapshot.preferences,
+      overlayMode: normalizeOverlayMode(snapshot.preferences.overlayMode),
+      actFast: Boolean(snapshot.actFast),
+      actFastMode: snapshot.actFastMode ?? null,
+      competitiveMode: Boolean(snapshot.competitiveMode),
+      payToWin: Boolean(snapshot.payToWin),
+      subsidizedStarts: Boolean(snapshot.subsidizedStarts),
+      noDocks,
+      sandwichedDock,
+      extraDocks: Boolean(snapshot.extraDocks),
+      factoryRejects: Boolean(snapshot.factoryRejects),
+      recoveryRule,
+      flagCount: playableCheckpoints.length,
+      classicSharedDeck: Boolean(snapshot.classicSharedDeck),
+      homeReboot: Boolean(snapshot.homeReboot || recoveryRule === "home_reboot"),
+      cuttingFloor: Boolean(snapshot.cuttingFloor),
+      startupSpinUp,
+      virtualBots,
+      upgradeWorld: Boolean(snapshot.upgradeWorld),
+      hazardousFlags,
+      movingTargets,
+      lessSpammyGame: Boolean(snapshot.lessSpammyGame),
+      criticalSpam: Boolean(snapshot.criticalSpam),
+      criticalHaywire: Boolean(snapshot.criticalHaywire),
+      permanentShutdown: Boolean(snapshot.permanentShutdown),
+      staggeredBoards: Boolean(snapshot.staggeredBoards)
+    },
+    attempts: snapshot.attempts ?? 0
+  };
+}
+
+async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}) {
+  if (!snapshot?.placements?.length || !snapshot?.checkpoints?.length || !snapshot?.preferences) {
+    return null;
+  }
+
+  const shouldStopRequested = typeof control.shouldStopRequested === "function"
+    ? control.shouldStopRequested
+    : () => false;
+  const onStage = typeof control.onStage === "function" ? control.onStage : null;
+  const onCooperativeProgress = typeof control.onCooperativeProgress === "function"
+    ? control.onCooperativeProgress
+    : null;
+  if (shouldStopRequested()) throw makeGenerationStopRequestedError("Saved-course reanalysis stopped.");
 
   const effectiveTargetPreferences = {
     difficulty: snapshot.effectiveTargetPreferences?.difficulty ?? snapshot.preferences.difficulty,
@@ -22683,7 +23200,8 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
       }
       : {})
   };
-  const sequence = analyzeFlagSequence(goalTileMap, analysisStarts, playableCheckpoints, snapshot.preferences.playerCount, applyVariantAnalysisOptions({
+  if (onStage) await onStage("Preparing saved-course route analysis");
+  const sequence = await analyzeFlagSequence(goalTileMap, analysisStarts, playableCheckpoints, snapshot.preferences.playerCount, applyVariantAnalysisOptions({
     ...getRouteAnalysisVariantOptions(hydrationPreferences),
     ...hydrationEnergyOptions,
     rebootTokens,
@@ -22694,6 +23212,24 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     // used the current Balanced budgets, so getScenarioGenerationMode() maps
     // those legacy snapshots to Balanced rather than silently using Standard.
     generationMode: hydrationGenerationMode,
+    fullCourseAnalyzer: analyzeFullCourseCooperativeSafe,
+    cooperativeYield: async (progress) => {
+      if (onCooperativeProgress) {
+        await onCooperativeProgress(progress);
+      } else {
+        await nextEventLoopTurn();
+      }
+    },
+    cooperativeYieldIntervalMs: GENERATION_COOPERATIVE_YIELD_INTERVAL_MS,
+    contextualCooperativeSearchSlices: true,
+    contextualCooperativeSearchSliceMs: GENERATION_COOPERATIVE_SEARCH_SLICE_MS,
+    contextualCooperativeSearchCheckPops: GENERATION_COOPERATIVE_SEARCH_CHECK_POPS,
+    cooperativeStage: async (stage) => {
+      if (onStage) await onStage(stage);
+      else await nextEventLoopTurn();
+      if (shouldStopRequested()) throw makeGenerationStopRequestedError("Saved-course reanalysis stopped.");
+    },
+    shouldStopRequested,
     contextualFastCardState: true,
     contextualEstimatedEnergyGuidance: true,
     fastBaselineTrafficEnabled: hydrationTrafficEnabled,
@@ -22849,6 +23385,17 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
   const hydrationPresentationUnavailable = Boolean(
     !hydrationPresentationComplete && !savedPresentationMetrics
   );
+  const savedGenerationDisposition = getSavedGenerationDisposition(snapshot);
+  const hydrationAcceptanceDrift = Boolean(
+    hydrationPresentationComplete &&
+    savedGenerationDisposition.acceptedAtSave === true &&
+    metrics.acceptable === false
+  );
+  const hydrationAcceptanceImproved = Boolean(
+    hydrationPresentationComplete &&
+    savedGenerationDisposition.acceptedAtSave === false &&
+    metrics.acceptable === true
+  );
   const movingTargetTimelines = sequence.movingTargetTimelines ?? [];
   const movingTargetReentryMarkers = collectMovingTargetReentryMarkers(tileMap, playableCheckpoints, movingTargets);
   const hydratedCompetitiveBalance = sequence.firstLeg?.summary?.competitiveStartBalance ?? null;
@@ -22943,6 +23490,11 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     boardCount: boardPlacements.length,
     boardRects,
     generationDiagnostics: snapshot.generationDiagnostics ?? null,
+    generationBestMatch: savedGenerationDisposition.bestMatch,
+    generationAcceptedAtSave: savedGenerationDisposition.acceptedAtSave,
+    generationTerminationReason: savedGenerationDisposition.terminationReason,
+    hydrationAcceptanceDrift,
+    hydrationAcceptanceImproved,
     constructionGuidancePrior: snapshot.constructionGuidancePrior ?? null,
     constructionGuidanceStages: snapshot.constructionGuidanceStages ?? null,
     guidanceLevel: snapshot.guidanceLevel ?? 0,
@@ -22954,6 +23506,9 @@ function hydrateScenarioFromSnapshot(assets, snapshot) {
     savedCourseNotesHtml: snapshot.courseNotesHtml ?? null,
     hydrationPresentationFallback,
     hydrationPresentationUnavailable,
+    hydrationReanalysisPending: false,
+    hydrationReanalysisStopped: false,
+    hydrationReanalysisFailed: false,
     movingTargetStats: metrics.movingTargetStats,
     movingTargetTimelines,
     movingTargetReentryMarkers,
@@ -24848,7 +25403,84 @@ if (typeof document !== "undefined") {
 
     if (snapshot) {
       applyPreferencesToControls(snapshot.preferences);
-      const restoredScenario = hydrateScenarioFromSnapshot(assets, snapshot);
+      generationStopRequested = false;
+      generationHasRetainableCandidate = false;
+      setGenerationStopControlState(false);
+      isGenerating = true;
+      setGeneratingOverlay(true, "", {
+        attempt: 1,
+        maxAttempts: 1,
+        stage: "Reanalyzing saved course",
+        preferences: snapshot.preferences,
+        generationStartedAt: generationNow(),
+        acceptableCandidateTarget: 1,
+        acceptableCandidatesFound: 0
+      });
+      await nextFrame();
+
+      const savedShell = buildSavedScenarioPresentationShell(assets, snapshot, "pending");
+      if (savedShell) {
+        currentScenario = savedShell;
+        await ensureScenarioImages(assets, currentScenario);
+        pruneImageCache(assets, [
+          ...getPlacementImagePieceIds(currentScenario.placements, currentScenario.pieceMap),
+          boardAuditState.pieceId
+        ]);
+        try {
+          renderScenario(currentScenario);
+        } catch (error) {
+          console.warn("Saved-course presentation shell could not be rendered before reanalysis", error);
+        }
+      }
+
+      let restoredScenario = null;
+      let hydrationStopped = false;
+      let hydrationFailed = false;
+      try {
+        restoredScenario = await hydrateScenarioFromSnapshot(assets, snapshot, {
+          shouldStopRequested: () => generationStopRequested,
+          onStage: async (stage) => {
+            setGeneratingOverlay(true, "", {
+              attempt: 1,
+              maxAttempts: 1,
+              stage: `Reanalyzing saved course — ${stage}`,
+              preferences: snapshot.preferences
+            });
+            await nextEventLoopTurn();
+          },
+          onCooperativeProgress: async (progress) => {
+            setGeneratingOverlay(true, "", {
+              attempt: 1,
+              maxAttempts: 1,
+              stage: `Reanalyzing saved course — ${formatCooperativeRouteProgressStage(progress)}`,
+              preferences: snapshot.preferences
+            });
+            await nextEventLoopTurn();
+          }
+        });
+      } catch (error) {
+        if (error?.code === "ANALYSIS_STOP_REQUESTED") {
+          hydrationStopped = true;
+        } else {
+          hydrationFailed = true;
+          console.error("Saved-course reanalysis failed", error);
+        }
+      } finally {
+        isGenerating = false;
+        setGeneratingOverlay(false);
+        generationStopRequested = false;
+        generationHasRetainableCandidate = false;
+        setGenerationStopControlState(false);
+      }
+
+      if (!restoredScenario && savedShell) {
+        restoredScenario = {
+          ...savedShell,
+          hydrationReanalysisPending: false,
+          hydrationReanalysisStopped: hydrationStopped,
+          hydrationReanalysisFailed: hydrationFailed || !hydrationStopped
+        };
+      }
       if (restoredScenario) {
         currentScenario = restoredScenario;
         await ensureScenarioImages(assets, currentScenario);
@@ -24857,7 +25489,6 @@ if (typeof document !== "undefined") {
           boardAuditState.pieceId
         ]);
         renderScenario(currentScenario);
-        setGeneratingOverlay(false);
         return;
       }
     }
@@ -24868,4 +25499,4 @@ if (typeof document !== "undefined") {
   init().catch(console.error);
 
 }
-// VERSION END: v49ad-hotspot-local-reroute
+// VERSION END: v49ai-traffic-evidence-reservoir
