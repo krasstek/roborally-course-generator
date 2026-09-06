@@ -1,6 +1,6 @@
-// VERSION START: v49ai-traffic-evidence-reservoir
+// VERSION START: v49aj-adaptive-search-worthiness
 // Robo Rally Course Randomizer - route analysis and scoring runtime
-export const ANALYZE_BUILD_ID = "v49ai-traffic-evidence-reservoir";
+export const ANALYZE_BUILD_ID = "v49aj-adaptive-search-worthiness";
 const ASSET_VERSION = new URL(import.meta.url).searchParams.get("v") ?? "";
 const VERSION_SUFFIX = ASSET_VERSION ? `?v=${encodeURIComponent(ASSET_VERSION)}` : "";
 const versionedPath = (path) => `${path}${VERSION_SUFFIX}`;
@@ -20688,6 +20688,16 @@ function* analyzeFullCourseContextualSteps(
   let trafficAlternateRepeatedMissEvidenceStops = 0;
   let trafficAlternateRepeatedMissEvidenceDeeperRetries = 0;
   const trafficAlternateNegativeSearchEvidence = new Map();
+  // v49aj evidence-only exact alternate reservoir. Valid alternates that miss the
+  // current traffic gain threshold are still useful information: keep them out of
+  // the selectable route pool, but retain them inside this one feedback run so a
+  // later mixture-only field update can re-price them without buying geometry again.
+  // This never changes physical legality or exact card validation.
+  const trafficAlternateEvidenceCandidatesByStart = new Map();
+  let trafficAlternateEvidenceCandidateChecks = 0;
+  let trafficAlternateEvidenceCandidatesStored = 0;
+  let trafficAlternateEvidenceCandidatesPromoted = 0;
+  let trafficAlternateEvidenceSaturationStops = 0;
   let trafficAlternateEscalations = 0;
   let trafficAlternateSearchNoRoutes = 0;
   let trafficAlternateCardRejects = 0;
@@ -23091,6 +23101,18 @@ function* analyzeFullCourseContextualSteps(
       for (let epoch = 0; epoch < trafficEpochLimit; epoch += 1) {
         const preparedRound = preparedTrafficFeedbackRound;
         preparedTrafficFeedbackRound = null;
+        const priorFieldDelta = preparedRound?.fieldDelta ?? null;
+        // v49aj worthiness is intentionally conservative. If the prior round changed
+        // any selected route identity, fresh geometry stays fully eligible next round
+        // because the routing question itself changed. Evidence saturation is only
+        // allowed after a mixture/occupancy-only material update.
+        const adaptiveEvidenceRound = Boolean(
+          epoch > 0 &&
+          priorFieldDelta?.materialChange &&
+          Number(priorFieldDelta.selectedRouteChanges) === 0
+        );
+        const roundEvidenceChecksAtStart = trafficAlternateEvidenceCandidateChecks;
+        const roundEvidenceStopsAtStart = trafficAlternateEvidenceSaturationStops;
         const temporaryAnalyses = preparedRound?.analyses ?? makeTrafficTemporaryAnalyses();
         const frozenSelection = preparedRound?.selection ?? selectFullCourseRoutesForStarts(
           tileMap,
@@ -23589,7 +23611,91 @@ function* analyzeFullCourseContextualSteps(
           );
           let bestCandidate = null;
           let bestCandidateLegIndex = -1;
+          let bestCandidateFromEvidence = false;
           let bestGain = -Infinity;
+          const evidenceGainByLeg = new Map();
+          const evidenceReplacementIdsByLeg = new Map();
+
+          const scoreRealizedTrafficCandidate = (realized) => {
+            if (!realized?.route) return null;
+            const candidateTrafficLegacy = getExpectedTrafficBreakdown(
+              tileMap,
+              realized.route,
+              otherRouteEntries,
+              flags,
+              options
+            );
+            const candidateTraffic = getDamageEconomyTrafficRoutingBreakdown(
+              tileMap,
+              realized.route,
+              candidateTrafficLegacy,
+              frozenTrafficAnalyses,
+              analysis.index,
+              flags,
+              {
+                ...options,
+                playerCount,
+                trafficRouteMixtureByIndex: frozenRouteMixtureByIndex
+              }
+            );
+            return (
+              baselineRoute.score + baselineRoutingTraffic.total
+            ) - (
+              realized.route.score + candidateTraffic.total
+            );
+          };
+
+          const rememberEvidenceCandidate = (realized, legIndex, replacementId) => {
+            if (!realized?.route) return;
+            const fullIdentity = getTrafficFullRouteIdentity(realized.route);
+            if (!fullIdentity || existingFullRouteIds.has(fullIdentity)) return;
+            let pool = trafficAlternateEvidenceCandidatesByStart.get(analysis.index);
+            if (!pool) {
+              pool = new Map();
+              trafficAlternateEvidenceCandidatesByStart.set(analysis.index, pool);
+            }
+            if (pool.has(fullIdentity)) return;
+            pool.set(fullIdentity, {
+              realized,
+              legIndex,
+              replacementId,
+              fullIdentity
+            });
+            trafficAlternateEvidenceCandidatesStored += 1;
+          };
+
+          // Only after a mixture/occupancy-only material update do we treat prior
+          // exact low-gain alternates as search-worthiness evidence. Re-price them
+          // under the current frozen field; if one has become useful it can be
+          // promoted without any new physical search. Accepted/selectable routes are
+          // filtered above, so this pool cannot silently dilute route mixtures.
+          if (adaptiveEvidenceRound) {
+            const evidencePool = trafficAlternateEvidenceCandidatesByStart.get(analysis.index);
+            for (const evidence of evidencePool?.values() || []) {
+              if (!evidence?.realized?.route || existingFullRouteIds.has(evidence.fullIdentity)) continue;
+              trafficAlternateEvidenceCandidateChecks += 1;
+              const gain = scoreRealizedTrafficCandidate(evidence.realized);
+              if (!Number.isFinite(gain)) continue;
+              let gains = evidenceGainByLeg.get(evidence.legIndex);
+              if (!gains) {
+                gains = [];
+                evidenceGainByLeg.set(evidence.legIndex, gains);
+              }
+              gains.push(gain);
+              let replacementIds = evidenceReplacementIdsByLeg.get(evidence.legIndex);
+              if (!replacementIds) {
+                replacementIds = new Set();
+                evidenceReplacementIdsByLeg.set(evidence.legIndex, replacementIds);
+              }
+              if (evidence.replacementId) replacementIds.add(evidence.replacementId);
+              if (gain > bestGain) {
+                bestGain = gain;
+                bestCandidate = evidence.realized;
+                bestCandidateLegIndex = evidence.legIndex;
+                bestCandidateFromEvidence = true;
+              }
+            }
+          }
 
           for (const demanded of demandedLegs) {
             const legIndex = demanded.legIndex;
@@ -23629,7 +23735,10 @@ function* analyzeFullCourseContextualSteps(
               routeSimilarity(baselineLeg, route, flags[legIndex]) <=
               trafficCachedProbeMaxSimilarity
             ));
-            const attemptedLegIds = new Set([baselineLegId]);
+            const attemptedLegIds = new Set([
+              baselineLegId,
+              ...(evidenceReplacementIdsByLeg.get(legIndex) || [])
+            ]);
 
             function* evaluateReplacement(replacementLeg) {
               if (!replacementLeg) return null;
@@ -23650,36 +23759,15 @@ function* analyzeFullCourseContextualSteps(
                 trafficAlternateDuplicateRejects += 1;
                 return null;
               }
-              const candidateTrafficLegacy = getExpectedTrafficBreakdown(
-                tileMap,
-                realized.route,
-                otherRouteEntries,
-                flags,
-                options
-              );
-              const candidateTraffic = getDamageEconomyTrafficRoutingBreakdown(
-                tileMap,
-                realized.route,
-                candidateTrafficLegacy,
-                frozenTrafficAnalyses,
-                analysis.index,
-                flags,
-                {
-                  ...options,
-                  playerCount,
-                  trafficRouteMixtureByIndex: frozenRouteMixtureByIndex
-                }
-              );
-              const gain = (
-                baselineRoute.score + baselineRoutingTraffic.total
-              ) - (
-                realized.route.score + candidateTraffic.total
-              );
+              rememberEvidenceCandidate(realized, legIndex, replacementId);
+              const gain = scoreRealizedTrafficCandidate(realized);
+              if (!Number.isFinite(gain)) return null;
               if (gain < trafficMinimumGain) trafficAlternateLowGainRejects += 1;
               if (gain > bestGain) {
                 bestGain = gain;
                 bestCandidate = realized;
                 bestCandidateLegIndex = legIndex;
+                bestCandidateFromEvidence = false;
               }
               return gain;
             }
@@ -23700,6 +23788,22 @@ function* analyzeFullCourseContextualSteps(
               Number.isFinite(cachedProbeBestGain) &&
               cachedProbeBestGain < trafficMinimumGain - pressureAdjustedProbeMargin
             );
+            const exactEvidenceGains = evidenceGainByLeg.get(legIndex) || [];
+            const exactEvidenceBestGain = exactEvidenceGains.length
+              ? Math.max(...exactEvidenceGains)
+              : -Infinity;
+            // Two distinct exact alternates for this leg, re-priced under the current
+            // field and still clearly below the existing gain threshold, are enough
+            // to call the local evidence saturated for this mixture-only update. A
+            // shutdown-sized pressure state automatically makes the "clearly poor"
+            // bar much harder to satisfy via the same pressure-adjusted margin used
+            // by the established cached-probe rule.
+            const exactEvidenceClearlyPoor = Boolean(
+              adaptiveEvidenceRound &&
+              exactEvidenceGains.length >= 2 &&
+              Number.isFinite(exactEvidenceBestGain) &&
+              exactEvidenceBestGain < trafficMinimumGain - pressureAdjustedProbeMargin
+            );
             if (cachedProbeClearlyPoor) {
               trafficAlternateCachedProbeStops += 1;
             } else if (bestGain >= trafficMinimumGain) {
@@ -23707,6 +23811,8 @@ function* analyzeFullCourseContextualSteps(
               // current frozen field. Do not spend a fresh hotspot search merely to
               // rediscover that the start has viable route choice.
               trafficAlternateCachedUsefulStops += 1;
+            } else if (exactEvidenceClearlyPoor) {
+              trafficAlternateEvidenceSaturationStops += 1;
             } else if (epochNewSearches < epochNewSearchLimit) {
               const hotspot = demanded.hotspot ?? {
                 hotspotIndex: 0,
@@ -23827,6 +23933,9 @@ function* analyzeFullCourseContextualSteps(
           }
 
           if (bestCandidate && bestGain >= trafficMinimumGain) {
+            if (bestCandidateFromEvidence) {
+              trafficAlternateEvidenceCandidatesPromoted += 1;
+            }
             startEntry.partials.push(bestCandidate.partial);
             trafficAlternateCandidatesAdded += 1;
             trafficAlternateBeneficialCandidates += 1;
@@ -23848,6 +23957,9 @@ function* analyzeFullCourseContextualSteps(
           newSearches: trafficAlternateNewSearches - epochSearchesAtStart,
           candidatesAdded: epochCandidatesAdded,
           bestGain: Number(epochBestGain.toFixed(2)),
+          adaptiveEvidence: adaptiveEvidenceRound,
+          evidenceChecks: trafficAlternateEvidenceCandidateChecks - roundEvidenceChecksAtStart,
+          evidenceStops: trafficAlternateEvidenceSaturationStops - roundEvidenceStopsAtStart,
           selectedRouteChanges: 0,
           mixtureWeightDelta: 0,
           occupancyWeightDelta: 0,
@@ -23856,7 +23968,14 @@ function* analyzeFullCourseContextualSteps(
         };
 
         if (!epochCandidatesAdded) {
-          trafficFeedbackStopReason = "no-new-candidate";
+          const evidenceSaturatedWithoutSearch = Boolean(
+            roundSummary.adaptiveEvidence &&
+            roundSummary.evidenceStops > 0 &&
+            roundSummary.newSearches === 0
+          );
+          trafficFeedbackStopReason = evidenceSaturatedWithoutSearch
+            ? "evidence-saturated"
+            : "no-new-candidate";
           roundSummary.stopReason = trafficFeedbackStopReason;
           trafficFeedbackRoundSummaries.push(roundSummary);
           break;
@@ -23901,7 +24020,8 @@ function* analyzeFullCourseContextualSteps(
         trafficFeedbackRoundSummaries.push(roundSummary);
         preparedTrafficFeedbackRound = {
           analyses: previewAnalyses,
-          selection: previewSelection
+          selection: previewSelection,
+          fieldDelta
         };
       }
     }
@@ -24498,6 +24618,12 @@ function* analyzeFullCourseContextualSteps(
         trafficAlternateRepeatedMissEvidenceDeeperRetries,
         trafficAlternateRepeatedMissEvidenceEntries:
           trafficAlternateNegativeSearchEvidence.size,
+        trafficAlternateEvidenceCandidateChecks,
+        trafficAlternateEvidenceCandidatesStored,
+        trafficAlternateEvidenceCandidatesPromoted,
+        trafficAlternateEvidenceSaturationStops,
+        trafficAlternateEvidenceCandidateEntries: [...trafficAlternateEvidenceCandidatesByStart.values()]
+          .reduce((sum, pool) => sum + pool.size, 0),
         trafficAlternateEscalations,
         trafficAlternateSearchNoRoutes,
         trafficAlternateCardRejects,
@@ -24622,6 +24748,12 @@ function* analyzeFullCourseContextualSteps(
         alternateRepeatedMissEvidenceDeeperRetries:
           trafficAlternateRepeatedMissEvidenceDeeperRetries,
         alternateRepeatedMissEvidenceEntries: trafficAlternateNegativeSearchEvidence.size,
+        alternateEvidenceCandidateChecks: trafficAlternateEvidenceCandidateChecks,
+        alternateEvidenceCandidatesStored: trafficAlternateEvidenceCandidatesStored,
+        alternateEvidenceCandidatesPromoted: trafficAlternateEvidenceCandidatesPromoted,
+        alternateEvidenceSaturationStops: trafficAlternateEvidenceSaturationStops,
+        alternateEvidenceCandidateEntries: [...trafficAlternateEvidenceCandidatesByStart.values()]
+          .reduce((sum, pool) => sum + pool.size, 0),
         alternateEffectiveDemandLegs: trafficAlternateEffectiveDemandLegs,
         alternateExploratoryDemandLegs: trafficAlternateExploratoryDemandLegs,
         alternatePressureDemandLegs: trafficAlternatePressureDemandLegs,
@@ -25396,4 +25528,4 @@ export function analyzeFlagLeg(tileMap, from, goal, options = {}) {
     }
   };
 }
-// VERSION END: v49ai-traffic-evidence-reservoir
+// VERSION END: v49aj-adaptive-search-worthiness

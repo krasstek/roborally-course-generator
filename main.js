@@ -1,4 +1,4 @@
-// VERSION START: v49ai-traffic-evidence-reservoir
+// VERSION START: v49am-hydration-start-disposition
 // Robo Rally Course Randomizer - production runtime
 // Mobile browsers may auto-detect number-like rule text and restyle it as a
 // tappable link even though the app emitted ordinary text. Keep rules/course
@@ -261,13 +261,31 @@ const NORMAL_FULL_COURSE_TRAFFIC_PASSES = 1;
 const NORMAL_PRUNE_BATCH_SIZE = 2;
 const NORMAL_CONTEXTUAL_FULL_FORECAST_SHARE = 0.65;
 
-// v49j generation-mode contract ------------------------------------------------
+// v49al generation-mode contract -----------------------------------------------
 // Modes never change route legality, reachability semantics, Energy valuation,
 // traffic scoring, or the definition of a hard-valid course. They change how
 // strongly construction guidance is trusted and how many broadly qualifying
-// course evaluations are collected before final ranking. Route/traffic evidence
-// budgets are still mode-dependent for now; that older v35 behavior is retained
-// until the traffic model itself is revised.
+// course evaluations are collected before final ranking. Traffic-feedback route
+// judgement now uses one shared Standard-strength contract in every mode; the
+// universal six-search ceiling is a safety backstop, not a mode quality tier.
+// Primary-witness/preflight breadth remains mode-dependent for now and is a
+// separate follow-up boundary, so this patch does not silently rewrite the whole
+// construction/evaluation envelope at once.
+const COMMON_TRAFFIC_ROUTING_PROFILE = Object.freeze({
+  trafficEnabled: true,
+  trafficEpochs: 2,
+  trafficAlternateMaxNewSearchesPerEpoch: 6,
+  trafficAlternateMaxNewSearchesTotal: 6,
+  trafficAlternateExpansions: 320,
+  trafficAlternateMaxActions: 30,
+  trafficAlternateCachedProbeMargin: 0.75,
+  trafficAlternateCachedProbeMaxSimilarity: 0.84,
+  trafficAlternateLegsPerStart: 1,
+  trafficExplorationUncertaintyShare: 0,
+  trafficExplorationConfidenceFloor: 1,
+  trafficAlternateUncertaintyEffortFloor: 0.18,
+  trafficAlternateUncertaintyEffortExponent: 1.15
+});
 const GENERATION_MODE_PROFILES = Object.freeze({
   fastest: Object.freeze({
     maxAttempts: 5,
@@ -279,22 +297,7 @@ const GENERATION_MODE_PROFILES = Object.freeze({
     lightStartExpansions: 4200,
     fullCourseExpansions: 32000,
     primaryWitnessRoutes: 1,
-    // Fastest still measures traffic on the full-course witnesses it already paid
-    // to realize. Zero epochs and zero alternate-search budgets mean traffic can
-    // score/rerank those witnesses, but cannot buy traffic-driven geometry.
-    trafficEnabled: true,
-    trafficEpochs: 0,
-    trafficAlternateMaxNewSearchesPerEpoch: 0,
-    trafficAlternateMaxNewSearchesTotal: 0,
-    trafficAlternateExpansions: 0,
-    trafficAlternateMaxActions: 0,
-    trafficAlternateCachedProbeMargin: 0,
-    trafficAlternateCachedProbeMaxSimilarity: 0.84,
-    trafficAlternateLegsPerStart: 1,
-    trafficExplorationUncertaintyShare: 0,
-    trafficExplorationConfidenceFloor: 1,
-    trafficAlternateUncertaintyEffortFloor: 0.10,
-    trafficAlternateUncertaintyEffortExponent: 1.45,
+    ...COMMON_TRAFFIC_ROUTING_PROFILE,
   }),
   fast: Object.freeze({
     maxAttempts: 8,
@@ -306,20 +309,7 @@ const GENERATION_MODE_PROFILES = Object.freeze({
     lightStartExpansions: 5200,
     fullCourseExpansions: 38000,
     primaryWitnessRoutes: 2,
-    trafficEnabled: true,
-    trafficEpochs: 1,
-    // Fast may accept a useful already-paid witness, but never opens new geometry.
-    trafficAlternateMaxNewSearchesPerEpoch: 0,
-    trafficAlternateMaxNewSearchesTotal: 0,
-    trafficAlternateExpansions: 0,
-    trafficAlternateMaxActions: 0,
-    trafficAlternateCachedProbeMargin: 0,
-    trafficAlternateCachedProbeMaxSimilarity: 0.84,
-    trafficAlternateLegsPerStart: 1,
-    trafficExplorationUncertaintyShare: 0,
-    trafficExplorationConfidenceFloor: 1,
-    trafficAlternateUncertaintyEffortFloor: 0.12,
-    trafficAlternateUncertaintyEffortExponent: 1.35,
+    ...COMMON_TRAFFIC_ROUTING_PROFILE,
   }),
   standard: Object.freeze({
     // v49j: three broadly qualifying candidates before near-best selection.
@@ -332,22 +322,7 @@ const GENERATION_MODE_PROFILES = Object.freeze({
     lightStartExpansions: 6000,
     fullCourseExpansions: 44000,
     primaryWitnessRoutes: 2,
-    trafficEnabled: true,
-    // v49ab adds one frozen-field reroute/recompute round. The total new-search
-    // allowance remains the old Standard maximum of six and is reserved across
-    // rounds, so iteration does not silently multiply the geometry budget.
-    trafficEpochs: 2,
-    trafficAlternateMaxNewSearchesPerEpoch: 6,
-    trafficAlternateMaxNewSearchesTotal: 6,
-    trafficAlternateExpansions: 320,
-    trafficAlternateMaxActions: 30,
-    trafficAlternateCachedProbeMargin: 0.75,
-    trafficAlternateCachedProbeMaxSimilarity: 0.84,
-    trafficAlternateLegsPerStart: 1,
-    trafficExplorationUncertaintyShare: 0,
-    trafficExplorationConfidenceFloor: 1,
-    trafficAlternateUncertaintyEffortFloor: 0.18,
-    trafficAlternateUncertaintyEffortExponent: 1.15,
+    ...COMMON_TRAFFIC_ROUTING_PROFILE,
   }),
   balanced: Object.freeze({
     maxAttempts: 20,
@@ -359,21 +334,7 @@ const GENERATION_MODE_PROFILES = Object.freeze({
     lightStartExpansions: 7000,
     fullCourseExpansions: 52000,
     primaryWitnessRoutes: 3,
-    trafficEnabled: true,
-    trafficEpochs: 3,
-    trafficAlternateMaxNewSearchesPerEpoch: 10,
-    trafficAlternateMaxNewSearchesTotal: 20,
-    trafficAlternateExpansions: 450,
-    trafficAlternateMaxActions: 34,
-    trafficAlternateCachedProbeMargin: 0.40,
-    trafficAlternateCachedProbeMaxSimilarity: 0.88,
-    trafficAlternateLegsPerStart: 1,
-    // Exploration only: admit 18% of the raw/effective gap while confidence is
-    // still at least .20. Final candidate value never uses this relaxed score.
-    trafficExplorationUncertaintyShare: 0.18,
-    trafficExplorationConfidenceFloor: 0.20,
-    trafficAlternateUncertaintyEffortFloor: 0.26,
-    trafficAlternateUncertaintyEffortExponent: 0.95,
+    ...COMMON_TRAFFIC_ROUTING_PROFILE,
   }),
   thorough: Object.freeze({
     maxAttempts: 36,
@@ -385,21 +346,7 @@ const GENERATION_MODE_PROFILES = Object.freeze({
     lightStartExpansions: 9500,
     fullCourseExpansions: 68000,
     primaryWitnessRoutes: 4,
-    trafficEnabled: true,
-    trafficEpochs: 4,
-    trafficAlternateMaxNewSearchesPerEpoch: 16,
-    trafficAlternateMaxNewSearchesTotal: 48,
-    trafficAlternateExpansions: 600,
-    trafficAlternateMaxActions: 36,
-    trafficAlternateCachedProbeMargin: 0.15,
-    trafficAlternateCachedProbeMaxSimilarity: 0.92,
-    trafficAlternateLegsPerStart: 2,
-    // Exploration only: look farther into high raw congestion, but never below
-    // .10 confidence and never use this relaxed value to choose the final route.
-    trafficExplorationUncertaintyShare: 0.35,
-    trafficExplorationConfidenceFloor: 0.10,
-    trafficAlternateUncertaintyEffortFloor: 0.36,
-    trafficAlternateUncertaintyEffortExponent: 0.78,
+    ...COMMON_TRAFFIC_ROUTING_PROFILE,
   })
 });
 const DIAGNOSTIC_ATTEMPTS = 24;
@@ -17610,7 +17557,7 @@ function buildScenarioCopySummary(scenario) {
       );
       if ((contextualProfile?.trafficFeedbackLoopEnabled || contextualCache.trafficEpochsExecuted > 0) && routeStrategy) {
         lines.push(
-          `Traffic feedback v49ai: rounds ${contextualCache.trafficEpochsExecuted ?? 0}/${contextualProfile?.trafficEpochs ?? 0} ceiling, stop ${contextualCache.trafficFeedbackStopReason ?? "?"}, convergence checks/hits ${contextualCache.trafficFeedbackConvergenceChecks ?? 0}/${contextualCache.trafficFeedbackConvergedRounds ?? 0}, demand ${contextualCache.trafficAlternateDemandStarts ?? 0} start-visits/${contextualCache.trafficAlternateDemandLegs ?? 0} legs (${contextualCache.trafficAlternateEffectiveDemandLegs ?? 0} effective/${contextualCache.trafficAlternateExploratoryDemandLegs ?? 0} exploratory/${contextualCache.trafficAlternatePressureDemandLegs ?? 0} pressure), pressure-restored ${contextualCache.trafficAlternatePressureRestoredLegs ?? 0} leg(s), pressure RE avg/max ${contextualCache.trafficAlternateAveragePressureRegisterEquivalents ?? 0}/${contextualCache.trafficAlternateMaximumPressureRegisterEquivalents ?? 0}, effort base→used avg ${contextualCache.trafficAlternateAverageBaseEffortScale ?? 1}→${contextualCache.trafficAlternateAverageEffortScale ?? 1}, hotspot-local ${contextualCache.trafficAlternateHotspotLocalSearches ?? 0} search(es), prefix kept avg/max ${contextualCache.trafficAlternateHotspotAveragePrefixActions ?? 0}/${contextualCache.trafficAlternateHotspotMaximumPrefixActions ?? 0}, leg-start fallback ${contextualCache.trafficAlternateHotspotFallbackLegStarts ?? 0}, 2-reg lookback ${contextualCache.trafficAlternateHotspotTwoRegisterLookbacks ?? 0}, cached divergence checks ${contextualCache.trafficAlternateCachedWitnessChecks ?? 0}, probe-stops ${contextualCache.trafficAlternateCachedProbeStops ?? 0}, cache-useful ${contextualCache.trafficAlternateCachedUsefulStops ?? 0}, local-cache ${contextualCache.trafficAlternateLocalCacheHits ?? 0}, repeat-miss checks/stops ${contextualCache.trafficAlternateRepeatedMissEvidenceChecks ?? 0}/${contextualCache.trafficAlternateRepeatedMissEvidenceStops ?? 0}, deeper-retries ${contextualCache.trafficAlternateRepeatedMissEvidenceDeeperRetries ?? 0}, miss-evidence ${contextualCache.trafficAlternateRepeatedMissEvidenceEntries ?? 0}, escalations ${contextualCache.trafficAlternateEscalations ?? 0}, new bounded searches ${contextualCache.trafficAlternateNewSearches ?? 0}/${contextualCache.trafficAlternateMaxNewSearchesTotal ?? contextualProfile?.trafficAlternateMaxNewSearchesTotal ?? 0} safety-cap (${contextualCache.trafficAlternateSearchNoRoutes ?? 0} no-route), exact alt checks/rejects ${contextualCache.trafficAlternateExactChecks ?? 0}/${contextualCache.trafficAlternateExactRejects ?? 0} [card ${contextualCache.trafficAlternateCardRejects ?? 0}, validation ${contextualCache.trafficAlternateValidationRejects ?? 0}], duplicates ${contextualCache.trafficAlternateDuplicateRejects ?? 0}, low-gain ${contextualCache.trafficAlternateLowGainRejects ?? 0}, downstream-miss ${contextualCache.trafficAlternateDownstreamRebuildFailures ?? 0}, candidates added ${contextualCache.trafficAlternateCandidatesAdded ?? 0}, best combined gain ${contextualCache.trafficAlternateBestGain ?? 0}; round trace ${(contextualCache.trafficFeedbackRoundSummaries ?? []).map((entry) => `R${entry.round} s${entry.newSearches}/c${entry.candidatesAdded}/g${entry.bestGain}${entry.fieldChanged ? `/Δr${entry.selectedRouteChanges}/m${entry.mixtureWeightDelta}/o${entry.occupancyWeightDelta}` : ""}${entry.stopReason ? `/${entry.stopReason}` : ""}`).join(", ") || "none"}; exploration gap ${(contextualCache.trafficExplorationUncertaintyShare ?? 0) * 100}% above conf ${contextualCache.trafficExplorationConfidenceFloor ?? 1}; traffic raw/effective avg ${routeStrategy.averageRawPenalty ?? 0}/${routeStrategy.averagePenalty ?? 0}, forecast confidence mean/min ${routeStrategy.averageForecastConfidence ?? 1}/${routeStrategy.minimumForecastConfidence ?? 1}`
+          `Traffic feedback v49aj: rounds ${contextualCache.trafficEpochsExecuted ?? 0}/${contextualProfile?.trafficEpochs ?? 0} ceiling, stop ${contextualCache.trafficFeedbackStopReason ?? "?"}, convergence checks/hits ${contextualCache.trafficFeedbackConvergenceChecks ?? 0}/${contextualCache.trafficFeedbackConvergedRounds ?? 0}, demand ${contextualCache.trafficAlternateDemandStarts ?? 0} start-visits/${contextualCache.trafficAlternateDemandLegs ?? 0} legs (${contextualCache.trafficAlternateEffectiveDemandLegs ?? 0} effective/${contextualCache.trafficAlternateExploratoryDemandLegs ?? 0} exploratory/${contextualCache.trafficAlternatePressureDemandLegs ?? 0} pressure), pressure-restored ${contextualCache.trafficAlternatePressureRestoredLegs ?? 0} leg(s), pressure RE avg/max ${contextualCache.trafficAlternateAveragePressureRegisterEquivalents ?? 0}/${contextualCache.trafficAlternateMaximumPressureRegisterEquivalents ?? 0}, effort base→used avg ${contextualCache.trafficAlternateAverageBaseEffortScale ?? 1}→${contextualCache.trafficAlternateAverageEffortScale ?? 1}, hotspot-local ${contextualCache.trafficAlternateHotspotLocalSearches ?? 0} search(es), prefix kept avg/max ${contextualCache.trafficAlternateHotspotAveragePrefixActions ?? 0}/${contextualCache.trafficAlternateHotspotMaximumPrefixActions ?? 0}, leg-start fallback ${contextualCache.trafficAlternateHotspotFallbackLegStarts ?? 0}, 2-reg lookback ${contextualCache.trafficAlternateHotspotTwoRegisterLookbacks ?? 0}, cached divergence checks ${contextualCache.trafficAlternateCachedWitnessChecks ?? 0}, probe-stops ${contextualCache.trafficAlternateCachedProbeStops ?? 0}, cache-useful ${contextualCache.trafficAlternateCachedUsefulStops ?? 0}, local-cache ${contextualCache.trafficAlternateLocalCacheHits ?? 0}, repeat-miss checks/stops ${contextualCache.trafficAlternateRepeatedMissEvidenceChecks ?? 0}/${contextualCache.trafficAlternateRepeatedMissEvidenceStops ?? 0}, deeper-retries ${contextualCache.trafficAlternateRepeatedMissEvidenceDeeperRetries ?? 0}, miss-evidence ${contextualCache.trafficAlternateRepeatedMissEvidenceEntries ?? 0}, exact-evidence checks/stored/entries/promoted/stops ${contextualCache.trafficAlternateEvidenceCandidateChecks ?? 0}/${contextualCache.trafficAlternateEvidenceCandidatesStored ?? 0}/${contextualCache.trafficAlternateEvidenceCandidateEntries ?? 0}/${contextualCache.trafficAlternateEvidenceCandidatesPromoted ?? 0}/${contextualCache.trafficAlternateEvidenceSaturationStops ?? 0}, escalations ${contextualCache.trafficAlternateEscalations ?? 0}, new bounded searches ${contextualCache.trafficAlternateNewSearches ?? 0}/${contextualCache.trafficAlternateMaxNewSearchesTotal ?? contextualProfile?.trafficAlternateMaxNewSearchesTotal ?? 0} safety-cap (${contextualCache.trafficAlternateSearchNoRoutes ?? 0} no-route), exact alt checks/rejects ${contextualCache.trafficAlternateExactChecks ?? 0}/${contextualCache.trafficAlternateExactRejects ?? 0} [card ${contextualCache.trafficAlternateCardRejects ?? 0}, validation ${contextualCache.trafficAlternateValidationRejects ?? 0}], duplicates ${contextualCache.trafficAlternateDuplicateRejects ?? 0}, low-gain ${contextualCache.trafficAlternateLowGainRejects ?? 0}, downstream-miss ${contextualCache.trafficAlternateDownstreamRebuildFailures ?? 0}, candidates added ${contextualCache.trafficAlternateCandidatesAdded ?? 0}, best combined gain ${contextualCache.trafficAlternateBestGain ?? 0}; round trace ${(contextualCache.trafficFeedbackRoundSummaries ?? []).map((entry) => `R${entry.round} s${entry.newSearches}/c${entry.candidatesAdded}/g${entry.bestGain}${entry.adaptiveEvidence ? `/e${entry.evidenceChecks ?? 0}-${entry.evidenceStops ?? 0}` : ""}${entry.fieldChanged ? `/Δr${entry.selectedRouteChanges}/m${entry.mixtureWeightDelta}/o${entry.occupancyWeightDelta}` : ""}${entry.stopReason ? `/${entry.stopReason}` : ""}`).join(", ") || "none"}; exploration gap ${(contextualCache.trafficExplorationUncertaintyShare ?? 0) * 100}% above conf ${contextualCache.trafficExplorationConfidenceFloor ?? 1}; traffic raw/effective avg ${routeStrategy.averageRawPenalty ?? 0}/${routeStrategy.averagePenalty ?? 0}, forecast confidence mean/min ${routeStrategy.averageForecastConfidence ?? 1}/${routeStrategy.minimumForecastConfidence ?? 1}`
         );
         const commonOccupancy = routeStrategy.commonOccupancyField ?? null;
         if (commonOccupancy?.weights?.length) {
@@ -18707,10 +18654,13 @@ function buildScenarioReport(scenario, selectedLegIndex) {
         ? `Start full-course continuation: mean ${summary.courseContinuationMean}, weighted into start scores`
         : "Start full-course continuation: n/a"),
     currentNormalRouteModel
-      ? `Traffic feedback: epochs ${contextualCache?.trafficEpochsExecuted ?? 0}, demand ${contextualCache?.trafficAlternateDemandStarts ?? 0} starts/${contextualCache?.trafficAlternateDemandLegs ?? 0} legs (${contextualCache?.trafficAlternateEffectiveDemandLegs ?? 0} effective/${contextualCache?.trafficAlternateExploratoryDemandLegs ?? 0} exploratory), probe-stops ${contextualCache?.trafficAlternateCachedProbeStops ?? 0}, escalations ${contextualCache?.trafficAlternateEscalations ?? 0}, bounded searches ${contextualCache?.trafficAlternateNewSearches ?? 0}, alternate effort mean/min ${contextualCache?.trafficAlternateAverageEffortScale ?? 1}/${contextualCache?.trafficAlternateMinimumEffortScale ?? 1}, candidates ${contextualCache?.trafficAlternateCandidatesAdded ?? 0}, route switches ${summary.fullCourseTraffic?.routeSwitches ?? 0}, effective/raw avg ${summary.fullCourseTraffic?.averagePenalty ?? 0}/${summary.fullCourseTraffic?.averageRawPenalty ?? 0}, confidence mean/min ${summary.fullCourseTraffic?.averageForecastConfidence ?? 1}/${summary.fullCourseTraffic?.minimumForecastConfidence ?? 1}`
+      ? `Traffic feedback: epochs ${contextualCache?.trafficEpochsExecuted ?? 0}, demand ${contextualCache?.trafficAlternateDemandStarts ?? 0} starts/${contextualCache?.trafficAlternateDemandLegs ?? 0} legs (${contextualCache?.trafficAlternateEffectiveDemandLegs ?? 0} effective/${contextualCache?.trafficAlternateExploratoryDemandLegs ?? 0} exploratory), probe-stops ${contextualCache?.trafficAlternateCachedProbeStops ?? 0}, escalations ${contextualCache?.trafficAlternateEscalations ?? 0}, bounded searches ${contextualCache?.trafficAlternateNewSearches ?? 0}, alternate effort mean/min ${contextualCache?.trafficAlternateAverageEffortScale ?? 1}/${contextualCache?.trafficAlternateMinimumEffortScale ?? 1}, candidates ${contextualCache?.trafficAlternateCandidatesAdded ?? 0}, final-selection switches ${summary.fullCourseTraffic?.routeSwitches ?? 0}, effective/raw avg ${summary.fullCourseTraffic?.averagePenalty ?? 0}/${summary.fullCourseTraffic?.averageRawPenalty ?? 0}, confidence mean/min ${summary.fullCourseTraffic?.averageForecastConfidence ?? 1}/${summary.fullCourseTraffic?.minimumForecastConfidence ?? 1}`
       : (summary.fullCourseTraffic
         ? `Full-course route pressure: passes ${summary.fullCourseTraffic.passes}, switches ${summary.fullCourseTraffic.routeSwitches}, avgPenalty ${summary.fullCourseTraffic.averagePenalty}`
         : "Full-course route pressure: n/a"),
+    currentNormalRouteModel
+      ? `Traffic round trace: ${(contextualCache?.trafficFeedbackRoundSummaries ?? []).map((entry) => `R${entry.round} s${entry.newSearches}/c${entry.candidatesAdded}/g${entry.bestGain}${entry.adaptiveEvidence ? `/e${entry.evidenceChecks ?? 0}-${entry.evidenceStops ?? 0}` : ""}${entry.fieldChanged ? `/Δr${entry.selectedRouteChanges}/m${entry.mixtureWeightDelta}/o${entry.occupancyWeightDelta}` : ""}${entry.stopReason ? `/${entry.stopReason}` : ""}`).join(", ") || "none"}`
+      : "Traffic round trace: n/a",
     currentNormalRouteModel
       ? `Estimate route cache: ${contextualCache?.estimatedLegCacheHits ?? 0} hits/${contextualCache?.estimatedLegSearches ?? 0} searches/${contextualCache?.estimatedLegWitnessesGenerated ?? 0} witnesses, exhaustive primary widenings ${contextualCache?.estimatedLegWidenedSearches ?? 0} [resumed ${contextualCache?.estimatedLegResumedWidenings ?? 0}, saved-root ~${contextualCache?.estimatedLegResumeSavedRootExpansions ?? 0}exp, replay ${contextualCache?.estimatedLegResumeReplayExpansions ?? 0}exp, fresh fallback ${contextualCache?.estimatedLegFreshExhaustiveFallbacks ?? 0}], exact realization direct/repaired/failed ${contextualCache?.exactRealizationDirectSuccesses ?? 0}/${contextualCache?.exactRealizationRepairedSuccesses ?? 0}/${contextualCache?.exactRealizationFailures ?? 0}`
       : (summary.contextualLegCache
@@ -20344,7 +20294,18 @@ function getScenarioRenderState(scenario) {
   const renderAnalysis = devViewEnabled ? { routes: getSelectedTraceRoutes(scenario, selectedLegIndex) } : null;
   const boardViewMode = getBoardViewMode();
   const iconBoardView = boardViewMode === BOARD_VIEW_MODES.icons;
-  const metricUnusableStartIndices = scenario.competitiveMode
+  // v49am reload fidelity: an incomplete/stopped/failed saved-course reanalysis is
+  // not authoritative evidence that previously accepted starting spaces disappeared.
+  // The snapshot already preserves the accepted active field + blocked disposition, so
+  // keep rendering that saved disposition until hydration is structurally complete.
+  const preserveSavedStartDisposition = Boolean(
+    scenario.hydrationPresentationFallback ||
+    scenario.hydrationPresentationUnavailable ||
+    scenario.hydrationReanalysisPending ||
+    scenario.hydrationReanalysisStopped ||
+    scenario.hydrationReanalysisFailed
+  );
+  const metricUnusableStartIndices = (scenario.competitiveMode || preserveSavedStartDisposition)
     ? []
     : scenario.sequence.firstLeg.starts
       .filter((startAnalysis) => !scenario.metrics.usableStarts.some((item) => item.index === startAnalysis.index))
@@ -21706,10 +21667,10 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         const productionAnalysisOptions = {
           ...baseAnalysisOptions,
           ...routeAwareBatteryScoringOptions,
-          // v35 mode contract. All modes share one exact Normal model. Modes vary
-          // only the optional evidence/search effort around it. Balanced/Thorough
-          // may explore some high raw congestion beyond Standard's confidence
-          // horizon, but final traffic scoring remains identical.
+          // v49al mode contract. All modes share one exact Normal model and the
+          // same traffic-feedback search/judgement contract. Mode differences here
+          // remain in outer construction/evaluation collection and the older
+          // primary-witness/preflight breadth, not traffic alternate quality tiers.
           contextualFastCardState: true,
           contextualEstimatedEnergyGuidance: true,
           fullCourseAnalyzer: typeof shouldStopDuringAnalysis === "function"
@@ -25499,4 +25460,4 @@ if (typeof document !== "undefined") {
   init().catch(console.error);
 
 }
-// VERSION END: v49ai-traffic-evidence-reservoir
+// VERSION END: v49am-hydration-start-disposition
