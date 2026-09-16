@@ -1,4 +1,4 @@
-// VERSION START: v49ag-target-fit-hydration
+// VERSION START: v49bx-ablation-gated-board-cleanup
 // Robo Rally Course Randomizer - player-facing course notes
 const notesCache = new WeakMap();
 
@@ -150,8 +150,12 @@ function isForcedExtraDocksPreference(preferences = {}) {
 
 export function buildCourseNoteFacts(scenario) {
   const metrics = scenario?.metrics ?? {};
-  const boardUseBoards = Array.isArray(metrics.meaningfulBoardUse?.boards)
-    ? metrics.meaningfulBoardUse.boards
+  const footprintMetric = metrics.boardFootprintUse ?? metrics.meaningfulBoardUse ?? null;
+  const boardUseBoards = Array.isArray(footprintMetric?.boards)
+    ? footprintMetric.boards
+    : [];
+  const gameplayRelevanceBoards = Array.isArray(metrics.boardGameplayRelevance?.boards)
+    ? metrics.boardGameplayRelevance.boards
     : [];
   const sandwichedMissingSideCount = scenario?.sandwichedDock
     ? Number(metrics.sandwichedDockUse?.missingSideCount) || 0
@@ -168,6 +172,13 @@ export function buildCourseNoteFacts(scenario) {
     board?.weakUse &&
     (Number(board?.uniqueRouteTiles) || 0) > 0 &&
     !sandwichedMissingBoardIndices.has(board?.boardIndex)
+  )).length;
+  const limitedFootprintCount = boardUseBoards.filter((board) => (
+    board?.weakUse &&
+    !sandwichedMissingBoardIndices.has(board?.boardIndex)
+  )).length;
+  const pendingAblationCount = gameplayRelevanceBoards.filter((board) => (
+    board?.relevanceStatus === "pending-ablation"
   )).length;
   const difficultyMismatch = getTargetMismatchFact(scenario, "difficulty");
   const lengthMismatch = getTargetMismatchFact(scenario, "length");
@@ -191,6 +202,8 @@ export function buildCourseNoteFacts(scenario) {
     boardUse: {
       zeroRouteInfluenceCount,
       weakTraversedCount,
+      limitedFootprintCount,
+      pendingAblationCount,
       sandwichedMissingSideCount
     },
     extraDocksRequestMismatch,
@@ -199,7 +212,8 @@ export function buildCourseNoteFacts(scenario) {
       difficultyMismatch.active ||
       lengthMismatch.active ||
       checkpointPlacement?.active ||
-      sandwichedMissingSideCount > 0
+      sandwichedMissingSideCount > 0 ||
+      zeroRouteInfluenceCount > 0
     )
   };
 }
@@ -360,7 +374,13 @@ export function buildCourseNoteEvidence(scenario, fitNotes = []) {
   const programmingPressure = scenario?.metrics?.programmingPressure || {};
   const facts = buildCourseNoteFacts(scenario);
   const checkpointPlacement = facts.checkpointPlacement;
-  const { zeroRouteInfluenceCount, weakTraversedCount, sandwichedMissingSideCount } = facts.boardUse;
+  const {
+    zeroRouteInfluenceCount,
+    weakTraversedCount,
+    limitedFootprintCount,
+    pendingAblationCount,
+    sandwichedMissingSideCount
+  } = facts.boardUse;
 
   return {
     fitNotes: [...fitNotes],
@@ -382,6 +402,8 @@ export function buildCourseNoteEvidence(scenario, fitNotes = []) {
     boardUse: {
       zeroRouteInfluenceCount,
       weakTraversedCount,
+      limitedFootprintCount,
+      pendingAblationCount,
       sandwichedMissingSideCount
     },
     opening: {
@@ -553,20 +575,25 @@ export function buildCourseNoteConcepts(evidence) {
       9.4,
       "Sandwiched Dock Use",
       sandwichedMissingSideCount === 1
-        ? "One side of the Sandwiched Dock has no checkpoints, so it is not part of the intended checkpoint progression and may see little direct race use. Its boards are kept because they preserve the sandwich and can still affect nearby play. You can omit them for table space, but doing so removes the intended Sandwiched Dock structure and may change the course."
-        : "The Sandwiched Dock sides have no checkpoints, so they are not part of the intended checkpoint progression and may see little direct race use. Their boards are kept because they preserve the sandwich and can still affect nearby play. You can omit them for table space, but doing so removes the intended Sandwiched Dock structure and may change the course."
+        ? "One side of the Sandwiched Dock has no checkpoints and may see little direct race use. Its boards are kept because they preserve the intended sandwich."
+        : "The Sandwiched Dock sides have no checkpoints and may see little direct race use. Their boards are kept because they preserve the intended sandwich."
     ));
   }
 
+  const limitedFootprintCount = Number(evidence.boardUse?.limitedFootprintCount) || 0;
   const zeroRouteInfluenceCount = Number(evidence.boardUse?.zeroRouteInfluenceCount) || 0;
-  if (zeroRouteInfluenceCount > 0) {
+  if (limitedFootprintCount > 0) {
     concepts.push(concept(
-      "indirect-board-use",
-      8.2 + Math.min(0.6, Math.max(0, zeroRouteInfluenceCount - 1) * 0.2),
+      "limited-board-footprint",
+      8.2 + Math.min(0.6, Math.max(0, limitedFootprintCount - 1) * 0.2),
       "Board Use",
-      zeroRouteInfluenceCount === 1
-        ? "One board is unlikely to be traversed directly, but it still influences nearby play through hazards, alternate space, or the shape of the racing line. If table space is tight, you can omit it, though the course may play a little differently."
-        : "Some boards are unlikely to be traversed directly, but they still influence nearby play through hazards, alternate space, or the shape of the racing line. If table space is tight, you can omit them, though the course may play a little differently."
+      limitedFootprintCount === 1
+        ? (
+          zeroRouteInfluenceCount > 0
+            ? "One board has little or no direct race footprint. This is mainly a table-space observation: the course uses only a small part of that physical board."
+            : "One board sees only a small part of its area used by the race. This can be completely reasonable when the course needs only a narrow corridor or edge section."
+        )
+        : "Some boards see only a small part of their area used by the race. This is a table-space observation, not a suggestion that those boards are unnecessary."
     ));
   }
 
@@ -813,4 +840,4 @@ export function clearCourseNotesCache(scenario = null) {
     notesCache.delete(scenario);
   }
 }
-// VERSION END: v49ag-target-fit-hydration
+// VERSION END: v49bx-ablation-gated-board-cleanup

@@ -8,7 +8,7 @@
   <meta name="mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="mobile-web-app-title" content="RoboRally" />
   <meta name="application-name" content="RoboRally Course Generator" />
-  <meta name="app-version" content="20260906075651" />
+  <meta name="app-version" content="20260916180817" />
   <title>RoboRally Course Generator</title>
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="icon" type="image/png" sizes="16x16" href="./assets/icons/favicon-16.png" />
@@ -458,14 +458,47 @@
         0 16px 30px rgba(12, 16, 20, 0.18);
     }
 
-    .map-inspection-control {
+    .map-inspection-controls {
+      display: flex;
+      gap: 10px;
+      align-items: end;
+      flex-wrap: wrap;
       margin: 12px 0 8px;
+    }
+
+    .map-inspection-control {
+      margin: 0;
       color: rgba(31, 40, 47, 0.82);
+      width: min(260px, 100%);
       max-width: 320px;
     }
 
     .map-inspection-control select {
       width: 100%;
+    }
+
+    .map-inspection-control > span {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 12px;
+      color: rgba(31, 40, 47, 0.82);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .map-inspection-control .variant-picker {
+      width: 100%;
+    }
+
+    .map-inspection-control .variant-menu {
+      min-width: 100%;
+    }
+
+    .dev-trace-option input {
+      width: 16px;
+      height: 16px;
+      accent-color: var(--accent);
+      flex: 0 0 auto;
     }
 
     .meta-strip {
@@ -1298,7 +1331,13 @@
         grid-column: 1 / -1;
       }
 
+      .map-inspection-controls {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
       .map-inspection-control {
+        width: 100%;
         max-width: none;
       }
 
@@ -1337,6 +1376,10 @@
       }
 
       .optional-rules-fields {
+        grid-template-columns: 1fr;
+      }
+
+      .map-inspection-controls {
         grid-template-columns: 1fr;
       }
 
@@ -1413,7 +1456,7 @@
             <option value="fastest">Fastest</option>
             <option value="fast">Fast</option>
             <option value="standard" selected>Standard</option>
-            <option value="balanced">Balanced</option>
+            <option value="balanced">Careful</option>
             <option value="thorough">Thorough</option>
           </select>
         </label>
@@ -1545,12 +1588,17 @@
           <p id="rules-advice-note" class="rules-note rules-advice-note hidden"></p>
         </div>
       </div>
-      <label id="trace-leg-label" class="map-inspection-control hidden">
-        Trace leg
-        <select id="leg-select">
-          <option value="all" selected>All legs</option>
-        </select>
-      </label>
+      <div id="trace-leg-label" class="map-inspection-controls hidden">
+        <label class="map-inspection-control">
+          Trace legs
+          <select id="leg-select" aria-label="Trace legs internal state">
+            <option value="all" selected>All legs</option>
+          </select>
+        </label>
+        <div id="trace-start-picker-host" class="map-inspection-control">
+          <span>Visible starts</span>
+        </div>
+      </div>
       <canvas id="canvas"></canvas>
       <div class="meta-strip">
         <span class="pill">Orange square: prohibited starting space</span>
