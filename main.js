@@ -1,6 +1,6 @@
-// VERSION START: v49cs-normal-selector-shadow-calibration
+// VERSION START: v49dc-current-owner-reporting-cleanup
 // Robo Rally Course Randomizer - production runtime
-const MAIN_BUILD_ID = "v49cs-normal-selector-shadow-calibration";
+const MAIN_BUILD_ID = "v49dc-current-owner-reporting-cleanup";
 // Mobile browsers may auto-detect number-like rule text and restyle it as a
 // tappable link even though the app emitted ordinary text. Keep rules/course
 // annotations visually plain; this is presentation-only and does not disable
@@ -57,7 +57,7 @@ const versionedPath = (path) => `${path}${VERSION_SUFFIX}`;
 
 const [
   { render },
-  { ANALYZE_BUILD_ID, analyzeCourse, analyzeFullCourse, analyzeFullCourseCooperative, analyzeFlagLeg, buildStartOccupancyMap, clearAnalysisCaches, evaluateFullCourseFocusPaymentCurveUnderOccupancy, evaluateRouteUpgradePotential, estimateInitialUpgradeOpportunitiesRemaining, getAnalysisTelemetrySnapshot, getDamageEconomyTelemetrySnapshot, getCourseMaxEnergy, getCourseStartingEnergy, getCourseStartingUpgradeCards, getRouteEnergyEconomyConfig, getRouteEnergyGainUtility, getRouteMarginalEnergyUtility, getRouteUpgradePotential, recomputeFirstLegPressure, rescoreFixedRouteUpgradeEconomy, resetAnalysisTelemetry, ROUTE_ENERGY_ECONOMY_DEFAULTS, scoreFlagArea, summarizeDamageEconomyFoundationForRoute, summarizeRegisterEquivalentLedger, summarizeCheapSearchRegisterEquivalentShadow, summarizeDamageShadowForRoute, summarizeIntrinsicRouteForecastConfidence, summarizePowerUpOpportunityBenchmark, summarizeProgramSequencePressure, summarizePowerUpProgramFeasibility, summarizePathfinderObjectiveAudit, summarizeTrafficOwnershipAudit, summarizeFixedRouteBoardAblation },
+  { ANALYZE_BUILD_ID, analyzeCourse, analyzeFullCourse, analyzeFullCourseCooperative, analyzeFlagLeg, buildStartOccupancyMap, clearAnalysisCaches, evaluateFullCourseFocusPaymentCurveUnderOccupancy, evaluateRouteUpgradePotential, estimateInitialUpgradeOpportunitiesRemaining, getAnalysisTelemetrySnapshot, getDamageEconomyTelemetrySnapshot, getCourseMaxEnergy, getCourseStartingEnergy, getCourseStartingUpgradeCards, getRouteEnergyEconomyConfig, getRouteEnergyGainUtility, getRouteMarginalEnergyUtility, getRouteUpgradePotential, recomputeFirstLegPressure, rescoreFixedRouteUpgradeEconomy, resetAnalysisTelemetry, ROUTE_ENERGY_ECONOMY_DEFAULTS, scoreFlagArea, summarizeDamageEconomyFoundationForRoute, summarizeRegisterEquivalentLedger, summarizeCheapSearchRegisterEquivalentShadow, summarizeIntrinsicRouteForecastConfidence, summarizePowerUpOpportunityBenchmark, summarizeProgramSequencePressure, summarizePowerUpProgramFeasibility, summarizePathfinderObjectiveAudit, summarizeTrafficOwnershipAudit, summarizeFixedRouteBoardAblation },
   {
     buildMainFootprintTiles,
     buildResolvedMap,
@@ -613,6 +613,13 @@ const SCENARIO_RENDER_INTERVAL_MS = 125;
 const BOARD_PROFILE_HAZARD_DENSITY_THRESHOLD = 0.16;
 const BOARD_PROFILE_HAZARD_DENSITY_WEIGHT = 2.4;
 const SAVED_SCENARIO_KEY = "roborally-course-generator:last-scenario";
+// Frozen observational fallback from the accepted v49cy 9-candidate Any-difficulty
+// Short/Medium/Long calibration batch. These are normalization anchors for the
+// Dev uncertainty shadow only; they are NOT production difficulty thresholds.
+// v49db observational uncertainty coupling. Existing forecast confidence/exposure
+// remains the baseline owner. RE-turn difficulty may only add uncertainty above
+// the empirical median; it never discounts existing forecast uncertainty.
+// Provisional Dev curve: q75 receives +20%; quadratic growth caps at +60%.
 const AUDIT_RENDER_MARGIN = 30;
 const BOARD_VIEW_MODES = {
   photos: "photos",
@@ -10420,511 +10427,6 @@ function getPayToWinAnalysisOptions(options = {}, playerCount = 4) {
     : options;
 }
 
-function getRouteEconomyReserveSamples(config) {
-  if (!(config.maxEnergy > 0)) return [];
-  const candidates = [1, config.startingEnergy, 6]
-    .map((energy) => clamp(Math.floor(Number(energy) || 0), 0, Math.max(0, config.maxEnergy - 1)));
-  return [...new Set(candidates)].sort((a, b) => a - b);
-}
-
-function buildRouteEnergyEconomyShadow(tileMap, startAnalyses = [], options = {}, benchmark = null) {
-  const config = getRouteEnergyEconomyConfig(options);
-  const routes = (startAnalyses || [])
-    .map((analysis) => ({ index: analysis?.index, route: analysis?.fullCourseRoute }))
-    .filter((entry) => entry.route && Array.isArray(entry.route.transitions) && entry.route.transitions.length);
-  const medianActions = medianValue(routes.map((entry) => entry.route.actions ?? entry.route.transitions.length));
-  const representative = routes.length
-    ? [...routes].sort((a, b) => Math.abs((a.route.actions ?? a.route.transitions.length) - medianActions) - Math.abs((b.route.actions ?? b.route.transitions.length) - medianActions))[0]
-    : null;
-  const route = representative?.route ?? null;
-  const horizonTurns = Number(benchmark?.medianFullCourseTurns) > 0
-    ? Number(benchmark.medianFullCourseTurns)
-    : (route ? route.transitions.length / config.registersPerTurn : 0);
-  const registerScore = Number(benchmark?.registerScoreMedian) > 0 ? Number(benchmark.registerScoreMedian) : null;
-  // P2W no longer uses a generic marginal-energy curve. Final pricing replays
-  // each coherent route under the actual v45 cards+Energy state after payment.
-  const p2wMarginals = [];
-  const timeZeroLevels = Array.from({ length: config.maxEnergy + 1 }, (_, energy) => ({
-    energy,
-    utilityR: Number(getRouteUpgradePotential(
-      energy,
-      horizonTurns,
-      config.startingUpgradeCards,
-      options,
-      horizonTurns
-    ).toFixed(3))
-  }));
-  const reserveSamples = getRouteEconomyReserveSamples(config);
-  const waitRegisterTurns = 1 / config.registersPerTurn;
-  const waitTempoCostR = registerScore
-    ? Number((Number(benchmark?.registerTempoCost ?? registerScore) / registerScore).toFixed(3))
-    : null;
-  const battery = [];
-  const chopShop = [];
-  const powerUp = [];
-  const buildEnergySensitivity = (remainingTurns, initialRemaining) => reserveSamples.map((energy) => ({
-    energy,
-    valueR: Number(getRouteMarginalEnergyUtility(
-      energy,
-      remainingTurns,
-      initialRemaining,
-      options,
-      horizonTurns
-    ).plus.toFixed(3))
-  }));
-  if (route) {
-    const seenBattery = new Set();
-    const seenChopShop = new Set();
-    const visitPoints = (transition) => {
-      const points = [];
-      const add = (point) => {
-        if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return;
-        const key = `${point.x},${point.y}`;
-        if (!points.some((item) => item.key === key)) points.push({ key, x: point.x, y: point.y });
-      };
-      add(transition?.from);
-      (transition?.traversed || []).forEach((step) => { add(step?.from); add(step?.to); });
-      add(transition?.to);
-      return points;
-    };
-    const actionHistory = Array.isArray(route.actionHistory)
-      ? route.actionHistory
-      : route.transitions.map((item) => item?.action).filter(Boolean);
-    route.transitions.forEach((transition, index) => {
-      // Preserve the existing route-point treatment for Chop Shops.
-      const elapsedTurns = index / config.registersPerTurn;
-      const remainingTurns = Math.max(0, horizonTurns - elapsedTurns);
-      const initialRemaining = estimateInitialUpgradeOpportunitiesRemaining(elapsedTurns, horizonTurns, config);
-      visitPoints(transition).forEach((point) => {
-        const features = tileMap?.get?.(point.key)?.features || [];
-        if (features.some((feature) => feature.type === "chopShop") && !seenChopShop.has(point.key)) {
-          seenChopShop.add(point.key);
-          const reserveSensitivity = reserveSamples.map((energy) => {
-            const energyOptionR = getRouteMarginalEnergyUtility(
-              energy,
-              remainingTurns,
-              initialRemaining,
-              options,
-              horizonTurns
-            ).plus;
-            const cardOptionR = Math.max(0,
-              getRouteUpgradePotential(energy, remainingTurns, initialRemaining + 1, options, horizonTurns) -
-              getRouteUpgradePotential(energy, remainingTurns, initialRemaining, options, horizonTurns)
-            );
-            return {
-              energy,
-              energyOptionR: Number(energyOptionR.toFixed(3)),
-              cardOptionR: Number(cardOptionR.toFixed(3)),
-              shadowR: Number(Math.max(energyOptionR, cardOptionR).toFixed(3)),
-              choice: cardOptionR > energyOptionR + 1e-9 ? "card" : "energy"
-            };
-          });
-          chopShop.push({
-            turn: Number(elapsedTurns.toFixed(2)),
-            remainingTurns: Number(remainingTurns.toFixed(2)),
-            initialUpgradeOpportunities: initialRemaining,
-            reserveSensitivity,
-            staticRouteWeight: getUpgradeFeaturePenaltyForAudit("chopShop", options, Boolean(options.upgradeWorld))
-          });
-        }
-      });
-
-      // Battery energy is collected at the post-register landing boundary. Merely
-      // crossing a Battery during a movement transition does not create a charging
-      // opportunity for the following Power Up register.
-      const landing = transition?.to;
-      if (!landing || !Number.isFinite(landing.x) || !Number.isFinite(landing.y)) return;
-      const landingKey = `${landing.x},${landing.y}`;
-      const landingFeatures = tileMap?.get?.(landingKey)?.features || [];
-      if (!landingFeatures.some((feature) => feature.type === "battery")) return;
-
-      const batteryElapsedTurns = (index + 1) / config.registersPerTurn;
-      const batteryRemainingTurns = Math.max(0, horizonTurns - batteryElapsedTurns);
-      const batteryInitialRemaining = estimateInitialUpgradeOpportunitiesRemaining(
-        batteryElapsedTurns,
-        horizonTurns,
-        config
-      );
-      const encounterKey = `${landingKey}:${index}`;
-      if (seenBattery.has(encounterKey)) return;
-      seenBattery.add(encounterKey);
-
-      const boundaryAbsoluteActions = index + 1;
-      const priorHistory = actionHistory.slice(0, boundaryAbsoluteActions);
-      const programFeasibility = typeof summarizePowerUpProgramFeasibility === "function"
-        ? summarizePowerUpProgramFeasibility(priorHistory, boundaryAbsoluteActions)
-        : null;
-      const powerUpLegal = programFeasibility
-        ? Boolean(programFeasibility.powerUp?.feasible)
-        : true;
-      const powerUpAgainLegal = programFeasibility
-        ? Boolean(programFeasibility.powerUpAgain?.feasible)
-        : ((boundaryAbsoluteActions + 1) % config.registersPerTurn) !== 0;
-      const powerUpReason = programFeasibility?.powerUp?.reason ?? null;
-      const powerUpAgainReason = programFeasibility?.powerUpAgain?.reason ?? null;
-      const powerUpPressure = powerUpLegal && typeof summarizeProgramSequencePressure === "function"
-        ? summarizeProgramSequencePressure(priorHistory, boundaryAbsoluteActions, ["WAIT"], options)
-        : null;
-      const powerUpAgainPressure = powerUpAgainLegal && typeof summarizeProgramSequencePressure === "function"
-        ? summarizeProgramSequencePressure(priorHistory, boundaryAbsoluteActions, ["WAIT", "WAIT"], options)
-        : null;
-      const powerUpCardPressureR = registerScore && Number.isFinite(powerUpPressure?.penalty)
-        ? Number((powerUpPressure.penalty / registerScore).toFixed(3))
-        : null;
-      const powerUpAgainCardPressureR = registerScore && Number.isFinite(powerUpAgainPressure?.penalty)
-        ? Number((powerUpAgainPressure.penalty / registerScore).toFixed(3))
-        : null;
-      const reserveSensitivity = reserveSamples.map((energy) => {
-        const arrivalValueR = getRouteEnergyGainUtility(
-          energy,
-          1,
-          batteryRemainingTurns,
-          batteryInitialRemaining,
-          options,
-          horizonTurns
-        );
-        // The reserve sample is the pre-arrival reserve. The Battery's +1E happens
-        // first; Power Up/Again values below are additional charging opportunities
-        // from the resulting reserve.
-        const energyAfterArrival = clamp(energy + 1, 0, config.maxEnergy);
-        const powerUpElapsed = batteryElapsedTurns + waitRegisterTurns;
-        const powerUpRemaining = Math.max(0, horizonTurns - powerUpElapsed);
-        const powerUpInitialRemaining = estimateInitialUpgradeOpportunitiesRemaining(
-          powerUpElapsed,
-          horizonTurns,
-          config
-        );
-        const powerUpEnergyR = powerUpLegal
-          ? getRouteEnergyGainUtility(
-            energyAfterArrival,
-            2,
-            powerUpRemaining,
-            powerUpInitialRemaining,
-            options,
-            horizonTurns
-          )
-          : null;
-        const energyAfterPowerUp = clamp(energyAfterArrival + 2, 0, config.maxEnergy);
-        const againElapsed = powerUpElapsed + waitRegisterTurns;
-        const againRemaining = Math.max(0, horizonTurns - againElapsed);
-        const againInitialRemaining = estimateInitialUpgradeOpportunitiesRemaining(
-          againElapsed,
-          horizonTurns,
-          config
-        );
-        const againAdditionalEnergyR = powerUpAgainLegal
-          ? getRouteEnergyGainUtility(
-            energyAfterPowerUp,
-            2,
-            againRemaining,
-            againInitialRemaining,
-            options,
-            horizonTurns
-          )
-          : null;
-        const powerUpAgainEnergyR = powerUpAgainLegal && Number.isFinite(powerUpEnergyR) && Number.isFinite(againAdditionalEnergyR)
-          ? powerUpEnergyR + againAdditionalEnergyR
-          : null;
-        const oneTempoR = Number.isFinite(waitTempoCostR) ? waitTempoCostR : null;
-        const twoTempoR = Number.isFinite(waitTempoCostR) ? waitTempoCostR * 2 : null;
-        const powerUpNetR = powerUpLegal && Number.isFinite(powerUpEnergyR) && Number.isFinite(oneTempoR) && Number.isFinite(powerUpCardPressureR)
-          ? powerUpEnergyR - oneTempoR - powerUpCardPressureR
-          : null;
-        const powerUpAgainNetR = powerUpAgainLegal && Number.isFinite(twoTempoR) && Number.isFinite(powerUpAgainCardPressureR)
-          ? powerUpAgainEnergyR - twoTempoR - powerUpAgainCardPressureR
-          : null;
-        return {
-          energy,
-          arrivalValueR: Number(arrivalValueR.toFixed(3)),
-          powerUpLegal,
-          powerUpReason,
-          powerUpEnergyR: Number.isFinite(powerUpEnergyR) ? Number(powerUpEnergyR.toFixed(3)) : null,
-          powerUpCardPressureR,
-          powerUpNetBeforePositionR: Number.isFinite(powerUpNetR)
-            ? Number(powerUpNetR.toFixed(3))
-            : null,
-          powerUpAgainLegal,
-          powerUpAgainReason,
-          powerUpAgainEnergyR: Number.isFinite(powerUpAgainEnergyR) ? Number(powerUpAgainEnergyR.toFixed(3)) : null,
-          powerUpAgainAdditionalEnergyR: Number.isFinite(againAdditionalEnergyR) ? Number(againAdditionalEnergyR.toFixed(3)) : null,
-          powerUpAgainCardPressureR,
-          powerUpAgainNetBeforePositionR: Number.isFinite(powerUpAgainNetR)
-            ? Number(powerUpAgainNetR.toFixed(3))
-            : null
-        };
-      });
-      battery.push({
-        turn: Number(batteryElapsedTurns.toFixed(2)),
-        remainingTurns: Number(batteryRemainingTurns.toFixed(2)),
-        initialUpgradeOpportunities: batteryInitialRemaining,
-        nextRegister: programFeasibility?.nextRegister ?? ((boundaryAbsoluteActions % config.registersPerTurn) + 1),
-        waitRegisterTurns: Number(waitRegisterTurns.toFixed(3)),
-        waitTempoCostR,
-        currentProgramFeasible: programFeasibility?.currentProgramFeasible ?? null,
-        currentProgramRequiresAgain: programFeasibility?.currentProgramRequiresAgain ?? null,
-        powerUpLegal,
-        powerUpReason,
-        powerUpCardPressureR,
-        powerUpAgainCardPressureR,
-        powerUpAgainLegal,
-        powerUpAgainReason,
-        reserveSensitivity,
-        staticRouteWeight: getUpgradeFeaturePenaltyForAudit("battery", options, Boolean(options.upgradeWorld))
-      });
-    });
-    const sampleCount = Math.min(5, route.transitions.length);
-    for (let sample = 0; sample < sampleCount; sample += 1) {
-      const index = Math.min(route.transitions.length - 1, Math.floor(((sample + 0.5) * route.transitions.length) / sampleCount));
-      const elapsedTurns = index / config.registersPerTurn;
-      const remainingTurns = Math.max(0, horizonTurns - elapsedTurns);
-      const initialRemaining = estimateInitialUpgradeOpportunitiesRemaining(elapsedTurns, horizonTurns, config);
-      const strategicScore = Number(benchmark?.powerUpStrategicDeltaMedian);
-      powerUp.push({
-        turn: Number(elapsedTurns.toFixed(2)),
-        remainingTurns: Number(remainingTurns.toFixed(2)),
-        initialUpgradeOpportunities: initialRemaining,
-        reserveSensitivity: buildEnergySensitivity(remainingTurns, initialRemaining),
-        waitTempoCostR,
-        strategicDeltaR: registerScore && Number.isFinite(strategicScore) ? Number((strategicScore / registerScore).toFixed(3)) : null
-      });
-    }
-  }
-  const selectedPoints = [0, 0.5, 0.9].map((fraction) => {
-    const elapsed = horizonTurns * fraction;
-    const remainingTurns = Math.max(0, horizonTurns - elapsed);
-    const initialOps = estimateInitialUpgradeOpportunitiesRemaining(elapsed, horizonTurns, config);
-    const detail = evaluateRouteUpgradePotential(
-      config.startingEnergy,
-      remainingTurns,
-      initialOps,
-      options,
-      horizonTurns
-    );
-    return {
-      turn: Number(elapsed.toFixed(2)),
-      remainingTurns: Number(remainingTurns.toFixed(2)),
-      initialUpgradeOpportunities: initialOps,
-      installCapacity: detail.installCapacity,
-      initialInstallCapacity: detail.initialInstallCapacity,
-      futureInstallCapacity: detail.futureInstallCapacity,
-      levels: Array.from({ length: config.maxEnergy + 1 }, (_, energy) => Number(getRouteUpgradePotential(
-        energy,
-        remainingTurns,
-        initialOps,
-        options,
-        horizonTurns
-      ).toFixed(3)))
-    };
-  });
-  return {
-    active: true,
-    method: "route-energy-conversion-shadow-v1.2",
-    representativeStartIndex: representative?.index ?? null,
-    config,
-    horizonTurns: Number(horizonTurns.toFixed(2)),
-    registerScore,
-    reserveSamples,
-    p2wMarginals,
-    timeZeroLevels,
-    selectedPoints,
-    battery,
-    powerUp,
-    chopShop
-  };
-}
-
-
-
-function buildCourseEnergyEconomyDiagnostics(scenario) {
-  if (!scenario?.goalTileMap || scenario.lighterGame) return null;
-  const firstLeg = scenario.sequence?.firstLeg;
-  const routeStarts = (firstLeg?.starts || []).filter((item) => (
-    item?.reachable && item?.fullCourseRoute && Array.isArray(item.fullCourseRoute.transitions) && item.fullCourseRoute.transitions.length
-  ));
-  if (!routeStarts.length) return null;
-
-  const options = {
-    ...(scenario.preferences || {}),
-    playerCount: scenario.playerCount ?? scenario.preferences?.playerCount,
-    upgradeWorld: Boolean(scenario.upgradeWorld ?? scenario.preferences?.upgradeWorld),
-    payToWin: Boolean(scenario.payToWin || scenario.subsidizedStarts),
-    subsidizedStarts: Boolean(scenario.subsidizedStarts)
-  };
-  const benchmark = typeof summarizePowerUpOpportunityBenchmark === "function"
-    ? summarizePowerUpOpportunityBenchmark(
-      scenario.goalTileMap,
-      routeStarts,
-      firstLeg?.flags || scenario.checkpoints || [],
-      options
-    )
-    : null;
-  const config = getRouteEnergyEconomyConfig(options);
-  const encounters = [];
-
-  routeStarts.forEach((startAnalysis) => {
-    const route = startAnalysis.fullCourseRoute;
-    const routeTurns = (route.actions ?? route.transitions.length) / config.registersPerTurn;
-    const routeBenchmark = benchmark
-      ? { ...benchmark, medianFullCourseActions: route.actions ?? route.transitions.length, medianFullCourseTurns: routeTurns }
-      : null;
-    const routeShadow = buildRouteEnergyEconomyShadow(
-      scenario.goalTileMap,
-      [startAnalysis],
-      options,
-      routeBenchmark
-    );
-    (routeShadow.battery || []).forEach((battery) => {
-      const progress = routeShadow.horizonTurns > 0 ? battery.turn / routeShadow.horizonTurns : 0;
-      encounters.push({
-        ...battery,
-        startIndex: startAnalysis.index,
-        horizonTurns: routeShadow.horizonTurns,
-        progress: Number(clamp(progress, 0, 1).toFixed(3))
-      });
-    });
-  });
-
-  const sorted = [...encounters].sort((a, b) => a.progress - b.progress || a.turn - b.turn || a.startIndex - b.startIndex);
-  const representative = [];
-  const addUnique = (entry) => {
-    if (!entry) return;
-    const key = `${entry.startIndex}:${entry.turn}:${entry.remainingTurns}`;
-    if (!representative.some((item) => `${item.startIndex}:${item.turn}:${item.remainingTurns}` === key)) {
-      representative.push(entry);
-    }
-  };
-  if (sorted.length) {
-    addUnique(sorted[0]);
-    addUnique([...sorted].sort((a, b) => Math.abs(a.progress - 0.5) - Math.abs(b.progress - 0.5))[0]);
-    addUnique(sorted[sorted.length - 1]);
-  }
-  representative.sort((a, b) => a.progress - b.progress || a.turn - b.turn);
-
-  const medianActions = medianValue(routeStarts.map((entry) => entry.fullCourseRoute.actions ?? entry.fullCourseRoute.transitions.length));
-  const medianTurns = medianActions / config.registersPerTurn;
-  const productionMetadata = scenario.sequence?.firstLeg?.summary?.coursePreflight?.routeAwareBatteryScoring ?? null;
-  const productionRewardScores = routeStarts
-    .map((entry) => Number(
-      entry.fullCourseRoute?.routeEnergyEconomyRewardScore ??
-      entry.fullCourseRoute?.batteryEconomyRewardScore
-    ))
-    .filter(Number.isFinite);
-  const productionBatteryRewardScores = routeStarts
-    .map((entry) => Number(entry.fullCourseRoute?.batteryEconomyRewardScore))
-    .filter(Number.isFinite);
-  const productionPowerUpRewardScores = routeStarts
-    .map((entry) => Number(entry.fullCourseRoute?.powerUpEconomyRewardScore))
-    .filter(Number.isFinite);
-  const productionChopShopRewardScores = routeStarts
-    .map((entry) => Number(entry.fullCourseRoute?.chopShopEconomyRewardScore))
-    .filter(Number.isFinite);
-  const productionPowerUpUses = routeStarts
-    .map((entry) => (entry.fullCourseRoute?.transitions ?? []).filter(
-      (transition) => transition?.action === "WAIT"
-    ).length)
-    .filter(Number.isFinite);
-  const productionOpeningReserves = routeStarts.map((entry) => Number(entry.fullCourseRoute?.routeEnergyShadowReserveStart)).filter(Number.isFinite);
-  const productionEndingReserves = routeStarts
-    .map((entry) => entry.fullCourseRoute?.routeEnergyShadowReserveEnd)
-    .filter((value) => value !== null && value !== undefined)
-    .map(Number)
-    .filter(Number.isFinite);
-  const overallShadow = buildRouteEnergyEconomyShadow(
-    scenario.goalTileMap,
-    routeStarts,
-    options,
-    benchmark ? { ...benchmark, medianFullCourseActions: medianActions, medianFullCourseTurns: medianTurns } : null
-  );
-
-  return {
-    active: true,
-    method: "course-route-upgrade-economy-diagnostics-v18-flat",
-    routeCount: routeStarts.length,
-    productionEnergyScoring: productionMetadata
-      ? {
-        ...productionMetadata,
-        selectedRouteRewardMedian: productionRewardScores.length
-          ? Number(medianValue(productionRewardScores).toFixed(2))
-          : 0,
-        selectedRouteRewardMax: productionRewardScores.length
-          ? Number(Math.max(...productionRewardScores).toFixed(2))
-          : 0,
-        selectedRouteBatteryRewardMedian: productionBatteryRewardScores.length
-          ? Number(medianValue(productionBatteryRewardScores).toFixed(2))
-          : 0,
-        selectedRouteBatteryRewardMax: productionBatteryRewardScores.length
-          ? Number(Math.max(...productionBatteryRewardScores).toFixed(2))
-          : 0,
-        selectedRoutePowerUpRewardMedian: productionPowerUpRewardScores.length
-          ? Number(medianValue(productionPowerUpRewardScores).toFixed(2))
-          : 0,
-        selectedRoutePowerUpRewardMax: productionPowerUpRewardScores.length
-          ? Number(Math.max(...productionPowerUpRewardScores).toFixed(2))
-          : 0,
-        selectedRouteChopShopRewardMedian: productionChopShopRewardScores.length ? Number(medianValue(productionChopShopRewardScores).toFixed(2)) : 0,
-        selectedRouteChopShopRewardMax: productionChopShopRewardScores.length ? Number(Math.max(...productionChopShopRewardScores).toFixed(2)) : 0,
-        selectedRouteOpeningReserveMedian: productionOpeningReserves.length ? Number(medianValue(productionOpeningReserves).toFixed(2)) : null,
-        selectedRoutePowerUpUsesMedian: productionPowerUpUses.length
-          ? Number(medianValue(productionPowerUpUses).toFixed(2))
-          : 0,
-        selectedRoutePowerUpUsesMax: productionPowerUpUses.length
-          ? Math.max(...productionPowerUpUses)
-          : 0,
-        selectedRouteEndingReserveMedian: productionEndingReserves.length
-          ? Number(medianValue(productionEndingReserves).toFixed(2))
-          : config.startingEnergy,
-        selectedRouteEndingReserveMax: productionEndingReserves.length
-          ? Number(Math.max(...productionEndingReserves).toFixed(2))
-          : config.startingEnergy
-      }
-      : null,
-    batteryEncounterCount: encounters.length,
-    batteryRouteCount: new Set(encounters.map((entry) => entry.startIndex)).size,
-    config,
-    horizonTurns: overallShadow.horizonTurns,
-    reserveSamples: overallShadow.reserveSamples,
-    representativeBatteryEncounters: representative,
-    selectedPoints: overallShadow.selectedPoints,
-    benchmark,
-    featureWeights: buildUpgradeFeatureWeightAudit(options)
-  };
-}
-
-function getUpgradeFeaturePenaltyForAudit(featureType, options = {}, upgradeWorld = false) {
-  try {
-    const value = getTilePenaltyForFeature(
-      { type: featureType },
-      {
-        ...options,
-        batteryActive: true,
-        lighterGame: false,
-        upgradeWorld
-      }
-    );
-    return Number.isFinite(value) ? Number(value.toFixed(2)) : null;
-  } catch {
-    return null;
-  }
-}
-
-function buildUpgradeFeatureWeightAudit(options = {}) {
-  const currentUpgradeWorld = Boolean(options.upgradeWorld);
-  return {
-    active: true,
-    currentUpgradeWorld,
-    battery: {
-      base: getUpgradeFeaturePenaltyForAudit("battery", options, false),
-      upgradeWorld: getUpgradeFeaturePenaltyForAudit("battery", options, true),
-      current: getUpgradeFeaturePenaltyForAudit("battery", options, currentUpgradeWorld)
-    },
-    chopShop: {
-      base: getUpgradeFeaturePenaltyForAudit("chopShop", options, false),
-      upgradeWorld: getUpgradeFeaturePenaltyForAudit("chopShop", options, true),
-      current: getUpgradeFeaturePenaltyForAudit("chopShop", options, currentUpgradeWorld)
-    }
-  };
-}
-
 function isSubsidizedStartsPricing(options = {}) {
   return Boolean(options.subsidizedStarts);
 }
@@ -11490,7 +10992,7 @@ function summarizeEconomyCompensationObjective(entries = [], adjustmentByIndex =
     adjustmentByIndex
   );
   const balance = summarizeNormalRetainedREBalance(balanceEntries);
-  const penalty = getNormalResidualBalanceSelectionPenalty(balanceEntries);
+  const penalty = getEconomyEnergyActionableResidualBalanceSelectionPenalty(balanceEntries);
   const outliers = rankNormalEffectiveREOutliers(
     balanceEntries,
     NORMAL_EFFECTIVE_RE_OUTLIER_Z
@@ -11517,7 +11019,7 @@ function getEconomyPhaseNormalStyleRemovalPressure(balanceEntries = [], playerCo
     };
   }
 
-  const currentPenalty = getNormalResidualBalanceSelectionPenalty(balanceEntries);
+  const currentPenalty = getEconomyEnergyActionableResidualBalanceSelectionPenalty(balanceEntries);
   if (!(currentPenalty.total > 1e-9)) {
     return {
       wouldPrune: false,
@@ -11535,7 +11037,7 @@ function getEconomyPhaseNormalStyleRemovalPressure(balanceEntries = [], playerCo
   const candidates = balanceEntries.map((entry) => {
     const retained = balanceEntries.filter((item) => item.index !== entry.index);
     if (retained.length < minimumStarts) return null;
-    const afterPenalty = getNormalResidualBalanceSelectionPenalty(retained);
+    const afterPenalty = getEconomyEnergyActionableResidualBalanceSelectionPenalty(retained);
     const improvement = currentPenalty.total - afterPenalty.total;
     const diagnostics = getNormalStartBalanceDiagnostics(
       entry,
@@ -11559,8 +11061,8 @@ function getEconomyPhaseNormalStyleRemovalPressure(balanceEntries = [], playerCo
     };
   }
 
-  // Mirror the one-phase version of the production Normal-style economy removal
-  // preference: a genuine RE outlier first, then material residual improvement.
+  // Mirror the one-phase version of the production economy removal preference:
+  // Energy-actionable RE outlier/dispersion first; literal duration is diagnostic only.
   candidates.sort((left, right) => (
     Number(right.isOutlier) - Number(left.isOutlier) ||
     right.improvement - left.improvement ||
@@ -11591,7 +11093,7 @@ function optimizeEconomyStartingEnergyAdjustments(entries = [], options = {}) {
   const maximumIterations = Math.max(1, entries.length * Math.max(1, maxAdjustment));
 
   for (let iteration = 0; iteration < maximumIterations; iteration += 1) {
-    // v49cn: Energy is an alternative to a Normal-style removal, not a mandate
+    // v49ct: Energy is an alternative to an Energy-actionable RE removal, not a mandate
     // to erase every residual imperfection. Before spending another 1E, ask
     // whether this selector phase would actually prune one start under the same
     // material-improvement rule. If not, preserve the smallest current price.
@@ -11608,8 +11110,8 @@ function optimizeEconomyStartingEnergyAdjustments(entries = [], options = {}) {
         maxAdjustment,
         Math.max(0, (entry.paymentScores?.length ?? 1) - 1)
       );
-      // v49cn keeps v49ck's genuine 1E stepping, but the next loop iteration
-      // now stops as soon as Normal-style removal pressure disappears. A 3E
+      // v49ct keeps v49ck's genuine 1E stepping, but the next loop iteration
+      // now stops as soon as Energy-actionable RE removal pressure disappears. A 3E
       // price can therefore arise only after 1E and 2E were each independently
       // useful AND a material one-start removal was still justified afterward.
       const nextAdjustment = currentAdjustment + 1;
@@ -11775,14 +11277,14 @@ function buildPayToWinEffectiveREPricingState(
     : 0;
   const pricingModel = {
     method: subsidizedStarts
-      ? "selector-aware-effective-re-compensation-first-subsidy-v49cn"
-      : "selector-aware-effective-re-compensation-first-payment-v49cn",
+      ? "selector-aware-effective-re-compensation-first-subsidy-v49ct"
+      : "selector-aware-effective-re-compensation-first-payment-v49ct",
     mode: subsidizedStarts ? "subsidy" : "payment",
     ownership: "completed-effective-re",
     occupancyQualityOwner: "completed-effective-re",
-    energyStepPolicy: "incremental-1E-stop-when-normal-style-prune-no-longer-justified",
+    energyStepPolicy: "incremental-1E-stop-when-energy-actionable-re-prune-no-longer-justified",
     compensationFirst: true,
-    target: "normal-style-prune-avoidance-effective-re-objective",
+    target: "energy-actionable-effective-re-prune-avoidance-objective-duration-diagnostic-only",
     baselineIndex: null,
     baselineFullScore: null,
     centerEffectiveRE: Number(centerRE.toFixed(3)),
@@ -11800,6 +11302,10 @@ function buildPayToWinEffectiveREPricingState(
     ).toFixed(3)),
     rawResidualPenalty: optimized.raw.penalty.total,
     residualPenalty: optimized.final.penalty.total,
+    rawIgnoredDurationPenalty: optimized.raw.penalty.ignoredDuration ?? 0,
+    residualIgnoredDurationPenalty: optimized.final.penalty.ignoredDuration ?? 0,
+    rawNormalStylePenaltyIncludingDuration: optimized.raw.penalty.normalTotal ?? optimized.raw.penalty.total,
+    residualNormalStylePenaltyIncludingDuration: optimized.final.penalty.normalTotal ?? optimized.final.penalty.total,
     rawStdDev: optimized.raw.balance.stdDev,
     residualStdDev: optimized.final.balance.stdDev,
     adjustmentSteps: optimized.steps,
@@ -12289,353 +11795,6 @@ function samplePayToWinKnownSelections(
   return sampled;
 }
 
-
-function buildNormalSelectorShadowProfileState(activeStarts, scoreByIndex) {
-  const values = activeStarts
-    .map((item) => Number(scoreByIndex?.get(item.index)))
-    .filter(Number.isFinite);
-  const center = values.length ? medianValue(values) : 0;
-  return {
-    entries: activeStarts.map((item) => {
-      const fullScore = Number(scoreByIndex?.get(item.index));
-      return {
-        index: item.index,
-        fullScore,
-        registerEquivalent: Number.isFinite(fullScore)
-          ? Number((fullScore - center).toFixed(6))
-          : null
-      };
-    }).filter((entry) => Number.isFinite(entry.fullScore)),
-    costUnit: 1,
-    minScore: values.length ? Math.min(...values) : 0,
-    maxScore: values.length ? Math.max(...values) : 0,
-    pricingModel: {
-      method: "normal-selector-shadow-raw-effective-re-v49cs",
-      centerEffectiveRE: Number(center.toFixed(6)),
-      comparatorOnly: true
-    }
-  };
-}
-
-function summarizeNormalSelectorShadowPhase(
-  activeStarts,
-  scoreByIndex,
-  playerCount,
-  selectors,
-  label
-) {
-  const balanceEntries = activeStarts.map((item) => ({
-    ...item,
-    normalFairnessEffectiveRE: Number(scoreByIndex?.get(item.index)),
-    normalFairnessRegisterCount:
-      item.normalFairnessRegisterCount ??
-      item.fullCourseRoute?.actions ??
-      item.bestActions
-  })).filter((item) => Number.isFinite(item.normalFairnessEffectiveRE));
-  const penalty = getNormalResidualBalanceSelectionPenalty(balanceEntries);
-  const removal = chooseNormalStartBalanceRemoval(balanceEntries, playerCount);
-  const retained = summarizeNormalRetainedREBalance(balanceEntries);
-  return {
-    label,
-    selectors: [...selectors],
-    count: balanceEntries.length,
-    stdDev: retained.stdDev,
-    range: retained.range,
-    worstScoreZ: retained.worstScoreZ,
-    penalty,
-    wouldPrune: Boolean(removal),
-    pruneCandidateIndex: removal?.index ?? null,
-    pruneImprovement: Number((removal?.removalImprovement ?? 0).toFixed(3)),
-    prunePenaltyAfter: Number((removal?.residualPenaltyAfterEstimate ?? penalty.total).toFixed(3))
-  };
-}
-
-function buildNormalSelectorConditionedEconomyShadow(scenario) {
-  if (
-    !isDevViewEnabled() ||
-    !scenario ||
-    scenario.competitiveMode ||
-    scenario.payToWin ||
-    scenario.subsidizedStarts ||
-    scenario.virtualBots
-  ) {
-    return {
-      active: false,
-      reason: "not-ordinary-normal-dev-course"
-    };
-  }
-
-  const firstLeg = scenario.sequence?.firstLeg;
-  const tileMap = scenario.goalTileMap;
-  const playerCount = Math.max(
-    1,
-    Number(scenario.playerCount ?? scenario.preferences?.playerCount ?? 1)
-  );
-  if (!firstLeg || !tileMap) {
-    return { active: false, reason: "missing-first-leg-or-tile-map" };
-  }
-
-  const usableIndexSet = new Set(
-    (scenario.metrics?.usableStarts ?? [])
-      .map((entry) => Number(entry?.index))
-      .filter(Number.isInteger)
-  );
-  const activeStarts = (firstLeg.starts ?? []).filter((item) => (
-    item.reachable &&
-    item.selectedRoute &&
-    item.fullCourseRoute &&
-    Array.isArray(item.fullCourseRoutes) &&
-    item.fullCourseRoutes.length &&
-    Number.isFinite(Number(item.normalFairnessEffectiveRE)) &&
-    (!usableIndexSet.size || usableIndexSet.has(item.index))
-  ));
-
-  const normalScoreByIndex = new Map(activeStarts.map((item) => [
-    item.index,
-    Number(item.normalFairnessEffectiveRE)
-  ]));
-  const normalPhase = summarizeNormalSelectorShadowPhase(
-    activeStarts,
-    normalScoreByIndex,
-    playerCount,
-    [],
-    "normal-current-field"
-  );
-
-  if (activeStarts.length <= playerCount || playerCount <= 1) {
-    return {
-      active: true,
-      evaluated: false,
-      reason: activeStarts.length <= playerCount
-        ? "inactive-no-surplus"
-        : "inactive-single-player",
-      startCount: activeStarts.length,
-      playerCount,
-      normalPhase,
-      selectorSplit: null,
-      earlyPhase: null,
-      latePhase: null,
-      disagreement: false,
-      evaluationCount: 0,
-      scenarioSamples: 0,
-      scenarioSamplesBySelector: {}
-    };
-  }
-
-  const analysisOptions = {
-    ...scenario.preferences,
-    ...scenario,
-    ...getRouteAnalysisVariantOptions(scenario),
-    playerCount,
-    payToWin: true,
-    subsidizedStarts: false,
-    payToWinMaxPayment: 0,
-    selectorShadowZeroEnergyOnly: true,
-    fullCourseTrafficPasses: 1
-  };
-  const pricingOptions = getPayToWinRouteEconomyPricingOptions(
-    firstLeg,
-    analysisOptions
-  );
-  pricingOptions.payToWinMaxPayment = 0;
-  pricingOptions.selectorShadowZeroEnergyOnly = true;
-
-  let evaluationCount = 0;
-  let scenarioSamples = 0;
-  const scenarioSamplesBySelector = {};
-  const selectorStates = new Map();
-  const activeIndices = activeStarts.map((item) => item.index);
-
-  const evaluateFocus = (
-    item,
-    qualityScoreByIndex,
-    knownIndices = [],
-    unresolvedIndices = null
-  ) => {
-    const occupancyByIndex = buildPayToWinQualityOccupancy(
-      activeStarts,
-      item.index,
-      playerCount,
-      qualityScoreByIndex,
-      knownIndices,
-      unresolvedIndices
-    );
-    const evaluation = evaluateFullCourseFocusPaymentCurveUnderOccupancy(
-      tileMap,
-      firstLeg,
-      firstLeg.flags ?? [],
-      item.index,
-      occupancyByIndex,
-      pricingOptions
-    );
-    evaluationCount += 1;
-    const zero = evaluation?.entries?.find((entry) => entry.payment === 0)
-      ?? evaluation?.entries?.[0]
-      ?? null;
-    const value = Number(zero?.fullEffectiveRE);
-    return Number.isFinite(value)
-      ? value
-      : Number(item.normalFairnessEffectiveRE);
-  };
-
-  const selectorOne = new Map();
-  for (const item of activeStarts) {
-    const effectiveRE = evaluateFocus(item, normalScoreByIndex);
-    selectorOne.set(item.index, {
-      adjusted: effectiveRE,
-      full: effectiveRE,
-      paymentScores: [effectiveRE]
-    });
-  }
-  selectorStates.set(1, selectorOne);
-  scenarioSamplesBySelector[1] = activeStarts.length;
-  scenarioSamples += activeStarts.length;
-
-  // Match the economy model's late-selector structure, but keep Energy fixed at
-  // 0 adjustment. Early selector-conditioned RE becomes the attractiveness map
-  // for later known-selection scenarios; no compensation is applied.
-  const earlyQualityByIndex = new Map(activeStarts.map((item) => [
-    item.index,
-    Number(selectorOne.get(item.index)?.full)
-  ]));
-
-  for (let selector = 2; selector <= playerCount; selector += 1) {
-    const state = new Map();
-    selectorStates.set(selector, state);
-    scenarioSamplesBySelector[selector] = 0;
-
-    for (const item of activeStarts) {
-      const otherIndices = activeIndices.filter((index) => index !== item.index);
-      const knownCount = Math.min(otherIndices.length, selector - 1);
-      const knownSamples = samplePayToWinKnownSelections(
-        otherIndices,
-        knownCount,
-        analysisOptions.payToWinLateScenarioSamples ?? 6
-      );
-      const values = [];
-      for (const knownIndices of knownSamples) {
-        const knownSet = new Set(knownIndices);
-        const unresolvedIndices = otherIndices.filter(
-          (index) => !knownSet.has(index)
-        );
-        values.push(evaluateFocus(
-          item,
-          earlyQualityByIndex,
-          knownIndices,
-          unresolvedIndices
-        ));
-        scenarioSamples += 1;
-        scenarioSamplesBySelector[selector] += 1;
-      }
-      const effectiveRE = values.length
-        ? averageValues(values)
-        : Number(earlyQualityByIndex.get(item.index));
-      state.set(item.index, {
-        adjusted: effectiveRE,
-        full: effectiveRE,
-        paymentScores: [effectiveRE]
-      });
-    }
-  }
-
-  const selectorProfileStates = new Map();
-  for (let selector = 1; selector <= playerCount; selector += 1) {
-    const scoreByIndex = new Map(activeStarts.map((item) => [
-      item.index,
-      Number(selectorStates.get(selector)?.get(item.index)?.full)
-    ]));
-    selectorProfileStates.set(
-      selector,
-      buildNormalSelectorShadowProfileState(activeStarts, scoreByIndex)
-    );
-  }
-  const adaptive = getPayToWinAdaptiveSelectorSplit(
-    activeStarts,
-    selectorStates,
-    selectorProfileStates,
-    { registerScore: 1, horizonTurns: null },
-    playerCount,
-    {
-      ...analysisOptions,
-      pricingStateBuilder: (starts, scoreMap) => (
-        buildNormalSelectorShadowProfileState(starts, scoreMap)
-      )
-    }
-  );
-
-  const allSelectors = Array.from({ length: playerCount }, (_, index) => index + 1);
-  const earlySelectors = adaptive.active
-    ? allSelectors.slice(0, adaptive.selectorSplit.cutoffAfter)
-    : allSelectors;
-  const lateSelectors = adaptive.active
-    ? allSelectors.slice(adaptive.selectorSplit.cutoffAfter)
-    : [];
-  const fallbackScoreByIndex = new Map(activeStarts.map((item) => [
-    item.index,
-    Number(selectorOne.get(item.index)?.full)
-  ]));
-  const earlyScoreByIndex = averagePayToWinSelectorScores(
-    selectorStates,
-    earlySelectors,
-    activeStarts,
-    "full",
-    fallbackScoreByIndex
-  );
-  const lateScoreByIndex = lateSelectors.length
-    ? averagePayToWinSelectorScores(
-      selectorStates,
-      lateSelectors,
-      activeStarts,
-      "full",
-      fallbackScoreByIndex
-    )
-    : null;
-  const earlyPhase = summarizeNormalSelectorShadowPhase(
-    activeStarts,
-    earlyScoreByIndex,
-    playerCount,
-    earlySelectors,
-    "selector-early"
-  );
-  const latePhase = lateScoreByIndex
-    ? summarizeNormalSelectorShadowPhase(
-      activeStarts,
-      lateScoreByIndex,
-      playerCount,
-      lateSelectors,
-      "selector-late"
-    )
-    : null;
-  const selectorWouldPrune = Boolean(
-    earlyPhase.wouldPrune || latePhase?.wouldPrune
-  );
-  const disagreement = Boolean(
-    normalPhase.wouldPrune !== selectorWouldPrune ||
-    (latePhase && earlyPhase.wouldPrune !== latePhase.wouldPrune)
-  );
-
-  return {
-    active: true,
-    evaluated: true,
-    method: "same-course-zero-energy-selector-conditioned-normal-shadow-v49cs",
-    behaviorChanged: false,
-    sameCourse: true,
-    freshRouteSearches: 0,
-    energyAdjustment: 0,
-    existingRouteRerankOnly: true,
-    startCount: activeStarts.length,
-    playerCount,
-    normalPhase,
-    earlyPhase,
-    latePhase,
-    selectorSplit: adaptive.selectorSplit,
-    disagreement,
-    selectorWouldPrune,
-    evaluationCount,
-    scenarioSamples,
-    scenarioSamplesBySelector
-  };
-}
 
 function getPayToWinLateCostEntries(
   firstLeg,
@@ -13399,7 +12558,7 @@ function buildEconomyPricedNormalREEntries(entries = [], costKey = "energyCost")
 function summarizeEconomyPricedREPhase(entries = [], costKey = "energyCost") {
   const balanceEntries = buildEconomyPricedNormalREEntries(entries, costKey);
   const balance = summarizeNormalRetainedREBalance(balanceEntries);
-  const penalty = getNormalResidualBalanceSelectionPenalty(balanceEntries);
+  const penalty = getEconomyEnergyActionableResidualBalanceSelectionPenalty(balanceEntries);
   const outliers = rankNormalEffectiveREOutliers(
     balanceEntries,
     NORMAL_EFFECTIVE_RE_OUTLIER_Z
@@ -13515,13 +12674,14 @@ function chooseEconomyCompensatedStartRemoval(
     energyCost: selected.entry.energyCost,
     lateEnergyCost: selected.lateEntry?.lateEnergyCost ?? selected.entry.energyCost,
     registerEquivalent: selected.entry.registerEquivalent,
+    lateRegisterEquivalent: selected.lateEntry?.lateRegisterEquivalent ?? selected.entry.registerEquivalent,
     effectiveREPruned: selected.isOutlier,
     balanceDispersionPruned: !selected.isOutlier,
     residualPenaltyBefore: Number(currentWorstPenalty.toFixed(3)),
     residualPenaltyAfterEstimate: Number(selected.afterWorstPenalty.toFixed(3)),
     removalImprovement: Number(selected.improvement.toFixed(3)),
     reason:
-      `Energy compensation exhausted before Normal-style residual balance; ` +
+      `Energy compensation exhausted before Energy-actionable RE residual balance; ` +
       `removal improves worst early/late residual penalty ` +
       `${Number(currentWorstPenalty.toFixed(3))}->${Number(selected.afterWorstPenalty.toFixed(3))}`
   };
@@ -13561,8 +12721,9 @@ function evaluatePayToWinSelectorAwarePricingState(
 
   // v49ck: all physically/routably valid starts remain offerable while Energy
   // compensation is being attempted. Failure to hit an extreme baseline is not
-  // an availability failure. Only the later Normal-style prune step may remove a
-  // start, and only when doing so materially improves residual effective-RE balance.
+  // an availability failure. Only the later Energy-actionable RE prune step may remove a
+  // start, and only when doing so materially improves RE dispersion/outlier balance.
+  // Literal register-duration disparity remains diagnostic and cannot trigger Energy or pruning.
   const earlyResidual = summarizeEconomyPricedREPhase(
     earlyEntries,
     "energyCost"
@@ -13571,7 +12732,7 @@ function evaluatePayToWinSelectorAwarePricingState(
     ? summarizeEconomyPricedREPhase(lateEntries, "lateEnergyCost")
     : earlyResidual;
   const residualBalance = {
-    method: "selector-aware-compensation-first-normal-re-v49cn",
+    method: "selector-aware-compensation-first-energy-actionable-re-v49ct",
     early: earlyResidual,
     late: lateResidual,
     worstStdDev: Math.max(earlyResidual.stddev, lateResidual.stddev),
@@ -13583,6 +12744,11 @@ function evaluatePayToWinSelectorAwarePricingState(
       earlyResidual.residualPenalty,
       lateResidual.residualPenalty
     ),
+    worstIgnoredDurationPenalty: Math.max(
+      earlyResidual.residualPenaltyComponents?.ignoredDuration ?? 0,
+      lateResidual.residualPenaltyComponents?.ignoredDuration ?? 0
+    ),
+    durationActionableForEnergy: false,
     acceptable: earlyResidual.acceptable && lateResidual.acceptable
   };
   const recommendedRemoval = chooseEconomyCompensatedStartRemoval(
@@ -13617,12 +12783,12 @@ function evaluatePayToWinSelectorAwarePricingState(
     availabilityValid,
     residualBalance,
     reOwnershipAudit: {
-      model: "economy-start-re-ownership-v49cn",
+      model: "economy-start-re-ownership-v49ct",
       observationalOnly: false,
       behaviorChanged: true,
       ownership: "completed-effective-re",
       occupancyQualityOwner: "completed-effective-re",
-      energyStepPolicy: "incremental-1E-stop-when-normal-style-prune-no-longer-justified",
+      energyStepPolicy: "incremental-1E-stop-when-energy-actionable-re-prune-no-longer-justified",
       compensationFirst: true,
       selectorAware: true,
       mode: isSubsidizedStartsPricing(pricingOptions) ? "subsidy" : "payment",
@@ -13632,6 +12798,8 @@ function evaluatePayToWinSelectorAwarePricingState(
           : null,
         postStdDev: earlyResidual.stddev,
         residualPenalty: earlyResidual.residualPenalty,
+        ignoredDurationPenalty: earlyResidual.residualPenaltyComponents?.ignoredDuration ?? 0,
+        normalStylePenaltyIncludingDuration: earlyResidual.residualPenaltyComponents?.normalTotal ?? earlyResidual.residualPenalty,
         nonzeroAdjustments: earlyEntries.filter((entry) => entry.energyCost > 0).length,
         maxAdjustment: earlyEntries.length
           ? Math.max(...earlyEntries.map((entry) => entry.energyCost))
@@ -13643,6 +12811,8 @@ function evaluatePayToWinSelectorAwarePricingState(
           : null,
         postStdDev: lateResidual.stddev,
         residualPenalty: lateResidual.residualPenalty,
+        ignoredDurationPenalty: lateResidual.residualPenaltyComponents?.ignoredDuration ?? 0,
+        normalStylePenaltyIncludingDuration: lateResidual.residualPenaltyComponents?.normalTotal ?? lateResidual.residualPenalty,
         nonzeroAdjustments: latePricingActive
           ? lateEntries.filter((entry) => entry.lateEnergyCost > 0).length
           : earlyEntries.filter((entry) => entry.energyCost > 0).length,
@@ -13758,7 +12928,7 @@ function mergeEconomyTargetedRescueRoutesIntoField(
         ...route,
         score: Number(normalized.score),
         economyTargetedRescue: {
-          model: "prune-gated-extreme-energy-route-discovery-v49cn",
+          model: "prune-gated-direction-aware-extreme-energy-route-discovery-v49ct",
           discoveredStartingEnergy: rescueStartingEnergy,
           normalizedStartingEnergy: baseStartingEnergy
         }
@@ -13781,6 +12951,27 @@ function mergeEconomyTargetedRescueRoutesIntoField(
   };
 }
 
+function getEconomyTargetedRescueDirectionProfile(removal, pricingOptions = {}) {
+  const subsidyMode = isSubsidizedStartsPricing(pricingOptions);
+  const earlyDelta = Number(removal?.registerEquivalent);
+  const lateDelta = Number(removal?.lateRegisterEquivalent);
+  const directional = [earlyDelta, lateDelta].filter(Number.isFinite);
+  const eligible = directional.some((delta) => (
+    subsidyMode ? delta > 1e-6 : delta < -1e-6
+  ));
+  return {
+    mode: subsidyMode ? "subsidy" : "payment",
+    legalEnergyDirection: subsidyMode ? "add-energy-to-higher-RE-start" : "remove-energy-from-lower-RE-start",
+    earlyDelta: Number.isFinite(earlyDelta) ? Number(earlyDelta.toFixed(3)) : null,
+    lateDelta: Number.isFinite(lateDelta) ? Number(lateDelta.toFixed(3)) : null,
+    eligible,
+    reason: eligible
+      ? "legal-energy-direction-can-compensate-target"
+      : "target-is-not-on-compensable-side-of-selector-field"
+  };
+}
+
+
 function attemptEconomyTargetedEnergyRescue({
   baseFirstLeg,
   currentFirstLeg,
@@ -13800,6 +12991,19 @@ function attemptEconomyTargetedEnergyRescue({
   const adjustmentLimit = getStartEnergyAdjustmentLimit(pricingOptions);
   if (!(adjustmentLimit > 0)) {
     return { attempted: false, reason: "no-legal-energy-adjustment" };
+  }
+  const directionProfile = getEconomyTargetedRescueDirectionProfile(
+    removal,
+    pricingOptions
+  );
+  if (!directionProfile.eligible) {
+    return {
+      attempted: false,
+      directionEligible: false,
+      targetIndex,
+      directionProfile,
+      reason: directionProfile.reason
+    };
   }
 
   const baseStartingEnergy = getCourseStartingEnergy(pricingOptions);
@@ -13831,6 +13035,8 @@ function attemptEconomyTargetedEnergyRescue({
       savedPrune: false,
       targetIndex,
       rescueStartingEnergy,
+      directionEligible: true,
+      directionProfile,
       reason: `search-error:${error?.code ?? error?.message ?? "unknown"}`,
       routesDiscovered: 0,
       routesAdded: 0
@@ -13858,6 +13064,8 @@ function attemptEconomyTargetedEnergyRescue({
       savedPrune: false,
       targetIndex,
       rescueStartingEnergy,
+      directionEligible: true,
+      directionProfile,
       reason: "no-new-route-candidate",
       routesDiscovered: rescueRoutes.length,
       routesAdded: 0
@@ -13905,6 +13113,8 @@ function attemptEconomyTargetedEnergyRescue({
       savedPrune: false,
       targetIndex,
       rescueStartingEnergy,
+      directionEligible: true,
+      directionProfile,
       reason: rescuedEconomy?.recommendedRemoval?.index === targetIndex
         ? "same-start-still-pruned"
         : "no-material-residual-improvement",
@@ -13931,6 +13141,8 @@ function attemptEconomyTargetedEnergyRescue({
     savedPrune,
     targetIndex,
     rescueStartingEnergy,
+    directionEligible: true,
+    directionProfile,
     reason: savedPrune ? "prune-avoided" : "different-residual-prune-after-rescue",
     routesDiscovered: rescueRoutes.length,
     routesAdded: currentMerge.addedRoutes,
@@ -13976,15 +13188,17 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
       : null;
   };
 
-  // v49cn: expensive fresh geometry is a last resort. Only a start that the
+  // v49ct: expensive fresh geometry is a last resort. Only a start that the
   // selector-aware compensated field is actually about to prune receives one
   // targeted search at the legal Energy extreme. The newly discovered geometry
   // is normalized back to baseline Energy, inserted as another coherent candidate,
   // and then repriced by the ordinary early/late economy curves.
   const targetedRescueAttemptKeys = new Set();
   const targetedRescueTelemetry = {
-    model: "prune-gated-extreme-energy-route-discovery-v49cn",
+    model: "prune-gated-direction-aware-extreme-energy-route-discovery-v49ct",
     attempts: 0,
+    directionEligibleAttempts: 0,
+    skippedDirectionMismatch: 0,
     accepted: 0,
     savedPrunes: 0,
     routesDiscovered: 0,
@@ -14037,8 +13251,24 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
         currentEconomy,
         removal
       });
+      if (rescue.directionEligible === false) {
+        targetedRescueTelemetry.skippedDirectionMismatch += 1;
+        targetedRescueTelemetry.details.push({
+          index: rescue.targetIndex ?? removal.index,
+          startingEnergy: null,
+          accepted: false,
+          savedPrune: false,
+          reason: rescue.reason ?? "target-is-not-on-compensable-side-of-selector-field",
+          directionProfile: rescue.directionProfile ?? null,
+          routesDiscovered: 0,
+          routesAdded: 0,
+          penaltyBefore: Number(currentEconomy?.penalty ?? NaN),
+          penaltyAfter: null
+        });
+      }
       if (rescue.attempted) {
         targetedRescueTelemetry.attempts += 1;
+        targetedRescueTelemetry.directionEligibleAttempts += 1;
         targetedRescueTelemetry.routesDiscovered += rescue.routesDiscovered ?? 0;
         targetedRescueTelemetry.routesAdded += rescue.routesAdded ?? 0;
         if (rescue.accepted) targetedRescueTelemetry.accepted += 1;
@@ -14049,6 +13279,7 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
           accepted: Boolean(rescue.accepted),
           savedPrune: Boolean(rescue.savedPrune),
           reason: rescue.reason ?? null,
+          directionProfile: rescue.directionProfile ?? null,
           routesDiscovered: rescue.routesDiscovered ?? 0,
           routesAdded: rescue.routesAdded ?? 0,
           penaltyBefore: Number.isFinite(rescue.penaltyBefore) ? rescue.penaltyBefore : null,
@@ -14259,9 +13490,9 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
         mode: isSubsidizedStartsPricing(options) ? "subsidy" : "payment",
         subsidizedStarts: isSubsidizedStartsPricing(options),
         pricingEconomyMethod: "card-aware-fixed-route-expected-economy-v37",
-        pruningPolicy: "selector-aware-re-compensation-targeted-rescue-before-normal-style-prune-v49cn",
+        pruningPolicy: "selector-aware-re-compensation-energy-actionable-targeted-rescue-before-prune-v49ct",
         compensationFirst: true,
-        routeReselectionPolicy: "existing-full-course-candidates-then-prune-gated-energy-specific-rescue-v49cn",
+        routeReselectionPolicy: "existing-full-course-candidates-then-prune-gated-direction-aware-energy-rescue-v49ct",
         freshEnergySpecificReroutes: targetedRescueTelemetry.attempts,
         targetedEnergyRescue: {
           ...targetedRescueTelemetry,
@@ -14873,6 +14104,24 @@ function getNormalResidualBalanceSelectionPenalty(entries = []) {
       "residual-normal-imbalance-is-course-selection-penalty-not-rejection"
   };
 }
+
+function getEconomyEnergyActionableResidualBalanceSelectionPenalty(entries = []) {
+  const normalPenalty = getNormalResidualBalanceSelectionPenalty(entries);
+  const actionableTotal = Math.max(
+    0,
+    (Number(normalPenalty.reDispersion) || 0) +
+      (Number(normalPenalty.outlier) || 0)
+  );
+  return {
+    ...normalPenalty,
+    total: Number(actionableTotal.toFixed(3)),
+    normalTotal: Number((Number(normalPenalty.total) || 0).toFixed(3)),
+    ignoredDuration: Number((Number(normalPenalty.duration) || 0).toFixed(3)),
+    durationActionable: false,
+    policy: "economy-energy-actionable-re-dispersion-outlier-duration-diagnostic-v49ct"
+  };
+}
+
 
 function chooseNormalStartBalanceRemoval(entries, playerCount, stdDevLimit = null) {
   const minimumStarts = Math.max(1, playerCount || 1);
@@ -17590,6 +16839,462 @@ function computeDifficultyRaw(sequence, checkpointPressure = 0) {
   ).toFixed(2));
 }
 
+
+// v49cx observational difficulty ownership ---------------------------------
+// Production difficultyRaw remains unchanged in this revision. v49cu showed
+// that non-tempo burden per programmed register over-normalized long routes and
+// did not order legacy-selected difficulty tiers sensibly. v49cv instead asks
+// how demanding a typical programming turn is: completed effective RE still
+// owns the total non-tempo burden, while the turn ledger contributes only the
+// within-route peak shape. Course aggregation remains route-mixture aware and
+// occupancy weighted, with a deliberately small likely-start upper-tail term.
+// Candidate-pool comparison is lazy Dev Copy All only: generation stores refs
+// to already-built acceptable scenarios but performs no extra route replay.
+const RE_TURN_DIFFICULTY_ROUTE_PEAK_WEIGHT = 0.20;
+const RE_TURN_DIFFICULTY_COURSE_TAIL_WEIGHT = 0.15;
+const RE_TURN_DIFFICULTY_TAIL_QUANTILE = 0.75;
+
+function quantileFinite(values = [], quantile = 0.75) {
+  const ordered = values
+    .map(Number)
+    .filter(Number.isFinite)
+    .sort((left, right) => left - right);
+  if (!ordered.length) return 0;
+  if (ordered.length === 1) return ordered[0];
+  const q = clamp(Number(quantile) || 0, 0, 1);
+  const position = (ordered.length - 1) * q;
+  const low = Math.floor(position);
+  const high = Math.ceil(position);
+  if (low === high) return ordered[low];
+  const mix = position - low;
+  return ordered[low] * (1 - mix) + ordered[high] * mix;
+}
+
+function weightedQuantileFinite(entries = [], quantile = 0.75) {
+  const ordered = entries
+    .map((entry) => ({
+      value: Number(entry?.value),
+      weight: Math.max(0, Number(entry?.weight) || 0)
+    }))
+    .filter((entry) => Number.isFinite(entry.value) && entry.weight > 0)
+    .sort((left, right) => left.value - right.value);
+  if (!ordered.length) return 0;
+  const totalWeight = ordered.reduce((sum, entry) => sum + entry.weight, 0);
+  if (!(totalWeight > 0)) return 0;
+  const target = clamp(Number(quantile) || 0, 0, 1) * totalWeight;
+  let cumulative = 0;
+  for (const entry of ordered) {
+    cumulative += entry.weight;
+    if (cumulative + 1e-9 >= target) return entry.value;
+  }
+  return ordered.at(-1).value;
+}
+
+function getREDifficultyRouteMixtureEntries(scenario, startAnalysis) {
+  const audit = scenario?.sequence?.firstLeg?.summary?.fullCourseTraffic?.routeMixtureOwnershipAudit
+    ?? scenario?.sequence?.firstLeg?.summary?.contextualLegCache?.trafficRouteMixtureOwnershipAudit
+    ?? null;
+  const startAudit = (audit?.perStart ?? []).find((entry) => entry.index === startAnalysis.index);
+  const routes = Array.isArray(startAnalysis?.fullCourseRoutes)
+    ? startAnalysis.fullCourseRoutes
+    : [];
+  const reEntries = (startAudit?.reNativeEntries ?? [])
+    .map((entry) => {
+      const routeIndex = Number(entry?.routeIndex);
+      const route = Number.isInteger(routeIndex) ? routes[routeIndex] : null;
+      const weight = Math.max(0, Number(entry?.weight) || 0);
+      const effectiveRE = Number(entry?.effectiveRE);
+      return route && weight > 0 && Number.isFinite(effectiveRE)
+        ? { route, routeIndex, weight, effectiveRE }
+        : null;
+    })
+    .filter(Boolean);
+  if (reEntries.length) return reEntries;
+
+  const route = startAnalysis?.fullCourseRoute ?? startAnalysis?.selectedRoute ?? null;
+  const effectiveRE = Number(startAnalysis?.normalFairnessEffectiveRE);
+  return route && Number.isFinite(effectiveRE)
+    ? [{ route, routeIndex: null, weight: 1, effectiveRE }]
+    : [];
+}
+
+function summarizeRETurnDifficultyRouteCandidate(
+  scenario,
+  startAnalysis,
+  routeEntry,
+  replayCache,
+  devTiming
+) {
+  const route = routeEntry?.route;
+  const effectiveRE = Number(routeEntry?.effectiveRE);
+  if (!route || !Number.isFinite(effectiveRE)) return null;
+
+  const tileMap = scenario?.goalTileMap;
+  const damageOptions = getDamageFoundationScenarioOptions(scenario);
+  const trafficContext = getDamageFoundationTrafficContext(
+    scenario,
+    startAnalysis.index
+  );
+  const replayStartedAt = typeof performance !== "undefined"
+    ? performance.now()
+    : NaN;
+  const ledger = tileMap && typeof summarizeRegisterEquivalentLedger === "function"
+    ? getCachedRouteReplay(
+      replayCache?.ledgerByRoute,
+      route,
+      () => summarizeRegisterEquivalentLedger(
+        tileMap,
+        route,
+        damageOptions,
+        trafficContext
+      )
+    )
+    : null;
+  addDevTiming(devTiming, "reDifficultyReplayMs", replayStartedAt);
+
+  // v49cx decomposition uses a traffic-free replay for intrinsic ownership.
+  // The existing difficulty ledger above may include a traffic context because it
+  // is used only for turn-shape. Keep a separate cache so component totals never
+  // depend on which diagnostic happened to replay the route first.
+  const intrinsicLedgerStartedAt = typeof performance !== "undefined"
+    ? performance.now()
+    : NaN;
+  const intrinsicLedger = tileMap && typeof summarizeRegisterEquivalentLedger === "function"
+    ? getCachedRouteReplay(
+      replayCache?.intrinsicLedgerByRoute,
+      route,
+      () => summarizeRegisterEquivalentLedger(
+        tileMap,
+        route,
+        damageOptions,
+        null
+      )
+    )
+    : null;
+  addDevTiming(devTiming, "reDifficultyDecompositionReplayMs", intrinsicLedgerStartedAt);
+
+  const programmedRegisters = Math.max(
+    0,
+    Number(ledger?.programmedRegisterRE ?? route?.actions ?? route?.transitions?.length) || 0
+  );
+  if (!(programmedRegisters > 0)) return null;
+  const lostRegisterTempoRE = Math.max(
+    0,
+    Number(ledger?.lostRegisterTempoRE) || 0
+  );
+  const burdenRE = Math.max(
+    0,
+    effectiveRE - programmedRegisters - lostRegisterTempoRE
+  );
+
+  const intrinsicProgrammedRegisters = Math.max(
+    0,
+    Number(intrinsicLedger?.programmedRegisterRE) || programmedRegisters
+  );
+  const intrinsicLostRegisterTempoRE = Math.max(
+    0,
+    Number(intrinsicLedger?.lostRegisterTempoRE) || lostRegisterTempoRE
+  );
+  const intrinsicRE = Number(intrinsicLedger?.observationalSubtotalWithMentalRE);
+  const cleanCardPlausibilityRE = Number(intrinsicLedger?.cleanCardPlausibilityRE) || 0;
+  const damageCardSupplyRE = Number(intrinsicLedger?.damageCardSupplyRE) || 0;
+  const clogRE = Number(intrinsicLedger?.clogRE) || 0;
+  const energyRE = Number(intrinsicLedger?.energyRE) || 0;
+  const intrinsicMentalRE = Number(intrinsicLedger?.mentalRegisterEquivalents) || 0;
+  const downstreamTrafficControlRE = Number.isFinite(intrinsicRE)
+    ? effectiveRE - intrinsicRE
+    : burdenRE - (
+      cleanCardPlausibilityRE + damageCardSupplyRE + clogRE + energyRE + intrinsicMentalRE
+    );
+
+  const turnBurdenShape = (ledger?.turns ?? [])
+    .map((turn) => {
+      const turnRegisters = Math.max(0, Number(turn?.programmedRegisterRE) || 0);
+      if (!(turnRegisters > 0)) return null;
+      const observed = Number(turn?.observationalSubtotalWithMentalRE);
+      const lostTempo = Math.max(0, Number(turn?.lostRegisterTempoRE) || 0);
+      if (!Number.isFinite(observed)) return null;
+      return Math.max(0, observed - turnRegisters - lostTempo);
+    })
+    .filter(Number.isFinite);
+  const programmingTurns = Math.max(
+    1,
+    turnBurdenShape.length || Math.ceil(programmedRegisters / 5)
+  );
+  const meanTurnBurdenRE = burdenRE / programmingTurns;
+  const ledgerMeanTurnBurdenRE = turnBurdenShape.length
+    ? meanFinite(turnBurdenShape)
+    : meanTurnBurdenRE;
+  const ledgerTailTurnBurdenRE = turnBurdenShape.length
+    ? quantileFinite(turnBurdenShape, RE_TURN_DIFFICULTY_TAIL_QUANTILE)
+    : meanTurnBurdenRE;
+  const peakRatio = ledgerMeanTurnBurdenRE > 1e-9
+    ? Math.max(1, ledgerTailTurnBurdenRE / ledgerMeanTurnBurdenRE)
+    : 1;
+  // Completed effective RE owns the amount; the ledger owns only the shape.
+  // This preserves downstream traffic/damage/control burden that is not fully
+  // represented inside the intrinsic turn ledger.
+  const authoritativeTailTurnBurdenRE = meanTurnBurdenRE * peakRatio;
+  const routeTurnDifficultyRE = meanTurnBurdenRE +
+    RE_TURN_DIFFICULTY_ROUTE_PEAK_WEIGHT * Math.max(
+      0,
+      authoritativeTailTurnBurdenRE - meanTurnBurdenRE
+    );
+
+  return {
+    routeIndex: routeEntry?.routeIndex ?? null,
+    weight: Math.max(0, Number(routeEntry?.weight) || 0),
+    effectiveRE: Number(effectiveRE.toFixed(3)),
+    programmedRegisters: Number(programmedRegisters.toFixed(3)),
+    lostRegisterTempoRE: Number(lostRegisterTempoRE.toFixed(3)),
+    burdenRE: Number(burdenRE.toFixed(3)),
+    programmingTurns,
+    meanTurnBurdenRE: Number(meanTurnBurdenRE.toFixed(4)),
+    turnTailBurdenRE: Number(authoritativeTailTurnBurdenRE.toFixed(4)),
+    peakRatio: Number(peakRatio.toFixed(4)),
+    routeTurnDifficultyRE: Number(routeTurnDifficultyRE.toFixed(4)),
+    componentRE: {
+      card: Number(cleanCardPlausibilityRE.toFixed(4)),
+      damageSupply: Number(damageCardSupplyRE.toFixed(4)),
+      clog: Number(clogRE.toFixed(4)),
+      energy: Number(energyRE.toFixed(4)),
+      intrinsicMental: Number(intrinsicMentalRE.toFixed(4)),
+      downstreamTrafficControl: Number(downstreamTrafficControlRE.toFixed(4)),
+      intrinsicTempoCheck: Number((intrinsicProgrammedRegisters + intrinsicLostRegisterTempoRE).toFixed(4))
+    }
+  };
+}
+
+function buildRETurnDifficultyShadow(scenario, options = {}) {
+  if (!isDevViewEnabled() || !scenario?.sequence?.firstLeg) {
+    return { active: false, reason: "not-dev-or-missing-first-leg" };
+  }
+
+  const firstLeg = scenario.sequence.firstLeg;
+  const playerCount = Math.max(
+    1,
+    Number(scenario.playerCount ?? scenario.preferences?.playerCount ?? 1)
+  );
+  const usableStarts = computeUsableStarts(firstLeg, {
+    ...(scenario.preferences ?? {}),
+    competitiveMode: Boolean(scenario.competitiveMode),
+    virtualBots: Boolean(scenario.virtualBots),
+    payToWin: Boolean(scenario.payToWin),
+    subsidizedStarts: Boolean(scenario.subsidizedStarts)
+  })
+    .filter((entry) => (
+      entry?.fullCourseRoute &&
+      Number.isFinite(Number(entry.normalFairnessEffectiveRE))
+    ));
+  if (!usableStarts.length) {
+    return { active: false, reason: "no-usable-completed-re-starts" };
+  }
+
+  const pricingEntries = firstLeg.summary?.payToWin?.pricingEntries ?? [];
+  const occupancyQualityScoreByIndex =
+    (scenario.payToWin || scenario.subsidizedStarts) && pricingEntries.length
+      ? new Map(pricingEntries.map((entry) => {
+        const early = Number(entry.postPaymentFullScore);
+        const late = Number(entry.latePostPaymentFullScore);
+        const score = Number.isFinite(early) && Number.isFinite(late)
+          ? (early + late) / 2
+          : Number.isFinite(early)
+            ? early
+            : Number.isFinite(late)
+              ? late
+              : Number(entry.fullScore);
+        return [entry.index, score];
+      }))
+      : null;
+  const occupancyByIndex = buildStartOccupancyMap(
+    usableStarts,
+    playerCount,
+    {
+      trafficOccupancyUseBalanceScore: true,
+      occupancyQualityScoreByIndex
+    },
+    (analysis) => analysis.fullCourseRoute
+  );
+
+  const replayCache = options.replayCache ?? getScenarioDevReplayCache(scenario);
+  const devTiming = options.timing ?? null;
+  const perStart = [];
+  let routeMixtureEntryCount = 0;
+
+  for (const startAnalysis of usableStarts) {
+    const mixtureEntries = getREDifficultyRouteMixtureEntries(
+      scenario,
+      startAnalysis
+    );
+    const routeSummaries = mixtureEntries
+      .map((routeEntry) => summarizeRETurnDifficultyRouteCandidate(
+        scenario,
+        startAnalysis,
+        routeEntry,
+        replayCache,
+        devTiming
+      ))
+      .filter(Boolean);
+    if (!routeSummaries.length) continue;
+
+    const routeWeightTotal = routeSummaries.reduce(
+      (sum, entry) => sum + Math.max(0, Number(entry.weight) || 0),
+      0
+    ) || routeSummaries.length;
+    const weighted = (key) => routeSummaries.reduce((sum, entry) => (
+      sum + Number(entry[key] || 0) * (
+        routeWeightTotal > 0
+          ? Math.max(0, Number(entry.weight) || 0) / routeWeightTotal
+          : 1 / routeSummaries.length
+      )
+    ), 0);
+    routeMixtureEntryCount += routeSummaries.length;
+
+    perStart.push({
+      index: startAnalysis.index,
+      occupancy: Math.max(0, Number(occupancyByIndex.get(startAnalysis.index)) || 0),
+      routeCount: routeSummaries.length,
+      effectiveRE: weighted("effectiveRE"),
+      programmedRegisters: weighted("programmedRegisters"),
+      lostRegisterTempoRE: weighted("lostRegisterTempoRE"),
+      burdenRE: weighted("burdenRE"),
+      programmingTurns: weighted("programmingTurns"),
+      meanTurnBurdenRE: weighted("meanTurnBurdenRE"),
+      turnTailBurdenRE: weighted("turnTailBurdenRE"),
+      routeTurnDifficultyRE: weighted("routeTurnDifficultyRE"),
+      componentRE: {
+        card: routeSummaries.reduce((sum, entry) => sum + Number(entry.componentRE?.card || 0) * (Math.max(0, Number(entry.weight) || 0) / routeWeightTotal), 0),
+        damageSupply: routeSummaries.reduce((sum, entry) => sum + Number(entry.componentRE?.damageSupply || 0) * (Math.max(0, Number(entry.weight) || 0) / routeWeightTotal), 0),
+        clog: routeSummaries.reduce((sum, entry) => sum + Number(entry.componentRE?.clog || 0) * (Math.max(0, Number(entry.weight) || 0) / routeWeightTotal), 0),
+        energy: routeSummaries.reduce((sum, entry) => sum + Number(entry.componentRE?.energy || 0) * (Math.max(0, Number(entry.weight) || 0) / routeWeightTotal), 0),
+        intrinsicMental: routeSummaries.reduce((sum, entry) => sum + Number(entry.componentRE?.intrinsicMental || 0) * (Math.max(0, Number(entry.weight) || 0) / routeWeightTotal), 0),
+        downstreamTrafficControl: routeSummaries.reduce((sum, entry) => sum + Number(entry.componentRE?.downstreamTrafficControl || 0) * (Math.max(0, Number(entry.weight) || 0) / routeWeightTotal), 0)
+      },
+      routes: routeSummaries
+    });
+  }
+
+  const occupancyMass = perStart.reduce((sum, entry) => sum + entry.occupancy, 0);
+  const fallbackWeight = perStart.length ? 1 / perStart.length : 0;
+  const normalizedWeight = (entry) => occupancyMass > 0
+    ? entry.occupancy / occupancyMass
+    : fallbackWeight;
+  const expectedMeanTurnBurdenRE = perStart.reduce(
+    (sum, entry) => sum + entry.meanTurnBurdenRE * normalizedWeight(entry),
+    0
+  );
+  const expectedPeakAdjustedTurnBurdenRE = perStart.reduce(
+    (sum, entry) => sum + entry.routeTurnDifficultyRE * normalizedWeight(entry),
+    0
+  );
+  const likelyStartTailTurnBurdenRE = weightedQuantileFinite(
+    perStart.map((entry) => ({
+      value: entry.routeTurnDifficultyRE,
+      weight: occupancyMass > 0 ? entry.occupancy : 1
+    })),
+    RE_TURN_DIFFICULTY_TAIL_QUANTILE
+  );
+  const courseTurnDifficultyRE = expectedPeakAdjustedTurnBurdenRE +
+    RE_TURN_DIFFICULTY_COURSE_TAIL_WEIGHT * Math.max(
+      0,
+      likelyStartTailTurnBurdenRE - expectedPeakAdjustedTurnBurdenRE
+    );
+
+  const componentKeys = [
+    "card",
+    "damageSupply",
+    "clog",
+    "energy",
+    "intrinsicMental",
+    "downstreamTrafficControl"
+  ];
+  const courseComponentREPerTurn = {};
+  for (const key of componentKeys) {
+    courseComponentREPerTurn[key] = perStart.reduce((sum, entry) => {
+      const turns = Math.max(1e-9, Number(entry.programmingTurns) || 0);
+      return sum + (Number(entry.componentRE?.[key]) || 0) / turns * normalizedWeight(entry);
+    }, 0);
+  }
+  const componentMeanSum = componentKeys.reduce(
+    (sum, key) => sum + (Number(courseComponentREPerTurn[key]) || 0),
+    0
+  );
+
+  return {
+    active: true,
+    method: "completed-re-nontempo-per-programming-turn-route-peak-start-tail-v49cx",
+    behaviorChanged: false,
+    productionOwner: false,
+    playerCount,
+    startCount: perStart.length,
+    occupancyMass: Number(occupancyMass.toFixed(3)),
+    routeMixtureEntryCount,
+    averageRouteFamiliesPerStart: Number((
+      perStart.length ? routeMixtureEntryCount / perStart.length : 0
+    ).toFixed(3)),
+    routePeakWeight: RE_TURN_DIFFICULTY_ROUTE_PEAK_WEIGHT,
+    courseTailWeight: RE_TURN_DIFFICULTY_COURSE_TAIL_WEIGHT,
+    tailQuantile: RE_TURN_DIFFICULTY_TAIL_QUANTILE,
+    expectedMeanTurnBurdenRE: Number(expectedMeanTurnBurdenRE.toFixed(4)),
+    expectedPeakAdjustedTurnBurdenRE: Number(expectedPeakAdjustedTurnBurdenRE.toFixed(4)),
+    likelyStartTailTurnBurdenRE: Number(likelyStartTailTurnBurdenRE.toFixed(4)),
+    courseTurnDifficultyRE: Number(courseTurnDifficultyRE.toFixed(4)),
+    courseComponentREPerTurn: Object.fromEntries(
+      Object.entries(courseComponentREPerTurn).map(([key, value]) => [key, Number(value.toFixed(4))])
+    ),
+    courseComponentMeanSum: Number(componentMeanSum.toFixed(4)),
+    componentReconciliationDelta: Number((expectedMeanTurnBurdenRE - componentMeanSum).toFixed(4)),
+    currentForecastEquivalentActions: Number(
+      scenario.metrics?.lengthMetrics?.contributions?.forecastEquivalentActions ?? 0
+    ),
+    legacyDifficultyRaw: Number(scenario.metrics?.difficultyRaw),
+    legacyDifficultyLabel: formatActualDifficultyLabel(scenario.metrics?.difficultyRaw),
+    tierPolicy: "thresholds-uncalibrated-future-nonoverlap-advanced-bounded-brutal-top",
+    perStart
+  };
+}
+
+function buildRETurnDifficultyCandidatePoolShadow(selectedScenario, options = {}) {
+  const candidates = getDevAcceptableCandidatePool(selectedScenario);
+  if (!isDevViewEnabled() || !candidates.length) {
+    return { active: false, reason: candidates.length ? "not-dev" : "candidate-pool-not-retained" };
+  }
+  const timing = options.timing ?? null;
+  const entries = candidates.map((candidate, index) => {
+    const shadow = buildRETurnDifficultyShadow(candidate, {
+      replayCache: getScenarioDevReplayCache(candidate),
+      timing
+    });
+    return {
+      candidate: index + 1,
+      selected: candidate === selectedScenario,
+      fitScore: Number(getAcceptableScenarioScore(candidate).toFixed(2)),
+      legacyDifficultyRaw: Number(candidate.metrics?.difficultyRaw),
+      legacyDifficultyLabel: formatActualDifficultyLabel(candidate.metrics?.difficultyRaw),
+      lengthRaw: Number(candidate.metrics?.lengthRaw),
+      usableStarts: Number(candidate.metrics?.usableStarts?.length ?? 0),
+      currentForecastEquivalentActions: Number(
+        candidate.metrics?.lengthMetrics?.contributions?.forecastEquivalentActions ?? 0
+      ),
+      shadow
+    };
+  }).filter((entry) => entry.shadow?.active);
+  if (!entries.length) return { active: false, reason: "candidate-shadows-unavailable" };
+  const composites = entries.map((entry) => Number(entry.shadow.courseTurnDifficultyRE));
+  const selectedEntry = entries.find((entry) => entry.selected) ?? null;
+  return {
+    active: true,
+    candidateCount: entries.length,
+    minComposite: Number(Math.min(...composites).toFixed(4)),
+    maxComposite: Number(Math.max(...composites).toFixed(4)),
+    selectedComposite: selectedEntry
+      ? Number(selectedEntry.shadow.courseTurnDifficultyRE.toFixed(4))
+      : null,
+    entries
+  };
+}
+
+
 function computePlayerTimeLoad(playerCount = 4) {
   const safePlayerCount = Math.max(1, playerCount || 4);
   // Every additional robot slows register resolution even on an open board:
@@ -19502,7 +19207,6 @@ function buildScenarioCopySummary(scenario) {
     !scenario.payToWin &&
     !scenario.subsidizedStarts
   );
-  const courseEnergyEconomy = buildCourseEnergyEconomyDiagnostics(scenario);
   const profile = diagnostics?.contextualProfileTotals ?? null;
   const playableCheckpoints = getPlayableCheckpoints(
     scenario.checkpoints ?? [],
@@ -19947,12 +19651,12 @@ function buildScenarioCopySummary(scenario) {
     if (reOwnershipAudit?.early) {
       const formatPhase = (label, phase) => (
         `${label}: raw→post RE sd ${phase.rawStdDev ?? "n/a"}→${phase.postStdDev ?? "n/a"}, ` +
-        `residual penalty ${phase.residualPenalty ?? 0}, nonzero adjustments ` +
+        `actionable penalty ${phase.residualPenalty ?? 0}, ignored duration ${phase.ignoredDurationPenalty ?? 0}, nonzero adjustments ` +
         `${phase.nonzeroAdjustments ?? 0}, max ${subsidyMode ? "+" : ""}${phase.maxAdjustment ?? 0}E`
       );
       lines.push(
-        `Economy start RE ownership v49cn LIVE: ${reOwnershipAudit.mode}; ` +
-        `RE-native occupancy, incremental 1E until Normal-style prune is avoided; ${formatPhase("early", reOwnershipAudit.early)}` +
+        `Economy start RE ownership v49ct LIVE: ${reOwnershipAudit.mode}; ` +
+        `RE-native occupancy, incremental 1E until Energy-actionable RE prune is avoided; literal duration is diagnostic-only; ${formatPhase("early", reOwnershipAudit.early)}` +
         `${payToWin.latePricingActive ? `; ${formatPhase("late", reOwnershipAudit.late)}` : ""}; ` +
         `extreme-baseline availability/pruning retired`
       );
@@ -19970,11 +19674,11 @@ function buildScenarioCopySummary(scenario) {
     const targetedRescue = payToWin.targetedEnergyRescue ?? null;
     if (targetedRescue) {
       lines.push(
-        `Economy targeted Energy rescue v49cn: attempts ${targetedRescue.attempts ?? 0}, ` +
-        `accepted ${targetedRescue.accepted ?? 0}, saved prunes ${targetedRescue.savedPrunes ?? 0}, ` +
+        `Economy targeted Energy rescue v49ct: attempts ${targetedRescue.attempts ?? 0}, ` +
+        `direction-skips ${targetedRescue.skippedDirectionMismatch ?? 0}, accepted ${targetedRescue.accepted ?? 0}, saved prunes ${targetedRescue.savedPrunes ?? 0}, ` +
         `routes discovered/added ${targetedRescue.routesDiscovered ?? 0}/${targetedRescue.routesAdded ?? 0}` +
         ((targetedRescue.details ?? []).length
-          ? `; ${targetedRescue.details.map((entry) => `#${entry.index + 1}@${entry.startingEnergy}E ${entry.reason}${Number.isFinite(entry.penaltyBefore) && Number.isFinite(entry.penaltyAfter) ? ` ${entry.penaltyBefore}->${entry.penaltyAfter}` : ""}`).join(" | ")}`
+          ? `; ${targetedRescue.details.map((entry) => `#${entry.index + 1}${Number.isFinite(entry.startingEnergy) ? `@${entry.startingEnergy}E` : ""} ${entry.directionProfile?.mode ?? ""} ${entry.reason}${Number.isFinite(entry.penaltyBefore) && Number.isFinite(entry.penaltyAfter) ? ` ${entry.penaltyBefore}->${entry.penaltyAfter}` : ""}`.replace(/\s+/g, " ").trim()).join(" | ")}`
           : "")
       );
     }
@@ -20013,19 +19717,6 @@ function buildScenarioCopySummary(scenario) {
       );
     }
 
-  }
-
-  if (courseEnergyEconomy?.active) {
-    const economy = courseEnergyEconomy;
-    const production = economy.productionEnergyScoring ?? null;
-    // v33 copied diagnostics foreground the production economy only. The older
-    // reserve/card shadow and static Battery sensitivity calculations remain in
-    // code for targeted regression work, but no longer appear as if authoritative.
-    lines.push(
-      production?.active
-        ? `Route Energy economy (flattened reserve+progress): start E${production.startingReserve ?? production.referenceReserve ?? "?"}, useful-card expectation ${production.usefulUpgradeCardRate ?? economy.config?.usefulUpgradeCardRate ?? "n/a"} applied immediately, install tranche ${production.usefulEnergyPerInstall ?? economy.config?.usefulEnergyPerInstall ?? "n/a"}E; no persistent upgrade-card shadow; post-opening reserve median E${production.selectedRouteOpeningReserveMedian ?? "?"}, selected-route reward median/max ${production.selectedRouteRewardMedian ?? 0}/${production.selectedRouteRewardMax ?? 0} score (Battery ${production.selectedRouteBatteryRewardMedian ?? 0}/${production.selectedRouteBatteryRewardMax ?? 0}, Power Up ${production.selectedRoutePowerUpRewardMedian ?? 0}/${production.selectedRoutePowerUpRewardMax ?? 0}, Chop Shop ${production.selectedRouteChopShopRewardMedian ?? 0}/${production.selectedRouteChopShopRewardMax ?? 0}), Power Up uses median/max ${production.selectedRoutePowerUpUsesMedian ?? 0}/${production.selectedRoutePowerUpUsesMax ?? 0}, end reserve median/max E${production.selectedRouteEndingReserveMedian ?? "?"}/E${production.selectedRouteEndingReserveMax ?? "?"}`
-        : "Route Energy economy: inactive"
-    );
   }
 
   lines.push(
@@ -20078,45 +19769,14 @@ function buildScenarioCopySummary(scenario) {
             `Traffic route mixture v49ac: ${routeMixture.model ?? "quality-weighted-route-families"}, starts ${routeMixture.startCount}, candidates/families/retained ${routeMixture.candidateCount ?? 0}/${routeMixture.familyCount ?? 0}/${routeMixture.retainedFamilyCount ?? 0}, families avg ${routeMixture.averageFamiliesPerStart ?? 0}, effective routes avg ${routeMixture.averageEffectiveRouteCount ?? 0}, alternate occupancy share avg/max ${routeMixture.averageAlternateShare ?? 0}/${routeMixture.maximumAlternateShare ?? 0}; same-traffic-trajectory witnesses are one family and each start keeps its fixed total occupancy`
           );
         }
-        const routeMixtureOwnershipAudit =
-          routeStrategy.routeMixtureOwnershipAudit
-          ?? contextualCache.trafficRouteMixtureOwnershipAudit
-          ?? null;
-        if (routeMixtureOwnershipAudit?.startCount) {
+        if (routeMixture?.startCount) {
           lines.push(
-            `Traffic route-mixture ownership v49ce LIVE: LIVE completed effective RE (including traffic-awareness mental) vs legacy pathfinder+traffic comparator at the same 1RE temperature; starts ${routeMixtureOwnershipAudit.startCount}, primary-family changes ${routeMixtureOwnershipAudit.startsWithPrimaryFamilyChange}, mixture total-variation avg/max ${routeMixtureOwnershipAudit.averageTotalVariation}/${routeMixtureOwnershipAudit.maximumTotalVariation}, alternate share legacy→LIVE ${routeMixtureOwnershipAudit.currentAverageAlternateShare}→${routeMixtureOwnershipAudit.reNativeAverageAlternateShare}, effective-route count legacy→LIVE ${routeMixtureOwnershipAudit.currentAverageEffectiveRouteCount}→${routeMixtureOwnershipAudit.reNativeAverageEffectiveRouteCount}; RE-native mixture LIVE`
+            `Traffic route-mixture ownership v49dc LIVE: completed effective RE (including traffic-awareness mental) owns route-family attractiveness; starts ${routeMixture.startCount}, alternate share avg/max ${routeMixture.averageAlternateShare ?? 0}/${routeMixture.maximumAlternateShare ?? 0}, effective-route count avg ${routeMixture.averageEffectiveRouteCount ?? 0}; fixed start occupancy preserved`
           );
-          const materialStarts = (routeMixtureOwnershipAudit.perStart ?? [])
-            .filter((entry) => (
-              entry.primaryFamilyChanged ||
-              (entry.totalVariation ?? 0) >= 0.05
-            ));
-          if (materialStarts.length) {
-            lines.push(
-              `Traffic route-mixture ownership legacy-comparison starts: ${materialStarts.map((entry) => `s${entry.index + 1}:TV${entry.totalVariation}/primary${entry.primaryFamilyChanged ? "Δ" : "="}/altLegacy→LIVE${entry.currentAlternateShare}→${entry.reNativeAlternateShare}/effLegacy→LIVE${entry.currentEffectiveRouteCount}→${entry.reNativeEffectiveRouteCount}; current[${(entry.currentEntries ?? []).map((item) => `r${(item.routeIndex ?? 0) + 1}:w${item.weight}@s${item.qualityScore}`).join(",")}] RE[${(entry.reNativeEntries ?? []).map((item) => `r${(item.routeIndex ?? 0) + 1}:w${item.weight}@${item.effectiveRE}RE`).join(",")}]`).join(" | ")}`
-            );
-          }
         }
-        const completedRouteOwnershipAudit = routeStrategy.completedRouteOwnershipAudit ?? null;
-        if (completedRouteOwnershipAudit?.startCount) {
-          lines.push(
-            `Traffic completed-route ownership v49ch OBSERVATIONAL: final frozen field, ${completedRouteOwnershipAudit.startCount} starts/${completedRouteOwnershipAudit.startsWithAlternates ?? 0} with alternates; current search-objective vs completed-RE preferred disagreements ${completedRouteOwnershipAudit.currentVsREPreferredDisagreements ?? 0}; actual selected vs RE-preferred ${completedRouteOwnershipAudit.actualVsREPreferredDisagreements ?? 0}; mean/max foregone effective RE ${completedRouteOwnershipAudit.meanForegoneEffectiveRE ?? 0}/${completedRouteOwnershipAudit.maximumForegoneEffectiveRE ?? 0}; minimum useful gain ${completedRouteOwnershipAudit.minimumUsefulGainScore ?? 0} search-score = ${completedRouteOwnershipAudit.minimumUsefulGainRE ?? 0} RE; behavior unchanged`
-          );
-          const materialOwnershipStarts = (completedRouteOwnershipAudit.perStart ?? []).filter((entry) => (
-            entry.currentVsREPreferredDisagree || entry.actualVsREPreferredDisagree || (entry.foregoneEffectiveRE ?? 0) > 0
-          ));
-          if (materialOwnershipStarts.length) {
-            lines.push(
-              `Traffic completed-route ownership starts: ${materialOwnershipStarts.map((entry) => (
-                `s${entry.startIndex + 1}:actual r${Number.isInteger(entry.actualSelectedRouteIndex) ? entry.actualSelectedRouteIndex + 1 : "-"}` +
-                `/current r${Number.isInteger(entry.currentPreferredRouteIndex) ? entry.currentPreferredRouteIndex + 1 : "-"}` +
-                `/RE r${Number.isInteger(entry.rePreferredRouteIndex) ? entry.rePreferredRouteIndex + 1 : "-"}` +
-                `; baseline ${entry.baselineEffectiveRE ?? "-"}RE/current ${entry.currentPreferredEffectiveRE ?? "-"}RE/REbest ${entry.rePreferredEffectiveRE ?? "-"}RE` +
-                `; foregone ${entry.foregoneEffectiveRE ?? 0}RE`
-              )).join(" | ")}`
-            );
-          }
-        }
+        lines.push(
+          "Traffic route-switch objective: intentional legacy pathfinder route.score + traffic.total (+4% raw-gap stability) for switching among already-discovered candidates; route-family occupancy attractiveness remains completed effective RE."
+        );
         if (routeFamilyDivergence) {
           const legSummary = (routeFamilyDivergence.perLeg ?? [])
             .map((entry) => (
@@ -20229,29 +19889,13 @@ function buildScenarioCopySummary(scenario) {
     if (summary.programmingScarcity) {
       const scarcity = summary.programmingScarcity;
       lines.push(
-        `Programming supply: selected ${scarcity.selectedRoutes ?? 0} routes, Again used on ${scarcity.routesUsingAgain ?? 0} route(s)/${scarcity.totalAgainTurns ?? 0} turn(s), consecutive required-Again turns ${scarcity.consecutiveTurnAgainReuse ?? 0}, literal program violations ${scarcity.literalProgramViolations ?? 0}, rolling two-turn violations ${scarcity.rollingWindowViolations ?? 0}; exact 9-card hypergeometric availability penalty mean/max ${scarcity.meanCardAvailabilityPenalty ?? 0}/${scarcity.maxCardAvailabilityPenalty ?? 0}; card RE compressed α=${scarcity.cardScarcityAdaptabilityFactor ?? 1}: mean/max ${scarcity.meanCardAvailabilityPenaltyRE ?? 0}/${scarcity.maxCardAvailabilityPenaltyRE ?? 0}RE vs uncompressed ${scarcity.meanCardAvailabilityPenaltyUncompressedRE ?? 0}/${scarcity.maxCardAvailabilityPenaltyUncompressedRE ?? 0}RE; fresh-deck reference P(1 of 4-copy) ${scarcity.baselineFourCopyProbability ?? "?"}, P(singleton) ${scarcity.singleCopyProbability ?? "?"}, P(3 distinct singletons) ${scarcity.threeDistinctSingleCopyProbability ?? "?"}, P(repeated 4-copy action incl Again) ${scarcity.repeatedFourCopyWithAgainProbability ?? "?"}; legacy cheap-literal comparator penalty mean/max ${scarcity.meanCheapSearchAvailabilityPenalty ?? 0}/${scarcity.maxCheapSearchAvailabilityPenalty ?? 0}, cheap-exact mean delta ${scarcity.meanCheapMinusExactAvailabilityPenalty ?? 0}; cheap refs P(singleton) ${scarcity.cheapSingleCopyProbability ?? "?"}, P(3 singletons) ${scarcity.cheapThreeDistinctSingleCopyProbability ?? "?"}, P(repeated 4-copy best literal) ${scarcity.cheapRepeatedFourCopyBestLiteralProbability ?? "?"}`
+        `Programming supply: selected ${scarcity.selectedRoutes ?? 0} routes, Again used on ${scarcity.routesUsingAgain ?? 0} route(s)/${scarcity.totalAgainTurns ?? 0} turn(s), consecutive required-Again turns ${scarcity.consecutiveTurnAgainReuse ?? 0}, literal program violations ${scarcity.literalProgramViolations ?? 0}, rolling two-turn violations ${scarcity.rollingWindowViolations ?? 0}; exact 9-card hypergeometric availability penalty mean/max ${scarcity.meanCardAvailabilityPenalty ?? 0}/${scarcity.maxCardAvailabilityPenalty ?? 0}; card RE compressed α=${scarcity.cardScarcityAdaptabilityFactor ?? 1}: mean/max ${scarcity.meanCardAvailabilityPenaltyRE ?? 0}/${scarcity.maxCardAvailabilityPenaltyRE ?? 0}RE vs uncompressed ${scarcity.meanCardAvailabilityPenaltyUncompressedRE ?? 0}/${scarcity.maxCardAvailabilityPenaltyUncompressedRE ?? 0}RE; fresh-deck reference P(1 of 4-copy) ${scarcity.baselineFourCopyProbability ?? "?"}, P(singleton) ${scarcity.singleCopyProbability ?? "?"}, P(3 distinct singletons) ${scarcity.threeDistinctSingleCopyProbability ?? "?"}, P(repeated 4-copy action incl Again) ${scarcity.repeatedFourCopyWithAgainProbability ?? "?"}`
       );
       if (scarcity.discoveredCandidateCardPressure) {
         const audit = scarcity.discoveredCandidateCardPressure;
         lines.push(
           `Card-pressure candidate audit v49ce OBSERVATIONAL (DISCOVERED CANDIDATES ONLY): starts ${audit.auditedStarts ?? 0}, same-register alternatives ${audit.startsWithSameRegisterAlternative ?? 0}, lower-card same-register ${audit.startsWithLowerCardSameRegisterCandidate ?? 0}, lower-card same-or-fewer ${audit.startsWithLowerCardSameOrFewerCandidate ?? 0}, mean selected ${audit.meanSelectedCardRE ?? 0}RE, mean reducible same-register ${audit.meanSameRegisterReducibleRE ?? 0}RE, max reducible same-register ${audit.maximumSameRegisterReducibleRE ?? 0}RE`
         );
-      }
-      if (scarcity.targetedSameRegisterCardPressure) {
-        const audit = scarcity.targetedSameRegisterCardPressure;
-        if (audit.enabled === false) {
-          lines.push(
-            `Targeted card-pressure search v49cd OBSERVATIONAL: unavailable (${audit.unavailableReason ?? "unsupported"}); behavior unchanged`
-          );
-        } else {
-          lines.push(
-            `Targeted card-pressure search v49cd OBSERVATIONAL: high-card starts ${audit.auditedStarts ?? 0}, same-register alternatives ${audit.startsWithSameRegisterAlternative ?? 0}, lower-card alternatives ${audit.startsWithLowerCardSameRegisterAlternative ?? 0}, mean/max improvement ${audit.meanImprovementRE ?? 0}/${audit.maximumImprovementRE ?? 0} RE, capped ${audit.cappedSearches ?? 0}, expansions ${audit.totalExpansions ?? 0}; post-selection frozen-seed diagnostic only, behavior unchanged`
-          );
-          const starts = (audit.starts ?? []).map((entry) => (
-            `s${entry.startIndex + 1}:${entry.selectedRegisters}r ${entry.selectedCardRE}→${entry.bestAlternativeCardRE ?? "-"}RE Δ${entry.improvementRE ?? 0} alt${entry.sameRegisterAlternativeCount ?? 0} exp${entry.expansions ?? 0}/${entry.maxExpansions ?? 0}${entry.hitExpansionCap ? " cap" : ""}`
-          )).join(" | ");
-          lines.push(`Targeted card-pressure starts: ${starts || "none"}`);
-        }
       }
     }
     if (routeStrategy) {
@@ -20312,13 +19956,13 @@ function buildScenarioCopySummary(scenario) {
           ? Number(Math.max(...values).toFixed(2))
           : 0;
         lines.push(
-          `Traffic search-choice deltas: ${switchedDiagnostics.length} switched start(s), search-cost increase median/max ${medianOrZero(switchedIntrinsicCosts)}/${maxOrZero(switchedIntrinsicCosts)}, traffic-pressure reduction median/max ${medianOrZero(switchedTrafficAdvantages)}/${maxOrZero(switchedTrafficAdvantages)}, legacy switch-objective gain median/max ${medianOrZero(switchedStrategicGains)}/${maxOrZero(switchedStrategicGains)} (search cost + confidence-weighted traffic pressure; must remain ≥${NORMAL_TRAFFIC_ALTERNATE_MIN_GAIN})`
+          `Traffic search-choice deltas: ${switchedDiagnostics.length} switched start(s), search-cost increase median/max ${medianOrZero(switchedIntrinsicCosts)}/${maxOrZero(switchedIntrinsicCosts)}, traffic-pressure reduction median/max ${medianOrZero(switchedTrafficAdvantages)}/${maxOrZero(switchedTrafficAdvantages)}, switch-objective gain median/max ${medianOrZero(switchedStrategicGains)}/${maxOrZero(switchedStrategicGains)} (search cost + confidence-weighted traffic pressure; must remain ≥${NORMAL_TRAFFIC_ALTERNATE_MIN_GAIN})`
         );
       }
       if (candidateDiagnostics.length) {
         lines.push(
           `Traffic diversity by start: ${candidateDiagnostics.map((entry) => (
-            `#${entry.startIndex + 1} ${entry.candidateCount ?? 0}c whole ${entry.wholeMostDifferentSimilarity ?? "n/a"} later ${entry.laterMostDifferentSimilarity ?? "n/a"} selected ${Number.isInteger(entry.selectedRouteIndex) ? entry.selectedRouteIndex + 1 : "?"}${entry.trafficSwitched ? "*" : ""} spread ${entry.scoreSpread ?? 0}${Number.isFinite(Number(entry.intrinsicCostSelectedVsBest)) && Number.isFinite(Number(entry.trafficAdvantageSelectedVsBest)) && Number.isFinite(Number(entry.strategicGainSelectedVsBest)) ? ` Δsearch ${entry.intrinsicCostSelectedVsBest} Δpressure ${entry.trafficAdvantageSelectedVsBest} legacyGain ${entry.strategicGainSelectedVsBest}` : ""}`
+            `#${entry.startIndex + 1} ${entry.candidateCount ?? 0}c whole ${entry.wholeMostDifferentSimilarity ?? "n/a"} later ${entry.laterMostDifferentSimilarity ?? "n/a"} selected ${Number.isInteger(entry.selectedRouteIndex) ? entry.selectedRouteIndex + 1 : "?"}${entry.trafficSwitched ? "*" : ""} spread ${entry.scoreSpread ?? 0}${Number.isFinite(Number(entry.intrinsicCostSelectedVsBest)) && Number.isFinite(Number(entry.trafficAdvantageSelectedVsBest)) && Number.isFinite(Number(entry.strategicGainSelectedVsBest)) ? ` Δsearch ${entry.intrinsicCostSelectedVsBest} Δpressure ${entry.trafficAdvantageSelectedVsBest} switchGain ${entry.strategicGainSelectedVsBest}` : ""}`
           )).join(" | ")}`
         );
       }
@@ -20413,17 +20057,21 @@ function buildScenarioBenchmarkSummary(scenario) {
     "Balance stddev:",
     "Fairness ",
     "Difficulty raw:",
+    "RE-turn difficulty v49dc",
+    "RE-turn tier migration v49dc",
+    "RE-turn difficulty candidate pool v49dc",
+    "RE-turn difficulty starts v49dc",
     "Length raw:",
     "Course scores:",
     "Estimate→realize:",
     "Traffic feedback ",
     "Traffic route mixture ",
+    "Traffic route-mixture ownership ",
+    "Traffic route-switch objective:",
     "Traffic route-family divergence ",
     "Traffic route-family starts:",
     "Programming supply:",
     "Card-pressure candidate audit ",
-    "Targeted card-pressure search ",
-    "Targeted card-pressure starts:",
     "Damage economy v9:",
     "Damage foundation ",
     "Exact reboot chronology "
@@ -20536,6 +20184,17 @@ function getDamageFoundationTrafficContext(scenario, startIndex) {
   return context;
 }
 
+const devAcceptableCandidatePoolBySelectedScenario = new WeakMap();
+
+function rememberDevAcceptableCandidatePool(selectedScenario, candidates = []) {
+  if (!selectedScenario || !Array.isArray(candidates) || !candidates.length) return;
+  devAcceptableCandidatePoolBySelectedScenario.set(selectedScenario, candidates.slice());
+}
+
+function getDevAcceptableCandidatePool(selectedScenario) {
+  return devAcceptableCandidatePoolBySelectedScenario.get(selectedScenario) ?? [];
+}
+
 const devReplayCacheByScenario = new WeakMap();
 
 function getScenarioDevReplayCache(scenario) {
@@ -20546,9 +20205,11 @@ function getScenarioDevReplayCache(scenario) {
   if (!cache) {
     cache = {
       ledgerByRoute: new WeakMap(),
+      intrinsicLedgerByRoute: new WeakMap(),
       cheapShadowByRoute: new WeakMap(),
       damageFoundationByRoute: new WeakMap(),
-      normalSelectorShadow: undefined
+      reDifficultyShadow: undefined,
+      reDifficultyCandidatePoolShadow: undefined
     };
     devReplayCacheByScenario.set(scenario, cache);
   }
@@ -20632,7 +20293,7 @@ function buildDamageFoundationReportLines(scenario, options = {}) {
     0
   ) / Math.max(1, starts.length)).toFixed(3));
   const lines = [
-    `Damage economy v9: ROUTING ACTIVE; damage input avg ${mean("totalDamageUnits")} = deterministic ${mean("deterministicDamageUnits")} + robot-laser expected ${mean("robotLaserExpectedDamageUnits")}; persistent SPAM total/held final avg ${mean("finalSpamTotal")}/${mean("finalSpamHeld")}; transient Haywire max expected clog avg ${mean("maxExpectedHaywireClogs")}; AUTHORITATIVE raw economy RE avg total ${mean("totalDamageEconomyRegisterEquivalents")} [supply ${mean("totalSpamSupplyRegisterEquivalents")}, control-clog ${mean("totalClogRegisterEquivalents")}], max-turn ${Number((entries.reduce((t,e)=>t+(Number(e.foundation?.maxTurnDamageEconomyRegisterEquivalents)||0),0)/Math.max(1,entries.length)).toFixed(3))}; SPAM plays avg forced/elective ${mean("totalForcedSpamReliefInitiations")}/${mean("totalElectiveSpamReliefInitiations")}, removed avg ${mean("totalSpamRemoved")} (reboot ${mean("totalRebootSpamRemoved")}, capacity ${mean("totalRebootSpamDisposalCapacity")}); Shutdown tolerance reference ${entries[0]?.foundation?.shutdownReferenceRegisterEquivalents ?? 5} RE is COUNTERFACTUAL ONLY, not programmed, not a cap; diagnostic threshold replay avg ${mean("shutdownEquivalentDamageScoreRegisterEquivalents")} RE = ${mean("shutdownEquivalentRegisterEquivalents")} threshold-chunk RE + ${mean("shutdownResidualRegisterEquivalents")} residual, ${sum("shutdownEquivalentEpisodeCount")} threshold crossing(s), high/elevated tolerance pressure ${entries.filter((entry)=>entry.foundation?.shutdownThreatLevel === "high").length}/${entries.filter((entry)=>entry.foundation?.shutdownThreatLevel === "elevated").length}; selected-route intrinsic damage adjustment avg ${selectedRouteMean("intrinsicDamageRoutingAdjustmentScore")} score [raw damage ${selectedRouteMean("intrinsicDamageEconomyRegisterEquivalents")} RE replacing legacy realized-direct ${selectedRouteMean("intrinsicDamageLegacyRealizedDirectScore")} score]; traffic robot-laser marginal raw-damage increment avg ${selectedTrafficMean("fullCourseTrafficDamageEconomyRobotLaserIncrementRegisterEquivalents")} RE, legacy expected-hit proxy ${selectedTrafficMean("fullCourseTrafficLegacyRobotLaserDamageProxyScore")} score replaced while residual ranged threat ${selectedTrafficMean("fullCourseTrafficResidualRangedThreatScore")} score is retained; exact candidate re-ranking active; Shutdown reference is search-worthiness context only; cheap primary search graph/budgets unchanged; tolerance replay ${telemetry.shutdownScoringReplayCount ?? 0} route(s)/${telemetry.shutdownScoringReplayTurns ?? 0} turn(s); relief coefficients unchanged from v49x; state cache ${telemetry.effectiveStateCacheHits ?? 0}/${telemetry.effectiveStateLookups ?? 0}, program cache ${telemetry.programCacheHits ?? 0}/${telemetry.programLookups ?? 0}, draw cache ${telemetry.spamDrawCacheHits ?? 0}/${telemetry.spamDrawLookups ?? 0}, route replay cache ${telemetry.routeSummaryCacheHits ?? 0}/${telemetry.routeSummaryLookups ?? 0}; implemented hooks ${implementedHooks.length ? implementedHooks.join(",") : "none"}, deferred ${deferredHooks.length ? deferredHooks.join(",") : "none"}`
+    `Damage economy v9: ROUTING ACTIVE; damage input avg ${mean("totalDamageUnits")} = deterministic ${mean("deterministicDamageUnits")} + robot-laser expected ${mean("robotLaserExpectedDamageUnits")}; persistent SPAM total/held final avg ${mean("finalSpamTotal")}/${mean("finalSpamHeld")}; transient Haywire max expected clog avg ${mean("maxExpectedHaywireClogs")}; AUTHORITATIVE raw economy RE avg total ${mean("totalDamageEconomyRegisterEquivalents")} [supply ${mean("totalSpamSupplyRegisterEquivalents")}, control-clog ${mean("totalClogRegisterEquivalents")}], max-turn ${Number((entries.reduce((t,e)=>t+(Number(e.foundation?.maxTurnDamageEconomyRegisterEquivalents)||0),0)/Math.max(1,entries.length)).toFixed(3))}; SPAM plays avg forced/elective ${mean("totalForcedSpamReliefInitiations")}/${mean("totalElectiveSpamReliefInitiations")}, removed avg ${mean("totalSpamRemoved")} (reboot ${mean("totalRebootSpamRemoved")}, capacity ${mean("totalRebootSpamDisposalCapacity")}); Shutdown tolerance reference ${entries[0]?.foundation?.shutdownReferenceRegisterEquivalents ?? 5} RE is COUNTERFACTUAL ONLY, not programmed, not a cap; diagnostic threshold replay avg ${mean("shutdownEquivalentDamageScoreRegisterEquivalents")} RE = ${mean("shutdownEquivalentRegisterEquivalents")} threshold-chunk RE + ${mean("shutdownResidualRegisterEquivalents")} residual, ${sum("shutdownEquivalentEpisodeCount")} threshold crossing(s), high/elevated tolerance pressure ${entries.filter((entry)=>entry.foundation?.shutdownThreatLevel === "high").length}/${entries.filter((entry)=>entry.foundation?.shutdownThreatLevel === "elevated").length}; selected-route intrinsic damage adjustment avg ${selectedRouteMean("intrinsicDamageRoutingAdjustmentScore")} score from ${selectedRouteMean("intrinsicDamageEconomyRegisterEquivalents")} raw damage-economy RE; traffic robot-laser marginal raw-damage increment avg ${selectedTrafficMean("fullCourseTrafficDamageEconomyRobotLaserIncrementRegisterEquivalents")} RE while residual ranged threat ${selectedTrafficMean("fullCourseTrafficResidualRangedThreatScore")} score remains separate; exact candidate re-ranking active; Shutdown reference is search-worthiness context only; cheap primary search graph/budgets unchanged; tolerance replay ${telemetry.shutdownScoringReplayCount ?? 0} route(s)/${telemetry.shutdownScoringReplayTurns ?? 0} turn(s); relief coefficients unchanged from v49x; state cache ${telemetry.effectiveStateCacheHits ?? 0}/${telemetry.effectiveStateLookups ?? 0}, program cache ${telemetry.programCacheHits ?? 0}/${telemetry.programLookups ?? 0}, draw cache ${telemetry.spamDrawCacheHits ?? 0}/${telemetry.spamDrawLookups ?? 0}, route replay cache ${telemetry.routeSummaryCacheHits ?? 0}/${telemetry.routeSummaryLookups ?? 0}; implemented hooks ${implementedHooks.length ? implementedHooks.join(",") : "none"}, deferred ${deferredHooks.length ? deferredHooks.join(",") : "none"}`
   ];
 
   if (includePerStart) {
@@ -20677,363 +20338,11 @@ function buildDamageFoundationReportLines(scenario, options = {}) {
 
 // DAMAGE_ECONOMY_FOUNDATION_END
 
-// DAMAGE_SHADOW_BEGIN
-// Dev-only presentation of the post-hoc route replay exported by analyze.js.
-// Nothing in generation, classification, traffic, calibration, or player-facing
-// Course Notes reads these values. Delete this block, its report call below, and
-// the analyze.js DAMAGE_SHADOW block to remove the old shadow completely.
-function buildDamageShadowReportLines(scenario, options = {}) {
-  // v49ce: the legacy DAMAGE_SHADOW has completed its migration-audit role.
-  // Keep the implementation in source for archaeology / explicit reactivation,
-  // but do not spend route-replay time on it in ordinary Dev View or Copy All.
-  if (options.enabled !== true) {
-    return [];
-  }
-  if (!isDevViewEnabled() || typeof summarizeDamageShadowForRoute !== "function") {
-    return [];
-  }
 
-  const includePerStart = options.includePerStart !== false;
-  const includeEventStream = options.includeEventStream !== false;
-
-  const tileMap = scenario?.goalTileMap;
-  const starts = (scenario?.sequence?.firstLeg?.starts ?? [])
-    .filter((entry) => entry?.reachable && entry?.fullCourseRoute);
-  if (!tileMap || !starts.length) {
-    return ["DAMAGE_SHADOW v11: unavailable (no selected full-course routes)"];
-  }
-  const usableStartIndices = new Set(
-    (scenario?.metrics?.usableStarts ?? []).map((entry) => entry.index)
-  );
-  const competitiveRemainingIndices = (
-    scenario?.sequence?.firstLeg?.summary?.competitiveStartBalance?.remainingIndices ?? []
-  );
-  const trafficFieldIndices = (
-    scenario.competitiveMode && competitiveRemainingIndices.length
-      ? new Set(competitiveRemainingIndices)
-      : usableStartIndices
-  );
-  const trafficStarts = starts.filter((entry) => trafficFieldIndices.has(entry.index));
-  const pricingEntries = scenario?.sequence?.firstLeg?.summary?.payToWin?.pricingEntries ?? [];
-  const trafficQualityScoreByIndex = (scenario.payToWin || scenario.subsidizedStarts) && pricingEntries.length
-    ? new Map(pricingEntries.map((entry) => {
-      const early = Number(entry.postPaymentFullScore);
-      const late = Number(entry.latePostPaymentFullScore);
-      const score = Number.isFinite(early) && Number.isFinite(late)
-        ? (early + late) / 2
-        : Number.isFinite(early)
-          ? early
-          : Number.isFinite(late)
-            ? late
-            : Number(entry.fullScore);
-      return [entry.index, score];
-    }))
-    : null;
-  const trafficFlags = getPlayableCheckpoints(
-    scenario.checkpoints,
-    scenario.virtualBots
-  );
-
-  const productionEnergy =
-    scenario.sequence?.firstLeg?.summary?.coursePreflight?.routeAwareBatteryScoring ?? null;
-  const shadowOptions = {
-    ...(scenario.preferences ?? {}),
-    // DAMAGE_SHADOW must replay with the same resolved Energy-scoring context
-    // as the selected production route. Production normally suppresses the old
-    // static Battery tile reward and values Batteries through the route-aware
-    // Energy economy instead. If the replay omits these resolved settings, that
-    // legacy -2 tile reward leaks back into the diagnostic and creates a false
-    // +2 production/control hazard drift on Battery transitions. This is replay
-    // context only; it does not alter production routing or Energy scoring.
-    routeAwareBatteryScoring: Boolean(productionEnergy?.active),
-    routeEnergyHorizonTurns: productionEnergy?.horizonTurns ?? null,
-    routeEnergyRegisterScore: productionEnergy?.registerScore ?? null,
-    recoveryRule: scenario.recoveryRule,
-    moreDeadlyGame: Boolean(scenario.moreDeadlyGame),
-    lessSpammyGame: Boolean(scenario.lessSpammyGame),
-    criticalSpam: Boolean(scenario.criticalSpam),
-    criticalHaywire: Boolean(scenario.criticalHaywire),
-    permanentShutdown: Boolean(scenario.permanentShutdown),
-    cuttingFloor: Boolean(scenario.cuttingFloor),
-    flamingOil: Boolean(scenario.flamingOil),
-    repulsorOverdrive: Boolean(scenario.repulsorOverdrive),
-    upgradeWorld: Boolean(scenario.upgradeWorld),
-    lighterGame: Boolean(scenario.lighterGame),
-    setToKill: Boolean(scenario.setToKill),
-    setToStun: Boolean(scenario.setToStun),
-    trafficGraceRegisters: scenario.virtualBots ? 5 : 0,
-    boardRects: scenario.boardRects ?? [],
-    rebootTokens: scenario.rebootTokens ?? [],
-    playerCount: scenario.preferences?.playerCount ?? scenario.playerCount ?? 4
-  };
-
-  const entries = starts.map((startAnalysis) => {
-    const trafficEligible = usableStartIndices.has(startAnalysis.index);
-    return {
-      startIndex: startAnalysis.index,
-      trafficRanged: Number(startAnalysis.fullCourseTrafficRanged) || 0,
-      trafficNearby: Number(startAnalysis.fullCourseTrafficNearby) || 0,
-      trafficCompetition: Number(startAnalysis.fullCourseTrafficCompetition) || 0,
-      shadow: summarizeDamageShadowForRoute(
-        tileMap,
-        startAnalysis.fullCourseRoute,
-        shadowOptions,
-        trafficEligible
-          ? {
-            analyses: trafficStarts,
-            focusIndex: startAnalysis.index,
-            flags: trafficFlags,
-            storedRangedScore: Number(startAnalysis.fullCourseTrafficRanged) || 0,
-            occupancyQualityScoreByIndex: trafficQualityScoreByIndex,
-            occupancyModel: scenario.competitiveMode
-              ? "competitive-remaining-common-field"
-              : (scenario.payToWin || scenario.subsidizedStarts)
-                ? "start-energy-post-adjustment-common-field"
-                : "normal-common-field"
-          }
-          : null
-      )
-    };
-  }).filter((entry) => entry.shadow);
-
-  if (!entries.length) {
-    return ["DAMAGE_SHADOW v11: unavailable (shadow replay returned no data)"];
-  }
-
-  const mean = (field) => Number((entries.reduce(
-    (sum, entry) => sum + (Number(entry.shadow?.[field]) || 0),
-    0
-  ) / entries.length).toFixed(2));
-  const trafficMean = (field) => Number((entries.reduce(
-    (sum, entry) => sum + (Number(entry[field]) || 0),
-    0
-  ) / entries.length).toFixed(2));
-  const sum = (field) => Number(entries.reduce(
-    (total, entry) => total + (Number(entry.shadow?.[field]) || 0),
-    0
-  ).toFixed(2));
-  const totalTransitions = sum("transitionCount");
-  const replayMismatches = sum("replayMismatchCount");
-  const trafficStateEntries = entries.filter((entry) => entry.shadow?.trafficStatefulAvailable);
-  const trafficStateMean = (field) => trafficStateEntries.length
-    ? Number((trafficStateEntries.reduce(
-      (total, entry) => total + (Number(entry.shadow?.[field]) || 0),
-      0
-    ) / trafficStateEntries.length).toFixed(2))
-    : 0;
-  const trafficStateMax = (field) => trafficStateEntries.length
-    ? Math.max(...trafficStateEntries.map((entry) => Number(entry.shadow?.[field]) || 0))
-    : 0;
-  const trafficStateMaxAbsDrift = trafficStateEntries.length
-    ? Math.max(...trafficStateEntries.map((entry) => Math.abs(Number(entry.shadow?.trafficRangedScoreDrift) || 0)))
-    : 0;
-  const trafficStateMaxAbsProductionStoredDrift = trafficStateEntries.length
-    ? Math.max(...trafficStateEntries.map((entry) => Math.abs(
-      Number(entry.shadow?.trafficProductionReplayStoredDrift) || 0
-    )))
-    : 0;
-  const trafficStateMaxAbsRegisterReplayDrift = trafficStateEntries.length
-    ? Math.max(...trafficStateEntries.map((entry) => Math.abs(
-      Number(entry.shadow?.trafficRegisterReplayDrift) || 0
-    )))
-    : 0;
-  const trafficOccupancyModels = [...new Set(
-    trafficStateEntries
-      .map((entry) => entry.shadow?.trafficOccupancyModel)
-      .filter(Boolean)
-  )];
-  const candidateEntries = trafficStateEntries.length ? trafficStateEntries : entries;
-  const candidateMean = (field) => candidateEntries.length
-    ? Number((candidateEntries.reduce(
-      (total, entry) => total + (Number(entry.shadow?.[field]) || 0),
-      0
-    ) / candidateEntries.length).toFixed(2))
-    : 0;
-  const candidateSum = (field) => Number(candidateEntries.reduce(
-    (total, entry) => total + (Number(entry.shadow?.[field]) || 0),
-    0
-  ).toFixed(2));
-  const candidateMax = (field) => candidateEntries.length
-    ? Math.max(...candidateEntries.map((entry) => Number(entry.shadow?.[field]) || 0))
-    : 0;
-  const candidateTurnEntries = candidateEntries.flatMap((entry) => (
-    Array.isArray(entry.shadow?.candidateEconomyTurns)
-      ? entry.shadow.candidateEconomyTurns.map((turn) => ({
-        startIndex: entry.startIndex,
-        turn
-      }))
-      : []
-  ));
-  const candidatePeakTurns = candidateTurnEntries
-    .filter((entry) => (Number(entry.turn?.damageEconomyRegisterEquivalents) || 0) > 0.005)
-    .sort((left, right) => (
-      (Number(right.turn?.damageEconomyRegisterEquivalents) || 0) -
-      (Number(left.turn?.damageEconomyRegisterEquivalents) || 0)
-    ))
-    .slice(0, 5);
-  const candidateUnsupportedVariants = [...new Set(candidateEntries.flatMap((entry) => (
-    Array.isArray(entry.shadow?.candidateDamageEconomyUnsupportedVariants)
-      ? entry.shadow.candidateDamageEconomyUnsupportedVariants
-      : []
-  )))];
-  const candidateClogAnchors = candidateEntries[0]?.shadow?.candidateClogRegisterEquivalentAnchors ?? [];
-  const rebootRegisterHistogram = Array.from({ length: 5 }, (_, index) => (
-    entries.reduce((total, entry) => {
-      const bucket = Array.isArray(entry.shadow?.rebootCountByRegister)
-        ? entry.shadow.rebootCountByRegister.find((item) => item?.register === index + 1)
-        : null;
-      return total + (Number(bucket?.count) || 0);
-    }, 0)
-  ));
-  const rebootRecoverySourceCounts = new Map();
-  entries.forEach((entry) => {
-    Object.entries(entry.shadow?.rebootRecoverySourceCounts || {}).forEach(([source, count]) => {
-      rebootRecoverySourceCounts.set(
-        source,
-        (rebootRecoverySourceCounts.get(source) || 0) + (Number(count) || 0)
-      );
-    });
-  });
-  const rebootRecoverySourceSummary = [...rebootRecoverySourceCounts.entries()]
-    .filter(([, count]) => count > 0)
-    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
-    .map(([source, count]) => `${source}:${count}`)
-    .join("/") || "none";
-
-  const lines = [
-    "",
-    "DAMAGE_SHADOW v11:",
-    `Diagnostic only; no scoring or route choice. Selected routes ${entries.length}; replay mismatches ${replayMismatches}/${totalTransitions}.`,
-    `Route pressure avg: production intrinsic ${mean("intrinsicHazardScore")}; control replay ${mean("controlReplayHazardScore")}; direct-associated threat score ${mean("directDamageScore")}; replay non-direct ${mean("netNonDirectReplayScore")}. Threat score is counterfactual route pressure and is not itself persistent damage.`,
-    `Replay hazard drift: ${sum("replayHazardDriftTransitionCount")} transition(s); signed ${sum("replayHazardDriftScore")}; absolute ${sum("replayHazardDriftAbsoluteScore")}; peak ${Math.max(...entries.map((entry) => Number(entry.shadow?.peakReplayHazardDrift) || 0))}. Threat attribution uses control-vs-suppressed replay; realized damage is reconstructed separately.`,
-    `Threat chronology: ${sum("damageBearingTransitionCount")} direct-associated transition(s) across ${sum("damageBearingTurnCount")} route-turn(s); non-reboot threat score ${sum("nonRebootDirectDamageScore")}; unresolved direct source ${sum("unresolvedDirectSourceCount")} transition(s)/${sum("unresolvedDirectSourceScore")} score; multi-threat route-turns ${sum("multiDamageBearingTurnCount")}; peak ${Math.max(...entries.map((entry) => Number(entry.shadow?.peakDamageBearingTransitionsInTurn) || 0))} transition(s) in one turn.`,
-    `Realized board damage v1: ${sum("realizedDamageTransitionCount")} physical-damage transition(s) across ${sum("realizedDamageTurnCount")} route-turn(s); total ${sum("realizedDamageUnits")} damage unit(s) [board laser ${sum("realizedBoardLaserDamageUnits")}, flamethrower ${sum("realizedFlamethrowerDamageUnits")}, ledge ${sum("realizedLedgeDamageUnits")}, reboot ${sum("realizedRebootDamageUnits")}]; multi-hit route-turns ${sum("multiRealizedDamageTurnCount")}; peak ${Math.max(...entries.map((entry) => Number(entry.shadow?.peakRealizedDamageEventsInTurn) || 0))} physical-damage transition(s) in one turn. Board lasers count only on the final surviving square after board movement.`,
-    `Burden reference v2: realized route-only damage, not laser-threat traversal score. Input avg ${mean("burdenInputUnits")} physical damage-equivalent unit(s); final unrelieved load avg ${mean("finalUnrelievedDamageLoad")}; shutdown-anchored burden avg ${mean("finalBurdenRegisterEquivalents")}/${Math.max(...entries.map((entry) => Number(entry.shadow?.burdenShutdownRegisterEquivalents) || 5))}R (${Math.round(mean("finalBurdenShutdownFraction") * 100)}%); peak turn input ${Math.max(...entries.map((entry) => Number(entry.shadow?.peakBurdenInputUnitsInTurn) || 0))}; max marginal burden ${Math.max(...entries.map((entry) => Number(entry.shadow?.maxMarginalBurdenRegisterEquivalents) || 0))}; unsupported factual damage source ${sum("burdenUnsupportedDirectTransitionCount")} transition(s)/${sum("burdenUnsupportedDirectScore")} neutral threat score; replay mismatches ${sum("burdenReplayMismatchCount")}.`,
-    `Relief reference v1: route-only/base-rule SPAM-disposal opportunity from the best register each game turn; applies relief before that turn's new realized damage and credits at most ${Math.max(...entries.map((entry) => Number(entry.shadow?.reliefMaxLoadUnitsPerTurn) || 1))} load unit/turn. Candidate turns ${sum("reliefCandidateTurnCount")}; relief used ${sum("reliefAppliedTurnCount")}; avg/max best opportunity ${mean("meanBestReliefOpportunity")}/${Math.max(...entries.map((entry) => Number(entry.shadow?.maxBestReliefOpportunity) || 0)).toFixed(2)}; best-register catastrophic-risk turns ${sum("bestReliefCatastrophicTurnCount")}; potential/applied relief ${sum("totalReliefPotentialUnits")}/${sum("totalReliefAppliedUnits")} load units; final relieved load/burden avg ${mean("finalRelievedDamageLoad")}/${mean("finalRelievedBurdenRegisterEquivalents")}R.`,
-    `Expected composition v2: provisional ${Math.round(mean("expectedSpamShare") * 100)}/${Math.round(mean("expectedHaywireShare") * 100)} persistent-SPAM-like/transient-Haywire-like split applied to realized route damage. Persistent input avg ${mean("totalExpectedPersistentInputUnits")}; route relief leaves persistent load/burden avg ${mean("finalPersistentDamageLoad")}/${mean("finalPersistentBurdenRegisterEquivalents")}R. Transient state clears each game turn: ${sum("transientDamageTurnCount")} realized-damage turn(s), expected affected registers avg/max ${mean("meanTransientExpectedAffectedRegisters")}/${Math.max(...entries.map((entry) => Number(entry.shadow?.maxTransientExpectedAffectedRegisters) || 0)).toFixed(2)}, P(2+ distinct) avg/max ${mean("meanTransientProbabilityAtLeastTwo")}/${Math.max(...entries.map((entry) => Number(entry.shadow?.maxTransientProbabilityAtLeastTwo) || 0)).toFixed(2)}, excess multi-register pressure avg/max ${mean("meanTransientExcessMultiRegisterPressure")}/${Math.max(...entries.map((entry) => Number(entry.shadow?.maxTransientExcessMultiRegisterPressure) || 0)).toFixed(2)}.`,
-    `Traffic damage composition v2: ${trafficStateEntries.length} retained route(s); occupancy ${trafficOccupancyModels.join("/") || "n/a"}, expected other-robot mass avg ${trafficStateMean("trafficOccupancyTotal")}; production-function replay ${trafficStateMean("trafficRangedProductionReplayScore")} vs stored ${trafficStateMean("trafficRangedStoredScore")} (max context/stored drift ${Number(trafficStateMaxAbsProductionStoredDrift.toFixed(3))}); register shadow ${trafficStateMean("trafficRangedEffectiveScoreRecomputed")} vs production replay (max reconstruction drift ${Number(trafficStateMaxAbsRegisterReplayDrift.toFixed(3))}; direct-vs-stored max ${Number(trafficStateMaxAbsDrift.toFixed(3))}); expected robot-laser input avg ${trafficStateMean("trafficExpectedDamageUnits")} damage-equivalent(s). Combined board+robot persistent load/burden avg ${trafficStateMean("combinedPersistentDamageLoad")}/${trafficStateMean("combinedPersistentBurdenRegisterEquivalents")}R, traffic marginal persistent burden ${trafficStateMean("trafficMarginalPersistentBurdenRegisterEquivalents")}R; combined transient affected registers avg/max ${trafficStateMean("combinedMeanTransientExpectedAffectedRegisters")}/${trafficStateMax("combinedMaxTransientExpectedAffectedRegisters").toFixed(2)}, P(2+) avg/max ${trafficStateMean("combinedMeanTransientProbabilityAtLeastTwo")}/${trafficStateMax("combinedMaxTransientProbabilityAtLeastTwo").toFixed(2)}. Nearby/displacement and competition stay separate and continue influencing congestion plus forecast confidence.`,
-    `Legacy damage shadow candidate v3 / turn ledger v1 (obsolete 50/50/state assumptions): ${candidateEntries.length} ${trafficStateEntries.length ? "retained board+traffic" : "board-only"} route(s); diagnostic only, new damage applies next programming turn. Damage-economy RE avg ${candidateMean("candidateTotalDamageEconomyRegisterEquivalents")} [SPAM program-supply ${candidateMean("candidateTotalSpamSupplyRegisterEquivalents")}, nonlinear clog ${candidateMean("candidateTotalClogRegisterEquivalents")}]; clean/SPAM-diluted program probability mean ${candidateMean("candidateMeanCleanProgramProbability")}/${candidateMean("candidateMeanSpamProgramProbability")}. Expected clogs avg-route H/forced-SPAM/total ${candidateMean("candidateTotalExpectedHaywireClogs")}/${candidateMean("candidateTotalExpectedForcedSpamClogs")}/${candidateMean("candidateTotalExpectedClogs")}; worst turn expected clogs ${candidateMax("candidateMaxExpectedClogs").toFixed(2)}, clog RE ${candidateMax("candidateMaxClogRegisterEquivalents").toFixed(2)}, P(4+)/P(full) ${candidateMax("candidateMaxProbabilityFourPlusClogs").toFixed(2)}/${candidateMax("candidateMaxProbabilityFullClog").toFixed(2)}; clog anchors ${candidateClogAnchors.join("/") || "n/a"} RE for 0..5 clogs. Max programming-time burden SPAM/Haywire ${candidateMax("candidateMaxSpamBurdenAtProgramming").toFixed(2)}/${candidateMax("candidateMaxHaywireBurdenAtProgramming").toFixed(2)}.`,
-    `Legacy damage shadow relief v3: stationary-hand approximation, no literal deck/reshuffle chronology. Positive registers ${candidateSum("candidatePositiveReliefRegisterCount")}, traffic-zeroed ${candidateSum("candidateTrafficSuppressedReliefRegisterCount")}; opportunity ${candidateSum("candidateTotalReliefOpportunity")}, expected SPAM initiations/removal ${candidateSum("candidateTotalReliefInitiations")}/${candidateSum("candidateTotalReliefExpectedRemoval")}, mean SPAM-chain yield ${candidateMean("candidateMeanReliefChainYield")}x, extra removal from SPAM->SPAM chains ${candidateSum("candidateSpamChainExtraRemoved")}; forced reboots clearing Haywire ${candidateSum("candidateRebootHaywireClearCount")} turn(s)/${candidateSum("candidateExpectedHaywireClearedByReboot")} expected pending Haywire; final SPAM avg ${candidateMean("candidateFinalSpamBurden")}, terminal next-turn Haywire avg ${candidateMean("candidateTerminalHaywireBurden")}.${candidateUnsupportedVariants.length ? ` Base-rule shadow does not yet apply optional damage variants: ${candidateUnsupportedVariants.join(", ")}.` : ""}`,
-    ...(candidatePeakTurns.length ? [
-      `Damage turn peaks: ${candidatePeakTurns.map(({ startIndex, turn }) => (
-        `#${startIndex + 1} T${turn.turn} ${turn.damageEconomyRegisterEquivalents}RE [supply ${turn.spamSupplyRegisterEquivalents}, clog ${turn.clogRegisterEquivalents}; clogs H/S/total ${turn.expectedHaywireClogs}/${turn.expectedForcedSpamClogs}/${turn.expectedTotalClogs}; P ${turn.cleanProgramProbability}->${turn.spamProgramProbability}; S ${turn.spamAtProgramming}; relief ${turn.reliefInitiations} init/${turn.expectedSpamRemoved} removed @chain ${turn.expectedSpamChainYieldAtStart}; dmg B/T ${turn.boardDamageUnits}/${turn.trafficDamageUnits}${turn.rebooted ? `; reboot R${turn.rebootRegister}, H-clear ${turn.haywireClearedByReboot}` : ""}]`
-      )).join(" | ")}`
-    ] : []),
-    `Exact reboot chronology v49k: reboots ${sum("explicitRebootCount")} (mid-turn ${sum("midTurnRebootCount")}; by register ${rebootRegisterHistogram.map((count, index) => `R${index + 1}:${count}`).join("/")}; recovery ${rebootRecoverySourceSummary}); physical damage ${sum("explicitRebootDamageUnits")}; skipped/lost registers ${sum("lostRegisters")}; turn-end clock mismatches ${sum("rebootTurnEndClockMismatchCount")}; reboot damage score ${sum("rebootDamageScore")}; skipped-register tempo ${sum("lostRegisterTempoOnlyScore")}; legacy discontinuity ${sum("rebootDiscontinuityScore")}; production reboot-route penalty total ${sum("lostRegisterTempoScore")}. Elapsed-clock gaps add no second tempo charge.`,
-    `Existing traffic totals unchanged: ranged ${trafficMean("trafficRanged")}; nearby/displacement ${trafficMean("trafficNearby")}; competition ${trafficMean("trafficCompetition")}.`
-  ];
-
-  if (includePerStart) {
-    entries.forEach((entry) => {
-      const shadow = entry.shadow;
-      lines.push(
-        `DAMAGE_SHADOW start #${entry.startIndex + 1}: production hazard ${shadow.intrinsicHazardScore}, control ${shadow.controlReplayHazardScore}, direct-associated threat ${shadow.directDamageScore}, replay non-direct ${shadow.netNonDirectReplayScore}, drift abs ${shadow.replayHazardDriftAbsoluteScore}, threat transitions/turns ${shadow.damageBearingTransitionCount}/${shadow.damageBearingTurnCount}, realized damage ${shadow.realizedDamageUnits} [laser ${shadow.realizedBoardLaserDamageUnits}, flamer ${shadow.realizedFlamethrowerDamageUnits}, ledge ${shadow.realizedLedgeDamageUnits}, reboot ${shadow.realizedRebootDamageUnits}] across ${shadow.realizedDamageTransitionCount}/${shadow.realizedDamageTurnCount}, burden input/unrelieved-load ${shadow.burdenInputUnits}/${shadow.finalUnrelievedDamageLoad}, route persistent input/load/burden ${shadow.totalExpectedPersistentInputUnits}/${shadow.finalPersistentDamageLoad}/${shadow.finalPersistentBurdenRegisterEquivalents}R, transient affected avg/max ${shadow.meanTransientExpectedAffectedRegisters}/${shadow.maxTransientExpectedAffectedRegisters}, relief ${shadow.splitReliefAppliedUnits} across ${shadow.splitReliefAppliedTurnCount} turn(s), candidate damage-economy RE ${shadow.candidateTotalDamageEconomyRegisterEquivalents} [supply ${shadow.candidateTotalSpamSupplyRegisterEquivalents}, clog ${shadow.candidateTotalClogRegisterEquivalents}], clogs H/S/total ${shadow.candidateTotalExpectedHaywireClogs}/${shadow.candidateTotalExpectedForcedSpamClogs}/${shadow.candidateTotalExpectedClogs}, clean/SPAM P ${shadow.candidateMeanCleanProgramProbability}/${shadow.candidateMeanSpamProgramProbability}, candidate SPAM removed/final ${shadow.candidateSpamBurdenRemoved}/${shadow.candidateFinalSpamBurden}, traffic state ${shadow.trafficStatefulAvailable ? `input ${shadow.trafficExpectedDamageUnits}, ranged register/reference/stored ${shadow.trafficRangedEffectiveScoreRecomputed}/${shadow.trafficRangedProductionReplayScore}/${shadow.trafficRangedStoredScore}, reconstruction drift ${shadow.trafficRegisterReplayDrift}, context/stored drift ${shadow.trafficProductionReplayStoredDrift}, combined load/burden ${shadow.combinedPersistentDamageLoad}/${shadow.combinedPersistentBurdenRegisterEquivalents}R, marginal ${shadow.trafficMarginalPersistentBurdenRegisterEquivalents}R` : "n/a (not retained traffic field)"}, nearby/competition ${Number(entry.trafficNearby.toFixed(2))}/${Number(entry.trafficCompetition.toFixed(2))}, reboots ${shadow.explicitRebootCount} (mid-turn ${shadow.midTurnRebootCount ?? 0}), lost registers ${shadow.lostRegisters}, H-clear ${shadow.candidateRebootHaywireClearCount ?? 0}/${shadow.candidateExpectedHaywireClearedByReboot ?? 0}, turn-end clock mismatch ${shadow.rebootTurnEndClockMismatchCount ?? 0}${shadow.replayMismatchCount ? `, replay mismatch ${shadow.replayMismatchCount}/${shadow.transitionCount}` : ""}${shadow.burdenReplayMismatchCount ? `, burden replay mismatch ${shadow.burdenReplayMismatchCount}` : ""}`
-      );
-    });
-  }
-
-  if (includeEventStream) {
-    entries.forEach((entry) => {
-      const candidateEconomyTurns = Array.isArray(entry.shadow?.candidateEconomyTurns)
-        ? entry.shadow.candidateEconomyTurns
-        : [];
-      candidateEconomyTurns
-        .filter((turn) => (
-          (Number(turn?.spamAtProgramming) || 0) > 0.0005 ||
-          (Number(turn?.haywireAtProgramming) || 0) > 0.0005 ||
-          (Number(turn?.pendingSpamBurden) || 0) > 0.0005 ||
-          (Number(turn?.expectedSpamRemoved) || 0) > 0.0005 ||
-          (Number(turn?.damageEconomyRegisterEquivalents) || 0) > 0.0005
-        ))
-        .forEach((turn) => {
-          lines.push(
-            `DAMAGE_SHADOW candidate-turn start #${entry.startIndex + 1} T${turn.turn} (${turn.programRegisters}R): burden S/H ${turn.spamAtProgramming}/${turn.haywireAtProgramming}; program P clean/SPAM ${turn.cleanProgramProbability}/${turn.spamProgramProbability} (ratio ${turn.spamProgramProbabilityRatio}), supply +${turn.spamSupplyRegisterEquivalents}RE; expected SPAM hand ${turn.expectedSpamDrawn}, clogs H/S/total ${turn.expectedHaywireClogs}/${turn.expectedForcedSpamClogs}/${turn.expectedTotalClogs}, clog ${turn.clogRegisterEquivalents}RE, total damage-economy ${turn.damageEconomyRegisterEquivalents}RE, P4+/full ${turn.probabilityFourPlusClogs}/${turn.probabilityFullClog}; relief opportunity/init/remove ${turn.reliefOpportunity}/${turn.reliefInitiations}/${turn.expectedSpamRemoved}, chain ${turn.expectedSpamChainYieldAtStart} (+${turn.spamChainExtraRemoved}); damage board/traffic ${turn.boardDamageUnits}/${turn.trafficDamageUnits} -> pending S ${turn.pendingSpamBurden}, next H ${turn.nextHaywireBurden}; S ${turn.spamAfterReliefBeforeDamage}->${turn.spamAtTurnEnd}${turn.rebooted ? `; reboot R${turn.rebootRegister} ends turn, clears ${turn.haywireClearedByReboot} pending H` : ""}`
-          );
-        });
-
-      const candidateReliefRegisters = Array.isArray(entry.shadow?.candidateReliefRegisters)
-        ? entry.shadow.candidateReliefRegisters
-        : [];
-      candidateReliefRegisters
-        .filter((record) => (
-          (Number(record?.reliefOpportunity) || 0) > 0.0005 ||
-          (Number(record?.expectedSpamRemoved) || 0) > 0 ||
-          (Number(record?.boardDamageUnits) || 0) > 0 ||
-          (Number(record?.trafficDamageUnits) || 0) > 0
-        ))
-        .forEach((record) => {
-          lines.push(
-            `DAMAGE_SHADOW candidate-relief start #${entry.startIndex + 1} T${record.turn}R${record.register} a${record.absoluteAction}: allowance ${record.timingAllowance}; minus movement/orientation/stationary/board/traffic ${record.movementPenalty}/${record.orientationPenalty}/${record.stationaryPenalty}/${record.boardComplexityPenalty}/${record.trafficPenalty}; plus conveyor/continuity ${record.cleanMovementBonus}/${record.continuityBonus} (run ${record.directionRunLength}); opportunity ${record.reliefOpportunity}, expected initiation ${record.reliefInitiation}, chain yield ${record.spamChainYield}, SPAM removed ${record.expectedSpamRemoved}, remaining expected initiations ${record.remainingExpectedSpamInitiations}; damage board/traffic ${record.boardDamageUnits}/${record.trafficDamageUnits}`
-          );
-        });
-
-      const reliefTurns = Array.isArray(entry.shadow?.reliefTurns) ? entry.shadow.reliefTurns : [];
-      reliefTurns
-        .filter((turn) => (Number(turn?.loadAtTurnStart) || 0) > 0 || (Number(turn?.appliedRelief) || 0) > 0)
-        .forEach((turn) => {
-          lines.push(
-            `DAMAGE_SHADOW relief start #${entry.startIndex + 1} T${turn.turn}: best R${turn.bestRegister ?? "?"}, opportunity ${turn.opportunity}, quality ${turn.meanQuality}, forgiving ${turn.forgivingShare}, exact ${turn.exactShare}, catastrophic ${turn.catastrophicShare}, damage-share ${turn.directDamageShare}; potential/applied ${turn.potentialRelief}/${turn.appliedRelief}; load ${turn.loadAtTurnStart}->${turn.loadAfterRelief}->${turn.loadAtTurnEnd}`
-          );
-        });
-
-      const compositionTurns = Array.isArray(entry.shadow?.compositionTurns) ? entry.shadow.compositionTurns : [];
-      compositionTurns.forEach((turn) => {
-        lines.push(
-          `DAMAGE_SHADOW composition start #${entry.startIndex + 1} T${turn.turn}: damage ${turn.damageInputUnits}, expected persistent/transient ${turn.expectedPersistentInputUnits}/${turn.expectedTransientInputUnits}; transient affected-regs ${turn.expectedAffectedRegisters}, P2+ ${turn.probabilityAtLeastTwoAffectedRegisters}, P3+ ${turn.probabilityAtLeastThreeAffectedRegisters}, excess-multi ${turn.excessMultiRegisterPressure}; persistent relief ${turn.appliedRelief}/${turn.potentialRelief}, load ${turn.persistentLoadAtTurnStart}->${turn.persistentLoadAfterRelief}->${turn.persistentLoadAtTurnEnd}`
-        );
-      });
-
-      const trafficCompositionTurns = Array.isArray(entry.shadow?.trafficCompositionTurns)
-        ? entry.shadow.trafficCompositionTurns
-        : [];
-      trafficCompositionTurns.forEach((turn) => {
-        lines.push(
-          `DAMAGE_SHADOW traffic-composition start #${entry.startIndex + 1} T${turn.turn}: board ${turn.boardDamageUnits} + robot-laser expected ${turn.trafficExpectedDamageUnits} = ${turn.combinedDamageUnits} damage-equivalents; persistent relief ${turn.appliedRelief}, load ${turn.persistentLoadAtTurnStart}->${turn.persistentLoadAfterRelief}->${turn.persistentLoadAtTurnEnd}; transient affected-regs ${turn.expectedAffectedRegisters}, P2+ ${turn.probabilityAtLeastTwoAffectedRegisters}, excess-multi ${turn.excessMultiRegisterPressure}`
-        );
-      });
-
-      const trafficRegisterInputs = Array.isArray(entry.shadow?.trafficRegisterInputs)
-        ? entry.shadow.trafficRegisterInputs
-        : [];
-      trafficRegisterInputs
-        .filter((record) => (Number(record?.expectedDamageUnits) || 0) > 0.0005)
-        .forEach((record) => {
-          lines.push(
-            `DAMAGE_SHADOW traffic start #${entry.startIndex + 1} T${record.turn}R${record.register} a${record.absoluteAction}: robot-laser raw/effective ${record.rawRangedScore}/${record.effectiveRangedScore}, expected damage ${record.expectedDamageUnits}, confidence ${record.confidence}, leg weight ${record.legWeight}`
-          );
-        });
-
-      const events = Array.isArray(entry.shadow?.damageEvents) ? entry.shadow.damageEvents : [];
-      events.forEach((event) => {
-        const from = event.from
-          ? `(${event.from.x},${event.from.y},${event.from.facing ?? "?"})`
-          : "(?)";
-        const to = event.to
-          ? `(${event.to.x},${event.to.y},${event.to.facing ?? "?"})`
-          : "(?)";
-        const threatSources = event.sourceTypes?.length
-          ? event.sourceTypes.join("+")
-          : "unresolved-direct-source";
-        const realizedSources = event.realizedSourceTypes?.length
-          ? event.realizedSourceTypes.join("+")
-          : "none";
-        const rebootDetail = event.rebooted
-          ? `, exact reboot damage ${event.exactDamageUnits ?? "?"}, lost registers ${event.lostRegisters ?? 0}, reboot-score ${event.rebootDamageScore ?? 0}, route continues ${event.routeContinuesAfterReboot ? "yes" : "no"}`
-          : "";
-        lines.push(
-          `DAMAGE_SHADOW event start #${entry.startIndex + 1} T${event.turn}R${event.register} a${event.absoluteAction}/${event.routeActionCount || "?"} leg${event.legIndex + 1}.${event.legAction}: threat ${threatSources}; realized ${realizedSources}; action ${event.action ?? "?"}; threat-score ${event.directDamageScore}, neutral-threat ${event.neutralDirectDamageScore ?? 0}, physical-input ${event.burdenInputUnits ?? 0} [laser ${event.realizedBoardLaserDamageUnits ?? 0}, flamer ${event.realizedFlamethrowerDamageUnits ?? 0}, ledge ${event.realizedLedgeDamageUnits ?? 0}, reboot ${event.realizedRebootDamageUnits ?? 0}], expected persistent/transient ${event.expectedPersistentInputUnits ?? 0}/${event.expectedTransientInputUnits ?? 0}, unrelieved-load ${event.burdenLoadBefore ?? 0}->${event.burdenLoadAfter ?? 0}, unrelieved burden ${event.burdenRegisterEqBefore ?? 0}->${event.burdenRegisterEqAfter ?? 0}R (Δ${event.marginalBurdenRegisterEq ?? 0}), relieved-load ${event.reliefLoadBefore ?? 0}->${event.reliefLoadAfter ?? 0}, relieved burden ${event.reliefBurdenRegisterEqBefore ?? 0}->${event.reliefBurdenRegisterEqAfter ?? 0}R (Δ${event.reliefMarginalBurdenRegisterEq ?? 0}), production-control drift ${event.productionControlHazardDrift ?? 0}; ${from}->${to}${rebootDetail}`
-        );
-      });
-    });
-  }
-
-  return lines;
-}
-// DAMAGE_SHADOW_END
 
 function buildScenarioReport(scenario, selectedLegIndices = null) {
   const reportStartedAt = typeof performance !== "undefined" ? performance.now() : NaN;
-  const devTiming = { ledgerMs: 0, cheapShadowMs: 0, damageFoundationMs: 0, damageShadowMs: 0, selectorShadowMs: 0 };
+  const devTiming = { ledgerMs: 0, cheapShadowMs: 0, damageFoundationMs: 0, reDifficultyMs: 0, reDifficultyReplayMs: 0, reDifficultyPoolMs: 0 };
   const replayCache = getScenarioDevReplayCache(scenario);
   const summary = scenario.sequence.firstLeg.summary;
   const checkpointPlacementAdvisory = getCheckpointPlacementAdvisory(scenario);
@@ -21057,24 +20366,39 @@ function buildScenarioReport(scenario, selectedLegIndices = null) {
     !scenario.payToWin &&
     !scenario.subsidizedStarts
   );
-  let normalSelectorShadow = null;
-  if (
-    isDevViewEnabled() &&
-    !scenario.competitiveMode &&
-    !scenario.payToWin &&
-    !scenario.subsidizedStarts &&
-    !scenario.virtualBots
-  ) {
-    const selectorShadowStartedAt = typeof performance !== "undefined"
+  let reDifficultyShadow = null;
+  if (isDevViewEnabled()) {
+    const reDifficultyStartedAt = typeof performance !== "undefined"
       ? performance.now()
       : NaN;
-    if (replayCache && replayCache.normalSelectorShadow !== undefined) {
-      normalSelectorShadow = replayCache.normalSelectorShadow;
+    if (replayCache && replayCache.reDifficultyShadow !== undefined) {
+      reDifficultyShadow = replayCache.reDifficultyShadow;
     } else {
-      normalSelectorShadow = buildNormalSelectorConditionedEconomyShadow(scenario);
-      if (replayCache) replayCache.normalSelectorShadow = normalSelectorShadow;
+      reDifficultyShadow = buildRETurnDifficultyShadow(scenario, {
+        replayCache,
+        timing: devTiming
+      });
+      if (replayCache) replayCache.reDifficultyShadow = reDifficultyShadow;
     }
-    addDevTiming(devTiming, "selectorShadowMs", selectorShadowStartedAt);
+    addDevTiming(devTiming, "reDifficultyMs", reDifficultyStartedAt);
+  }
+
+  let reDifficultyCandidatePoolShadow = null;
+  if (isDevViewEnabled()) {
+    const poolStartedAt = typeof performance !== "undefined"
+      ? performance.now()
+      : NaN;
+    if (replayCache && replayCache.reDifficultyCandidatePoolShadow !== undefined) {
+      reDifficultyCandidatePoolShadow = replayCache.reDifficultyCandidatePoolShadow;
+    } else {
+      reDifficultyCandidatePoolShadow = buildRETurnDifficultyCandidatePoolShadow(scenario, {
+        timing: devTiming
+      });
+      if (replayCache) {
+        replayCache.reDifficultyCandidatePoolShadow = reDifficultyCandidatePoolShadow;
+      }
+    }
+    addDevTiming(devTiming, "reDifficultyPoolMs", poolStartedAt);
   }
 
   function formatOutlierReasons(reasons) {
@@ -21089,7 +20413,7 @@ function buildScenarioReport(scenario, selectedLegIndices = null) {
         : "Pay to Win compensation-first residual pruning");
     }
     if (reasons.payToWinUnavailable) {
-      parts.push("legacy selector-unavailable state (should not occur under v49cn compensation-first pricing)");
+      parts.push("legacy selector-unavailable state (should not occur under v49ct compensation-first pricing)");
     }
     if (reasons.normalBalancePruned) {
       const zText = Number.isFinite(reasons.scoreZ)
@@ -21280,6 +20604,13 @@ function buildScenarioReport(scenario, selectedLegIndices = null) {
     scenario.metrics.variantDifficultyAccounting
       ? `Variant difficulty accounting v38: route/base ${scenario.metrics.variantDifficultyAccounting.base} -> final ${scenario.metrics.variantDifficultyAccounting.final} (residual delta ${scenario.metrics.variantDifficultyAccounting.delta}); residuals ${(scenario.metrics.variantDifficultyAccounting.contributions ?? []).map((entry) => `${entry.id} ${entry.delta >= 0 ? "+" : ""}${entry.delta} [${entry.kind}]`).join(", ") || "none"}; mechanically represented ${(scenario.metrics.variantDifficultyAccounting.mechanicalRules ?? []).map((entry) => `${entry.id} (${entry.note})`).join(", ") || "none"}`
       : "Variant difficulty accounting v38: n/a",
+    reDifficultyShadow?.active
+      ? `RE-turn difficulty v49dc OBSERVATIONAL: completed effective RE minus programmed-register tempo minus lost-register tempo, normalized by programming turns (not register count); occupancy-weighted mean ${reDifficultyShadow.expectedMeanTurnBurdenRE}RE/turn, +turn-p${Math.round((reDifficultyShadow.tailQuantile ?? 0.75) * 100)} peak(${reDifficultyShadow.routePeakWeight}) -> ${reDifficultyShadow.expectedPeakAdjustedTurnBurdenRE}, +likely-start p${Math.round((reDifficultyShadow.tailQuantile ?? 0.75) * 100)} tail ${reDifficultyShadow.likelyStartTailTurnBurdenRE}(${reDifficultyShadow.courseTailWeight}) -> composite ${reDifficultyShadow.courseTurnDifficultyRE}; occupancy ${reDifficultyShadow.occupancyMass}/${reDifficultyShadow.playerCount} across ${reDifficultyShadow.startCount} start(s), route-mixture entries ${reDifficultyShadow.routeMixtureEntryCount} (${reDifficultyShadow.averageRouteFamiliesPerStart}/start); legacy ${reDifficultyShadow.legacyDifficultyRaw} = ${reDifficultyShadow.legacyDifficultyLabel}; current forecast uncertainty ${reDifficultyShadow.currentForecastEquivalentActions} equivalent register(s); behavior unchanged`
+      : `RE-turn difficulty v49dc OBSERVATIONAL: ${reDifficultyShadow?.reason ?? "n/a"}`,
+    `RE-turn tier migration v49dc: production thresholds remain UNCALIBRATED; requested legacy tiers are NOT calibration truth; Dev calibration uses only Any-difficulty candidate samples; future Beginner < Intermediate < Advanced < Brutal bands are non-overlapping, Advanced bounded above, Brutal exclusive top; legacy difficultyRaw still owns production acceptance`,
+    reDifficultyCandidatePoolShadow?.active
+      ? `RE-turn difficulty candidate pool v49dc OBSERVATIONAL: ${reDifficultyCandidatePoolShadow.candidateCount} acceptable candidate(s), composite range ${reDifficultyCandidatePoolShadow.minComposite}..${reDifficultyCandidatePoolShadow.maxComposite}, selected ${reDifficultyCandidatePoolShadow.selectedComposite ?? "n/a"}; ${(reDifficultyCandidatePoolShadow.entries ?? []).map((entry) => `c${entry.candidate}${entry.selected ? "*" : ""} fit${entry.fitScore} legacy${entry.legacyDifficultyRaw}/${entry.legacyDifficultyLabel} turn${entry.shadow.courseTurnDifficultyRE} mean${entry.shadow.expectedMeanTurnBurdenRE} peak${entry.shadow.expectedPeakAdjustedTurnBurdenRE} tail${entry.shadow.likelyStartTailTurnBurdenRE} len${entry.lengthRaw} unc${entry.currentForecastEquivalentActions} starts${entry.usableStarts}`).join(" | ")}; generation selection unchanged, no fresh pathfinding`
+      : `RE-turn difficulty candidate pool v49dc OBSERVATIONAL: ${reDifficultyCandidatePoolShadow?.reason ?? "n/a"}`,
     scenario.metrics.programmingPressure
       ? `Programming pressure v38: combined ${scenario.metrics.programmingPressure.planningPressure}, timed ${scenario.metrics.programmingPressure.timedPressure}; hazard ${scenario.metrics.programmingPressure.hazardPressure} (${scenario.metrics.programmingPressure.hazardPerRegister}/reg), traffic ${scenario.metrics.programmingPressure.trafficPressure} (${scenario.metrics.programmingPressure.trafficPerRegister}/reg), control ${scenario.metrics.programmingPressure.controlPressure} (${scenario.metrics.programmingPressure.controlPerRegister}/reg), cards ${scenario.metrics.programmingPressure.cardPressure}; avg gears ${scenario.metrics.programmingPressure.averageGearTurns ?? 0}, conveyor turns ${scenario.metrics.programmingPressure.averageConveyorTurns ?? 0}, forced spaces ${scenario.metrics.programmingPressure.averageForcedSpaces ?? 0}`
       : "Programming pressure v38: n/a",
@@ -21367,9 +20698,9 @@ function buildScenarioReport(scenario, selectedLegIndices = null) {
         const audit = summary.payToWin.reOwnershipAudit;
         const early = audit.early;
         const late = audit.late;
-        return `Economy start RE ownership v49cn LIVE: ${audit.mode}; RE-native occupancy + incremental 1E until Normal-style prune is avoided; early raw/post sd ${early.rawStdDev ?? "n/a"}/${early.postStdDev ?? "n/a"}, nonzero ${early.nonzeroAdjustments ?? 0}, max ${summary.payToWin.subsidizedStarts ? "+" : ""}${early.maxAdjustment ?? 0}E${summary.payToWin.latePricingActive ? `; late raw/post sd ${late.rawStdDev ?? "n/a"}/${late.postStdDev ?? "n/a"}, nonzero ${late.nonzeroAdjustments ?? 0}, max ${summary.payToWin.subsidizedStarts ? "+" : ""}${late.maxAdjustment ?? 0}E` : ""}; extreme-baseline availability retired`;
+        return `Economy start RE ownership v49ct LIVE: ${audit.mode}; RE-native occupancy + incremental 1E until Energy-actionable RE prune is avoided; literal duration diagnostic-only; early raw/post sd ${early.rawStdDev ?? "n/a"}/${early.postStdDev ?? "n/a"}, penalty ${early.residualPenalty ?? 0}, ignored-duration ${early.ignoredDurationPenalty ?? 0}, nonzero ${early.nonzeroAdjustments ?? 0}, max ${summary.payToWin.subsidizedStarts ? "+" : ""}${early.maxAdjustment ?? 0}E${summary.payToWin.latePricingActive ? `; late raw/post sd ${late.rawStdDev ?? "n/a"}/${late.postStdDev ?? "n/a"}, penalty ${late.residualPenalty ?? 0}, ignored-duration ${late.ignoredDurationPenalty ?? 0}, nonzero ${late.nonzeroAdjustments ?? 0}, max ${summary.payToWin.subsidizedStarts ? "+" : ""}${late.maxAdjustment ?? 0}E` : ""}; extreme-baseline availability retired`;
       })()
-      : "Economy start RE ownership v49cn: n/a",
+      : "Economy start RE ownership v49ct: n/a",
     summary.payToWin?.selectorRuntimeOptimization
       ? (() => {
         const runtime = summary.payToWin.selectorRuntimeOptimization;
@@ -21379,10 +20710,14 @@ function buildScenarioReport(scenario, selectedLegIndices = null) {
     summary.payToWin?.targetedEnergyRescue
       ? (() => {
         const rescue = summary.payToWin.targetedEnergyRescue;
-        const details = (rescue.details ?? []).map((entry) => `#${entry.index + 1}@${entry.startingEnergy}E ${entry.reason}${Number.isFinite(entry.penaltyBefore) && Number.isFinite(entry.penaltyAfter) ? ` ${entry.penaltyBefore}->${entry.penaltyAfter}` : ""}`).join(" | ");
-        return `Economy targeted Energy rescue v49cn: attempts ${rescue.attempts ?? 0}, accepted ${rescue.accepted ?? 0}, saved prunes ${rescue.savedPrunes ?? 0}, routes discovered/added ${rescue.routesDiscovered ?? 0}/${rescue.routesAdded ?? 0}${details ? `; ${details}` : ""}`;
+        const details = (rescue.details ?? []).map((entry) => (
+          `#${entry.index + 1}${Number.isFinite(entry.startingEnergy) ? `@${entry.startingEnergy}E` : ""} ` +
+          `${entry.directionProfile?.mode ?? ""} ${entry.reason}` +
+          `${Number.isFinite(entry.penaltyBefore) && Number.isFinite(entry.penaltyAfter) ? ` ${entry.penaltyBefore}->${entry.penaltyAfter}` : ""}`
+        ).replace(/\s+/g, " ").trim()).join(" | ");
+        return `Economy targeted Energy rescue v49ct: attempts ${rescue.attempts ?? 0}, direction-skips ${rescue.skippedDirectionMismatch ?? 0}, accepted ${rescue.accepted ?? 0}, saved prunes ${rescue.savedPrunes ?? 0}, routes discovered/added ${rescue.routesDiscovered ?? 0}/${rescue.routesAdded ?? 0}${details ? `; ${details}` : ""}`;
       })()
-      : "Economy targeted Energy rescue v49cn: n/a",
+      : "Economy targeted Energy rescue v49ct: n/a",
     summary.payToWin?.pricingEntries?.length
       ? `Priced start residuals: ${summary.payToWin.pricingEntries.map((entry) => {
         const prefix = summary.payToWin.subsidizedStarts ? "+" : "";
@@ -21398,25 +20733,9 @@ function buildScenarioReport(scenario, selectedLegIndices = null) {
     summary.normalStartBalance?.active
       ? `Normal start balance v49bq: RE-native iterative, pruned ${(summary.normalStartBalance.pressurePruned ?? []).length ? (summary.normalStartBalance.pressurePruned ?? []).map((item) => `#${item.index + 1}(RE outlier; z ${item.diagnostics?.scoreZ ?? "n/a"}; ΔRE ${item.diagnostics?.scoreDelta ?? "n/a"}; regs ${item.actions ?? "n/a"}; pass ${item.pass ?? "n/a"})`).join(", ") : "none"}, retained ${summary.normalStartBalance.retainedCount ?? scenario.metrics?.usableStarts?.length ?? "n/a"}, effectiveRE ${summary.normalStartBalance.retainedEffectiveREMin ?? summary.normalStartBalance.retainedScoreMin ?? "n/a"}..${summary.normalStartBalance.retainedEffectiveREMax ?? summary.normalStartBalance.retainedScoreMax ?? "n/a"}, RE stddev ${summary.normalStartBalance.balanceStdDevBefore ?? "n/a"}->${summary.normalStartBalance.balanceStdDevAfter ?? "n/a"}/${summary.normalStartBalance.balanceStdDevLimit ?? NORMAL_EFFECTIVE_RE_FAIRNESS_STDDEV_LIMIT}, action pruning OFF, RE-balance pruning ON only above player floor, duration guardrail ${(summary.normalStartBalance.durationGuardrail?.min ?? "n/a")}..${(summary.normalStartBalance.durationGuardrail?.max ?? "n/a")} regs (range ${summary.normalStartBalance.durationGuardrail?.range ?? "n/a"}/${summary.normalStartBalance.durationGuardrail?.allowedRange ?? "n/a"}; ${summary.normalStartBalance.durationGuardrail?.violation ? "VIOLATION" : "pass"}), worst remaining RE z ${summary.normalStartBalance.worstRemainingScoreZ ?? "n/a"}, traffic recomputations ${summary.normalStartBalance.trafficRecomputations ?? 0}, remainingBad ${(summary.normalStartBalance.remainingBadStarts ?? []).length}, floor ${summary.normalStartBalance.retainedCount ?? "n/a"}/${summary.normalStartBalance.playerFloor ?? scenario.playerCount ?? "?"}${summary.normalStartBalance.floorReached ? " reached" : ""}, residual scorer penalty ${summary.normalStartBalance.residualSelectionPenalty ?? 0}, hard-fail ${summary.normalStartBalance.belowPlayerFloor ? "yes" : "no"}`
       : "Normal start balance: n/a",
-    normalSelectorShadow?.active
-      ? (() => {
-        const formatSelectors = (phase) => phase?.selectors?.length
-          ? `p${phase.selectors.join("-")}`
-          : "none";
-        const formatPhase = (phase) => {
-          if (!phase) return "n/a";
-          const penalty = phase.penalty ?? {};
-          const prune = phase.wouldPrune
-            ? `prune #${(phase.pruneCandidateIndex ?? -1) + 1} Δ${phase.pruneImprovement}`
-            : "no prune";
-          return `${formatSelectors(phase)} sd ${phase.stdDev}RE, penalty ${penalty.total ?? 0} [disp ${penalty.reDispersion ?? 0}, outlier ${penalty.outlier ?? 0}, duration ${penalty.duration ?? 0}], worstZ ${phase.worstScoreZ ?? 0}, ${prune}`;
-        };
-        const split = normalSelectorShadow.selectorSplit?.selected
-          ? `after-p${normalSelectorShadow.selectorSplit.cutoffAfter}`
-          : "none";
-        return `Normal selector-conditioned economy shadow v49cs OBSERVATIONAL: SAME FROZEN COURSE, 0E adjustment, existing discovered routes only, fresh searches 0; Normal ${formatPhase(normalSelectorShadow.normalPhase)}; selector split ${split}; early ${formatPhase(normalSelectorShadow.earlyPhase)}; late ${formatPhase(normalSelectorShadow.latePhase)}; Normal-vs-selector disagreement ${normalSelectorShadow.disagreement ? "YES" : "no"}; selector evaluations ${normalSelectorShadow.evaluationCount ?? 0}, sampled scenarios ${normalSelectorShadow.scenarioSamples ?? 0} (${Object.entries(normalSelectorShadow.scenarioSamplesBySelector ?? {}).map(([selector, count]) => `p${selector}:${count}`).join(", ") || "none"}); behavior unchanged`;
-      })()
-      : `Normal selector-conditioned economy shadow v49cs: ${normalSelectorShadow?.reason ?? "n/a"}`,
+    reDifficultyShadow?.active
+      ? `RE-turn difficulty starts v49dc: ${(reDifficultyShadow.perStart ?? []).map((entry) => `#${entry.index + 1} occ${Number(entry.occupancy).toFixed(3)} mix${entry.routeCount} eff${Number(entry.effectiveRE).toFixed(2)}RE regs${Number(entry.programmedRegisters).toFixed(2)} turns${Number(entry.programmingTurns).toFixed(2)} lost${Number(entry.lostRegisterTempoRE).toFixed(2)} burden${Number(entry.burdenRE).toFixed(2)} meanTurn${Number(entry.meanTurnBurdenRE).toFixed(3)} peakTurn${Number(entry.turnTailBurdenRE).toFixed(3)} composite${Number(entry.routeTurnDifficultyRE).toFixed(3)}`).join(" | ")}`
+      : `RE-turn difficulty starts v49dc: ${reDifficultyShadow?.reason ?? "n/a"}`,
     scenario.movingTargetReentryMarkers?.length
       ? `Moving target re-entry: ${scenario.movingTargetReentryMarkers.map((marker) => `${marker.label}(${marker.x},${marker.y})`).join(", ")}`
       : "Moving target re-entry: none",
@@ -21438,7 +20757,7 @@ function buildScenarioReport(scenario, selectedLegIndices = null) {
         const audit = summarizeTrafficOwnershipAuditSafe();
         const own = summary.fullCourseTraffic?.ownershipAuditV49bk ?? null;
         return audit && own
-          ? `Traffic ownership v49ce: avg effective ${summary.fullCourseTraffic?.averagePenalty ?? 0} score (mechanical traffic only); robot-laser damage ${own.averageRobotLaserDamageScore ?? 0} score = ${own.averageRobotLaserDamageRE ?? 0} RE via damage economy; residual ranged threat ${own.averageResidualRangedThreatPenalty ?? 0}; nearby turn-episode control AUTHORITATIVE ${own.averageNearbyPenalty ?? 0} score = ${own.averageAuthoritativeNearbyControlRE ?? 0} RE (legacy nearby comparator ${own.averageLegacyNearbyPenalty ?? 0}); traffic-awareness mental AUTHORITATIVE downstream ${own.averageTrafficAwarenessMentalRE ?? 0} RE from event mass ${own.averageTrafficAwarenessEventMass ?? 0} (laser ${own.averageTrafficAwarenessRobotLaserEventMass ?? 0} + non-laser ${own.averageTrafficAwarenessNonLaserEventMass ?? 0}); non-laser episode probability mass ${own.averageNearbyTurnEpisodeEventMassCandidate ?? 0}, episode control load ${own.averageNearbyTurnEpisodeControlLoadCandidate ?? 0}; competition ${own.averageCompetitionPenalty ?? 0} (active ${audit.competitionActive ? "yes" : "no"}).`
+          ? `Traffic ownership v49ce: avg effective ${summary.fullCourseTraffic?.averagePenalty ?? 0} score (mechanical traffic only); robot-laser damage ${own.averageRobotLaserDamageScore ?? 0} score = ${own.averageRobotLaserDamageRE ?? 0} RE via damage economy; residual ranged threat ${own.averageResidualRangedThreatPenalty ?? 0}; nearby turn-episode control AUTHORITATIVE ${own.averageNearbyPenalty ?? 0} score = ${own.averageAuthoritativeNearbyControlRE ?? 0} RE; traffic-awareness mental AUTHORITATIVE downstream ${own.averageTrafficAwarenessMentalRE ?? 0} RE from event mass ${own.averageTrafficAwarenessEventMass ?? 0} (laser ${own.averageTrafficAwarenessRobotLaserEventMass ?? 0} + non-laser ${own.averageTrafficAwarenessNonLaserEventMass ?? 0}); non-laser episode probability mass ${own.averageNearbyTurnEpisodeEventMassCandidate ?? 0}, episode control load ${own.averageNearbyTurnEpisodeControlLoadCandidate ?? 0}; competition ${own.averageCompetitionPenalty ?? 0} (active ${audit.competitionActive ? "yes" : "no"}).`
           : "Traffic ownership v49ce: audit metadata unavailable.";
       })()
       : "Traffic ownership v49ce: n/a",
@@ -21457,77 +20776,22 @@ function buildScenarioReport(scenario, selectedLegIndices = null) {
       : "Traffic round trace: n/a",
     currentNormalRouteModel
       ? (() => {
-        const audit = summary.fullCourseTraffic?.routeMixtureOwnershipAudit
-          ?? contextualCache?.trafficRouteMixtureOwnershipAudit
+        const field = summary.fullCourseTraffic?.routeMixtureField
+          ?? contextualCache?.trafficRouteMixtureField
           ?? null;
-        if (!audit?.startCount) {
-          return "Traffic route-mixture ownership v49ce LIVE: unavailable";
+        if (!field?.startCount) {
+          return "Traffic route-mixture ownership v49dc LIVE: unavailable";
         }
         return (
-          `Traffic route-mixture ownership v49ce LIVE: LIVE completed effective RE (including traffic-awareness mental) vs legacy pathfinder+traffic comparator at the same 1RE temperature; ` +
-          `starts ${audit.startCount}, primary-family changes ${audit.startsWithPrimaryFamilyChange ?? 0}, ` +
-          `mixture total-variation avg/max ${audit.averageTotalVariation ?? 0}/${audit.maximumTotalVariation ?? 0}, ` +
-          `alternate share legacy→LIVE ${audit.currentAverageAlternateShare ?? 0}→${audit.reNativeAverageAlternateShare ?? 0}, ` +
-          `effective-route count legacy→LIVE ${audit.currentAverageEffectiveRouteCount ?? 0}→${audit.reNativeAverageEffectiveRouteCount ?? 0}; RE-native mixture LIVE`
+          `Traffic route-mixture ownership v49dc LIVE: completed effective RE (including traffic-awareness mental) owns route-family attractiveness; ` +
+          `starts ${field.startCount}, alternate share avg/max ${field.averageAlternateShare ?? 0}/${field.maximumAlternateShare ?? 0}, ` +
+          `effective-route count avg ${field.averageEffectiveRouteCount ?? 0}; fixed start occupancy preserved`
         );
       })()
-      : "Traffic route-mixture ownership v49ce LIVE: n/a",
+      : "Traffic route-mixture ownership v49dc LIVE: n/a",
     currentNormalRouteModel
-      ? (() => {
-        const audit = summary.fullCourseTraffic?.routeMixtureOwnershipAudit
-          ?? contextualCache?.trafficRouteMixtureOwnershipAudit
-          ?? null;
-        if (!audit?.startCount) {
-          return "Traffic route-mixture ownership legacy-comparison starts: unavailable";
-        }
-        const materialStarts = (audit.perStart ?? [])
-          .filter((entry) => (
-            entry.primaryFamilyChanged ||
-            (entry.totalVariation ?? 0) >= 0.05
-          ));
-        return materialStarts.length
-          ? `Traffic route-mixture ownership legacy-comparison starts: ${materialStarts.map((entry) => (
-            `s${entry.index + 1}:TV${entry.totalVariation}/primary${entry.primaryFamilyChanged ? "Δ" : "="}` +
-            `/altLegacy→LIVE${entry.currentAlternateShare}→${entry.reNativeAlternateShare}` +
-            `/effLegacy→LIVE${entry.currentEffectiveRouteCount}→${entry.reNativeEffectiveRouteCount}; ` +
-            `legacy[${(entry.currentEntries ?? []).map((item) => `r${(item.routeIndex ?? 0) + 1}:w${item.weight}@s${item.qualityScore}`).join(",")}] ` +
-            `LIVE-RE[${(entry.reNativeEntries ?? []).map((item) => `r${(item.routeIndex ?? 0) + 1}:w${item.weight}@${item.effectiveRE}RE`).join(",")}]`
-          )).join(" | ")}`
-          : "Traffic route-mixture ownership legacy-comparison starts: none material (primary change or TV>=0.05)";
-      })()
-      : "Traffic route-mixture ownership legacy-comparison starts: n/a",
-    currentNormalRouteModel
-      ? (() => {
-        const audit = summary.fullCourseTraffic?.completedRouteOwnershipAudit ?? null;
-        if (!audit?.startCount) return "Traffic completed-route ownership v49ch OBSERVATIONAL: unavailable";
-        return (
-          `Traffic completed-route ownership v49ch OBSERVATIONAL: final frozen field; ` +
-          `starts ${audit.startCount}, with alternates ${audit.startsWithAlternates ?? 0}, ` +
-          `current-vs-RE preferred disagreements ${audit.currentVsREPreferredDisagreements ?? 0}, ` +
-          `actual-vs-RE ${audit.actualVsREPreferredDisagreements ?? 0}, ` +
-          `mean/max foregone effective RE ${audit.meanForegoneEffectiveRE ?? 0}/${audit.maximumForegoneEffectiveRE ?? 0}, ` +
-          `gain threshold ${audit.minimumUsefulGainScore ?? 0} search-score = ${audit.minimumUsefulGainRE ?? 0} RE; behavior unchanged`
-        );
-      })()
-      : "Traffic completed-route ownership v49ch OBSERVATIONAL: n/a",
-    currentNormalRouteModel
-      ? (() => {
-        const audit = summary.fullCourseTraffic?.completedRouteOwnershipAudit ?? null;
-        if (!audit?.startCount) return "Traffic completed-route ownership starts: unavailable";
-        const material = (audit.perStart ?? []).filter((entry) => (
-          entry.currentVsREPreferredDisagree || entry.actualVsREPreferredDisagree || (entry.foregoneEffectiveRE ?? 0) > 0
-        ));
-        return material.length
-          ? `Traffic completed-route ownership starts: ${material.map((entry) => (
-            `s${entry.startIndex + 1}:actual r${Number.isInteger(entry.actualSelectedRouteIndex) ? entry.actualSelectedRouteIndex + 1 : "-"}` +
-            `/current r${Number.isInteger(entry.currentPreferredRouteIndex) ? entry.currentPreferredRouteIndex + 1 : "-"}` +
-            `/RE r${Number.isInteger(entry.rePreferredRouteIndex) ? entry.rePreferredRouteIndex + 1 : "-"}` +
-            ` baseline/current/RE ${entry.baselineEffectiveRE ?? "-"}/${entry.currentPreferredEffectiveRE ?? "-"}/${entry.rePreferredEffectiveRE ?? "-"}RE` +
-            ` foregone ${entry.foregoneEffectiveRE ?? 0}RE`
-          )).join(" | ")}`
-          : "Traffic completed-route ownership starts: none material";
-      })()
-      : "Traffic completed-route ownership starts: n/a",
+      ? "Traffic route-switch objective: intentional legacy pathfinder route.score + traffic.total (+4% raw-gap stability) for switching among already-discovered candidates; route-family occupancy attractiveness remains completed effective RE."
+      : "Traffic route-switch objective: n/a",
     currentNormalRouteModel
       ? (() => {
         const field = summary.fullCourseTraffic?.routeFamilyDivergenceField
@@ -21601,7 +20865,7 @@ function buildScenarioReport(scenario, selectedLegIndices = null) {
         ? `Contextual leg cache: exactEntries ${summary.contextualLegCache.entries ?? 0}, templateEntries ${summary.contextualLegCache.templateEntries ?? 0}, exactHits ${summary.contextualLegCache.exactHits ?? 0}, templateHits ${summary.contextualLegCache.templateHits ?? 0}, misses ${summary.contextualLegCache.misses ?? 0}, templateFallbacks ${summary.contextualLegCache.templateFallbacks ?? 0}, cappedContexts ${summary.contextualLegCache.zeroRouteCapFailures ?? 0} across ${summary.contextualLegCache.zeroRouteFailureStarts ?? 0} starts, survivors ${summary.contextualLegCache.survivingStarts ?? "n/a"}/${summary.contextualLegCache.requiredSurvivingStarts ?? "n/a"}`
         : "Contextual leg cache: n/a"),
     summary.programmingScarcity
-      ? `Programming supply: selected ${summary.programmingScarcity.selectedRoutes ?? 0} routes, Again used on ${summary.programmingScarcity.routesUsingAgain ?? 0} route(s)/${summary.programmingScarcity.totalAgainTurns ?? 0} turn(s), consecutive required-Again turns ${summary.programmingScarcity.consecutiveTurnAgainReuse ?? 0}, literal program violations ${summary.programmingScarcity.literalProgramViolations ?? 0}, rolling two-turn violations ${summary.programmingScarcity.rollingWindowViolations ?? 0}; exact 9-card hypergeometric availability penalty mean/max ${summary.programmingScarcity.meanCardAvailabilityPenalty ?? 0}/${summary.programmingScarcity.maxCardAvailabilityPenalty ?? 0}; card RE compressed α=${summary.programmingScarcity.cardScarcityAdaptabilityFactor ?? 1}: mean/max ${summary.programmingScarcity.meanCardAvailabilityPenaltyRE ?? 0}/${summary.programmingScarcity.maxCardAvailabilityPenaltyRE ?? 0}RE vs uncompressed ${summary.programmingScarcity.meanCardAvailabilityPenaltyUncompressedRE ?? 0}/${summary.programmingScarcity.maxCardAvailabilityPenaltyUncompressedRE ?? 0}RE; fresh-deck reference P(1 of 4-copy) ${summary.programmingScarcity.baselineFourCopyProbability ?? "?"}, P(singleton) ${summary.programmingScarcity.singleCopyProbability ?? "?"}, P(3 distinct singletons) ${summary.programmingScarcity.threeDistinctSingleCopyProbability ?? "?"}, P(repeated 4-copy action incl Again) ${summary.programmingScarcity.repeatedFourCopyWithAgainProbability ?? "?"}; legacy cheap-literal comparator penalty mean/max ${summary.programmingScarcity.meanCheapSearchAvailabilityPenalty ?? 0}/${summary.programmingScarcity.maxCheapSearchAvailabilityPenalty ?? 0}, cheap-exact mean delta ${summary.programmingScarcity.meanCheapMinusExactAvailabilityPenalty ?? 0}; cheap refs P(singleton) ${summary.programmingScarcity.cheapSingleCopyProbability ?? "?"}, P(3 singletons) ${summary.programmingScarcity.cheapThreeDistinctSingleCopyProbability ?? "?"}, P(repeated 4-copy best literal) ${summary.programmingScarcity.cheapRepeatedFourCopyBestLiteralProbability ?? "?"}`
+      ? `Programming supply: selected ${summary.programmingScarcity.selectedRoutes ?? 0} routes, Again used on ${summary.programmingScarcity.routesUsingAgain ?? 0} route(s)/${summary.programmingScarcity.totalAgainTurns ?? 0} turn(s), consecutive required-Again turns ${summary.programmingScarcity.consecutiveTurnAgainReuse ?? 0}, literal program violations ${summary.programmingScarcity.literalProgramViolations ?? 0}, rolling two-turn violations ${summary.programmingScarcity.rollingWindowViolations ?? 0}; exact 9-card hypergeometric availability penalty mean/max ${summary.programmingScarcity.meanCardAvailabilityPenalty ?? 0}/${summary.programmingScarcity.maxCardAvailabilityPenalty ?? 0}; card RE compressed α=${summary.programmingScarcity.cardScarcityAdaptabilityFactor ?? 1}: mean/max ${summary.programmingScarcity.meanCardAvailabilityPenaltyRE ?? 0}/${summary.programmingScarcity.maxCardAvailabilityPenaltyRE ?? 0}RE vs uncompressed ${summary.programmingScarcity.meanCardAvailabilityPenaltyUncompressedRE ?? 0}/${summary.programmingScarcity.maxCardAvailabilityPenaltyUncompressedRE ?? 0}RE; fresh-deck reference P(1 of 4-copy) ${summary.programmingScarcity.baselineFourCopyProbability ?? "?"}, P(singleton) ${summary.programmingScarcity.singleCopyProbability ?? "?"}, P(3 distinct singletons) ${summary.programmingScarcity.threeDistinctSingleCopyProbability ?? "?"}, P(repeated 4-copy action incl Again) ${summary.programmingScarcity.repeatedFourCopyWithAgainProbability ?? "?"}`
       : "Programming supply: n/a",
     summary.programmingScarcity
       ? `Card scarcity adaptability v49ce PROVISIONAL: α=${summary.programmingScarcity.cardScarcityAdaptabilityFactor ?? 1}; exact hypergeometric probabilities unchanged; raw scarcity normalization P4/P-1 unchanged; only extra card RE compressed; omitted-information rationale = player sees actual hand and can adapt program, while rolling two-turn depletion is a simplified representative state; half-baseline raw +1RE -> compressed +${summary.programmingScarcity.halfBaselineCompressedScarcityRE ?? "?"}RE`
@@ -21631,33 +20895,6 @@ function buildScenarioReport(scenario, selectedLegIndices = null) {
         );
       })()
       : "Card-pressure candidate audit v49ce OBSERVATIONAL: unavailable",
-    summary.programmingScarcity?.targetedSameRegisterCardPressure
-      ? (() => {
-        const audit = summary.programmingScarcity.targetedSameRegisterCardPressure;
-        if (audit.enabled === false) {
-          return `Targeted card-pressure search v49cd OBSERVATIONAL: unavailable (${audit.unavailableReason ?? "unsupported"}); behavior unchanged`;
-        }
-        const starts = (audit.starts ?? [])
-          .map((entry) => (
-            `s${entry.startIndex + 1}:sel ${entry.selectedRegisters}r/${entry.selectedCardRE}RE` +
-            ` bestAlt ${entry.bestAlternativeCardRE ?? "-"}RE Δ${entry.improvementRE ?? 0}` +
-            ` alt${entry.sameRegisterAlternativeCount ?? 0}` +
-            ` exact${entry.exactCandidateCount ?? 0}` +
-            ` exp${entry.expansions ?? 0}/${entry.maxExpansions ?? 0}` +
-            `${entry.hitExpansionCap ? "/CAP" : ""}${entry.hitRouteLimit ? "/ROUTE-LIMIT" : ""}`
-          ))
-          .join(" | ");
-        return (
-          `Targeted card-pressure search v49cd OBSERVATIONAL (POST-SELECTION FROZEN-SEED, HIGH-CARD STARTS ONLY): ` +
-          `${audit.auditedStarts ?? 0} starts; same-register alternatives on ${audit.startsWithSameRegisterAlternative ?? 0}, ` +
-          `lower-card same-register alternative on ${audit.startsWithLowerCardSameRegisterAlternative ?? 0}; ` +
-          `mean/max improvement ${audit.meanImprovementRE ?? 0}/${audit.maximumImprovementRE ?? 0}RE; ` +
-          `search ${audit.searchRoutesPerStart ?? "?"} routes/start, ${audit.searchExpansionCapPerStart ?? "?"} exp/start, ` +
-          `card-focus weight ${audit.diagnosticCardWeight ?? "?"}, capped ${audit.cappedSearches ?? 0}, total expansions ${audit.totalExpansions ?? 0}; ` +
-          `behavior unchanged; ${starts || "no audited starts"}`
-        );
-      })()
-      : "Targeted card-pressure search v49cd RETIRED: automatic run disabled in v49ce after 4/4 fixed-seed searches capped with zero completions; dormant diagnostic only",
     scenario.generationDiagnostics?.cheapProgramUnionAvailabilityTotals
       ? (() => {
         const unionCache = scenario.generationDiagnostics.cheapProgramUnionAvailabilityTotals;
@@ -21771,25 +21008,17 @@ function buildScenarioReport(scenario, selectedLegIndices = null) {
     replayCache,
     timing: devTiming
   }));
-  // Legacy DAMAGE_SHADOW intentionally disabled in v49ce; its source remains
-  // available if a future regression requires explicit reactivation.
-  lines.push(...buildDamageShadowReportLines(scenario, {
-    enabled: false,
-    timing: devTiming
-  }));
-
   const reportTotalMs = Number.isFinite(reportStartedAt) ? performance.now() - reportStartedAt : 0;
   scenario.devPerformance = {
     ...(scenario.devPerformance ?? {}),
     lastDeepReportMs: reportTotalMs,
     lastLedgerReplayMs: devTiming.ledgerMs,
     lastCheapShadowMs: devTiming.cheapShadowMs,
-    lastDamageFoundationMs: devTiming.damageFoundationMs,
-    lastLegacyDamageShadowMs: devTiming.damageShadowMs
+    lastDamageFoundationMs: devTiming.damageFoundationMs
   };
   lines.push(
     "",
-    `Dev diagnostics timing v49cs: deep report ${formatDevMilliseconds(reportTotalMs)}; Normal selector shadow ${formatDevMilliseconds(devTiming.selectorShadowMs)}; authoritative RE ledgers ${formatDevMilliseconds(devTiming.ledgerMs)}; cheap-card shadows ${formatDevMilliseconds(devTiming.cheapShadowMs)}; damage foundation ${formatDevMilliseconds(devTiming.damageFoundationMs)}; legacy DAMAGE_SHADOW disabled; automatic v49cd targeted card search disabled.`
+    `Dev diagnostics timing v49dc: deep report ${formatDevMilliseconds(reportTotalMs)}; selected RE-turn shadow ${formatDevMilliseconds(devTiming.reDifficultyMs)}; candidate-pool RE-turn shadow ${formatDevMilliseconds(devTiming.reDifficultyPoolMs)}; total RE-turn route replay ${formatDevMilliseconds(devTiming.reDifficultyReplayMs)}; intrinsic decomposition replay ${formatDevMilliseconds(devTiming.reDifficultyDecompositionReplayMs)}; authoritative RE ledgers ${formatDevMilliseconds(devTiming.ledgerMs)}; cheap-card comparison ${formatDevMilliseconds(devTiming.cheapShadowMs)}; damage foundation ${formatDevMilliseconds(devTiming.damageFoundationMs)}.`
   );
 
   return lines.map(roundCourseEvaluationNumbers).join("\n");
@@ -22614,10 +21843,8 @@ function formatRegisterEquivalentLedgerLines(scenario, route, startIndex = null,
         return `${numeric >= 0 ? "+" : ""}${numeric}`;
       };
       lines.push(
-        `  Cheap-search RE shadow v1: ROUTING-ACTIVE card core ${cheapShadow.routedUnionCoreRE} RE vs exact-comparable ${cheapShadow.exactComparableCoreRE} (${signed(cheapShadow.comparableCoreDeltaRE)}); legacy greedy core ${cheapShadow.legacyGreedyCoreRE}; card greedy/frontier/union-frontier/exact ${cheapShadow.cheapCardRE}/${cheapShadow.frontierCardRE}/${cheapShadow.unionFrontierCardRE}/${cheapShadow.exactCleanCardRE} (greedy ${signed(cheapShadow.cardDeltaRE)}, frontier ${signed(cheapShadow.frontierCardDeltaRE)}, union-frontier ${signed(cheapShadow.unionFrontierCardDeltaRE)}); Energy ${cheapShadow.energyRE} (already routing-active); intrinsic mental ${cheapShadow.cheapIntrinsicMentalRE} (completed-route scoring; not hot pathfinder state), traffic-awareness mental +${cheapShadow.trafficMentalIncrementRE} (downstream effective-RE layer; not hot pathfinder state) -> full ${cheapShadow.fullMentalRE}; damage-supply ${cheapShadow.deferredDamageSupplyRE} + clog ${cheapShadow.deferredClogRE} are deferred to authoritative replay; full observational route ${cheapShadow.fullObservationalRE} RE.`,
-        `    Cheap card greedy by turn: ${(cheapShadow.cheapCardTurnComparison || []).map((turn) => `T${turn.turn} ${turn.cheapCardRE}/${turn.exactCardRE} (${signed(turn.deltaRE)})`).join(", ") || "none"}; max |turn delta| ${cheapShadow.maxAbsCardTurnDeltaRE ?? 0} RE.`,
-        `    Cheap card frontier by turn: ${(cheapShadow.frontierCardTurnComparison || []).map((turn) => `T${turn.turn} ${turn.frontierCardRE}/${turn.exactCardRE} (${signed(turn.deltaRE)})`).join(", ") || "none"}; max |turn delta| ${cheapShadow.maxAbsFrontierCardTurnDeltaRE ?? 0} RE; retained end states ${cheapShadow.frontierCardRetainedStates ?? 0}${cheapShadow.frontierCardFeasible === false ? "; infeasible" : ""}.`,
-        `    Cheap card union-frontier by turn: ${(cheapShadow.unionFrontierCardTurnComparison || []).map((turn) => `T${turn.turn} ${turn.unionFrontierCardRE}/${turn.exactCardRE} (${signed(turn.deltaRE)})`).join(", ") || "none"}; max |turn delta| ${cheapShadow.maxAbsUnionFrontierCardTurnDeltaRE ?? 0} RE; retained end states ${cheapShadow.unionFrontierCardRetainedStates ?? 0}${cheapShadow.unionFrontierCardFeasible === false ? "; infeasible" : ""}.`
+        `  Routing-card comparison v49dc: routing-active union core ${cheapShadow.routedUnionCoreRE} RE vs exact-comparable ${cheapShadow.exactComparableCoreRE} (${signed(cheapShadow.comparableCoreDeltaRE)}); union card ${cheapShadow.unionFrontierCardRE} RE vs exact ${cheapShadow.exactCleanCardRE} RE (${signed(cheapShadow.unionFrontierCardDeltaRE)}); Energy ${cheapShadow.energyRE} routing-active; intrinsic mental ${cheapShadow.cheapIntrinsicMentalRE} completed-route, traffic-awareness mental +${cheapShadow.trafficMentalIncrementRE} downstream -> full ${cheapShadow.fullMentalRE}; damage-supply ${cheapShadow.deferredDamageSupplyRE} + clog ${cheapShadow.deferredClogRE} deferred to authoritative replay; full observational route ${cheapShadow.fullObservationalRE} RE.`,
+        `    Routing-card union by turn: ${(cheapShadow.unionFrontierCardTurnComparison || []).map((turn) => `T${turn.turn} ${turn.unionFrontierCardRE}/${turn.exactCardRE} (${signed(turn.deltaRE)})`).join(", ") || "none"}; max |turn delta| ${cheapShadow.maxAbsUnionFrontierCardTurnDeltaRE ?? 0} RE; retained end states ${cheapShadow.unionFrontierCardRetainedStates ?? 0}${cheapShadow.unionFrontierCardFeasible === false ? "; infeasible" : ""}.`
       );
     }
   }
@@ -22640,7 +21867,7 @@ function formatRouteDetail(scenario, entry) {
   // so diagnostics must not resurrect the raw printed feature under a flag.
   const traceTileMap = scenario?.goalTileMap ?? null;
   const lines = [
-    `${entry.label}: ${route.actions} register${route.actions === 1 ? "" : "s"}, distance ${route.distance}, forced ${route.forcedDistance}, route score ${route.score}${Number.isFinite(Number(route.legacyScoreBeforeDamageRouting)) ? ` (legacy before damage routing ${route.legacyScoreBeforeDamageRouting})` : ""}`,
+    `${entry.label}: ${route.actions} register${route.actions === 1 ? "" : "s"}, distance ${route.distance}, forced ${route.forcedDistance}, route score ${route.score}`,
     ...formatChronologicalRouteTrace(route, traceTileMap)
   ];
 
@@ -22673,7 +21900,7 @@ function formatRouteDetail(scenario, entry) {
       );
       if (route.damageRoutingModel) {
         lines.push(
-          `Damage routing: intrinsic raw damage economy ${route.intrinsicDamageEconomyRegisterEquivalents ?? 0} RE -> ${route.intrinsicDamageReplacementScore ?? 0} score, replacing ${route.intrinsicDamageLegacyRealizedDirectScore ?? 0} legacy realized-direct score; intrinsic adjustment ${route.intrinsicDamageRoutingAdjustmentScore ?? 0}. Shutdown reference ${route.intrinsicDamageShutdownReferenceRegisterEquivalents ?? damageEconomy.shutdownReferenceRegisterEquivalents ?? 5} RE is tolerance context only. Robot-laser damage is added through the later traffic comparison as marginal raw damage RE.`
+          `Damage routing: intrinsic raw damage economy ${route.intrinsicDamageEconomyRegisterEquivalents ?? 0} RE -> ${route.intrinsicDamageReplacementScore ?? 0} score; intrinsic adjustment ${route.intrinsicDamageRoutingAdjustmentScore ?? 0}. Shutdown reference ${route.intrinsicDamageShutdownReferenceRegisterEquivalents ?? damageEconomy.shutdownReferenceRegisterEquivalents ?? 5} RE is tolerance context only. Robot-laser damage is added through the later traffic comparison as marginal raw damage RE.`
         );
       }
       if (
@@ -23207,16 +22434,6 @@ function renderStructuredRouteInspection(detailEl, scenario, entry) {
     ["Role", "Search/discovery diagnostics only; not an additional RE score"]
   ], { fontSize: "0.86em" });
 
-  const routeOwnershipAudit = scenario?.sequence?.firstLeg?.summary?.fullCourseTraffic?.completedRouteOwnershipAudit ?? null;
-  const ownershipStart = (routeOwnershipAudit?.perStart ?? []).find((item) => item.startIndex === startIndex) ?? null;
-  if (ownershipStart) {
-    const auditNote = document.createElement("div");
-    auditNote.style.fontSize = "0.86em";
-    auditNote.style.margin = "0.3rem 0";
-    auditNote.textContent = `v49ch observational final-snapshot audit: current search objective prefers route ${(ownershipStart.currentPreferredRouteIndex ?? 0) + 1}; completed effective RE prefers route ${(ownershipStart.rePreferredRouteIndex ?? 0) + 1}; foregone effective RE ${ownershipStart.foregoneEffectiveRE ?? 0}. Behavior unchanged.`;
-    searchDiagnostics.append(auditNote);
-  }
-
   const traceDetails = appendInspectionDetails(detailEl, "Register trace", { open: true });
   const traceRows = buildInspectionTraceRows(route, scenario?.goalTileMap ?? null);
   renderInspectionTraceTable(traceDetails, traceRows);
@@ -23274,7 +22491,7 @@ function renderStructuredRouteInspection(detailEl, scenario, entry) {
       );
       if (cheapShadow) {
         secondaryLines.push(
-          `Cheap card comparator: routing-active union ${cheapShadow.unionFrontierCardRE} RE vs exact ${cheapShadow.exactCleanCardRE} RE; greedy ${cheapShadow.cheapCardRE} RE; frontier ${cheapShadow.frontierCardRE} RE.`,
+          `Routing-card comparator: routing-active union ${cheapShadow.unionFrontierCardRE} RE vs exact ${cheapShadow.exactCleanCardRE} RE.`,
           `Completed-route mental: intrinsic ${cheapShadow.cheapIntrinsicMentalRE} RE + traffic-awareness ${cheapShadow.trafficMentalIncrementRE} RE = ${cheapShadow.fullMentalRE} RE.`
         );
       }
@@ -23298,7 +22515,7 @@ function renderStructuredRouteInspection(detailEl, scenario, entry) {
         );
       }
     }
-    secondaryLines.push("Full event-level and legacy text diagnostics remain available through Copy All.");
+    secondaryLines.push("Full event-level diagnostics remain available through Copy All.");
     secondaryBody.replaceChildren();
     secondaryLines.forEach((line) => {
       const row = document.createElement("div");
@@ -27822,6 +27039,9 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
       selectedScenario.generationBestMatch = false;
       selectedScenario.generationTerminationReason = terminationReason;
       selectedScenario.attempts = attempt;
+      if (isDevViewEnabled()) {
+        rememberDevAcceptableCandidatePool(selectedScenario, acceptableCandidates);
+      }
       attachDiagnostics(selectedScenario);
       return {
         scenario: selectedScenario,
@@ -27885,6 +27105,9 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
     bestScenario.generationBestMatch = !Boolean(bestScenario.metrics?.acceptable);
     bestScenario.generationTerminationReason = terminationReason;
     bestScenario.attempts = attempt;
+  }
+  if (bestScenario && acceptableCandidates.length && isDevViewEnabled()) {
+    rememberDevAcceptableCandidatePool(bestScenario, acceptableCandidates);
   }
   attachDiagnostics(bestScenario);
 
@@ -29331,4 +28554,4 @@ if (typeof document !== "undefined") {
   init().catch(console.error);
 
 }
-// VERSION END: v49cq-competitive-re-production-ownership
+// VERSION END: v49dc-current-owner-reporting-cleanup
