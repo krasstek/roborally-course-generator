@@ -1,6 +1,6 @@
-// VERSION START: v49cs-normal-selector-shadow-calibration
+// VERSION START: v49dd-damage-control-owner-extraction
 // Robo Rally Course Randomizer - route analysis and scoring runtime
-export const ANALYZE_BUILD_ID = "v49cs-normal-selector-shadow-calibration";
+export const ANALYZE_BUILD_ID = "v49dd-damage-control-owner-extraction";
 const ASSET_VERSION = new URL(import.meta.url).searchParams.get("v") ?? "";
 const VERSION_SUFFIX = ASSET_VERSION ? `?v=${encodeURIComponent(ASSET_VERSION)}` : "";
 const versionedPath = (path) => `${path}${VERSION_SUFFIX}`;
@@ -1822,12 +1822,6 @@ function getHomeRebootTokensForStart(start, rebootTokens = []) {
 }
 
 function getRebootDamagePenalty(options = {}) {
-  // DAMAGE_SHADOW: dev-only replay can remove the direct damage component while
-  // preserving reboot timing/movement consequences. Normal production callers
-  // never set this option.
-  if (options.damageShadowSuppressDirectDamage) {
-    return 0;
-  }
   const basePenalty = options.moreDeadlyGame ? MORE_DEADLY_REBOOT_DAMAGE_PENALTY : REBOOT_DAMAGE_PENALTY;
   return Number((basePenalty * getDamageDeckPressureMultipliers(options).reboot).toFixed(2));
 }
@@ -2639,20 +2633,6 @@ function getTilePenalty(
       continue;
     }
 
-    // DAMAGE_SHADOW: replay-only suppression isolates the current direct-damage
-    // part of route hazard without changing any production feature weights.
-    if (
-      options.damageShadowSuppressDirectDamage &&
-      (
-        feature.type === "laser" ||
-        feature.type === "flamethrower" ||
-        feature.type === "crusher" ||
-        feature.type === "trapdoor" ||
-        feature.type === "homingMissile"
-      )
-    ) {
-      continue;
-    }
     // Randomizers affect the card played only when the robot STARTS a register
     // on the space. Traversing or merely ending the current movement on one
     // does not alter the current register.
@@ -3602,9 +3582,7 @@ function moveOneStep(
   const pitPressurePenalty = getPitPressurePenalty(tileMap, resolvedState, options);
   const ledgePressurePenalty = getLedgePressurePenalty(tileMap, resolvedState, options);
   if (finishProgrammedStepPhase) finishProgrammedStepPhase("physicalMissProgramPressureMs");
-  const directLedgeDamagePenalty = options.damageShadowSuppressDirectDamage
-    ? 0
-    : (moveCheck.ledgeDamage || 0);
+  const directLedgeDamagePenalty = moveCheck.ledgeDamage || 0;
 
   const outcome = {
     state: resolvedState,
@@ -3972,10 +3950,6 @@ function getTimedHazardSeverity(feature) {
 }
 
 function getFlamethrowerDamagePenalty(options = {}) {
-  // DAMAGE_SHADOW: dev-only replay removes only the physical damage term.
-  if (options.damageShadowSuppressDirectDamage) {
-    return 0;
-  }
   // A flamer hit is one damage, comparable to a one-damage board laser.
   // Flamers become more dangerous because the same register can inflict one
   // hit on entry/pass-through and another at the end of the register.
@@ -4642,7 +4616,7 @@ export function simulateAction(tileMap, startState, action, options = {}) {
 }
 
 
-// DAMAGE_ECONOMY_FOUNDATION_BEGIN
+// DAMAGE_CONTROL_RE_OWNER_BEGIN
 // v49ab-damage9-pressure-reroute production-economy foundation. This remains a route
 // difficulty/fairness estimator, not a literal deck/hand/register simulator.
 // The state deliberately separates three consequences that were incorrectly
@@ -4785,7 +4759,7 @@ function advanceDamageEconomyToTurn(state, turn) {
     // damage-register risks. A further empty boundary expires Haywire naturally.
     state.spamTotal += state.pendingSpam;
     state.pendingSpam = 0;
-    state.activeHaywireDistribution = getDamageShadowPoissonBinomialDistribution(
+    state.activeHaywireDistribution = getDamageEconomyPoissonBinomialDistribution(
       state.pendingHaywireRegisterRisks
     );
     state.pendingHaywireRegisterRisks = Array(REGISTER_COUNT).fill(0);
@@ -4956,7 +4930,7 @@ function getDamageEconomyProgramAvailabilityProbabilityInteger(
       Math.max(REGISTER_COUNT, actualNormalCards)
     );
     const totalBaseWays = chooseSmall(baseDeckSize, modeledNormalCards);
-    const successfulBaseWays = getDamageShadowBaseProgramSuccessfulWays(
+    const successfulBaseWays = getDamageEconomyBaseProgramSuccessfulWays(
       safePreviousCode,
       actions,
       modeledNormalCards
@@ -5053,10 +5027,10 @@ function getDamageEconomyProgrammingSummary(
     });
   });
 
-  const cleanPenaltyScore = getDamageShadowAvailabilityPenaltyFromProbability(
+  const cleanPenaltyScore = getDamageEconomyAvailabilityPenaltyFromProbability(
     cleanProgramProbability
   );
-  const damagedPenaltyScore = getDamageShadowAvailabilityPenaltyFromProbability(
+  const damagedPenaltyScore = getDamageEconomyAvailabilityPenaltyFromProbability(
     damagedProgramProbability
   );
   const spamSupplyScore = (
@@ -5095,108 +5069,13 @@ export function getDamageEconomyTelemetrySnapshot() {
     spamDrawCacheSize: DAMAGE_ECONOMY_SPAM_DRAW_CACHE.size
   };
 }
-// DAMAGE_ECONOMY_FOUNDATION_END
 
 
-// DAMAGE_SHADOW_BEGIN
-// Dev-only post-hoc diagnostic. This replays already-selected route transitions
-// twice with identical route context: first as an unsuppressed control replay,
-// then with only direct damage pressure suppressed. Direct-damage attribution is
-// therefore control-vs-suppressed, not production-vs-replay. That distinction is
-// deliberate: an otherwise physically identical reconstruction can carry a small
-// contextual hazard drift, and v2 could accidentally mislabel that drift as
-// "unattributed direct" damage. v3 reports such production/control drift
-// separately instead of folding it into damage.
-//
-// v7 deliberately splits route threat from physical damage. The suppression
-// delta remains a diagnostic of damage-associated *hazard pressure* used by the
-// route decision tree; it is never assumed to be a literal hit. A separate
-// realized stream reconstructs exact board-laser/flamethrower/ledge/reboot damage
-// from register chronology, and only that stream advances persistent/transient
-// burden. A later shadow layer overlays occupancy/confidence-weighted robot-laser
-// exposure on the same chronology while leaving nearby/displacement/competition
-// traffic intact. None of these shadow values participates in search, route
-// choice, acceptance, traffic selection, calibration, or production Course
-// Evaluation metrics. Remove this block plus the DAMAGE_SHADOW-tagged suppression
-// branches above to remove the shadow completely.
-const DAMAGE_SHADOW_DIRECT_FEATURE_TYPES = new Set([
-  "laser",
-  "flamethrower",
-  "crusher",
-  "trapdoor",
-  "homingMissile"
-]);
-
-// DAMAGE_SHADOW burden reference v1. This is intentionally not a production
-// damage model yet. It turns only well-understood route damage into an
-// *unrelieved* abstract load, then maps that load onto a five-register shutdown
-// anchor. No hand/SPAM/Haywire state is simulated, no automatic time decay is
-// assumed, no safe-SPAM-disposal opportunity is credited yet, and traffic laser
-// pressure remains outside this route-only state. The shape is deliberately
-// visible and easy to replace after real-course inspection:
-//   burden(L) = 5 * L^3 / (L^3 + 5^3)
-// so low damage is cheap, the curve steepens through the strategically
-// uncomfortable middle, and the state approaches (but never exceeds) one lost
-// programming turn. This is a diagnostic reference curve, not a tuned rule.
-const DAMAGE_SHADOW_ONE_DAMAGE_SCORE = 4;
-const DAMAGE_SHADOW_SHUTDOWN_REGISTER_EQUIVALENTS = REGISTER_COUNT;
-const DAMAGE_SHADOW_BURDEN_HALF_LOAD = 5;
-const DAMAGE_SHADOW_BURDEN_EXPONENT = 3;
-
-// DAMAGE_SHADOW relief reference v1. Relief is deliberately a route-context
-// opportunity model, not a hand simulator. When a player chooses to spend a
-// SPAM, the relevant question is whether surrendering control of one register
-// is mechanically forgiving. We approximate that with the known 20-card
-// programming-deck action mix at the selected route state: simulate each
-// ordinary card outcome (plus Again as the selected previous action when known),
-// compare the resulting end state with the planned transition, and ask how often
-// the random outcome stays close to plan without rebooting/crashing or taking
-// direct damage. Conveyors/pushers/other forced movement automatically make an
-// opportunity safer when they cause otherwise-different cards to converge on a
-// similar result. No card is claimed to be in hand, and no SPAM/Haywire count is
-// carried.
-//
-// Relief is applied once per *game turn* from the best register opportunity,
-// before that turn's new damage is added. This mirrors the real sequencing: a
-// player programs a SPAM already in hand at the start of the turn; damage gained
-// during that turn cannot be immediately cleared by that same programming
-// decision. At most one abstract damage-equivalent unit can drain per turn in
-// this first reference, and low-confidence opportunities below the explicit
-// floor drain nothing. These are visible shadow-tuning constants, not production
-// rules. Traffic and damage-optional-rule relief semantics remain intentionally
-// outside v1.
-const DAMAGE_SHADOW_RELIEF_OPPORTUNITY_FLOOR = 0.45;
-const DAMAGE_SHADOW_RELIEF_MAX_LOAD_UNITS_PER_TURN = 1;
-const DAMAGE_SHADOW_RELIEF_FORGIVING_QUALITY = 0.5;
-
-// DAMAGE_SHADOW expected-composition reference v1. The route predictor cannot
-// and should not carry literal damage cards or hand state. For this diagnostic
-// only, each supported damage-equivalent impulse is split 50/50 into an
-// expected persistent (SPAM-like) share and a transient (Haywire-like) share.
-// The 50/50 composition is an explicit provisional assumption supplied during
-// development and is intentionally centralized here so the exact deck spread
-// can replace it later without rewriting the model. Optional damage rules do
-// not alter this base split yet.
-//
-// Transient pressure is *not* counted as Haywire cards. Instead, for each
-// register we estimate the probability that at least one Haywire-like result
-// would occur from the damage received in that register. This naturally
-// saturates repeated same-register damage (only one forced register matters)
-// while damage spread across different registers compounds. The per-turn state
-// clears before the next game turn. We surface expected affected registers, the
-// probability of 2+/3+ distinct affected registers, and the expected number of
-// affected registers beyond the first; no arbitrary register-cost conversion is
-// imposed yet.
-const DAMAGE_SHADOW_EXPECTED_SPAM_SHARE = 0.5;
-const DAMAGE_SHADOW_EXPECTED_HAYWIRE_SHARE = 0.5;
-
-// DAMAGE_SHADOW candidate damage economy v3 / turn ledger v1. Damage received
-// during a game turn does not retroactively change that turn's already-programmed
-// hand. SPAM persists and changes future programming supply; Haywire occupies
-// next-turn registers and then expires. The constants below remain visible shadow
-// assumptions for browser validation. Older hill-curve/composition references stay
-// intact as regression comparisons and still do not affect production scoring.
-const DAMAGE_SHADOW_CANDIDATE_RELIEF_TIMING_ALLOWANCE = Object.freeze([
+// v49dd owner extraction: the helpers below are live damage/control/RE machinery.
+// They were historically nested under a diagnostic shadow banner even after the damage
+// economy became production-active. Keep these constants/mechanics behavior-identical;
+// the retired full shadow replay and its suppression-only branches are removed.
+const DAMAGE_ECONOMY_RELIEF_TIMING_ALLOWANCE = Object.freeze([
   0.08, 0.30, 0.65, 0.95, 1.00
 ]);
 const DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT = 2;
@@ -5207,32 +5086,12 @@ const DAMAGE_ECONOMY_RELIEF_CONVEYOR_BONUS_MAX = 0.18;
 const DAMAGE_ECONOMY_RELIEF_FORWARD_DISTANCE_WEIGHTS = Object.freeze([1, 0.60, 0.35]);
 const DAMAGE_ECONOMY_RELIEF_WALL_BONUS_BY_DISTANCE = Object.freeze([0.32, 0.18, 0.08]);
 const DAMAGE_ECONOMY_RELIEF_FORWARD_HAZARD_PENALTY_MAX = 0.55;
-const DAMAGE_SHADOW_CANDIDATE_RELIEF_FORWARD_CATASTROPHIC_MAX = 0.60;
-const DAMAGE_SHADOW_CANDIDATE_RELIEF_ORIENTATION_CATASTROPHIC_MAX = 0.45;
-const DAMAGE_SHADOW_CANDIDATE_RELIEF_FORWARD_HAZARD_MAX = 0.30;
-const DAMAGE_SHADOW_CANDIDATE_RELIEF_ORIENTATION_HAZARD_MAX = 0.15;
-const DAMAGE_SHADOW_CANDIDATE_RELIEF_STATIONARY_HAZARD_MAX = 0.30;
-const DAMAGE_SHADOW_CANDIDATE_RELIEF_STATIONARY_CATASTROPHIC_MAX = 0.45;
-const DAMAGE_SHADOW_CANDIDATE_RELIEF_GOAL_REGRESSION_MAX = 0.12;
-const DAMAGE_SHADOW_CANDIDATE_RELIEF_CONVEYOR_TURN_PENALTY = 0.18;
-const DAMAGE_SHADOW_CANDIDATE_RELIEF_GEAR_PENALTY = 0.12;
-const DAMAGE_SHADOW_CANDIDATE_RELIEF_STRAIGHT_CONVEYOR_BONUS_MAX = 0.15;
-const DAMAGE_SHADOW_CANDIDATE_RELIEF_CONTINUITY_BONUS_MAX = 0.15;
-const DAMAGE_SHADOW_CANDIDATE_RELIEF_TRAFFIC_PENALTY_MAX = 0.50;
-// v48y turn-scoped damage-economy shadow. These are diagnostic anchors, not
-// production scoring. A clogged register is one register no longer freely
-// programmable. The first clog costs about one RE, then loss of control compounds;
-// four/five clogged registers may be worse than a voluntary five-register Shutdown
-// because the robot still executes an increasingly uncontrolled program.
-const DAMAGE_SHADOW_CLOG_RE_BY_COUNT = Object.freeze([0, 1, 2.2, 3.6, 5.4, 7.5]);
-const DAMAGE_SHADOW_SPAM_PROGRAM_CACHE = new Map();
-const DAMAGE_SHADOW_SPAM_PROGRAM_CACHE_LIMIT = 12000;
-const DAMAGE_SHADOW_SPAM_BASE_WAYS_CACHE = new Map();
-const DAMAGE_SHADOW_SPAM_BASE_WAYS_CACHE_LIMIT = 12000;
-const DAMAGE_SHADOW_SPAM_DRAW_CACHE = new Map();
-const DAMAGE_SHADOW_SPAM_DRAW_CACHE_LIMIT = 4000;
+const DAMAGE_ECONOMY_RELIEF_CONTINUITY_BONUS_MAX = 0.15;
+const DAMAGE_ECONOMY_CLOG_RE_BY_COUNT = Object.freeze([0, 1, 2.2, 3.6, 5.4, 7.5]);
+const DAMAGE_ECONOMY_BASE_PROGRAM_WAYS_CACHE = new Map();
+const DAMAGE_ECONOMY_BASE_PROGRAM_WAYS_CACHE_LIMIT = 12000;
 
-function interpolateDamageShadowCurve(value, points) {
+function interpolateDamageEconomyCurve(value, points) {
   const x = Math.max(0, Number(value) || 0);
   if (!points.length) return 0;
   if (x <= points[0][0]) return points[0][1];
@@ -5248,8 +5107,8 @@ function interpolateDamageShadowCurve(value, points) {
   return points[points.length - 1][1];
 }
 
-function getDamageShadowClogRegisterEquivalents(clogCount) {
-  return interpolateDamageShadowCurve(clogCount, DAMAGE_SHADOW_CLOG_RE_BY_COUNT.map(
+function getDamageEconomyClogCurveRegisterEquivalents(clogCount) {
+  return interpolateDamageEconomyCurve(clogCount, DAMAGE_ECONOMY_CLOG_RE_BY_COUNT.map(
     (value, count) => [count, value]
   ));
 }
@@ -5257,17 +5116,17 @@ function getDamageShadowClogRegisterEquivalents(clogCount) {
 function getDamageEconomyClogRegisterEquivalents(clogLoad) {
   const load = Math.max(0, Number(clogLoad) || 0);
   if (load <= REGISTER_COUNT) {
-    return getDamageShadowClogRegisterEquivalents(load);
+    return getDamageEconomyClogCurveRegisterEquivalents(load);
   }
   // The old 0..5 anchors describe one turn of increasingly uncontrolled
   // registers. SPAM relief can deliberately surrender more than one register-
   // equivalent of control per played SPAM, so the active economy must not flatten
   // at five. Continue from the last observed slope (5.4 -> 7.5 = +2.1 RE) rather
   // than inventing a second nonlinear family beyond the established anchors.
-  return DAMAGE_SHADOW_CLOG_RE_BY_COUNT[REGISTER_COUNT] +
+  return DAMAGE_ECONOMY_CLOG_RE_BY_COUNT[REGISTER_COUNT] +
     (load - REGISTER_COUNT) *
-    (DAMAGE_SHADOW_CLOG_RE_BY_COUNT[REGISTER_COUNT] -
-      DAMAGE_SHADOW_CLOG_RE_BY_COUNT[REGISTER_COUNT - 1]);
+    (DAMAGE_ECONOMY_CLOG_RE_BY_COUNT[REGISTER_COUNT] -
+      DAMAGE_ECONOMY_CLOG_RE_BY_COUNT[REGISTER_COUNT - 1]);
 }
 
 function getDamageEconomyAdjustedForcedSpamHaywireJointDistribution(
@@ -5377,7 +5236,7 @@ function getDamageEconomyCombinedClogSummary(
   };
 }
 
-function getDamageShadowPoissonBinomialDistribution(probabilities = []) {
+function getDamageEconomyPoissonBinomialDistribution(probabilities = []) {
   const safe = (probabilities || []).map((value) => clamp(Number(value) || 0, 0, 1));
   let distribution = Array(safe.length + 1).fill(0);
   distribution[0] = 1;
@@ -5394,7 +5253,7 @@ function getDamageShadowPoissonBinomialDistribution(probabilities = []) {
   return distribution;
 }
 
-function getDamageShadowSelectedProgramTurns(legs = []) {
+function getDamageEconomySelectedProgramTurns(legs = []) {
   const byTurn = new Map();
   for (const leg of legs || []) {
     const transitions = Array.isArray(leg?.transitions) ? leg.transitions : [];
@@ -5429,7 +5288,7 @@ function getDamageShadowSelectedProgramTurns(legs = []) {
   return out;
 }
 
-function getDamageShadowProgramCodeFromLiteralCards(programCardIds = []) {
+function getDamageEconomyProgramCodeFromLiteralCards(programCardIds = []) {
   const state = {
     naturalUses: new Map(),
     againUsed: false,
@@ -5446,13 +5305,13 @@ function getDamageShadowProgramCodeFromLiteralCards(programCardIds = []) {
   return encodeCompactProgramResourceState(state);
 }
 
-function getDamageShadowBaseProgramSuccessfulWays(previousCode, actionIds, handSize) {
+function getDamageEconomyBaseProgramSuccessfulWays(previousCode, actionIds, handSize) {
   const safePreviousCode = Math.max(0, Math.floor(Number(previousCode) || 0));
   const safeHandSize = Math.max(0, Math.floor(Number(handSize) || 0));
   const actions = Array.isArray(actionIds) ? actionIds : [];
   const cacheKey = `${safePreviousCode}|${actions.join(".")}|h${safeHandSize}`;
-  if (DAMAGE_SHADOW_SPAM_BASE_WAYS_CACHE.has(cacheKey)) {
-    return DAMAGE_SHADOW_SPAM_BASE_WAYS_CACHE.get(cacheKey);
+  if (DAMAGE_ECONOMY_BASE_PROGRAM_WAYS_CACHE.has(cacheKey)) {
+    return DAMAGE_ECONOMY_BASE_PROGRAM_WAYS_CACHE.get(cacheKey);
   }
 
   const deckCounts = getExactProgramDeckCounts(safePreviousCode);
@@ -5482,126 +5341,19 @@ function getDamageShadowBaseProgramSuccessfulWays(previousCode, actionIds, handS
   };
   enumerate(0, safeHandSize, 1);
 
-  if (DAMAGE_SHADOW_SPAM_BASE_WAYS_CACHE.size >= DAMAGE_SHADOW_SPAM_BASE_WAYS_CACHE_LIMIT) {
-    const oldest = DAMAGE_SHADOW_SPAM_BASE_WAYS_CACHE.keys().next().value;
-    if (oldest !== undefined) DAMAGE_SHADOW_SPAM_BASE_WAYS_CACHE.delete(oldest);
+  if (DAMAGE_ECONOMY_BASE_PROGRAM_WAYS_CACHE.size >= DAMAGE_ECONOMY_BASE_PROGRAM_WAYS_CACHE_LIMIT) {
+    const oldest = DAMAGE_ECONOMY_BASE_PROGRAM_WAYS_CACHE.keys().next().value;
+    if (oldest !== undefined) DAMAGE_ECONOMY_BASE_PROGRAM_WAYS_CACHE.delete(oldest);
   }
-  DAMAGE_SHADOW_SPAM_BASE_WAYS_CACHE.set(cacheKey, successfulWays);
+  DAMAGE_ECONOMY_BASE_PROGRAM_WAYS_CACHE.set(cacheKey, successfulWays);
   return successfulWays;
 }
 
-function getDamageShadowSpamProgramAvailabilityProbabilityInteger(
-  previousCode,
-  actionIds = [],
-  spamCount = 0
-) {
-  const safePreviousCode = Math.max(0, Math.floor(Number(previousCode) || 0));
-  const safeSpamCount = Math.max(0, Math.floor(Number(spamCount) || 0));
-  const actions = Array.isArray(actionIds) ? actionIds : [];
-  if (!actions.length) return 1;
-  const cacheKey = `${safePreviousCode}|${actions.join(".")}|s${safeSpamCount}`;
-  if (DAMAGE_SHADOW_SPAM_PROGRAM_CACHE.has(cacheKey)) {
-    return DAMAGE_SHADOW_SPAM_PROGRAM_CACHE.get(cacheKey);
-  }
-
-  const baseDeckSize = getExactProgramDeckCounts(safePreviousCode)
-    .reduce((sum, count) => sum + count, 0);
-  const deckSize = baseDeckSize + safeSpamCount;
-  const handSize = Math.min(PROGRAM_EXACT_HAND_SIZE, deckSize);
-  const totalWays = chooseSmall(deckSize, handSize);
-  let successfulWays = 0;
-  const maxSpamTake = Math.min(safeSpamCount, handSize);
-  for (let spamTake = 0; spamTake <= maxSpamTake; spamTake += 1) {
-    const baseTake = handSize - spamTake;
-    if (baseTake < 0 || baseTake > baseDeckSize) continue;
-    successfulWays += (
-      chooseSmall(safeSpamCount, spamTake) *
-      getDamageShadowBaseProgramSuccessfulWays(safePreviousCode, actions, baseTake)
-    );
-  }
-  const probability = totalWays > 0
-    ? clamp(successfulWays / totalWays, 0, 1)
-    : 0;
-  if (DAMAGE_SHADOW_SPAM_PROGRAM_CACHE.size >= DAMAGE_SHADOW_SPAM_PROGRAM_CACHE_LIMIT) {
-    const oldest = DAMAGE_SHADOW_SPAM_PROGRAM_CACHE.keys().next().value;
-    if (oldest !== undefined) DAMAGE_SHADOW_SPAM_PROGRAM_CACHE.delete(oldest);
-  }
-  DAMAGE_SHADOW_SPAM_PROGRAM_CACHE.set(cacheKey, probability);
-  return probability;
-}
-
-function getDamageShadowSpamProgramAvailabilityProbability(
-  previousCode,
-  actionIds = [],
-  spamBurden = 0
-) {
-  const burden = Math.max(0, Number(spamBurden) || 0);
-  const low = Math.floor(burden);
-  const high = Math.ceil(burden);
-  const lowProbability = getDamageShadowSpamProgramAvailabilityProbabilityInteger(
-    previousCode,
-    actionIds,
-    low
-  );
-  if (high === low) return lowProbability;
-  const highProbability = getDamageShadowSpamProgramAvailabilityProbabilityInteger(
-    previousCode,
-    actionIds,
-    high
-  );
-  const fraction = burden - low;
-  return lowProbability + (highProbability - lowProbability) * fraction;
-}
-
-function getDamageShadowAvailabilityPenaltyFromProbability(probability) {
+function getDamageEconomyAvailabilityPenaltyFromProbability(probability) {
   return getProgramAvailabilityPenaltyFromProbability(probability);
 }
 
-function getDamageShadowSpamDrawDistributionInteger(baseDeckSize, spamCount) {
-  const safeBaseDeckSize = Math.max(0, Math.floor(Number(baseDeckSize) || 0));
-  const safeSpamCount = Math.max(0, Math.floor(Number(spamCount) || 0));
-  const cacheKey = `${safeBaseDeckSize}|${safeSpamCount}`;
-  if (DAMAGE_SHADOW_SPAM_DRAW_CACHE.has(cacheKey)) {
-    return DAMAGE_SHADOW_SPAM_DRAW_CACHE.get(cacheKey);
-  }
-  const deckSize = safeBaseDeckSize + safeSpamCount;
-  const handSize = Math.min(PROGRAM_EXACT_HAND_SIZE, deckSize);
-  const totalWays = chooseSmall(deckSize, handSize);
-  const distribution = Array(handSize + 1).fill(0);
-  for (let spamDrawn = 0; spamDrawn <= handSize; spamDrawn += 1) {
-    const normalDrawn = handSize - spamDrawn;
-    if (spamDrawn > safeSpamCount || normalDrawn > safeBaseDeckSize) continue;
-    distribution[spamDrawn] = totalWays > 0
-      ? chooseSmall(safeSpamCount, spamDrawn) *
-        chooseSmall(safeBaseDeckSize, normalDrawn) / totalWays
-      : 0;
-  }
-  const value = { handSize, distribution };
-  if (DAMAGE_SHADOW_SPAM_DRAW_CACHE.size >= DAMAGE_SHADOW_SPAM_DRAW_CACHE_LIMIT) {
-    const oldest = DAMAGE_SHADOW_SPAM_DRAW_CACHE.keys().next().value;
-    if (oldest !== undefined) DAMAGE_SHADOW_SPAM_DRAW_CACHE.delete(oldest);
-  }
-  DAMAGE_SHADOW_SPAM_DRAW_CACHE.set(cacheKey, value);
-  return value;
-}
-
-function getDamageShadowSpamDrawDistribution(baseDeckSize, spamBurden) {
-  const burden = Math.max(0, Number(spamBurden) || 0);
-  const low = Math.floor(burden);
-  const high = Math.ceil(burden);
-  const lowValue = getDamageShadowSpamDrawDistributionInteger(baseDeckSize, low);
-  if (low === high) return lowValue;
-  const highValue = getDamageShadowSpamDrawDistributionInteger(baseDeckSize, high);
-  const handSize = Math.max(lowValue.handSize, highValue.handSize);
-  const fraction = burden - low;
-  const distribution = Array(handSize + 1).fill(0).map((_, index) => (
-    (lowValue.distribution[index] || 0) * (1 - fraction) +
-    (highValue.distribution[index] || 0) * fraction
-  ));
-  return { handSize, distribution };
-}
-
-function getDamageShadowExpectedSpamChainYieldInteger(baseDeckSize, spamCount) {
+function getDamageEconomyExpectedSpamChainYieldInteger(baseDeckSize, spamCount) {
   const safeBaseDeckSize = Math.max(0, Math.floor(Number(baseDeckSize) || 0));
   const safeSpamCount = Math.max(0, Math.floor(Number(spamCount) || 0));
   if (safeSpamCount <= 0) return 0;
@@ -5621,101 +5373,18 @@ function getDamageShadowExpectedSpamChainYieldInteger(baseDeckSize, spamCount) {
   return yieldCount;
 }
 
-function getDamageShadowExpectedSpamChainYield(baseDeckSize, spamBurden) {
+function getDamageEconomyExpectedSpamChainYield(baseDeckSize, spamBurden) {
   const burden = Math.max(0, Number(spamBurden) || 0);
   if (burden <= 0) return 0;
   const low = Math.floor(burden);
   const high = Math.ceil(burden);
-  const lowYield = getDamageShadowExpectedSpamChainYieldInteger(baseDeckSize, low);
+  const lowYield = getDamageEconomyExpectedSpamChainYieldInteger(baseDeckSize, low);
   if (low === high) return lowYield;
-  const highYield = getDamageShadowExpectedSpamChainYieldInteger(baseDeckSize, high);
+  const highYield = getDamageEconomyExpectedSpamChainYieldInteger(baseDeckSize, high);
   return lowYield + (highYield - lowYield) * (burden - low);
 }
 
-function getDamageShadowClogSummary(
-  baseDeckSize,
-  spamBurden,
-  haywireProbabilities = [],
-  programRegisters = REGISTER_COUNT
-) {
-  const registers = Math.max(0, Math.min(
-    REGISTER_COUNT,
-    Math.floor(Number(programRegisters) || 0)
-  ));
-  if (!registers) {
-    return {
-      handSize: 0,
-      expectedSpamDrawn: 0,
-      expectedHaywireClogs: 0,
-      expectedForcedSpamClogs: 0,
-      expectedTotalClogs: 0,
-      expectedClogRegisterEquivalents: 0,
-      probabilityFourPlusClogs: 0,
-      probabilityFullClog: 0,
-      clogDistribution: [1]
-    };
-  }
-  const spamDraw = getDamageShadowSpamDrawDistribution(baseDeckSize, spamBurden);
-  const haywireDistribution = getDamageShadowPoissonBinomialDistribution(
-    (haywireProbabilities || []).slice(0, registers)
-  );
-  const clogDistribution = Array(registers + 1).fill(0);
-  let expectedSpamDrawn = 0;
-  let expectedHaywireClogs = 0;
-  let expectedForcedSpamClogs = 0;
-
-  spamDraw.distribution.forEach((probability, spamDrawn) => {
-    expectedSpamDrawn += probability * spamDrawn;
-  });
-  haywireDistribution.forEach((probability, haywireCount) => {
-    expectedHaywireClogs += probability * Math.min(registers, haywireCount);
-  });
-
-  haywireDistribution.forEach((haywireProbability, haywireCountRaw) => {
-    if (haywireProbability <= 0) return;
-    const haywireCount = Math.min(registers, haywireCountRaw);
-    const freelyProgrammableRegisters = Math.max(0, registers - haywireCount);
-    const spamTolerance = Math.max(0, spamDraw.handSize - freelyProgrammableRegisters);
-    spamDraw.distribution.forEach((spamProbability, spamDrawn) => {
-      if (spamProbability <= 0) return;
-      const forcedSpamClogs = Math.min(
-        freelyProgrammableRegisters,
-        Math.max(0, spamDrawn - spamTolerance)
-      );
-      const joint = haywireProbability * spamProbability;
-      expectedForcedSpamClogs += joint * forcedSpamClogs;
-      const totalClogs = Math.min(registers, haywireCount + forcedSpamClogs);
-      clogDistribution[totalClogs] += joint;
-    });
-  });
-
-  let expectedTotalClogs = 0;
-  let expectedClogRegisterEquivalents = 0;
-  let probabilityFourPlusClogs = 0;
-  let probabilityFullClog = 0;
-  clogDistribution.forEach((probability, clogCount) => {
-    expectedTotalClogs += probability * clogCount;
-    expectedClogRegisterEquivalents += (
-      probability * getDamageShadowClogRegisterEquivalents(clogCount)
-    );
-    if (clogCount >= 4) probabilityFourPlusClogs += probability;
-    if (clogCount >= registers) probabilityFullClog += probability;
-  });
-
-  return {
-    handSize: spamDraw.handSize,
-    expectedSpamDrawn,
-    expectedHaywireClogs,
-    expectedForcedSpamClogs,
-    expectedTotalClogs,
-    expectedClogRegisterEquivalents,
-    probabilityFourPlusClogs,
-    probabilityFullClog,
-    clogDistribution
-  };
-}
-
-function getDamageShadowCandidateTravelDirection(transition) {
+function getDamageEconomyTravelDirection(transition) {
   const from = transition?.from;
   const to = transition?.to;
   if (!from || !to || transition?.rebooted || transition?.crashed) return null;
@@ -5728,166 +5397,6 @@ function getDamageShadowCandidateTravelDirection(transition) {
   return null;
 }
 
-function getDamageShadowCandidateRegisterReliefProfile(
-  tileMap,
-  transition,
-  plannedReplay,
-  replayOptions,
-  absoluteAction
-) {
-  const register = getRegisterPosition(absoluteAction);
-  const timingAllowance = DAMAGE_SHADOW_CANDIDATE_RELIEF_TIMING_ALLOWANCE[register - 1] ?? 0;
-  if (!transition?.from || !plannedReplay?.to || plannedReplay?.rebooted || plannedReplay?.crashed) {
-    return {
-      timingAllowance,
-      boardOpportunity: 0,
-      movementPenalty: timingAllowance,
-      orientationPenalty: 0,
-      boardComplexityPenalty: 0,
-      stationaryPenalty: 0,
-      cleanMovementBonus: 0,
-      forwardSafeCount: 0,
-      forwardCatastrophicCount: 0,
-      orientationCatastrophicCount: 0,
-      travelDirection: null
-    };
-  }
-
-  const neutralOptions = getDamageShadowNeutralDeckOptions(replayOptions);
-  const forwardActionIds = ["FORWARD", "FORWARD_2", "FORWARD_3"];
-  let forwardSafeCount = 0;
-  let forwardCatastrophicCount = 0;
-  let forwardPositiveHazardScore = 0;
-  let forwardGoalRegression = 0;
-
-  for (const actionId of forwardActionIds) {
-    const action = ACTIONS.find((candidate) => candidate.id === actionId);
-    if (!action) continue;
-    const probe = simulateAction(tileMap, transition.from, action, neutralOptions);
-    if (probe?.rebooted || probe?.crashed || !probe?.to) {
-      forwardCatastrophicCount += 1;
-      continue;
-    }
-    forwardSafeCount += 1;
-    forwardPositiveHazardScore += Math.max(0, Number(probe?.hazard) || 0);
-    if (replayOptions?.goal) {
-      forwardGoalRegression += Math.max(
-        0,
-        heuristic(probe.to, replayOptions.goal) - heuristic(plannedReplay.to, replayOptions.goal)
-      );
-    }
-  }
-
-  const movementPenalty = (
-    (forwardCatastrophicCount / forwardActionIds.length) *
-      DAMAGE_SHADOW_CANDIDATE_RELIEF_FORWARD_CATASTROPHIC_MAX +
-    Math.min(
-      DAMAGE_SHADOW_CANDIDATE_RELIEF_FORWARD_HAZARD_MAX,
-      (forwardPositiveHazardScore / Math.max(1, forwardSafeCount) / REGISTER_TEMPO_COST) * 0.12
-    ) +
-    Math.min(
-      DAMAGE_SHADOW_CANDIDATE_RELIEF_GOAL_REGRESSION_MAX,
-      (forwardGoalRegression / Math.max(1, forwardSafeCount)) * 0.04
-    )
-  );
-
-  let orientationCatastrophicCount = 0;
-  let orientationPositiveHazardScore = 0;
-  const moveThree = ACTIONS.find((candidate) => candidate.id === "FORWARD_3");
-  const rotations = ["cw", "ccw", "uturn"];
-  if (moveThree) {
-    for (const rotation of rotations) {
-      const rotatedState = cloneState(transition.from);
-      rotatedState.facing = rotateFacing(rotatedState.facing, rotation);
-      const probe = simulateAction(tileMap, rotatedState, moveThree, neutralOptions);
-      if (probe?.rebooted || probe?.crashed || !probe?.to) {
-        orientationCatastrophicCount += 1;
-      } else {
-        orientationPositiveHazardScore += Math.max(0, Number(probe?.hazard) || 0);
-      }
-    }
-  }
-  const orientationPenalty = (
-    (orientationCatastrophicCount / rotations.length) *
-      DAMAGE_SHADOW_CANDIDATE_RELIEF_ORIENTATION_CATASTROPHIC_MAX +
-    Math.min(
-      DAMAGE_SHADOW_CANDIDATE_RELIEF_ORIENTATION_HAZARD_MAX,
-      (orientationPositiveHazardScore / Math.max(1, rotations.length - orientationCatastrophicCount) /
-        REGISTER_TEMPO_COST) * 0.06
-    )
-  );
-
-  const waitAction = ACTIONS.find((candidate) => candidate.id === "WAIT");
-  let stationaryPenalty = 0;
-  if (waitAction) {
-    const stationaryProbe = simulateAction(tileMap, transition.from, waitAction, neutralOptions);
-    if (stationaryProbe?.rebooted || stationaryProbe?.crashed || !stationaryProbe?.to) {
-      stationaryPenalty = DAMAGE_SHADOW_CANDIDATE_RELIEF_STATIONARY_CATASTROPHIC_MAX;
-    } else {
-      stationaryPenalty = Math.min(
-        DAMAGE_SHADOW_CANDIDATE_RELIEF_STATIONARY_HAZARD_MAX,
-        (Math.max(0, Number(stationaryProbe?.hazard) || 0) / REGISTER_TEMPO_COST) * 0.15
-      );
-    }
-  }
-
-  const conveyorSteps = plannedReplay?.conveyorSteps || [];
-  let conveyorTurns = 0;
-  let previousConveyorDir = null;
-  conveyorSteps.forEach((step) => {
-    if (step?.turned) conveyorTurns += 1;
-    if (previousConveyorDir && step?.dir && step.dir !== previousConveyorDir) {
-      conveyorTurns += 1;
-    }
-    if (step?.dir) previousConveyorDir = step.dir;
-  });
-  const boardComplexityPenalty = (
-    Math.min(
-      DAMAGE_SHADOW_CANDIDATE_RELIEF_CONVEYOR_TURN_PENALTY * 2,
-      conveyorTurns * DAMAGE_SHADOW_CANDIDATE_RELIEF_CONVEYOR_TURN_PENALTY
-    ) +
-    (plannedReplay?.gearTurned ? DAMAGE_SHADOW_CANDIDATE_RELIEF_GEAR_PENALTY : 0)
-  );
-
-  let boardOpportunity = Math.max(
-    0,
-    timingAllowance - movementPenalty - orientationPenalty - stationaryPenalty - boardComplexityPenalty
-  );
-  let cleanMovementBonus = 0;
-  // Positive credits cannot rescue a register that the subtractive safety test
-  // has already driven to zero. This prevents many mediocre registers from
-  // accumulating fictional relief over several turns.
-  if (boardOpportunity > 0 && conveyorSteps.length > 0 && conveyorTurns === 0) {
-    cleanMovementBonus = Math.min(
-      DAMAGE_SHADOW_CANDIDATE_RELIEF_STRAIGHT_CONVEYOR_BONUS_MAX,
-      conveyorSteps.length * 0.05
-    );
-    boardOpportunity = Math.min(1, boardOpportunity + cleanMovementBonus);
-  }
-
-  return {
-    timingAllowance,
-    boardOpportunity: Number(boardOpportunity.toFixed(4)),
-    movementPenalty: Number(movementPenalty.toFixed(4)),
-    orientationPenalty: Number(orientationPenalty.toFixed(4)),
-    boardComplexityPenalty: Number(boardComplexityPenalty.toFixed(4)),
-    stationaryPenalty: Number(stationaryPenalty.toFixed(4)),
-    cleanMovementBonus: Number(cleanMovementBonus.toFixed(4)),
-    forwardSafeCount,
-    forwardCatastrophicCount,
-    orientationCatastrophicCount,
-    travelDirection: getDamageShadowCandidateTravelDirection(plannedReplay)
-  };
-}
-
-// v49v production-candidate SPAM relief deliberately does NOT simulate random
-// replacement-card outcomes. The damage economy already prices loss of control
-// through held/deck pressure and the joint SPAM/Haywire clog distribution. Relief
-// therefore answers only whether this register is a plausible tactical disposal
-// point on the selected route: later registers are easier to sacrifice, while
-// actual conveyor/gear complexity makes the opportunity less forgiving. Straight
-// conveyor continuity can still help. This keeps the useful route/register shape
-// from the older shadow without a speculative mini-simulation of SPAM results.
 function getDamageEconomyForwardReliefContext(
   tileMap,
   transition,
@@ -5943,7 +5452,7 @@ function getDamageEconomyForwardReliefContext(
     landingHazardScore += Math.max(0, Number(moveCheck.ledgeDamage) || 0);
     landingHazardScore += getPitPressurePenalty(tileMap, to, registerOptions, true);
     landingHazardScore += getLedgePressurePenalty(tileMap, to, registerOptions);
-    landingHazardScore += getDamageShadowActiveFlamethrowerCount(tile, registerOptions) *
+    landingHazardScore += getDamageEconomyActiveFlamethrowerCount(tile, registerOptions) *
       Math.max(0, getFlamethrowerDamagePenalty(registerOptions));
     if (hasActiveFeature(tile, "crusher", registerOptions)) {
       landingHazardScore = Math.max(landingHazardScore, REGISTER_TEMPO_COST * 2);
@@ -5975,7 +5484,7 @@ function getDamageEconomyRegisterReliefProfile(
   absoluteAction
 ) {
   const register = getRegisterPosition(absoluteAction);
-  const timingAllowance = DAMAGE_SHADOW_CANDIDATE_RELIEF_TIMING_ALLOWANCE[register - 1] ?? 0;
+  const timingAllowance = DAMAGE_ECONOMY_RELIEF_TIMING_ALLOWANCE[register - 1] ?? 0;
   if (!transition?.from || !plannedReplay?.to || plannedReplay?.rebooted || plannedReplay?.crashed) {
     return {
       timingAllowance,
@@ -6047,150 +5556,19 @@ function getDamageEconomyRegisterReliefProfile(
     conveyorTurns,
     currentSteps: currentSteps.length,
     pusherEvents,
-    travelDirection: getDamageShadowCandidateTravelDirection(plannedReplay),
+    travelDirection: getDamageEconomyTravelDirection(plannedReplay),
     method: "selected-route-register-opportunity-v2"
   };
 }
 
-function getDamageShadowCandidateTrafficReliefPenalty(record) {
-  const effectiveInteractionScore = Math.max(
-    0,
-    Number(record?.effectiveInteractionScore) || 0
-  );
-  return Math.min(
-    DAMAGE_SHADOW_CANDIDATE_RELIEF_TRAFFIC_PENALTY_MAX,
-    effectiveInteractionScore / (DAMAGE_SHADOW_ONE_DAMAGE_SCORE * 8)
-  );
-}
-
-function getDamageShadowNeutralDeckOptions(options = {}) {
-  // These four options currently alter damage *valuation* rather than route
-  // physics. Neutralize them when measuring baseline damage-equivalent input so
-  // the future burden mechanism can apply optional-rule semantics explicitly
-  // instead of inheriting today's static multipliers. Physical rules such as
-  // Hard Reboot and Cutting Floor deliberately remain active.
-  return {
-    ...options,
-    lessSpammyGame: false,
-    criticalSpam: false,
-    criticalHaywire: false,
-    permanentShutdown: false
-  };
-}
-
-function getDamageShadowBurdenRegisterEquivalents(load) {
-  const normalizedLoad = Math.max(0, Number(load) || 0);
-  if (normalizedLoad <= 0) return 0;
-  const numerator = normalizedLoad ** DAMAGE_SHADOW_BURDEN_EXPONENT;
-  const midpoint = DAMAGE_SHADOW_BURDEN_HALF_LOAD ** DAMAGE_SHADOW_BURDEN_EXPONENT;
-  return DAMAGE_SHADOW_SHUTDOWN_REGISTER_EQUIVALENTS * numerator / (numerator + midpoint);
-}
-
-function getDamageShadowFacingCorrectionRegisters(a, b) {
-  const from = ROTATION_ORDER.indexOf(a ?? "E");
-  const to = ROTATION_ORDER.indexOf(b ?? "E");
-  if (from < 0 || to < 0 || from === to) return 0;
-  // Any non-matching cardinal facing can be corrected with one programming card
-  // (left/right or U-turn), so treat orientation divergence as one register of
-  // local correction rather than two quarter-turn units.
-  return 1;
-}
-
-function getDamageShadowReliefCapacity(opportunity) {
-  const score = clamp(Number(opportunity) || 0, 0, 1);
-  if (score <= DAMAGE_SHADOW_RELIEF_OPPORTUNITY_FLOOR) return 0;
-  const normalized = (score - DAMAGE_SHADOW_RELIEF_OPPORTUNITY_FLOOR) /
-    (1 - DAMAGE_SHADOW_RELIEF_OPPORTUNITY_FLOOR);
-  return DAMAGE_SHADOW_RELIEF_MAX_LOAD_UNITS_PER_TURN * clamp(normalized, 0, 1);
-}
-
-function getDamageShadowHaywireRegisterProbability(damageUnits) {
-  const units = Math.max(0, Number(damageUnits) || 0);
-  if (units <= 0) return 0;
-  // With the provisional 50% Haywire share, n independent damage draws have a
-  // 1-(1-p)^n chance of producing at least one Haywire-like result on this
-  // register. Fractional expected damage inputs use the same smooth extension;
-  // this is an expectation model, never a claim about literal drawn cards.
-  return clamp(
-    1 - ((1 - DAMAGE_SHADOW_EXPECTED_HAYWIRE_SHARE) ** units),
-    0,
-    1
-  );
-}
-
-function getDamageShadowHaywireTurnPressure(registerDamageUnits) {
-  const probabilities = Array.from({ length: REGISTER_COUNT }, (_, index) => (
-    getDamageShadowHaywireRegisterProbability(registerDamageUnits.get(index + 1) || 0)
-  ));
-
-  // Exact Poisson-binomial distribution across the five register-level
-  // activation probabilities. This keeps the "one meaningful Haywire per
-  // register" saturation explicit while allowing several different registers
-  // in the same game turn to compound.
-  let distribution = Array(REGISTER_COUNT + 1).fill(0);
-  distribution[0] = 1;
-  probabilities.forEach((probability) => {
-    const next = Array(REGISTER_COUNT + 1).fill(0);
-    for (let count = 0; count <= REGISTER_COUNT; count += 1) {
-      const base = distribution[count] || 0;
-      if (base <= 0) continue;
-      next[count] += base * (1 - probability);
-      if (count + 1 <= REGISTER_COUNT) {
-        next[count + 1] += base * probability;
-      }
-    }
-    distribution = next;
-  });
-
-  let expectedAffectedRegisters = 0;
-  let probabilityAtLeastTwo = 0;
-  let probabilityAtLeastThree = 0;
-  distribution.forEach((probability, count) => {
-    expectedAffectedRegisters += probability * count;
-    if (count >= 2) probabilityAtLeastTwo += probability;
-    if (count >= 3) probabilityAtLeastThree += probability;
-  });
-  const probabilityAny = 1 - (distribution[0] || 0);
-  // E[max(0, K-1)] is a transparent measure of the multi-register part of the
-  // problem: the first forced register is largely manageable, while additional
-  // distinct forced registers progressively remove programming freedom.
-  const excessMultiRegisterPressure = Math.max(
-    0,
-    expectedAffectedRegisters - probabilityAny
-  );
-
-  return {
-    expectedAffectedRegisters,
-    probabilityAny,
-    probabilityAtLeastTwo,
-    probabilityAtLeastThree,
-    excessMultiRegisterPressure
-  };
-}
-
-
-// DAMAGE_SHADOW realized-damage reference v1. Route hazard and physical damage
-// are deliberately separate here. The cheap/estimated route model is allowed to
-// charge laser geometry as a threat while a robot passes through it, because the
-// beam constrains safe programming even when perfect play avoids the hit. That
-// counterfactual threat remains part of production route scoring. Persistent
-// damage state, however, advances only when the already-realized register would
-// actually deal damage under board timing:
-//   * board lasers hit only the final surviving square after board movement;
-//   * active flamethrowers hit on each actual entry/pass-through and again when
-//     the robot survives on the flame square at the end of the register;
-//   * downward ledge crossings use their exact 1/2 damage consequence;
-//   * an exact reboot contributes its real 2 damage, or 3 under Hard Reboot.
-// This is post-hoc diagnostic reconstruction only; it does not change the flat
-// hazard proxy used by route search.
-function getDamageShadowActiveFlamethrowerCount(tile, registerOptions = {}) {
+function getDamageEconomyActiveFlamethrowerCount(tile, registerOptions = {}) {
   return (tile?.features || []).filter((feature) => (
     feature.type === "flamethrower" &&
     isFeatureActiveThisRegister(feature, registerOptions)
   )).length;
 }
 
-function getDamageShadowRealizedDamageForTransition(
+function getDamageEconomyRealizedDamageForTransition(
   tileMap,
   transition,
   options = {},
@@ -6214,7 +5592,7 @@ function getDamageShadowRealizedDamageForTransition(
   for (const point of transition?.traversed || []) {
     if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
     const tile = tileMap.get(tileKey(point.x, point.y));
-    flamethrowerDamageUnits += getDamageShadowActiveFlamethrowerCount(
+    flamethrowerDamageUnits += getDamageEconomyActiveFlamethrowerCount(
       tile,
       registerOptions
     );
@@ -6259,7 +5637,7 @@ function getDamageShadowRealizedDamageForTransition(
         boardLaserDamageUnits += getEffectiveLaserDamage(feature, options);
       }
     }
-    flamethrowerDamageUnits += getDamageShadowActiveFlamethrowerCount(
+    flamethrowerDamageUnits += getDamageEconomyActiveFlamethrowerCount(
       finalTile,
       registerOptions
     );
@@ -6336,7 +5714,7 @@ function getDamageEconomyReliefOpportunityByAbsoluteAction(transitionRecords = [
     previousTravelAbsoluteAction = absoluteAction;
     const continuityBonus = record?.reliefProfile?.boardOpportunity > 0 && directionRunLength > 1
       ? Math.min(
-        DAMAGE_SHADOW_CANDIDATE_RELIEF_CONTINUITY_BONUS_MAX,
+        DAMAGE_ECONOMY_RELIEF_CONTINUITY_BONUS_MAX,
         (directionRunLength - 1) * 0.05
       )
       : 0;
@@ -6388,7 +5766,7 @@ function replayDamageEconomyShutdownEquivalentScore({
 
     const previousProgram = selectedProgramTurns.get(turn - 1) ?? null;
     const previousProgramCode = previousProgram
-      ? getDamageShadowProgramCodeFromLiteralCards(previousProgram.programCardIds)
+      ? getDamageEconomyProgramCodeFromLiteralCards(previousProgram.programCardIds)
       : 0;
     const programming = getDamageEconomyProgrammingSummary(
       previousProgramCode,
@@ -6410,7 +5788,7 @@ function replayDamageEconomyShutdownEquivalentScore({
       const forcedCirculatingSpam = Math.max(0, state.spamTotal - spamInHandRemaining);
       const forcedSpamChainYield = Math.max(
         1,
-        getDamageShadowExpectedSpamChainYield(
+        getDamageEconomyExpectedSpamChainYield(
           programming.baseDeckSize,
           forcedCirculatingSpam
         )
@@ -6440,7 +5818,7 @@ function replayDamageEconomyShutdownEquivalentScore({
         const currentCirculatingSpam = Math.max(0, state.spamTotal - spamInHandRemaining);
         const chainYield = Math.max(
           1,
-          getDamageShadowExpectedSpamChainYield(
+          getDamageEconomyExpectedSpamChainYield(
             programming.baseDeckSize,
             currentCirculatingSpam
           )
@@ -6488,7 +5866,7 @@ function replayDamageEconomyShutdownEquivalentScore({
 
     const spamHeldBeforeFilter = Math.min(state.spamTotal, spamInHandRemaining);
     state.spamHeld = profile.spamFilter ? 0 : spamHeldBeforeFilter;
-    const electiveSpamPlayDistribution = getDamageShadowPoissonBinomialDistribution(
+    const electiveSpamPlayDistribution = getDamageEconomyPoissonBinomialDistribution(
       electiveReliefInitiationProbabilities
     );
     const forcedSpamHaywireJointDistribution =
@@ -6599,7 +5977,7 @@ export function summarizeDamageEconomyFoundationForRoute(
   }
   DAMAGE_ECONOMY_TELEMETRY.routeSummaryCacheMisses += 1;
 
-  const trafficRanged = getDamageShadowTrafficRangedRegisterInputs(
+  const trafficRanged = getDamageEconomyTrafficRangedRegisterInputs(
     tileMap,
     route,
     trafficContext,
@@ -6625,7 +6003,7 @@ export function summarizeDamageEconomyFoundationForRoute(
   const legs = Array.isArray(route.legRoutes) && route.legRoutes.length
     ? route.legRoutes
     : [route];
-  const selectedProgramTurns = getDamageShadowSelectedProgramTurns(legs);
+  const selectedProgramTurns = getDamageEconomySelectedProgramTurns(legs);
   const transitionRecords = [];
   let previousAbsoluteAction = 0;
   for (const [legIndex, leg] of legs.entries()) {
@@ -6641,7 +6019,7 @@ export function summarizeDamageEconomyFoundationForRoute(
       );
       const turn = Math.floor((absoluteAction - 1) / REGISTER_COUNT) + 1;
       const register = getRegisterPosition(absoluteAction);
-      const realized = getDamageShadowRealizedDamageForTransition(
+      const realized = getDamageEconomyRealizedDamageForTransition(
         tileMap,
         transition,
         options,
@@ -6728,7 +6106,7 @@ export function summarizeDamageEconomyFoundationForRoute(
     if (!programRegisters) continue;
     const previousProgram = selectedProgramTurns.get(turn - 1) ?? null;
     const previousProgramCode = previousProgram
-      ? getDamageShadowProgramCodeFromLiteralCards(previousProgram.programCardIds)
+      ? getDamageEconomyProgramCodeFromLiteralCards(previousProgram.programCardIds)
       : 0;
     const programming = getDamageEconomyProgrammingSummary(
       previousProgramCode,
@@ -6756,7 +6134,7 @@ export function summarizeDamageEconomyFoundationForRoute(
       const forcedCirculatingSpam = Math.max(0, state.spamTotal - spamInHandRemaining);
       forcedSpamChainYield = Math.max(
         1,
-        getDamageShadowExpectedSpamChainYield(
+        getDamageEconomyExpectedSpamChainYield(
           programming.baseDeckSize,
           forcedCirculatingSpam
         )
@@ -6807,7 +6185,7 @@ export function summarizeDamageEconomyFoundationForRoute(
         const currentCirculatingSpam = Math.max(0, state.spamTotal - spamInHandRemaining);
         chainYield = Math.max(
           1,
-          getDamageShadowExpectedSpamChainYield(
+          getDamageEconomyExpectedSpamChainYield(
             programming.baseDeckSize,
             currentCirculatingSpam
           )
@@ -6960,13 +6338,13 @@ export function summarizeDamageEconomyFoundationForRoute(
     const spamHeldBeforeFilter = Math.min(state.spamTotal, spamInHandRemaining);
     state.spamHeld = profile.spamFilter ? 0 : spamHeldBeforeFilter;
 
-    const pendingHaywireDistribution = getDamageShadowPoissonBinomialDistribution(
+    const pendingHaywireDistribution = getDamageEconomyPoissonBinomialDistribution(
       state.pendingHaywireRegisterRisks
     );
     const pendingHaywireExpected = getDamageEconomyExpectedCount(
       pendingHaywireDistribution
     );
-    const electiveSpamPlayDistribution = getDamageShadowPoissonBinomialDistribution(
+    const electiveSpamPlayDistribution = getDamageEconomyPoissonBinomialDistribution(
       electiveReliefInitiationProbabilities
     );
     const forcedSpamHaywireJointDistribution =
@@ -7090,7 +6468,7 @@ export function summarizeDamageEconomyFoundationForRoute(
   const activeHaywireExpected = getDamageEconomyExpectedCount(
     state.activeHaywireDistribution
   );
-  const terminalPendingHaywireDistribution = getDamageShadowPoissonBinomialDistribution(
+  const terminalPendingHaywireDistribution = getDamageEconomyPoissonBinomialDistribution(
     state.pendingHaywireRegisterRisks
   );
   const terminalPendingHaywireExpected = getDamageEconomyExpectedCount(
@@ -7474,7 +6852,7 @@ function getSearchIntrinsicMentalTransitionStep(
   options = {}
 ) {
   const safeAbsoluteAction = Math.max(1, Math.floor(Number(absoluteAction) || 1));
-  const damageEvent = getDamageShadowRealizedDamageForTransition(
+  const damageEvent = getDamageEconomyRealizedDamageForTransition(
     tileMap,
     transition,
     options,
@@ -8361,7 +7739,7 @@ function getLegacyRealizedDirectDamageScoreForRoute(tileMap, route, options = {}
       for (const point of transition?.traversed || []) {
         if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
         const tile = tileMap.get(tileKey(point.x, point.y));
-        score += getDamageShadowActiveFlamethrowerCount(tile, registerOptions) *
+        score += getDamageEconomyActiveFlamethrowerCount(tile, registerOptions) *
           getFlamethrowerDamagePenalty(registerOptions);
       }
 
@@ -8414,7 +7792,7 @@ function getLegacyRealizedDirectDamageScoreForRoute(tileMap, route, options = {}
             }));
           }
         }
-        score += getDamageShadowActiveFlamethrowerCount(finalTile, registerOptions) *
+        score += getDamageEconomyActiveFlamethrowerCount(finalTile, registerOptions) *
           getFlamethrowerDamagePenalty(registerOptions);
       }
 
@@ -8900,7 +8278,7 @@ function getDamageEconomyTrafficRoutingBreakdown(
 // one robot; later aggregation applies occupancy and the existing one-hit-per-
 // cardinal-direction cap. This keeps optional damage-score multipliers and rear/
 // side persistence heuristics out of the physical damage-card input.
-function getDamageShadowRobotShotProfile(tileMap, route, otherRoute) {
+function getDamageEconomyRobotShotProfile(tileMap, route, otherRoute) {
   const timelineA = getRegisterTimeline(route);
   const timelineB = getRegisterTimeline(otherRoute);
   const byFacing = Object.fromEntries(
@@ -8958,7 +8336,7 @@ function getDamageShadowRobotShotProfile(tileMap, route, otherRoute) {
 // traffic model. Nearby/displacement and competition are still calculated to
 // advance confidence exactly as production does, but they are NOT converted to
 // damage here. This preserves congestion/interference as their own consequences.
-function getDamageShadowTrafficRangedRegisterInputs(
+function getDamageEconomyTrafficRangedRegisterInputs(
   tileMap,
   route,
   trafficContext = null,
@@ -9061,7 +8439,7 @@ function getDamageShadowTrafficRangedRegisterInputs(
 
     for (const other of preparedOthers) {
       const profile = getTrafficPairProfile(tileMap, routeLeg, other.route, options);
-      const shotProfile = getDamageShadowRobotShotProfile(
+      const shotProfile = getDamageEconomyRobotShotProfile(
         tileMap,
         routeLeg,
         other.route
@@ -9179,1703 +8557,7 @@ function getDamageShadowTrafficRangedRegisterInputs(
   };
 }
 
-function getDamageShadowRandomCardReliefOpportunity(
-  tileMap,
-  transition,
-  plannedReplay,
-  replayOptions,
-  previousRouteActionId = null
-) {
-  if (!transition?.from || !plannedReplay?.to) {
-    return null;
-  }
-
-  // The route model deliberately does not infer the player's actual hand/deck
-  // order. The copy counts below are only a neutral random-card envelope for
-  // "what could a SPAM reveal here?". Again is represented by the selected
-  // route's immediately previous action when that history exists; otherwise its
-  // one copy is omitted rather than guessed.
-  const actionWeights = new Map(PROGRAM_CARD_COUNTS);
-  if (previousRouteActionId && actionWeights.has(previousRouteActionId)) {
-    actionWeights.set(
-      previousRouteActionId,
-      (actionWeights.get(previousRouteActionId) || 0) + AGAIN_CARD_COUNT
-    );
-  }
-
-  const neutralOptions = getDamageShadowNeutralDeckOptions(replayOptions);
-  let totalWeight = 0;
-  let qualityWeight = 0;
-  let forgivingWeight = 0;
-  let exactWeight = 0;
-  let catastrophicWeight = 0;
-  let directDamageWeight = 0;
-  let mismatchWeight = 0;
-
-  for (const [actionId, weightValue] of actionWeights.entries()) {
-    const weight = Math.max(0, Number(weightValue) || 0);
-    if (weight <= 0) continue;
-    const action = ACTIONS.find((candidate) => candidate.id === actionId);
-    if (!action) continue;
-    totalWeight += weight;
-
-    const candidate = simulateAction(
-      tileMap,
-      transition.from,
-      action,
-      neutralOptions
-    );
-    const suppressed = simulateAction(tileMap, transition.from, action, {
-      ...neutralOptions,
-      damageShadowSuppressDirectDamage: true
-    });
-    if (!sameDamageShadowPhysicalOutcome(candidate, suppressed)) {
-      mismatchWeight += weight;
-      continue;
-    }
-
-    if (candidate?.rebooted || candidate?.crashed || !candidate?.to) {
-      catastrophicWeight += weight;
-      continue;
-    }
-
-    const directDamageScore = Math.max(
-      0,
-      (Number(candidate?.hazard) || 0) - (Number(suppressed?.hazard) || 0)
-    );
-    if (directDamageScore > 0.005) {
-      directDamageWeight += weight;
-    }
-
-    const positionDelta = heuristic(candidate.to, plannedReplay.to);
-    const facingCorrection = getDamageShadowFacingCorrectionRegisters(
-      candidate.to?.facing,
-      plannedReplay.to?.facing
-    );
-    const goalRegression = replayOptions?.goal
-      ? Math.max(
-        0,
-        heuristic(candidate.to, replayOptions.goal) -
-          heuristic(plannedReplay.to, replayOptions.goal)
-      )
-      : 0;
-    const directDamageUnits = directDamageScore / DAMAGE_SHADOW_ONE_DAMAGE_SCORE;
-
-    // This is a local correction proxy, not a claim that the route literally
-    // takes this many registers to repair. Position divergence, wrong facing,
-    // moving farther from the current leg goal, and taking fresh damage each
-    // reduce the quality of deliberately surrendering control here. The smooth
-    // reciprocal keeps the diagnostic readable and avoids a brittle safe/unsafe
-    // cliff before we have real-course evidence.
-    const correctionPressure = (
-      positionDelta * 0.55 +
-      facingCorrection * 0.65 +
-      goalRegression * 0.45 +
-      directDamageUnits * 1.25
-    );
-    const quality = 1 / (1 + correctionPressure);
-    qualityWeight += quality * weight;
-
-    const exact = (
-      candidate.to.x === plannedReplay.to.x &&
-      candidate.to.y === plannedReplay.to.y &&
-      (candidate.to.facing ?? "E") === (plannedReplay.to.facing ?? "E") &&
-      directDamageScore <= 0.005
-    );
-    if (exact) exactWeight += weight;
-    if (quality >= DAMAGE_SHADOW_RELIEF_FORGIVING_QUALITY && directDamageScore <= 0.005) {
-      forgivingWeight += weight;
-    }
-  }
-
-  if (totalWeight <= 0) return null;
-  const meanQuality = qualityWeight / totalWeight;
-  const forgivingShare = forgivingWeight / totalWeight;
-  const exactShare = exactWeight / totalWeight;
-  const catastrophicShare = catastrophicWeight / totalWeight;
-  const directDamageShare = directDamageWeight / totalWeight;
-  const mismatchShare = mismatchWeight / totalWeight;
-
-  // Players tend to spend SPAM only where the bad tail is tolerable, not merely
-  // where the average random card is decent. The forgiving-share term therefore
-  // dominates the mean-quality term, while any outright autokill outcomes apply
-  // an additional tail-risk discount. This remains a shadow reference and all
-  // components are surfaced for inspection.
-  const tailRiskFactor = clamp(1 - catastrophicShare * 2, 0, 1);
-  const opportunity = clamp(
-    (forgivingShare * 0.65 + meanQuality * 0.35) * tailRiskFactor,
-    0,
-    1
-  );
-
-  return {
-    opportunity: Number(opportunity.toFixed(4)),
-    meanQuality: Number(meanQuality.toFixed(4)),
-    forgivingShare: Number(forgivingShare.toFixed(4)),
-    exactShare: Number(exactShare.toFixed(4)),
-    catastrophicShare: Number(catastrophicShare.toFixed(4)),
-    directDamageShare: Number(directDamageShare.toFixed(4)),
-    mismatchShare: Number(mismatchShare.toFixed(4)),
-    cardCopyWeight: Number(totalWeight.toFixed(2))
-  };
-}
-
-function sameDamageShadowPhysicalOutcome(replay, transition) {
-  return Boolean(
-    replay &&
-    Boolean(replay.blocked) === Boolean(transition?.blocked) &&
-    Boolean(replay.crashed) === Boolean(transition?.crashed) &&
-    Boolean(replay.rebooted) === Boolean(transition?.rebooted) &&
-    replay.to?.x === transition?.to?.x &&
-    replay.to?.y === transition?.to?.y
-  );
-}
-
-function getDamageShadowTransitionSourceTypes(tileMap, transition, options, absoluteAction) {
-  const sourceTypes = new Set();
-  const registerOptions = {
-    ...options,
-    registerIndex: (absoluteAction - 1) % REGISTER_COUNT
-  };
-  const points = [transition?.from, ...(transition?.traversed || [])];
-  if (!transition?.rebooted) {
-    points.push(transition?.to);
-  }
-  const fromKey = transition?.from
-    ? tileKey(transition.from.x, transition.from.y)
-    : null;
-
-  for (const point of points) {
-    if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
-    const tile = tileMap.get(tileKey(point.x, point.y));
-    if (!tile) {
-      if (transition?.rebooted) sourceTypes.add("course-edge");
-      continue;
-    }
-    if (transition?.rebooted && isPit(tile)) {
-      sourceTypes.add("pit");
-    }
-    for (const feature of tile.features || []) {
-      if (!DAMAGE_SHADOW_DIRECT_FEATURE_TYPES.has(feature?.type)) continue;
-      if (feature.type === "homingMissile" && tileKey(point.x, point.y) === fromKey) {
-        continue;
-      }
-      if (
-        hasExplicitTiming(feature) &&
-        hasKnownRegisterTiming(registerOptions) &&
-        !isFeatureActiveThisRegister(feature, registerOptions)
-      ) {
-        continue;
-      }
-      sourceTypes.add(feature.type);
-    }
-  }
-
-  // Ledge damage is generated by the boundary crossed, not by a standalone
-  // direct-damage feature on the destination tile. Reconstruct each adjacent
-  // movement edge from the control replay so it receives an explicit source
-  // label rather than falling into the unresolved bucket.
-  const movementPoints = [transition?.from, ...(transition?.traversed || [])]
-    .filter((point) => point && Number.isFinite(point.x) && Number.isFinite(point.y));
-  for (let index = 1; index < movementPoints.length; index += 1) {
-    const from = movementPoints[index - 1];
-    const to = movementPoints[index];
-    const dx = to.x - from.x;
-    const dy = to.y - from.y;
-    const dir = dx === 1 && dy === 0
-      ? "E"
-      : dx === -1 && dy === 0
-        ? "W"
-        : dx === 0 && dy === 1
-          ? "S"
-          : dx === 0 && dy === -1
-            ? "N"
-            : null;
-    if (!dir) continue;
-    const toTile = tileMap.get(tileKey(to.x, to.y));
-    if (
-      toTile &&
-      getLedgeSides(toTile).has(OPPOSITE[dir]) &&
-      !hasRampForDir(toTile, OPPOSITE[dir])
-    ) {
-      sourceTypes.add("ledge");
-    }
-  }
-
-  for (const event of transition?.boardEvents || []) {
-    if (event?.type === "trapdoor") sourceTypes.add("trapdoor");
-  }
-
-  if (transition?.rebooted) {
-    sourceTypes.add("reboot");
-    if (
-      !sourceTypes.has("pit") &&
-      !sourceTypes.has("course-edge") &&
-      !sourceTypes.has("trapdoor") &&
-      !sourceTypes.has("crusher")
-    ) {
-      sourceTypes.add("reboot-cause-unresolved");
-    }
-  }
-
-  return [...sourceTypes];
-}
-
-export function summarizeDamageShadowForRoute(tileMap, route, options = {}, trafficContext = null) {
-  if (!tileMap || !route) {
-    return null;
-  }
-
-  const legs = Array.isArray(route.legRoutes) && route.legRoutes.length
-    ? route.legRoutes
-    : [route];
-  const portalMap = options.portalMap ?? buildPortalMap(tileMap);
-  const routeActionCount = Math.max(
-    0,
-    Number(route.absoluteActions) || 0,
-    ...legs.map((leg) => (
-      Number.isFinite(Number(leg?.absoluteActions))
-        ? Number(leg.absoluteActions)
-        : getElapsedAbsoluteActionsAfterTransitions(
-          leg?.transitions || [],
-          leg?.absoluteStartAction ?? 0
-        )
-    ))
-  );
-  const totalRouteTransitionCount = legs.reduce(
-    (sum, leg) => sum + (Array.isArray(leg?.transitions) ? leg.transitions.length : 0),
-    0
-  );
-  const damageEvents = [];
-  let directDamageScore = 0;
-  let nonRebootDirectDamageScore = 0;
-  let intrinsicHazardScore = 0;
-  let controlReplayHazardScore = 0;
-  let suppressedReplayHazardScore = 0;
-  let replayHazardDriftScore = 0;
-  let replayHazardDriftAbsoluteScore = 0;
-  let replayHazardDriftTransitionCount = 0;
-  let peakReplayHazardDrift = 0;
-  let unresolvedDirectSourceCount = 0;
-  let unresolvedDirectSourceScore = 0;
-  let explicitRebootDamageUnits = 0;
-  let explicitRebootCount = 0;
-  let midTurnRebootCount = 0;
-  const rebootCountByRegister = new Array(REGISTER_COUNT).fill(0);
-  let rebootTurnEndClockMismatchCount = 0;
-  let previousTransitionRebooted = false;
-  let lostRegisters = 0;
-  let replayMismatchCount = 0;
-  let burdenReplayMismatchCount = 0;
-  let transitionCount = 0;
-  let burdenUnsupportedDirectTransitionCount = 0;
-  let burdenUnsupportedDirectScore = 0;
-  let realizedBoardLaserDamageUnits = 0;
-  let realizedFlamethrowerDamageUnits = 0;
-  let realizedLedgeDamageUnits = 0;
-  let realizedRebootDamageUnits = 0;
-  const reliefRegisterContexts = [];
-  const candidateReliefRegisterContexts = [];
-  let previousRouteActionId = null;
-  const routeRebootStart = legs[0]?.initialState
-    ? { x: legs[0].initialState.x, y: legs[0].initialState.y }
-    : route?.initialState
-      ? { x: route.initialState.x, y: route.initialState.y }
-      : null;
-  const rebootRecoverySourceCounts = new Map();
-
-  for (const [legIndex, leg] of legs.entries()) {
-    const transitions = Array.isArray(leg?.transitions) ? leg.transitions : [];
-    const absoluteStartAction = Math.max(0, Number(leg?.absoluteStartAction) || 0);
-    let elapsedAbsoluteActions = absoluteStartAction;
-    let dynamicArchivePoint = options.recoveryRule === "dynamic_archiving"
-      ? (leg?.dynamicArchivePointStart
-        ? { ...leg.dynamicArchivePointStart }
-        : leg?.initialState
-          ? { x: leg.initialState.x, y: leg.initialState.y }
-          : null)
-      : null;
-    const goal = leg?.hitTarget ?? options.goal ?? null;
-
-    transitions.forEach((transition, index) => {
-      transitionCount += 1;
-      intrinsicHazardScore += Number(transition?.hazard) || 0;
-
-      const absoluteAction = getTransitionAbsoluteAction(
-        transition,
-        elapsedAbsoluteActions + 1
-      );
-      const register = getRegisterPosition(absoluteAction);
-      const turn = Math.floor((absoluteAction - 1) / REGISTER_COUNT) + 1;
-      if (previousTransitionRebooted && register !== 1) {
-        rebootTurnEndClockMismatchCount += 1;
-      }
-      const rebootLostRegisters = transition?.rebooted
-        ? getRebootLostRegisters(absoluteAction)
-        : 0;
-      const rebootDamageUnits = transition?.rebooted
-        ? (options.moreDeadlyGame ? 3 : 2)
-        : 0;
-      const currentRebootDamageScore = transition?.rebooted
-        ? getRebootDamagePenalty(options)
-        : 0;
-
-      if (transition?.rebooted) {
-        explicitRebootCount += 1;
-        const recoverySource = transition?.rebootRecoverySource ?? "legacy_unknown";
-        rebootRecoverySourceCounts.set(
-          recoverySource,
-          (rebootRecoverySourceCounts.get(recoverySource) || 0) + 1
-        );
-        rebootCountByRegister[register - 1] += 1;
-        if (rebootLostRegisters > 0) midTurnRebootCount += 1;
-        explicitRebootDamageUnits += rebootDamageUnits;
-        lostRegisters += rebootLostRegisters;
-      }
-
-      const action = ACTIONS.find((candidate) => candidate.id === transition?.action);
-      if (!action || !transition?.from) {
-        replayMismatchCount += 1;
-      } else {
-        const replayOptions = {
-          ...options,
-          portalMap,
-          goal,
-          rebootStart: options.rebootStart ?? routeRebootStart,
-          registerIndex: (absoluteAction - 1) % REGISTER_COUNT,
-          dynamicArchivePoint
-        };
-        const controlReplay = simulateAction(
-          tileMap,
-          transition.from,
-          action,
-          replayOptions
-        );
-        const suppressedReplay = simulateAction(tileMap, transition.from, action, {
-          ...replayOptions,
-          damageShadowSuppressDirectDamage: true
-        });
-        const neutralReplayOptions = getDamageShadowNeutralDeckOptions(replayOptions);
-        const neutralControlReplay = simulateAction(
-          tileMap,
-          transition.from,
-          action,
-          neutralReplayOptions
-        );
-        const neutralSuppressedReplay = simulateAction(tileMap, transition.from, action, {
-          ...neutralReplayOptions,
-          damageShadowSuppressDirectDamage: true
-        });
-        const samePhysicalOutcome = (
-          sameDamageShadowPhysicalOutcome(controlReplay, transition) &&
-          sameDamageShadowPhysicalOutcome(suppressedReplay, transition)
-        );
-        const sameBurdenPhysicalOutcome = (
-          sameDamageShadowPhysicalOutcome(neutralControlReplay, transition) &&
-          sameDamageShadowPhysicalOutcome(neutralSuppressedReplay, transition)
-        );
-
-        if (sameDamageShadowPhysicalOutcome(controlReplay, transition)) {
-          const relief = getDamageShadowRandomCardReliefOpportunity(
-            tileMap,
-            transition,
-            controlReplay,
-            replayOptions,
-            previousRouteActionId
-          );
-          if (relief) {
-            reliefRegisterContexts.push({
-              legIndex,
-              legAction: index + 1,
-              absoluteAction,
-              turn,
-              register,
-              action: transition?.action ?? null,
-              ...relief
-            });
-          }
-          const candidateRelief = getDamageShadowCandidateRegisterReliefProfile(
-            tileMap,
-            transition,
-            controlReplay,
-            replayOptions,
-            absoluteAction
-          );
-          candidateReliefRegisterContexts.push({
-            legIndex,
-            legAction: index + 1,
-            absoluteAction,
-            turn,
-            register,
-            action: transition?.action ?? null,
-            ...candidateRelief
-          });
-        }
-
-        if (samePhysicalOutcome) {
-          const controlHazard = Number(controlReplay?.hazard) || 0;
-          const suppressedHazard = Number(suppressedReplay?.hazard) || 0;
-          const productionHazard = Number(transition?.hazard) || 0;
-          const hazardDrift = productionHazard - controlHazard;
-          const hazardDriftAbs = Math.abs(hazardDrift);
-          controlReplayHazardScore += controlHazard;
-          suppressedReplayHazardScore += suppressedHazard;
-          replayHazardDriftScore += hazardDrift;
-          replayHazardDriftAbsoluteScore += hazardDriftAbs;
-          peakReplayHazardDrift = Math.max(peakReplayHazardDrift, hazardDriftAbs);
-          if (hazardDriftAbs > 0.005) {
-            replayHazardDriftTransitionCount += 1;
-          }
-
-          const transitionDirectDamageScore = Math.max(
-            0,
-            controlHazard - suppressedHazard
-          );
-          directDamageScore += transitionDirectDamageScore;
-          const transitionNonRebootDirectDamageScore = Math.max(
-            0,
-            transitionDirectDamageScore - currentRebootDamageScore
-          );
-          nonRebootDirectDamageScore += transitionNonRebootDirectDamageScore;
-
-          let neutralDirectDamageScore = 0;
-          let neutralNonRebootDirectDamageScore = 0;
-          if (sameBurdenPhysicalOutcome) {
-            const neutralControlHazard = Number(neutralControlReplay?.hazard) || 0;
-            const neutralSuppressedHazard = Number(neutralSuppressedReplay?.hazard) || 0;
-            neutralDirectDamageScore = Math.max(0, neutralControlHazard - neutralSuppressedHazard);
-            const neutralRebootDamageScore = transition?.rebooted
-              ? getRebootDamagePenalty(neutralReplayOptions)
-              : 0;
-            neutralNonRebootDirectDamageScore = Math.max(
-              0,
-              neutralDirectDamageScore - neutralRebootDamageScore
-            );
-          } else {
-            burdenReplayMismatchCount += 1;
-          }
-
-          const realizedDamage = getDamageShadowRealizedDamageForTransition(
-            tileMap,
-            controlReplay,
-            options,
-            absoluteAction
-          );
-          const burdenInputUnits = sameBurdenPhysicalOutcome
-            ? realizedDamage.totalDamageUnits
-            : 0;
-          realizedBoardLaserDamageUnits += realizedDamage.boardLaserDamageUnits;
-          realizedFlamethrowerDamageUnits += realizedDamage.flamethrowerDamageUnits;
-          realizedLedgeDamageUnits += realizedDamage.ledgeDamageUnits;
-          realizedRebootDamageUnits += realizedDamage.rebootDamageUnits;
-
-          if (
-            transitionDirectDamageScore > 0 ||
-            transition?.rebooted ||
-            burdenInputUnits > 0
-          ) {
-            // This source list describes route-hazard attribution, NOT a list of
-            // physical hits. A laser may legitimately appear here because its
-            // threat constrained this transition even when the robot did not
-            // finish the register in the beam. `realizedSourceTypes` below is
-            // the factual stream that advances persistent/transient burden.
-            const sourceTypes = getDamageShadowTransitionSourceTypes(
-              tileMap,
-              controlReplay,
-              options,
-              absoluteAction
-            );
-            if (!sourceTypes.length && transitionDirectDamageScore > 0) {
-              sourceTypes.push("unresolved-direct-source");
-              unresolvedDirectSourceCount += 1;
-              unresolvedDirectSourceScore += transitionDirectDamageScore;
-            }
-
-            // Homing Missile still has a direct route-hazard value but this
-            // shadow does not yet have an agreed physical damage-card count for
-            // it. Surface that omission rather than deriving cards from score.
-            const unsupportedPhysicalSource = (
-              sourceTypes.includes("homingMissile") &&
-              neutralNonRebootDirectDamageScore > 0
-            );
-            if (unsupportedPhysicalSource) {
-              burdenUnsupportedDirectTransitionCount += 1;
-              burdenUnsupportedDirectScore += neutralNonRebootDirectDamageScore;
-            }
-
-            damageEvents.push({
-              legIndex,
-              legAction: index + 1,
-              absoluteAction,
-              routeActionCount,
-              turn,
-              register,
-              action: transition?.action ?? null,
-              from: transition?.from ? cloneState(transition.from) : null,
-              to: transition?.to ? cloneState(transition.to) : null,
-              sourceTypes,
-              realizedSourceTypes: realizedDamage.sourceTypes,
-              directDamageScore: Number(transitionDirectDamageScore.toFixed(2)),
-              nonRebootDirectDamageScore: Number(transitionNonRebootDirectDamageScore.toFixed(2)),
-              neutralDirectDamageScore: Number(neutralDirectDamageScore.toFixed(2)),
-              neutralNonRebootDirectDamageScore: Number(neutralNonRebootDirectDamageScore.toFixed(2)),
-              burdenInputUnits: Number(burdenInputUnits.toFixed(3)),
-              burdenNonRebootSupported: !unsupportedPhysicalSource,
-              realizedBoardLaserDamageUnits: Number(realizedDamage.boardLaserDamageUnits.toFixed(3)),
-              realizedFlamethrowerDamageUnits: Number(realizedDamage.flamethrowerDamageUnits.toFixed(3)),
-              realizedLedgeDamageUnits: Number(realizedDamage.ledgeDamageUnits.toFixed(3)),
-              realizedRebootDamageUnits: Number(realizedDamage.rebootDamageUnits.toFixed(3)),
-              productionControlHazardDrift: Number(hazardDrift.toFixed(2)),
-              exactDamageUnits: rebootDamageUnits || null,
-              rebootDamageScore: Number(currentRebootDamageScore.toFixed(2)),
-              lostRegisters: rebootLostRegisters,
-              rebooted: Boolean(transition?.rebooted),
-              rebootRecoverySource: transition?.rebootRecoverySource ?? null,
-              routeContinuesAfterReboot: Boolean(
-                transition?.rebooted && transitionCount < totalRouteTransitionCount
-              )
-            });
-          }
-        } else {
-          replayMismatchCount += 1;
-        }
-      }
-
-      if (transition?.action) {
-        previousRouteActionId = transition?.rebooted ? null : transition.action;
-      }
-      elapsedAbsoluteActions = transition?.rebooted
-        ? getRebootEndedAbsoluteActions(absoluteAction)
-        : absoluteAction;
-      previousTransitionRebooted = Boolean(transition?.rebooted);
-
-      if (options.recoveryRule === "dynamic_archiving" && transition?.to) {
-        dynamicArchivePoint = getNextDynamicArchivePoint(
-          tileMap,
-          transition.to,
-          dynamicArchivePoint,
-          options
-        );
-      }
-    });
-  }
-
-  const rebootDamageBaseScore = options.moreDeadlyGame
-    ? MORE_DEADLY_REBOOT_DAMAGE_PENALTY
-    : REBOOT_DAMAGE_PENALTY;
-  const rebootDamageScore = Number((
-    explicitRebootCount *
-    rebootDamageBaseScore *
-    getDamageDeckPressureMultipliers(options).reboot
-  ).toFixed(2));
-  const lostRegisterTempoOnlyScore = Number((
-    lostRegisters * REGISTER_TEMPO_COST
-  ).toFixed(2));
-  const rebootDiscontinuityScore = Number((
-    explicitRebootCount * REBOOT_DISCONTINUITY_PENALTY
-  ).toFixed(2));
-  // v49bf diagnostic split: production getRebootRoutePenalty() now contains only
-  // concrete skipped-register tempo. The legacy fixed discontinuity field is kept
-  // at zero for visibility and regression checking.
-  const lostRegisterTempoScore = Number((
-    lostRegisterTempoOnlyScore + rebootDiscontinuityScore
-  ).toFixed(2));
-  const damageEventsPerTurn = new Map();
-  damageEvents.forEach((event) => {
-    damageEventsPerTurn.set(event.turn, (damageEventsPerTurn.get(event.turn) || 0) + 1);
-  });
-  const damageBearingTurnCount = damageEventsPerTurn.size;
-  const multiDamageBearingTurnCount = [...damageEventsPerTurn.values()]
-    .filter((count) => count >= 2).length;
-  const peakDamageBearingTransitionsInTurn = damageEventsPerTurn.size
-    ? Math.max(...damageEventsPerTurn.values())
-    : 0;
-  const realizedDamageEvents = damageEvents.filter(
-    (event) => (Number(event?.burdenInputUnits) || 0) > 0
-  );
-  const realizedDamageEventsPerTurn = new Map();
-  realizedDamageEvents.forEach((event) => {
-    realizedDamageEventsPerTurn.set(
-      event.turn,
-      (realizedDamageEventsPerTurn.get(event.turn) || 0) + 1
-    );
-  });
-  const realizedDamageTurnCount = realizedDamageEventsPerTurn.size;
-  const multiRealizedDamageTurnCount = [...realizedDamageEventsPerTurn.values()]
-    .filter((count) => count >= 2).length;
-  const peakRealizedDamageEventsInTurn = realizedDamageEventsPerTurn.size
-    ? Math.max(...realizedDamageEventsPerTurn.values())
-    : 0;
-
-  // Stateful burden reference v1: damage does not fade merely because time
-  // passes. Each supported impulse increases unresolved load. The unrelieved
-  // track remains intact as an upper reference. Relief reference v1 then runs a
-  // second copy of that load through game-turn disposal opportunities derived
-  // from the random-card robustness envelope above. Relief is applied before the
-  // current turn's new damage, never after it, so this still does not pretend
-  // fresh damage can instantly become and clear as SPAM in the same turn.
-  let unrelievedDamageLoad = 0;
-  let maxMarginalBurdenRegisterEquivalents = 0;
-  let totalBurdenInputUnits = 0;
-  const burdenInputByTurn = new Map();
-  const damageEventsByTurn = new Map();
-  for (const event of damageEvents) {
-    if (!damageEventsByTurn.has(event.turn)) damageEventsByTurn.set(event.turn, []);
-    damageEventsByTurn.get(event.turn).push(event);
-
-    const inputUnits = Math.max(0, Number(event?.burdenInputUnits) || 0);
-    if (inputUnits <= 0) {
-      event.burdenLoadBefore = Number(unrelievedDamageLoad.toFixed(3));
-      event.burdenLoadAfter = Number(unrelievedDamageLoad.toFixed(3));
-      event.burdenRegisterEqBefore = Number(getDamageShadowBurdenRegisterEquivalents(unrelievedDamageLoad).toFixed(3));
-      event.burdenRegisterEqAfter = event.burdenRegisterEqBefore;
-      event.marginalBurdenRegisterEq = 0;
-      continue;
-    }
-    const burdenBefore = getDamageShadowBurdenRegisterEquivalents(unrelievedDamageLoad);
-    const loadBefore = unrelievedDamageLoad;
-    unrelievedDamageLoad += inputUnits;
-    totalBurdenInputUnits += inputUnits;
-    const burdenAfter = getDamageShadowBurdenRegisterEquivalents(unrelievedDamageLoad);
-    const marginalBurden = Math.max(0, burdenAfter - burdenBefore);
-    maxMarginalBurdenRegisterEquivalents = Math.max(
-      maxMarginalBurdenRegisterEquivalents,
-      marginalBurden
-    );
-    burdenInputByTurn.set(
-      event.turn,
-      (burdenInputByTurn.get(event.turn) || 0) + inputUnits
-    );
-    event.burdenLoadBefore = Number(loadBefore.toFixed(3));
-    event.burdenLoadAfter = Number(unrelievedDamageLoad.toFixed(3));
-    event.burdenRegisterEqBefore = Number(burdenBefore.toFixed(3));
-    event.burdenRegisterEqAfter = Number(burdenAfter.toFixed(3));
-    event.marginalBurdenRegisterEq = Number(marginalBurden.toFixed(3));
-  }
-  const peakBurdenInputUnitsInTurn = burdenInputByTurn.size
-    ? Math.max(...burdenInputByTurn.values())
-    : 0;
-  const finalBurdenRegisterEquivalents = getDamageShadowBurdenRegisterEquivalents(
-    unrelievedDamageLoad
-  );
-
-  const bestReliefByTurn = new Map();
-  for (const entry of reliefRegisterContexts) {
-    const previous = bestReliefByTurn.get(entry.turn);
-    if (!previous || entry.opportunity > previous.opportunity) {
-      bestReliefByTurn.set(entry.turn, entry);
-    }
-  }
-
-  let relievedDamageLoad = 0;
-  let totalReliefPotentialUnits = 0;
-  let totalReliefAppliedUnits = 0;
-  let reliefCandidateTurnCount = 0;
-  let reliefAppliedTurnCount = 0;
-  let bestOpportunitySum = 0;
-  let bestOpportunityCount = 0;
-  let bestOpportunityMax = 0;
-  let bestCatastrophicShareSum = 0;
-  let bestCatastrophicTurnCount = 0;
-  let maxRelievedMarginalBurdenRegisterEquivalents = 0;
-  const reliefTurns = [];
-  const maxRouteTurn = Math.max(
-    0,
-    Math.ceil(routeActionCount / REGISTER_COUNT),
-    ...reliefRegisterContexts.map((entry) => entry.turn),
-    ...damageEvents.map((event) => event.turn)
-  );
-
-  for (let turn = 1; turn <= maxRouteTurn; turn += 1) {
-    const best = bestReliefByTurn.get(turn) ?? null;
-    const loadAtTurnStart = relievedDamageLoad;
-    const opportunity = Number(best?.opportunity) || 0;
-    const potentialRelief = getDamageShadowReliefCapacity(opportunity);
-    const hadLoadToRelieve = loadAtTurnStart > 0.0005;
-    if (hadLoadToRelieve) {
-      reliefCandidateTurnCount += 1;
-      bestOpportunitySum += opportunity;
-      bestOpportunityCount += 1;
-      bestOpportunityMax = Math.max(bestOpportunityMax, opportunity);
-      const catastrophicShare = Number(best?.catastrophicShare) || 0;
-      bestCatastrophicShareSum += catastrophicShare;
-      if (catastrophicShare > 0.0005) bestCatastrophicTurnCount += 1;
-    }
-
-    totalReliefPotentialUnits += hadLoadToRelieve ? potentialRelief : 0;
-    const appliedRelief = hadLoadToRelieve
-      ? Math.min(relievedDamageLoad, potentialRelief)
-      : 0;
-    if (appliedRelief > 0.0005) reliefAppliedTurnCount += 1;
-    relievedDamageLoad = Math.max(0, relievedDamageLoad - appliedRelief);
-    totalReliefAppliedUnits += appliedRelief;
-    const loadAfterRelief = relievedDamageLoad;
-
-    const turnEvents = damageEventsByTurn.get(turn) ?? [];
-    for (const event of turnEvents) {
-      const inputUnits = Math.max(0, Number(event?.burdenInputUnits) || 0);
-      const loadBefore = relievedDamageLoad;
-      const burdenBefore = getDamageShadowBurdenRegisterEquivalents(loadBefore);
-      relievedDamageLoad += inputUnits;
-      const burdenAfter = getDamageShadowBurdenRegisterEquivalents(relievedDamageLoad);
-      const marginal = Math.max(0, burdenAfter - burdenBefore);
-      maxRelievedMarginalBurdenRegisterEquivalents = Math.max(
-        maxRelievedMarginalBurdenRegisterEquivalents,
-        marginal
-      );
-      event.reliefLoadBefore = Number(loadBefore.toFixed(3));
-      event.reliefLoadAfter = Number(relievedDamageLoad.toFixed(3));
-      event.reliefBurdenRegisterEqBefore = Number(burdenBefore.toFixed(3));
-      event.reliefBurdenRegisterEqAfter = Number(burdenAfter.toFixed(3));
-      event.reliefMarginalBurdenRegisterEq = Number(marginal.toFixed(3));
-    }
-
-    reliefTurns.push({
-      turn,
-      bestRegister: best?.register ?? null,
-      bestAbsoluteAction: best?.absoluteAction ?? null,
-      opportunity: Number(opportunity.toFixed(4)),
-      meanQuality: Number((Number(best?.meanQuality) || 0).toFixed(4)),
-      forgivingShare: Number((Number(best?.forgivingShare) || 0).toFixed(4)),
-      exactShare: Number((Number(best?.exactShare) || 0).toFixed(4)),
-      catastrophicShare: Number((Number(best?.catastrophicShare) || 0).toFixed(4)),
-      directDamageShare: Number((Number(best?.directDamageShare) || 0).toFixed(4)),
-      loadAtTurnStart: Number(loadAtTurnStart.toFixed(3)),
-      potentialRelief: Number(potentialRelief.toFixed(3)),
-      appliedRelief: Number(appliedRelief.toFixed(3)),
-      loadAfterRelief: Number(loadAfterRelief.toFixed(3)),
-      loadAtTurnEnd: Number(relievedDamageLoad.toFixed(3))
-    });
-  }
-
-  const finalRelievedBurdenRegisterEquivalents = getDamageShadowBurdenRegisterEquivalents(
-    relievedDamageLoad
-  );
-  const meanBestReliefOpportunity = bestOpportunityCount
-    ? bestOpportunitySum / bestOpportunityCount
-    : 0;
-  const meanBestReliefCatastrophicShare = bestOpportunityCount
-    ? bestCatastrophicShareSum / bestOpportunityCount
-    : 0;
-
-  // Expected-composition reference v1. Keep the previous all-persistent tracks
-  // above unchanged as comparison/upper references. This parallel track applies
-  // route relief only to the expected persistent (SPAM-like) half. The transient
-  // half is summarized within each game turn and then discarded before the next
-  // turn; it never becomes persistent load.
-  const unrelievedPersistentDamageLoad = totalBurdenInputUnits * DAMAGE_SHADOW_EXPECTED_SPAM_SHARE;
-  const unrelievedPersistentBurdenRegisterEquivalents =
-    getDamageShadowBurdenRegisterEquivalents(unrelievedPersistentDamageLoad);
-  let persistentDamageLoad = 0;
-  let totalExpectedPersistentInputUnits = 0;
-  let totalExpectedTransientInputUnits = 0;
-  let splitReliefPotentialUnits = 0;
-  let splitReliefAppliedUnits = 0;
-  let splitReliefAppliedTurnCount = 0;
-  let transientDamageTurnCount = 0;
-  let transientExpectedAffectedRegisterSum = 0;
-  let transientExpectedAffectedRegisterMax = 0;
-  let transientProbabilityAtLeastTwoSum = 0;
-  let transientProbabilityAtLeastTwoMax = 0;
-  let transientProbabilityAtLeastThreeSum = 0;
-  let transientProbabilityAtLeastThreeMax = 0;
-  let transientExcessMultiRegisterPressureSum = 0;
-  let transientExcessMultiRegisterPressureMax = 0;
-  let transientTwoPlusLikelyTurnCount = 0;
-  let peakExpectedTransientInputUnitsInTurn = 0;
-  const compositionTurns = [];
-
-  for (let turn = 1; turn <= maxRouteTurn; turn += 1) {
-    const best = bestReliefByTurn.get(turn) ?? null;
-    const loadAtTurnStart = persistentDamageLoad;
-    const potentialRelief = getDamageShadowReliefCapacity(Number(best?.opportunity) || 0);
-    splitReliefPotentialUnits += loadAtTurnStart > 0.0005 ? potentialRelief : 0;
-    const appliedRelief = loadAtTurnStart > 0.0005
-      ? Math.min(loadAtTurnStart, potentialRelief)
-      : 0;
-    if (appliedRelief > 0.0005) splitReliefAppliedTurnCount += 1;
-    persistentDamageLoad = Math.max(0, persistentDamageLoad - appliedRelief);
-    splitReliefAppliedUnits += appliedRelief;
-    const loadAfterRelief = persistentDamageLoad;
-
-    const registerDamageUnits = new Map();
-    let turnDamageInputUnits = 0;
-    let turnPersistentInputUnits = 0;
-    let turnExpectedTransientInputUnits = 0;
-    const turnEvents = damageEventsByTurn.get(turn) ?? [];
-    const turnHasForcedReboot = turnEvents.some((event) => event?.rebooted);
-    for (const event of turnEvents) {
-      const inputUnits = Math.max(0, Number(event?.burdenInputUnits) || 0);
-      if (inputUnits <= 0) continue;
-      const persistentInput = inputUnits * DAMAGE_SHADOW_EXPECTED_SPAM_SHARE;
-      const transientInput = inputUnits * DAMAGE_SHADOW_EXPECTED_HAYWIRE_SHARE;
-      event.expectedPersistentInputUnits = Number(persistentInput.toFixed(3));
-      event.expectedTransientInputUnits = Number(transientInput.toFixed(3));
-      event.splitPersistentLoadBefore = Number(persistentDamageLoad.toFixed(3));
-      persistentDamageLoad += persistentInput;
-      event.splitPersistentLoadAfter = Number(persistentDamageLoad.toFixed(3));
-      turnDamageInputUnits += inputUnits;
-      turnPersistentInputUnits += persistentInput;
-      turnExpectedTransientInputUnits += transientInput;
-      totalExpectedPersistentInputUnits += persistentInput;
-      totalExpectedTransientInputUnits += transientInput;
-      registerDamageUnits.set(
-        event.register,
-        (registerDamageUnits.get(event.register) || 0) + inputUnits
-      );
-    }
-
-    let transientPressure = {
-      expectedAffectedRegisters: 0,
-      probabilityAny: 0,
-      probabilityAtLeastTwo: 0,
-      probabilityAtLeastThree: 0,
-      excessMultiRegisterPressure: 0
-    };
-    if (turnDamageInputUnits > 0 && !turnHasForcedReboot) {
-      transientDamageTurnCount += 1;
-      transientPressure = getDamageShadowHaywireTurnPressure(registerDamageUnits);
-      transientExpectedAffectedRegisterSum += transientPressure.expectedAffectedRegisters;
-      transientExpectedAffectedRegisterMax = Math.max(
-        transientExpectedAffectedRegisterMax,
-        transientPressure.expectedAffectedRegisters
-      );
-      transientProbabilityAtLeastTwoSum += transientPressure.probabilityAtLeastTwo;
-      transientProbabilityAtLeastTwoMax = Math.max(
-        transientProbabilityAtLeastTwoMax,
-        transientPressure.probabilityAtLeastTwo
-      );
-      transientProbabilityAtLeastThreeSum += transientPressure.probabilityAtLeastThree;
-      transientProbabilityAtLeastThreeMax = Math.max(
-        transientProbabilityAtLeastThreeMax,
-        transientPressure.probabilityAtLeastThree
-      );
-      transientExcessMultiRegisterPressureSum += transientPressure.excessMultiRegisterPressure;
-      transientExcessMultiRegisterPressureMax = Math.max(
-        transientExcessMultiRegisterPressureMax,
-        transientPressure.excessMultiRegisterPressure
-      );
-      if (transientPressure.probabilityAtLeastTwo >= 0.5) {
-        transientTwoPlusLikelyTurnCount += 1;
-      }
-      peakExpectedTransientInputUnitsInTurn = Math.max(
-        peakExpectedTransientInputUnitsInTurn,
-        turnExpectedTransientInputUnits
-      );
-    }
-
-    if (turnDamageInputUnits > 0 || appliedRelief > 0.0005) {
-      compositionTurns.push({
-        turn,
-        damageInputUnits: Number(turnDamageInputUnits.toFixed(3)),
-        expectedPersistentInputUnits: Number(turnPersistentInputUnits.toFixed(3)),
-        expectedTransientInputUnits: Number(turnExpectedTransientInputUnits.toFixed(3)),
-        expectedAffectedRegisters: Number(transientPressure.expectedAffectedRegisters.toFixed(4)),
-        probabilityAtLeastTwoAffectedRegisters: Number(transientPressure.probabilityAtLeastTwo.toFixed(4)),
-        probabilityAtLeastThreeAffectedRegisters: Number(transientPressure.probabilityAtLeastThree.toFixed(4)),
-        excessMultiRegisterPressure: Number(transientPressure.excessMultiRegisterPressure.toFixed(4)),
-        persistentLoadAtTurnStart: Number(loadAtTurnStart.toFixed(3)),
-        potentialRelief: Number(potentialRelief.toFixed(3)),
-        appliedRelief: Number(appliedRelief.toFixed(3)),
-        persistentLoadAfterRelief: Number(loadAfterRelief.toFixed(3)),
-        persistentLoadAtTurnEnd: Number(persistentDamageLoad.toFixed(3)),
-        haywireClearedByReboot: turnHasForcedReboot
-      });
-    }
-  }
-
-  const finalPersistentBurdenRegisterEquivalents =
-    getDamageShadowBurdenRegisterEquivalents(persistentDamageLoad);
-  const meanTransientExpectedAffectedRegisters = transientDamageTurnCount
-    ? transientExpectedAffectedRegisterSum / transientDamageTurnCount
-    : 0;
-  const meanTransientProbabilityAtLeastTwo = transientDamageTurnCount
-    ? transientProbabilityAtLeastTwoSum / transientDamageTurnCount
-    : 0;
-  const meanTransientProbabilityAtLeastThree = transientDamageTurnCount
-    ? transientProbabilityAtLeastThreeSum / transientDamageTurnCount
-    : 0;
-  const meanTransientExcessMultiRegisterPressure = transientDamageTurnCount
-    ? transientExcessMultiRegisterPressureSum / transientDamageTurnCount
-    : 0;
-
-  // Traffic-composition reference v1. Board damage above is deterministic for
-  // the selected realized route. Robot lasers remain probabilistic: use the
-  // existing occupancy/temporal/cardinal/confidence traffic field to produce an
-  // expected damage-equivalent input at each register, then feed that expected
-  // input into the same persistent/transient chronology. Nearby displacement and
-  // competition remain separate traffic consequences and are not reinterpreted
-  // as damage. This is intentionally a shadow of the eventual scoring model.
-  const trafficRanged = getDamageShadowTrafficRangedRegisterInputs(
-    tileMap,
-    route,
-    trafficContext,
-    options
-  );
-  const boardDamageByAbsoluteAction = new Map();
-  for (const event of damageEvents) {
-    const units = Math.max(0, Number(event?.burdenInputUnits) || 0);
-    if (units <= 0) continue;
-    boardDamageByAbsoluteAction.set(
-      event.absoluteAction,
-      (boardDamageByAbsoluteAction.get(event.absoluteAction) || 0) + units
-    );
-  }
-  const trafficDamageByAbsoluteAction = new Map();
-  for (const record of trafficRanged?.records || []) {
-    const units = Math.max(0, Number(record?.expectedDamageUnits) || 0);
-    if (units <= 0) continue;
-    trafficDamageByAbsoluteAction.set(
-      record.absoluteAction,
-      (trafficDamageByAbsoluteAction.get(record.absoluteAction) || 0) + units
-    );
-  }
-
-  // Candidate delayed-control economy v3 / turn-ledger v1. This remains a
-  // diagnostic shadow. It deliberately averages over unknown draw/discard and
-  // reshuffle position instead of becoming a gameplay deck simulator:
-  //   * persistent SPAM is a stationary added deck category at programming time;
-  //   * the exact selected program's normal-card requirements still use the
-  //     existing rolling previous-program depletion;
-  //   * SPAM supply pressure is clean-vs-SPAM hypergeometric availability;
-  //   * SPAM clog is the probability that a 9-card hand contains too few freely
-  //     programmable non-SPAM cards for the remaining unclogged registers;
-  //   * Haywire occupies next-turn registers directly, one meaningful clog per
-  //     damaged register, and then expires;
-  //   * the joint clog-count distribution is valued nonlinearly, so four/five
-  //     uncontrolled registers can exceed the five-RE Shutdown reference;
-  //   * safe SPAM disposal is register-local and capped by the expected SPAM
-  //     cards available in the stationary hand; a programmed SPAM can clear a
-  //     finite expected SPAM->SPAM replacement chain in that same register.
-  // Current-turn damage remains delayed: it cannot alter a program already chosen.
-  const trafficRecordByAbsoluteAction = new Map(
-    (trafficRanged?.records || []).map((record) => [record.absoluteAction, record])
-  );
-  const rebootByAbsoluteAction = new Map(
-    damageEvents
-      .filter((event) => event?.rebooted)
-      .map((event) => [event.absoluteAction, event])
-  );
-  const candidateContextByAbsoluteAction = new Map();
-  let priorCandidateDirection = null;
-  let priorCandidateAbsoluteAction = null;
-  let candidateDirectionRunLength = 0;
-  for (const context of [...candidateReliefRegisterContexts]
-    .sort((a, b) => a.absoluteAction - b.absoluteAction)) {
-    if (
-      context.travelDirection &&
-      context.travelDirection === priorCandidateDirection &&
-      priorCandidateAbsoluteAction !== null &&
-      context.absoluteAction === priorCandidateAbsoluteAction + 1
-    ) {
-      candidateDirectionRunLength += 1;
-    } else {
-      candidateDirectionRunLength = context.travelDirection ? 1 : 0;
-    }
-    priorCandidateDirection = context.travelDirection;
-    priorCandidateAbsoluteAction = context.absoluteAction;
-    const continuityBonus = context.boardOpportunity > 0 && candidateDirectionRunLength > 1
-      ? Math.min(
-        DAMAGE_SHADOW_CANDIDATE_RELIEF_CONTINUITY_BONUS_MAX,
-        (candidateDirectionRunLength - 1) * 0.05
-      )
-      : 0;
-    candidateContextByAbsoluteAction.set(context.absoluteAction, {
-      ...context,
-      directionRunLength: candidateDirectionRunLength,
-      continuityBonus: Number(continuityBonus.toFixed(4)),
-      boardOpportunityWithContinuity: Number(Math.min(
-        1,
-        context.boardOpportunity > 0
-          ? context.boardOpportunity + continuityBonus
-          : 0
-      ).toFixed(4))
-    });
-  }
-
-  const selectedProgramTurns = getDamageShadowSelectedProgramTurns(legs);
-  const candidateUnsupportedDamageVariants = [
-    options.lessSpammyGame ? "lessSpammyGame" : null,
-    options.criticalSpam ? "criticalSpam" : null,
-    options.criticalHaywire ? "criticalHaywire" : null,
-    options.permanentShutdown ? "permanentShutdown" : null
-  ].filter(Boolean);
-
-  let candidateSpamBurden = 0;
-  let candidateActiveHaywireByRegister = Array(REGISTER_COUNT).fill(0);
-  let candidateTotalDamageEconomyRegisterEquivalents = 0;
-  let candidateTotalSpamSupplyRegisterEquivalents = 0;
-  let candidateTotalClogRegisterEquivalents = 0;
-  let candidateTotalExpectedHaywireClogs = 0;
-  let candidateTotalExpectedForcedSpamClogs = 0;
-  let candidateTotalExpectedClogs = 0;
-  let candidateTurnCount = 0;
-  let candidateCleanProgramProbabilitySum = 0;
-  let candidateSpamProgramProbabilitySum = 0;
-  let candidateMaxSpamBurdenAtProgramming = 0;
-  let candidateMaxHaywireBurdenAtProgramming = 0;
-  let candidateMaxExpectedClogs = 0;
-  let candidateMaxClogRegisterEquivalents = 0;
-  let candidateMaxSpamSupplyRegisterEquivalents = 0;
-  let candidateMaxDamageEconomyRegisterEquivalents = 0;
-  let candidateMaxProbabilityFourPlusClogs = 0;
-  let candidateMaxProbabilityFullClog = 0;
-  let candidateTotalReliefOpportunity = 0;
-  let candidateTotalReliefInitiations = 0;
-  let candidateTotalReliefExpectedRemoval = 0;
-  let candidateSpamChainExtraRemoved = 0;
-  let candidateSpamBurdenRemoved = 0;
-  let candidatePositiveReliefRegisterCount = 0;
-  let candidateTrafficSuppressedReliefRegisterCount = 0;
-  let candidateRebootHaywireClearCount = 0;
-  let candidateExpectedHaywireClearedByReboot = 0;
-  const candidateEconomyTurns = [];
-  const candidateReliefRegisters = [];
-
-  for (let turn = 1; turn <= maxRouteTurn; turn += 1) {
-    const programTurn = selectedProgramTurns.get(turn) ?? {
-      actionIds: [],
-      programCardIds: [],
-      absoluteActions: []
-    };
-    const actionIds = programTurn.actionIds || [];
-    const programRegisters = actionIds.length;
-    if (!programRegisters) continue;
-    const previousProgram = selectedProgramTurns.get(turn - 1) ?? null;
-    const previousProgramCode = previousProgram
-      ? getDamageShadowProgramCodeFromLiteralCards(previousProgram.programCardIds)
-      : 0;
-    const baseDeckSize = getExactProgramDeckCounts(previousProgramCode)
-      .reduce((sum, count) => sum + count, 0);
-    const spamAtProgramming = candidateSpamBurden;
-    const activeHaywireProbabilities = candidateActiveHaywireByRegister
-      .slice(0, programRegisters);
-    const haywireAtProgramming = activeHaywireProbabilities.reduce(
-      (sum, probability) => sum + probability,
-      0
-    );
-
-    const cleanProgramProbability = getExactProgramHandAvailabilityProbability(
-      previousProgramCode,
-      actionIds
-    );
-    const spamProgramProbability = getDamageShadowSpamProgramAvailabilityProbability(
-      previousProgramCode,
-      actionIds,
-      spamAtProgramming
-    );
-    const cleanProgramPenaltyScore = getDamageShadowAvailabilityPenaltyFromProbability(
-      cleanProgramProbability
-    );
-    const spamProgramPenaltyScore = getDamageShadowAvailabilityPenaltyFromProbability(
-      spamProgramProbability
-    );
-    const spamSupplyRegisterEquivalents = (
-      Number.isFinite(cleanProgramPenaltyScore) &&
-      Number.isFinite(spamProgramPenaltyScore)
-    )
-      ? Math.max(0, spamProgramPenaltyScore - cleanProgramPenaltyScore) /
-        REGISTER_TEMPO_COST
-      : 0;
-
-    const clogSummary = getDamageShadowClogSummary(
-      baseDeckSize,
-      spamAtProgramming,
-      activeHaywireProbabilities,
-      programRegisters
-    );
-    const clogRegisterEquivalents = clogSummary.expectedClogRegisterEquivalents;
-    const damageEconomyRegisterEquivalents = (
-      spamSupplyRegisterEquivalents + clogRegisterEquivalents
-    );
-
-    candidateTurnCount += 1;
-    candidateCleanProgramProbabilitySum += cleanProgramProbability;
-    candidateSpamProgramProbabilitySum += spamProgramProbability;
-    candidateTotalSpamSupplyRegisterEquivalents += spamSupplyRegisterEquivalents;
-    candidateTotalClogRegisterEquivalents += clogRegisterEquivalents;
-    candidateTotalDamageEconomyRegisterEquivalents += damageEconomyRegisterEquivalents;
-    candidateTotalExpectedHaywireClogs += clogSummary.expectedHaywireClogs;
-    candidateTotalExpectedForcedSpamClogs += clogSummary.expectedForcedSpamClogs;
-    candidateTotalExpectedClogs += clogSummary.expectedTotalClogs;
-    candidateMaxSpamBurdenAtProgramming = Math.max(
-      candidateMaxSpamBurdenAtProgramming,
-      spamAtProgramming
-    );
-    candidateMaxHaywireBurdenAtProgramming = Math.max(
-      candidateMaxHaywireBurdenAtProgramming,
-      haywireAtProgramming
-    );
-    candidateMaxExpectedClogs = Math.max(
-      candidateMaxExpectedClogs,
-      clogSummary.expectedTotalClogs
-    );
-    candidateMaxClogRegisterEquivalents = Math.max(
-      candidateMaxClogRegisterEquivalents,
-      clogRegisterEquivalents
-    );
-    candidateMaxSpamSupplyRegisterEquivalents = Math.max(
-      candidateMaxSpamSupplyRegisterEquivalents,
-      spamSupplyRegisterEquivalents
-    );
-    candidateMaxDamageEconomyRegisterEquivalents = Math.max(
-      candidateMaxDamageEconomyRegisterEquivalents,
-      damageEconomyRegisterEquivalents
-    );
-    candidateMaxProbabilityFourPlusClogs = Math.max(
-      candidateMaxProbabilityFourPlusClogs,
-      clogSummary.probabilityFourPlusClogs
-    );
-    candidateMaxProbabilityFullClog = Math.max(
-      candidateMaxProbabilityFullClog,
-      clogSummary.probabilityFullClog
-    );
-
-    let pendingSpamBurden = 0;
-    const pendingHaywireByRegister = Array(REGISTER_COUNT).fill(0);
-    let turnReliefOpportunity = 0;
-    let turnReliefInitiations = 0;
-    let turnExpectedSpamRemoved = 0;
-    let turnSpamChainExtraRemoved = 0;
-    let turnBoardDamageUnits = 0;
-    let turnTrafficDamageUnits = 0;
-    let turnRebooted = false;
-    let turnRebootRegister = 0;
-    let turnHaywireClearedByReboot = 0;
-    // A stationary hand abstraction: expected SPAM cards drawn are the maximum
-    // number of deliberate SPAM initiations we can spend this turn. Haywire-occupied
-    // registers cannot also be chosen as SPAM disposal slots.
-    let turnReliefInitiationsRemaining = Math.max(
-      0,
-      Math.min(
-        programRegisters - clogSummary.expectedHaywireClogs,
-        clogSummary.expectedSpamDrawn
-      )
-    );
-    const expectedSpamChainYieldAtStart = getDamageShadowExpectedSpamChainYield(
-      baseDeckSize,
-      spamAtProgramming
-    );
-
-    for (let register = 1; register <= programRegisters; register += 1) {
-      const absoluteAction = programTurn.absoluteActions?.[register - 1] ??
-        ((turn - 1) * REGISTER_COUNT + register);
-      const context = candidateContextByAbsoluteAction.get(absoluteAction) ?? null;
-      const trafficRecord = trafficRecordByAbsoluteAction.get(absoluteAction) ?? null;
-      const boardOpportunity = Math.max(
-        0,
-        Number(context?.boardOpportunityWithContinuity) || 0
-      );
-      const trafficPenalty = getDamageShadowCandidateTrafficReliefPenalty(trafficRecord);
-      const reliefOpportunity = Math.max(0, boardOpportunity - trafficPenalty);
-      if (boardOpportunity > 0 && reliefOpportunity <= 0.0005 && trafficPenalty > 0) {
-        candidateTrafficSuppressedReliefRegisterCount += 1;
-      }
-      if (reliefOpportunity > 0.0005) candidatePositiveReliefRegisterCount += 1;
-      candidateTotalReliefOpportunity += reliefOpportunity;
-      turnReliefOpportunity += reliefOpportunity;
-
-      let reliefInitiation = 0;
-      let spamChainYield = 0;
-      let removedThisRegister = 0;
-      if (
-        candidateSpamBurden > 0.0005 &&
-        reliefOpportunity > 0.0005 &&
-        turnReliefInitiationsRemaining > 0.0005
-      ) {
-        reliefInitiation = Math.min(
-          reliefOpportunity,
-          turnReliefInitiationsRemaining,
-          candidateSpamBurden
-        );
-        spamChainYield = getDamageShadowExpectedSpamChainYield(
-          baseDeckSize,
-          candidateSpamBurden
-        );
-        removedThisRegister = Math.min(
-          candidateSpamBurden,
-          reliefInitiation * Math.max(1, spamChainYield)
-        );
-        candidateSpamBurden = Math.max(0, candidateSpamBurden - removedThisRegister);
-        turnReliefInitiationsRemaining = Math.max(
-          0,
-          turnReliefInitiationsRemaining - reliefInitiation
-        );
-        candidateTotalReliefInitiations += reliefInitiation;
-        candidateTotalReliefExpectedRemoval += removedThisRegister;
-        candidateSpamBurdenRemoved += removedThisRegister;
-        candidateSpamChainExtraRemoved += Math.max(0, removedThisRegister - reliefInitiation);
-        turnReliefInitiations += reliefInitiation;
-        turnExpectedSpamRemoved += removedThisRegister;
-        turnSpamChainExtraRemoved += Math.max(0, removedThisRegister - reliefInitiation);
-      }
-
-      const boardDamageUnits = Math.max(
-        0,
-        Number(boardDamageByAbsoluteAction.get(absoluteAction)) || 0
-      );
-      const trafficDamageUnits = Math.max(
-        0,
-        Number(trafficDamageByAbsoluteAction.get(absoluteAction)) || 0
-      );
-      const combinedDamageUnits = boardDamageUnits + trafficDamageUnits;
-      pendingSpamBurden += combinedDamageUnits * DAMAGE_SHADOW_EXPECTED_SPAM_SHARE;
-      pendingHaywireByRegister[register - 1] = getDamageShadowHaywireRegisterProbability(
-        combinedDamageUnits
-      );
-      turnBoardDamageUnits += boardDamageUnits;
-      turnTrafficDamageUnits += trafficDamageUnits;
-
-      const rebootEvent = rebootByAbsoluteAction.get(absoluteAction) ?? null;
-      if (rebootEvent) {
-        // A forced reboot ends the current programming turn and clears Haywire.
-        // Existing Haywire already constrained this turn's chosen program, but no
-        // current-turn or newly received Haywire survives into the next programming
-        // phase. Persistent SPAM is intentionally unaffected.
-        const haywireToClear = pendingHaywireByRegister.reduce(
-          (sum, probability) => sum + probability,
-          0
-        );
-        turnRebooted = true;
-        turnRebootRegister = register;
-        turnHaywireClearedByReboot += haywireToClear;
-        candidateRebootHaywireClearCount += 1;
-        candidateExpectedHaywireClearedByReboot += haywireToClear;
-        pendingHaywireByRegister.fill(0);
-      }
-
-      if (
-        reliefOpportunity > 0.0005 ||
-        candidateSpamBurden > 0.0005 ||
-        removedThisRegister > 0 ||
-        combinedDamageUnits > 0
-      ) {
-        candidateReliefRegisters.push({
-          turn,
-          register,
-          absoluteAction,
-          spamBurdenBeforeNewDamage: Number(candidateSpamBurden.toFixed(3)),
-          boardOpportunity: Number(boardOpportunity.toFixed(4)),
-          trafficPenalty: Number(trafficPenalty.toFixed(4)),
-          reliefOpportunity: Number(reliefOpportunity.toFixed(4)),
-          reliefInitiation: Number(reliefInitiation.toFixed(4)),
-          spamChainYield: Number(spamChainYield.toFixed(4)),
-          expectedSpamRemoved: Number(removedThisRegister.toFixed(4)),
-          remainingExpectedSpamInitiations: Number(turnReliefInitiationsRemaining.toFixed(4)),
-          boardDamageUnits: Number(boardDamageUnits.toFixed(3)),
-          trafficDamageUnits: Number(trafficDamageUnits.toFixed(3)),
-          rebooted: Boolean(rebootEvent),
-          haywireClearedByReboot: Number((rebootEvent ? turnHaywireClearedByReboot : 0).toFixed(3)),
-          timingAllowance: Number(context?.timingAllowance || 0),
-          movementPenalty: Number(context?.movementPenalty || 0),
-          orientationPenalty: Number(context?.orientationPenalty || 0),
-          boardComplexityPenalty: Number(context?.boardComplexityPenalty || 0),
-          stationaryPenalty: Number(context?.stationaryPenalty || 0),
-          cleanMovementBonus: Number(context?.cleanMovementBonus || 0),
-          continuityBonus: Number(context?.continuityBonus || 0),
-          directionRunLength: Number(context?.directionRunLength || 0)
-        });
-      }
-    }
-
-    const spamAfterReliefBeforeDamage = candidateSpamBurden;
-    candidateSpamBurden += pendingSpamBurden;
-    candidateActiveHaywireByRegister = pendingHaywireByRegister;
-    const nextHaywireBurden = pendingHaywireByRegister.reduce(
-      (sum, probability) => sum + probability,
-      0
-    );
-
-    candidateEconomyTurns.push({
-      turn,
-      programRegisters,
-      actionIds,
-      programCardIds: programTurn.programCardIds || [],
-      previousProgramCode,
-      baseDeckSize,
-      spamAtProgramming: Number(spamAtProgramming.toFixed(3)),
-      haywireAtProgramming: Number(haywireAtProgramming.toFixed(3)),
-      cleanProgramProbability: Number(cleanProgramProbability.toFixed(5)),
-      spamProgramProbability: Number(spamProgramProbability.toFixed(5)),
-      spamProgramProbabilityRatio: Number((cleanProgramProbability > 0
-        ? spamProgramProbability / cleanProgramProbability
-        : 1).toFixed(4)),
-      cleanProgramPenaltyScore: Number((Number.isFinite(cleanProgramPenaltyScore)
-        ? cleanProgramPenaltyScore
-        : 0).toFixed(3)),
-      spamProgramPenaltyScore: Number((Number.isFinite(spamProgramPenaltyScore)
-        ? spamProgramPenaltyScore
-        : 0).toFixed(3)),
-      spamSupplyRegisterEquivalents: Number(spamSupplyRegisterEquivalents.toFixed(3)),
-      expectedSpamDrawn: Number(clogSummary.expectedSpamDrawn.toFixed(3)),
-      expectedHaywireClogs: Number(clogSummary.expectedHaywireClogs.toFixed(3)),
-      expectedForcedSpamClogs: Number(clogSummary.expectedForcedSpamClogs.toFixed(3)),
-      expectedTotalClogs: Number(clogSummary.expectedTotalClogs.toFixed(3)),
-      clogRegisterEquivalents: Number(clogRegisterEquivalents.toFixed(3)),
-      damageEconomyRegisterEquivalents: Number(damageEconomyRegisterEquivalents.toFixed(3)),
-      probabilityFourPlusClogs: Number(clogSummary.probabilityFourPlusClogs.toFixed(4)),
-      probabilityFullClog: Number(clogSummary.probabilityFullClog.toFixed(4)),
-      clogDistribution: clogSummary.clogDistribution.map((value) => Number(value.toFixed(5))),
-      expectedSpamChainYieldAtStart: Number(expectedSpamChainYieldAtStart.toFixed(4)),
-      reliefOpportunity: Number(turnReliefOpportunity.toFixed(3)),
-      reliefInitiations: Number(turnReliefInitiations.toFixed(3)),
-      expectedSpamRemoved: Number(turnExpectedSpamRemoved.toFixed(3)),
-      spamChainExtraRemoved: Number(turnSpamChainExtraRemoved.toFixed(3)),
-      spamAfterReliefBeforeDamage: Number(spamAfterReliefBeforeDamage.toFixed(3)),
-      pendingSpamBurden: Number(pendingSpamBurden.toFixed(3)),
-      spamAtTurnEnd: Number(candidateSpamBurden.toFixed(3)),
-      nextHaywireBurden: Number(nextHaywireBurden.toFixed(3)),
-      boardDamageUnits: Number(turnBoardDamageUnits.toFixed(3)),
-      trafficDamageUnits: Number(turnTrafficDamageUnits.toFixed(3)),
-      rebooted: turnRebooted,
-      rebootRegister: turnRebootRegister || null,
-      haywireClearedByReboot: Number(turnHaywireClearedByReboot.toFixed(3))
-    });
-  }
-
-  const candidateTerminalHaywireBurden = candidateActiveHaywireByRegister.reduce(
-    (sum, probability) => sum + probability,
-    0
-  );
-  // Report the effective removal per initiated SPAM disposal. The raw
-  // stationary-chain estimate may interpolate below 1 for fractional burden,
-  // but actual relief never removes less than the initiating SPAM. Reporting
-  // removal/initiation therefore matches the quantity the shadow actually uses.
-  const candidateMeanReliefChainYield = candidateTotalReliefInitiations > 0
-    ? candidateTotalReliefExpectedRemoval / candidateTotalReliefInitiations
-    : 0;
-
-  let combinedPersistentDamageLoad = 0;
-  let combinedPersistentInputUnits = 0;
-  let combinedTrafficPersistentInputUnits = 0;
-  let combinedReliefAppliedUnits = 0;
-  let combinedTransientDamageTurnCount = 0;
-  let combinedTransientExpectedAffectedRegisterSum = 0;
-  let combinedTransientExpectedAffectedRegisterMax = 0;
-  let combinedTransientProbabilityAtLeastTwoSum = 0;
-  let combinedTransientProbabilityAtLeastTwoMax = 0;
-  let combinedTransientExcessMultiRegisterPressureSum = 0;
-  let combinedTransientExcessMultiRegisterPressureMax = 0;
-  let combinedTransientTwoPlusLikelyTurnCount = 0;
-  const trafficCompositionTurns = [];
-
-  if (trafficRanged) {
-    for (let turn = 1; turn <= maxRouteTurn; turn += 1) {
-      const best = bestReliefByTurn.get(turn) ?? null;
-      const loadAtTurnStart = combinedPersistentDamageLoad;
-      const potentialRelief = getDamageShadowReliefCapacity(Number(best?.opportunity) || 0);
-      const appliedRelief = loadAtTurnStart > 0.0005
-        ? Math.min(loadAtTurnStart, potentialRelief)
-        : 0;
-      combinedPersistentDamageLoad = Math.max(
-        0,
-        combinedPersistentDamageLoad - appliedRelief
-      );
-      combinedReliefAppliedUnits += appliedRelief;
-      const loadAfterRelief = combinedPersistentDamageLoad;
-
-      const registerCombinedDamageUnits = new Map();
-      const turnHasForcedReboot = (damageEventsByTurn.get(turn) || [])
-        .some((event) => event?.rebooted);
-      let turnBoardDamageUnits = 0;
-      let turnTrafficDamageUnits = 0;
-      for (let register = 1; register <= REGISTER_COUNT; register += 1) {
-        const absoluteAction = (turn - 1) * REGISTER_COUNT + register;
-        if (absoluteAction > routeActionCount) break;
-        const boardUnits = Math.max(
-          0,
-          Number(boardDamageByAbsoluteAction.get(absoluteAction)) || 0
-        );
-        const trafficUnits = Math.max(
-          0,
-          Number(trafficDamageByAbsoluteAction.get(absoluteAction)) || 0
-        );
-        const combinedUnits = boardUnits + trafficUnits;
-        if (combinedUnits > 0) {
-          registerCombinedDamageUnits.set(register, combinedUnits);
-        }
-        const persistentBoard = boardUnits * DAMAGE_SHADOW_EXPECTED_SPAM_SHARE;
-        const persistentTraffic = trafficUnits * DAMAGE_SHADOW_EXPECTED_SPAM_SHARE;
-        combinedPersistentDamageLoad += persistentBoard + persistentTraffic;
-        combinedPersistentInputUnits += persistentBoard + persistentTraffic;
-        combinedTrafficPersistentInputUnits += persistentTraffic;
-        turnBoardDamageUnits += boardUnits;
-        turnTrafficDamageUnits += trafficUnits;
-      }
-
-      const turnCombinedDamageUnits = turnBoardDamageUnits + turnTrafficDamageUnits;
-      let transientPressure = {
-        expectedAffectedRegisters: 0,
-        probabilityAny: 0,
-        probabilityAtLeastTwo: 0,
-        probabilityAtLeastThree: 0,
-        excessMultiRegisterPressure: 0
-      };
-      if (turnCombinedDamageUnits > 0 && !turnHasForcedReboot) {
-        combinedTransientDamageTurnCount += 1;
-        transientPressure = getDamageShadowHaywireTurnPressure(
-          registerCombinedDamageUnits
-        );
-        combinedTransientExpectedAffectedRegisterSum += transientPressure.expectedAffectedRegisters;
-        combinedTransientExpectedAffectedRegisterMax = Math.max(
-          combinedTransientExpectedAffectedRegisterMax,
-          transientPressure.expectedAffectedRegisters
-        );
-        combinedTransientProbabilityAtLeastTwoSum += transientPressure.probabilityAtLeastTwo;
-        combinedTransientProbabilityAtLeastTwoMax = Math.max(
-          combinedTransientProbabilityAtLeastTwoMax,
-          transientPressure.probabilityAtLeastTwo
-        );
-        combinedTransientExcessMultiRegisterPressureSum += transientPressure.excessMultiRegisterPressure;
-        combinedTransientExcessMultiRegisterPressureMax = Math.max(
-          combinedTransientExcessMultiRegisterPressureMax,
-          transientPressure.excessMultiRegisterPressure
-        );
-        if (transientPressure.probabilityAtLeastTwo >= 0.5) {
-          combinedTransientTwoPlusLikelyTurnCount += 1;
-        }
-      }
-
-      if (turnCombinedDamageUnits > 0 || appliedRelief > 0.0005) {
-        trafficCompositionTurns.push({
-          turn,
-          boardDamageUnits: Number(turnBoardDamageUnits.toFixed(3)),
-          trafficExpectedDamageUnits: Number(turnTrafficDamageUnits.toFixed(3)),
-          combinedDamageUnits: Number(turnCombinedDamageUnits.toFixed(3)),
-          persistentLoadAtTurnStart: Number(loadAtTurnStart.toFixed(3)),
-          appliedRelief: Number(appliedRelief.toFixed(3)),
-          persistentLoadAfterRelief: Number(loadAfterRelief.toFixed(3)),
-          persistentLoadAtTurnEnd: Number(combinedPersistentDamageLoad.toFixed(3)),
-          expectedAffectedRegisters: Number(transientPressure.expectedAffectedRegisters.toFixed(4)),
-          probabilityAtLeastTwoAffectedRegisters: Number(transientPressure.probabilityAtLeastTwo.toFixed(4)),
-          excessMultiRegisterPressure: Number(transientPressure.excessMultiRegisterPressure.toFixed(4)),
-          haywireClearedByReboot: turnHasForcedReboot
-        });
-      }
-    }
-  }
-
-  const combinedPersistentBurdenRegisterEquivalents = trafficRanged
-    ? getDamageShadowBurdenRegisterEquivalents(combinedPersistentDamageLoad)
-    : 0;
-  const trafficMarginalPersistentBurdenRegisterEquivalents = trafficRanged
-    ? Math.max(
-      0,
-      combinedPersistentBurdenRegisterEquivalents - finalPersistentBurdenRegisterEquivalents
-    )
-    : 0;
-  const combinedMeanTransientExpectedAffectedRegisters = combinedTransientDamageTurnCount
-    ? combinedTransientExpectedAffectedRegisterSum / combinedTransientDamageTurnCount
-    : 0;
-  const combinedMeanTransientProbabilityAtLeastTwo = combinedTransientDamageTurnCount
-    ? combinedTransientProbabilityAtLeastTwoSum / combinedTransientDamageTurnCount
-    : 0;
-  const combinedMeanTransientExcessMultiRegisterPressure = combinedTransientDamageTurnCount
-    ? combinedTransientExcessMultiRegisterPressureSum / combinedTransientDamageTurnCount
-    : 0;
-  const storedTrafficRangedScore = Number(trafficContext?.storedRangedScore);
-  const productionReplayTrafficRangedScore = Number(
-    trafficRanged?.productionReplayRangedScore
-  );
-  const trafficProductionReplayStoredDrift = (
-    trafficRanged &&
-    Number.isFinite(storedTrafficRangedScore) &&
-    Number.isFinite(productionReplayTrafficRangedScore)
-  )
-    ? productionReplayTrafficRangedScore - storedTrafficRangedScore
-    : null;
-  const trafficRegisterReplayDrift = (
-    trafficRanged &&
-    Number.isFinite(productionReplayTrafficRangedScore)
-  )
-    ? trafficRanged.effectiveRangedScore - productionReplayTrafficRangedScore
-    : null;
-  const trafficRangedScoreDrift = trafficRanged && Number.isFinite(storedTrafficRangedScore)
-    ? trafficRanged.effectiveRangedScore - storedTrafficRangedScore
-    : null;
-
-  return {
-    method: "DAMAGE_SHADOW_v10_turn-scoped-damage-economy-shadow",
-    transitionCount,
-    replayMismatchCount,
-    burdenReplayMismatchCount,
-    intrinsicHazardScore: Number(intrinsicHazardScore.toFixed(2)),
-    controlReplayHazardScore: Number(controlReplayHazardScore.toFixed(2)),
-    suppressedReplayHazardScore: Number(suppressedReplayHazardScore.toFixed(2)),
-    replayHazardDriftScore: Number(replayHazardDriftScore.toFixed(2)),
-    replayHazardDriftAbsoluteScore: Number(replayHazardDriftAbsoluteScore.toFixed(2)),
-    replayHazardDriftTransitionCount,
-    peakReplayHazardDrift: Number(peakReplayHazardDrift.toFixed(2)),
-    directDamageScore: Number(directDamageScore.toFixed(2)),
-    nonRebootDirectDamageScore: Number(nonRebootDirectDamageScore.toFixed(2)),
-    netNonDirectReplayScore: Number(suppressedReplayHazardScore.toFixed(2)),
-    unresolvedDirectSourceCount,
-    unresolvedDirectSourceScore: Number(unresolvedDirectSourceScore.toFixed(2)),
-    damageBearingTransitionCount: damageEvents.length,
-    damageBearingTurnCount,
-    multiDamageBearingTurnCount,
-    peakDamageBearingTransitionsInTurn,
-    realizedDamageTransitionCount: realizedDamageEvents.length,
-    realizedDamageTurnCount,
-    multiRealizedDamageTurnCount,
-    peakRealizedDamageEventsInTurn,
-    realizedBoardLaserDamageUnits: Number(realizedBoardLaserDamageUnits.toFixed(3)),
-    realizedFlamethrowerDamageUnits: Number(realizedFlamethrowerDamageUnits.toFixed(3)),
-    realizedLedgeDamageUnits: Number(realizedLedgeDamageUnits.toFixed(3)),
-    realizedRebootDamageUnits: Number(realizedRebootDamageUnits.toFixed(3)),
-    realizedDamageUnits: Number((
-      realizedBoardLaserDamageUnits +
-      realizedFlamethrowerDamageUnits +
-      realizedLedgeDamageUnits +
-      realizedRebootDamageUnits
-    ).toFixed(3)),
-    burdenMethod: "realized-board-damage-load-hill-v1-plus-route-relief-v1",
-    burdenCurveHalfLoad: DAMAGE_SHADOW_BURDEN_HALF_LOAD,
-    burdenCurveExponent: DAMAGE_SHADOW_BURDEN_EXPONENT,
-    burdenShutdownRegisterEquivalents: DAMAGE_SHADOW_SHUTDOWN_REGISTER_EQUIVALENTS,
-    burdenInputUnits: Number(totalBurdenInputUnits.toFixed(3)),
-    finalUnrelievedDamageLoad: Number(unrelievedDamageLoad.toFixed(3)),
-    finalBurdenRegisterEquivalents: Number(finalBurdenRegisterEquivalents.toFixed(3)),
-    finalBurdenShutdownFraction: Number((finalBurdenRegisterEquivalents / DAMAGE_SHADOW_SHUTDOWN_REGISTER_EQUIVALENTS).toFixed(3)),
-    maxMarginalBurdenRegisterEquivalents: Number(maxMarginalBurdenRegisterEquivalents.toFixed(3)),
-    peakBurdenInputUnitsInTurn: Number(peakBurdenInputUnitsInTurn.toFixed(3)),
-    reliefMethod: "best-register-random-card-robustness-v1-base-rules-no-traffic",
-    reliefOpportunityFloor: DAMAGE_SHADOW_RELIEF_OPPORTUNITY_FLOOR,
-    reliefMaxLoadUnitsPerTurn: DAMAGE_SHADOW_RELIEF_MAX_LOAD_UNITS_PER_TURN,
-    reliefCandidateTurnCount,
-    reliefAppliedTurnCount,
-    meanBestReliefOpportunity: Number(meanBestReliefOpportunity.toFixed(4)),
-    maxBestReliefOpportunity: Number(bestOpportunityMax.toFixed(4)),
-    meanBestReliefCatastrophicShare: Number(meanBestReliefCatastrophicShare.toFixed(4)),
-    bestReliefCatastrophicTurnCount: bestCatastrophicTurnCount,
-    totalReliefPotentialUnits: Number(totalReliefPotentialUnits.toFixed(3)),
-    totalReliefAppliedUnits: Number(totalReliefAppliedUnits.toFixed(3)),
-    finalRelievedDamageLoad: Number(relievedDamageLoad.toFixed(3)),
-    finalRelievedBurdenRegisterEquivalents: Number(finalRelievedBurdenRegisterEquivalents.toFixed(3)),
-    finalRelievedBurdenShutdownFraction: Number((finalRelievedBurdenRegisterEquivalents / DAMAGE_SHADOW_SHUTDOWN_REGISTER_EQUIVALENTS).toFixed(3)),
-    maxRelievedMarginalBurdenRegisterEquivalents: Number(maxRelievedMarginalBurdenRegisterEquivalents.toFixed(3)),
-    reliefTurns,
-    expectedSpamShare: DAMAGE_SHADOW_EXPECTED_SPAM_SHARE,
-    expectedHaywireShare: DAMAGE_SHADOW_EXPECTED_HAYWIRE_SHARE,
-    totalExpectedPersistentInputUnits: Number(totalExpectedPersistentInputUnits.toFixed(3)),
-    totalExpectedTransientInputUnits: Number(totalExpectedTransientInputUnits.toFixed(3)),
-    finalUnrelievedPersistentDamageLoad: Number(unrelievedPersistentDamageLoad.toFixed(3)),
-    finalUnrelievedPersistentBurdenRegisterEquivalents: Number(unrelievedPersistentBurdenRegisterEquivalents.toFixed(3)),
-    splitReliefPotentialUnits: Number(splitReliefPotentialUnits.toFixed(3)),
-    splitReliefAppliedUnits: Number(splitReliefAppliedUnits.toFixed(3)),
-    splitReliefAppliedTurnCount,
-    finalPersistentDamageLoad: Number(persistentDamageLoad.toFixed(3)),
-    finalPersistentBurdenRegisterEquivalents: Number(finalPersistentBurdenRegisterEquivalents.toFixed(3)),
-    finalPersistentBurdenShutdownFraction: Number((finalPersistentBurdenRegisterEquivalents / DAMAGE_SHADOW_SHUTDOWN_REGISTER_EQUIVALENTS).toFixed(3)),
-    transientDamageTurnCount,
-    meanTransientExpectedAffectedRegisters: Number(meanTransientExpectedAffectedRegisters.toFixed(4)),
-    maxTransientExpectedAffectedRegisters: Number(transientExpectedAffectedRegisterMax.toFixed(4)),
-    meanTransientProbabilityAtLeastTwo: Number(meanTransientProbabilityAtLeastTwo.toFixed(4)),
-    maxTransientProbabilityAtLeastTwo: Number(transientProbabilityAtLeastTwoMax.toFixed(4)),
-    meanTransientProbabilityAtLeastThree: Number(meanTransientProbabilityAtLeastThree.toFixed(4)),
-    maxTransientProbabilityAtLeastThree: Number(transientProbabilityAtLeastThreeMax.toFixed(4)),
-    meanTransientExcessMultiRegisterPressure: Number(meanTransientExcessMultiRegisterPressure.toFixed(4)),
-    maxTransientExcessMultiRegisterPressure: Number(transientExcessMultiRegisterPressureMax.toFixed(4)),
-    transientTwoPlusLikelyTurnCount,
-    peakExpectedTransientInputUnitsInTurn: Number(peakExpectedTransientInputUnitsInTurn.toFixed(3)),
-    compositionTurns,
-    trafficStatefulAvailable: Boolean(trafficRanged),
-    trafficOccupancyModel: trafficRanged?.occupancyModel ?? null,
-    trafficOccupancyTotal: trafficRanged?.occupancyTotal ?? 0,
-    trafficRangedRawScoreRecomputed: trafficRanged?.rawRangedScore ?? 0,
-    trafficRangedEffectiveScoreRecomputed: trafficRanged?.effectiveRangedScore ?? 0,
-    trafficRangedProductionReplayScore: Number.isFinite(productionReplayTrafficRangedScore)
-      ? Number(productionReplayTrafficRangedScore.toFixed(3))
-      : null,
-    trafficRangedStoredScore: Number.isFinite(storedTrafficRangedScore)
-      ? Number(storedTrafficRangedScore.toFixed(3))
-      : null,
-    trafficProductionReplayStoredDrift: trafficProductionReplayStoredDrift === null
-      ? null
-      : Number(trafficProductionReplayStoredDrift.toFixed(3)),
-    trafficRegisterReplayDrift: trafficRegisterReplayDrift === null
-      ? null
-      : Number(trafficRegisterReplayDrift.toFixed(3)),
-    trafficRangedScoreDrift: trafficRangedScoreDrift === null
-      ? null
-      : Number(trafficRangedScoreDrift.toFixed(3)),
-    trafficExpectedDamageUnits: trafficRanged?.expectedDamageUnits ?? 0,
-    trafficForecastConfidenceMean: trafficRanged?.confidenceMean ?? 1,
-    trafficForecastConfidenceEnd: trafficRanged?.confidenceEnd ?? 1,
-    combinedPersistentInputUnits: Number(combinedPersistentInputUnits.toFixed(3)),
-    combinedTrafficPersistentInputUnits: Number(combinedTrafficPersistentInputUnits.toFixed(3)),
-    combinedReliefAppliedUnits: Number(combinedReliefAppliedUnits.toFixed(3)),
-    combinedPersistentDamageLoad: Number(combinedPersistentDamageLoad.toFixed(3)),
-    combinedPersistentBurdenRegisterEquivalents: Number(combinedPersistentBurdenRegisterEquivalents.toFixed(3)),
-    trafficMarginalPersistentBurdenRegisterEquivalents: Number(trafficMarginalPersistentBurdenRegisterEquivalents.toFixed(3)),
-    combinedTransientDamageTurnCount,
-    combinedMeanTransientExpectedAffectedRegisters: Number(combinedMeanTransientExpectedAffectedRegisters.toFixed(4)),
-    combinedMaxTransientExpectedAffectedRegisters: Number(combinedTransientExpectedAffectedRegisterMax.toFixed(4)),
-    combinedMeanTransientProbabilityAtLeastTwo: Number(combinedMeanTransientProbabilityAtLeastTwo.toFixed(4)),
-    combinedMaxTransientProbabilityAtLeastTwo: Number(combinedTransientProbabilityAtLeastTwoMax.toFixed(4)),
-    combinedMeanTransientExcessMultiRegisterPressure: Number(combinedMeanTransientExcessMultiRegisterPressure.toFixed(4)),
-    combinedMaxTransientExcessMultiRegisterPressure: Number(combinedTransientExcessMultiRegisterPressureMax.toFixed(4)),
-    combinedTransientTwoPlusLikelyTurnCount,
-    trafficRegisterInputs: trafficRanged?.records ?? [],
-    trafficCompositionTurns,
-    candidateDamageEconomyMethod: "turn-scoped-stationary-spam-hypergeom-plus-joint-clog-re-v1",
-    candidateDamageEconomyUnsupportedVariants: candidateUnsupportedDamageVariants,
-    candidateClogRegisterEquivalentAnchors: DAMAGE_SHADOW_CLOG_RE_BY_COUNT,
-    candidateTurnCount,
-    candidateTotalDamageEconomyRegisterEquivalents: Number(candidateTotalDamageEconomyRegisterEquivalents.toFixed(3)),
-    candidateTotalSpamSupplyRegisterEquivalents: Number(candidateTotalSpamSupplyRegisterEquivalents.toFixed(3)),
-    candidateTotalClogRegisterEquivalents: Number(candidateTotalClogRegisterEquivalents.toFixed(3)),
-    candidateTotalExpectedHaywireClogs: Number(candidateTotalExpectedHaywireClogs.toFixed(3)),
-    candidateTotalExpectedForcedSpamClogs: Number(candidateTotalExpectedForcedSpamClogs.toFixed(3)),
-    candidateTotalExpectedClogs: Number(candidateTotalExpectedClogs.toFixed(3)),
-    candidateMeanCleanProgramProbability: Number((candidateTurnCount
-      ? candidateCleanProgramProbabilitySum / candidateTurnCount
-      : 1).toFixed(4)),
-    candidateMeanSpamProgramProbability: Number((candidateTurnCount
-      ? candidateSpamProgramProbabilitySum / candidateTurnCount
-      : 1).toFixed(4)),
-    candidateMaxSpamBurdenAtProgramming: Number(candidateMaxSpamBurdenAtProgramming.toFixed(3)),
-    candidateMaxHaywireBurdenAtProgramming: Number(candidateMaxHaywireBurdenAtProgramming.toFixed(3)),
-    candidateMaxExpectedClogs: Number(candidateMaxExpectedClogs.toFixed(3)),
-    candidateMaxClogRegisterEquivalents: Number(candidateMaxClogRegisterEquivalents.toFixed(3)),
-    candidateMaxSpamSupplyRegisterEquivalents: Number(candidateMaxSpamSupplyRegisterEquivalents.toFixed(3)),
-    candidateMaxDamageEconomyRegisterEquivalents: Number(candidateMaxDamageEconomyRegisterEquivalents.toFixed(3)),
-    candidateMaxProbabilityFourPlusClogs: Number(candidateMaxProbabilityFourPlusClogs.toFixed(4)),
-    candidateMaxProbabilityFullClog: Number(candidateMaxProbabilityFullClog.toFixed(4)),
-    candidateTotalReliefOpportunity: Number(candidateTotalReliefOpportunity.toFixed(3)),
-    candidateTotalReliefInitiations: Number(candidateTotalReliefInitiations.toFixed(3)),
-    candidateTotalReliefExpectedRemoval: Number(candidateTotalReliefExpectedRemoval.toFixed(3)),
-    candidateMeanReliefChainYield: Number(candidateMeanReliefChainYield.toFixed(4)),
-    candidateSpamChainExtraRemoved: Number(candidateSpamChainExtraRemoved.toFixed(3)),
-    candidateSpamBurdenRemoved: Number(candidateSpamBurdenRemoved.toFixed(3)),
-    candidatePositiveReliefRegisterCount,
-    candidateTrafficSuppressedReliefRegisterCount,
-    candidateRebootHaywireClearCount,
-    candidateExpectedHaywireClearedByReboot: Number(candidateExpectedHaywireClearedByReboot.toFixed(3)),
-    candidateFinalSpamBurden: Number(candidateSpamBurden.toFixed(3)),
-    candidateTerminalHaywireBurden: Number(candidateTerminalHaywireBurden.toFixed(3)),
-    candidateEconomyTurns,
-    candidateReliefRegisters,
-    burdenUnsupportedDirectTransitionCount,
-    burdenUnsupportedDirectScore: Number(burdenUnsupportedDirectScore.toFixed(2)),
-    explicitRebootCount,
-    midTurnRebootCount,
-    rebootCountByRegister: rebootCountByRegister.map((count, index) => ({
-      register: index + 1,
-      count
-    })),
-    rebootRecoverySourceCounts: Object.fromEntries(rebootRecoverySourceCounts),
-    rebootTurnEndClockMismatchCount,
-    explicitRebootDamageUnits,
-    rebootDamageScore,
-    lostRegisters,
-    lostRegisterTempoOnlyScore,
-    rebootDiscontinuityScore,
-    lostRegisterTempoScore,
-    damageEvents
-  };
-}
-// DAMAGE_SHADOW_END
+// DAMAGE_CONTROL_RE_OWNER_END
 
 function buildTimeline(transitions, start) {
   const timeline = [{ x: start.x, y: start.y }];
@@ -30036,4 +27718,4 @@ export function analyzeFlagLeg(tileMap, from, goal, options = {}) {
     }
   };
 }
-// VERSION END: v49ci-economy-start-re-ownership-audit
+// VERSION END: v49dd-damage-control-owner-extraction
