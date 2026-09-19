@@ -1,6 +1,6 @@
-// VERSION START: v49ds-re-native-expected-play-extent-production
+// VERSION START: v49ee-turn-floor-course-notes-toggle
 // Robo Rally Course Randomizer - production runtime
-const MAIN_BUILD_ID = "v49ds-re-native-expected-play-extent-production";
+const MAIN_BUILD_ID = "v49ee-turn-floor-course-notes-toggle";
 // Mobile browsers may auto-detect number-like rule text and restyle it as a
 // tappable link even though the app emitted ordinary text. Keep rules/course
 // annotations visually plain; this is presentation-only and does not disable
@@ -57,7 +57,7 @@ const versionedPath = (path) => `${path}${VERSION_SUFFIX}`;
 
 const [
   { render },
-  { ANALYZE_BUILD_ID, analyzeCourse, analyzeFullCourse, analyzeFullCourseCooperative, analyzeFlagLeg, buildStartOccupancyMap, clearAnalysisCaches, evaluateFullCourseFocusPaymentCurveUnderOccupancy, evaluateRouteUpgradePotential, estimateInitialUpgradeOpportunitiesRemaining, getAnalysisTelemetrySnapshot, getDamageEconomyTelemetrySnapshot, getCourseMaxEnergy, getCourseStartingEnergy, getCourseStartingUpgradeCards, getRouteEnergyEconomyConfig, getRouteEnergyGainUtility, getRouteMarginalEnergyUtility, getRouteUpgradePotential, recomputeFirstLegPressure, rescoreFixedRouteUpgradeEconomy, resetAnalysisTelemetry, ROUTE_ENERGY_ECONOMY_DEFAULTS, scoreFlagArea, summarizeDamageEconomyFoundationForRoute, summarizeRegisterEquivalentLedger, summarizeRENativeRouteUncertaintyEvidence, summarizeCheapSearchRegisterEquivalentShadow, summarizeIntrinsicRouteForecastConfidence, summarizePowerUpOpportunityBenchmark, summarizeProgramSequencePressure, summarizePowerUpProgramFeasibility, summarizePathfinderObjectiveAudit, summarizeTrafficOwnershipAudit, summarizeFixedRouteBoardAblation },
+  { ANALYZE_BUILD_ID, analyzeCourse, analyzeFullCourse, analyzeFullCourseCooperative, analyzeFlagLeg, buildStartOccupancyMap, clearAnalysisCaches, evaluateFullCourseFocusPaymentCurveUnderOccupancy, evaluateRouteUpgradePotential, estimateInitialUpgradeOpportunitiesRemaining, getAnalysisTelemetrySnapshot, getDamageEconomyTelemetrySnapshot, getCourseMaxEnergy, getCourseStartingEnergy, getCourseStartingUpgradeCards, getRouteEnergyEconomyConfig, getRouteEnergyGainUtility, getRouteMarginalEnergyUtility, getRouteUpgradePotential, recomputeFirstLegPressure, rescoreFixedRouteUpgradeEconomy, resetAnalysisTelemetry, ROUTE_ENERGY_ECONOMY_DEFAULTS, scoreFlagArea, summarizeDamageEconomyFoundationForRoute, summarizeFixedRouteUpgradeEconomyActivity, summarizeRegisterEquivalentLedger, summarizeRENativeRouteUncertaintyEvidence, summarizeCheapSearchRegisterEquivalentShadow, summarizeIntrinsicRouteForecastConfidence, summarizePowerUpOpportunityBenchmark, summarizeProgramSequencePressure, summarizePowerUpProgramFeasibility, summarizePathfinderObjectiveAudit, summarizeTrafficOwnershipAudit, summarizeFixedRouteBoardAblation },
   {
     buildMainFootprintTiles,
     buildResolvedMap,
@@ -370,6 +370,7 @@ const DOCK_BRIDGE_GAP = 3;
 const MAX_DOCK_COUNT = 2;
 const DEFAULT_STARTING_ENERGY = ROUTE_ENERGY_ECONOMY_DEFAULTS.startingEnergy;
 const DEFAULT_STARTING_UPGRADE_CARDS = ROUTE_ENERGY_ECONOMY_DEFAULTS.startingUpgradeCards;
+const SUBSIDIZED_STARTS_MAX_EXTRA_ENERGY = 3;
 
 // Start-Energy balancing uses the v37 card-aware fixed-route pricing economy.
 // Route search itself stays on the shared flattened production scorer; pricing
@@ -457,93 +458,92 @@ const NORMAL_START_FAIRNESS_STDDEV_LIMIT = 14;
 // already use their selector-aware completed-RE economy path.
 const NORMAL_EFFECTIVE_RE_OUTLIER_Z = 2.25;
 const NORMAL_EFFECTIVE_RE_MINIMUM_DELTA = 2.5;
-const NORMAL_EFFECTIVE_RE_FAIRNESS_STDDEV_LIMIT = 3.5;
+// v49dx: Normal/economy fairness is range-first. The tolerated best↔worst
+// completed-RE gap grows with full-course programming extent; SD/outlier z are
+// diagnostics and pruning-direction tie-breakers, not independent targets.
+const NORMAL_EFFECTIVE_RE_RANGE_MIN = 3.0;
+const NORMAL_EFFECTIVE_RE_RANGE_PER_TURN = 0.60;
+// v49dy: once the expected range is met, fairness contributes zero candidate-fit
+// pressure. A modest overflow may still be retained at the player-count floor
+// and compete as a soft penalty; larger overflow is closest-match territory.
+const NORMAL_EFFECTIVE_RE_SOFT_OVERFLOW_MIN = 0.75;
+const NORMAL_EFFECTIVE_RE_SOFT_OVERFLOW_FRACTION = 0.25;
+// A forced Pay to Win / Subsidized Starts course that produces no visible
+// starting-Energy change is mechanically legal but a weak realization of a
+// Must request. Penalize selection rather than inventing an unnecessary price.
+const FORCED_ECONOMY_NO_EFFECT_FIT_PENALTY = 12;
+const NORMAL_EFFECTIVE_RE_FAIRNESS_STDDEV_LIMIT = 3.5; // diagnostic/Competitive anchor only
 // Main owns the RE-to-score conversion used by the residual Normal scorer;
 // do not depend on a private analyzer constant.
 const NORMAL_EFFECTIVE_RE_SCORE_PER_RE = 6.4;
 const NORMAL_REGISTER_RANGE_GUARDRAIL_MIN = 12;
 const NORMAL_REGISTER_RANGE_GUARDRAIL_FRACTION = 0.45;
-// Competitive's best remaining player-count field keeps its historical soft/hard
-// acceptance envelope during the ownership migration. The legacy score-space
-// gates below are retained only as calibration anchors for the RE conversion.
-const COMPETITIVE_START_FAIRNESS_HARD_STDDEV_LIMIT = 21;
-const COMPETITIVE_START_HARD_OUTLIER_Z = 3.25;
-// v49cq ownership migration only: preserve the old Competitive soft/hard
-// strictness by converting its 14/21 score-unit gates through the existing
-// 6.4 score-per-RE bridge. Calibration of these RE-native limits comes later.
-const COMPETITIVE_EFFECTIVE_RE_SOFT_STDDEV_LIMIT =
-  NORMAL_START_FAIRNESS_STDDEV_LIMIT / NORMAL_EFFECTIVE_RE_SCORE_PER_RE;
-const COMPETITIVE_EFFECTIVE_RE_HARD_STDDEV_LIMIT =
-  COMPETITIVE_START_FAIRNESS_HARD_STDDEV_LIMIT / NORMAL_EFFECTIVE_RE_SCORE_PER_RE;
+// v49ec: Competitive fairness is range-first after the sequential player-block
+// simulation. Keep Competitive calibration separate from Normal even though the
+// provisional length response currently shares the same 3RE / 0.6RE-per-turn
+// shape. SD/z remain diagnostics only. The hard ceiling preserves the historical
+// 1.5x soft/hard separation while multi-course calibration is still pending.
+const COMPETITIVE_EFFECTIVE_RE_RANGE_MIN = 3.0;
+const COMPETITIVE_EFFECTIVE_RE_RANGE_PER_TURN = 0.60;
+const COMPETITIVE_EFFECTIVE_RE_HARD_RANGE_MULTIPLIER = 1.50;
 
-// v49cr: Competitive difficulty calibration is mode-specific. Easy asks for a
-// tighter post-block choice set and strongly prefers block targets that are
-// legible from the course rather than depending on subtle completed-RE effects.
-// Higher requested difficulties tolerate more strategic ambiguity. `any` keeps
-// the v49cq ownership-migration baseline and applies no readability fit penalty.
+// v49ec: Competitive difficulty calibration stays mode-specific, but all
+// evidence is RE-native. Easy asks for a tighter post-block range and more
+// legible completed-RE block decisions. Higher difficulties tolerate more
+// strategic ambiguity. `any` keeps the baseline range and no legibility penalty.
 function getCompetitiveDifficultyCalibration(preferences = {}) {
   const requested = String(preferences.difficulty ?? "any");
   const byDifficulty = {
     easy: {
-      softStdDevMultiplier: 0.85,
-      hardStdDevMultiplier: 0.90,
+      softRangeMultiplier: 0.85,
+      hardRangeMultiplier: 0.90,
       meanBlockChallengeTarget: 0.42,
       maxBlockChallengeTarget: 0.72,
       meanChallengePenaltyWeight: 18,
-      maxChallengePenaltyWeight: 7,
-      hiddenValueDisagreementPenalty: 2.5
+      maxChallengePenaltyWeight: 7
     },
     moderate: {
-      softStdDevMultiplier: 1,
-      hardStdDevMultiplier: 1,
+      softRangeMultiplier: 1,
+      hardRangeMultiplier: 1,
       meanBlockChallengeTarget: 0.58,
       maxBlockChallengeTarget: 0.82,
       meanChallengePenaltyWeight: 12,
-      maxChallengePenaltyWeight: 4,
-      hiddenValueDisagreementPenalty: 1.25
+      maxChallengePenaltyWeight: 4
     },
     hard: {
-      softStdDevMultiplier: 1,
-      hardStdDevMultiplier: 1,
+      softRangeMultiplier: 1,
+      hardRangeMultiplier: 1,
       meanBlockChallengeTarget: 0.72,
       maxBlockChallengeTarget: 0.92,
       meanChallengePenaltyWeight: 7,
-      maxChallengePenaltyWeight: 2,
-      hiddenValueDisagreementPenalty: 0.5
+      maxChallengePenaltyWeight: 2
     },
     brutal: {
-      softStdDevMultiplier: 1,
-      hardStdDevMultiplier: 1,
+      softRangeMultiplier: 1,
+      hardRangeMultiplier: 1,
       meanBlockChallengeTarget: 0.82,
       maxBlockChallengeTarget: 1,
       meanChallengePenaltyWeight: 3,
-      maxChallengePenaltyWeight: 0,
-      hiddenValueDisagreementPenalty: 0
+      maxChallengePenaltyWeight: 0
     },
     any: {
-      softStdDevMultiplier: 1,
-      hardStdDevMultiplier: 1,
+      softRangeMultiplier: 1,
+      hardRangeMultiplier: 1,
       meanBlockChallengeTarget: 1,
       maxBlockChallengeTarget: 1,
       meanChallengePenaltyWeight: 0,
-      maxChallengePenaltyWeight: 0,
-      hiddenValueDisagreementPenalty: 0
+      maxChallengePenaltyWeight: 0
     }
   };
   const profile = byDifficulty[requested] ?? byDifficulty.moderate;
   return {
     requestedDifficulty: requested,
-    softStdDevLimit:
-      COMPETITIVE_EFFECTIVE_RE_SOFT_STDDEV_LIMIT * profile.softStdDevMultiplier,
-    hardStdDevLimit:
-      COMPETITIVE_EFFECTIVE_RE_HARD_STDDEV_LIMIT * profile.hardStdDevMultiplier,
     ...profile
   };
 }
 
 function summarizeCompetitiveBlockReadability(
   blockSequence = [],
-  completedREBlockComparisons = [],
   calibration = getCompetitiveDifficultyCalibration()
 ) {
   const challenges = (blockSequence || [])
@@ -553,12 +553,6 @@ function summarizeCompetitiveBlockReadability(
     ? challenges.reduce((sum, value) => sum + value, 0) / challenges.length
     : 0;
   const maxBlockChallenge = challenges.length ? Math.max(...challenges) : 0;
-  const comparisonCount = completedREBlockComparisons?.length ?? 0;
-  const hiddenValueDisagreements = (completedREBlockComparisons || [])
-    .filter((entry) => entry?.agrees === false).length;
-  const hiddenValueDisagreementShare = comparisonCount
-    ? hiddenValueDisagreements / comparisonCount
-    : 0;
   const meanExcess = Math.max(
     0,
     meanBlockChallenge - Number(calibration.meanBlockChallengeTarget || 0)
@@ -569,19 +563,17 @@ function summarizeCompetitiveBlockReadability(
   );
   const penalty =
     meanExcess * Number(calibration.meanChallengePenaltyWeight || 0) +
-    maxExcess * Number(calibration.maxChallengePenaltyWeight || 0) +
-    hiddenValueDisagreementShare *
-      Number(calibration.hiddenValueDisagreementPenalty || 0);
+    maxExcess * Number(calibration.maxChallengePenaltyWeight || 0);
   return {
     meanBlockChallenge: Number(meanBlockChallenge.toFixed(3)),
     maxBlockChallenge: Number(maxBlockChallenge.toFixed(3)),
-    hiddenValueDisagreements,
-    hiddenValueDisagreementShare: Number(hiddenValueDisagreementShare.toFixed(3)),
     meanBlockChallengeTarget: calibration.meanBlockChallengeTarget,
     maxBlockChallengeTarget: calibration.maxBlockChallengeTarget,
     fitPenalty: Number(penalty.toFixed(3)),
     requestedDifficulty: calibration.requestedDifficulty,
-    model: "competitive-difficulty-readability-v49cr"
+    evidenceOwner: "completed-effective-re-decision-margin-and-advantage",
+    legacyShadowUsed: false,
+    model: "competitive-re-native-legibility-v49ec"
   };
 }
 
@@ -2299,6 +2291,11 @@ function describeGenerationRejection(scenario, fallbackStage = "") {
         targetAcceptance.grossLengthMismatch ? "length" : null
       ].filter(Boolean).join("+");
       reasons.push(`strong target-axis mismatch ${axes}`);
+    } else if (scenario.metrics?.fairnessAcceptance?.ordinaryAcceptable === false) {
+      reasons.push(
+        `fairness overflow ${scenario.metrics.fairnessAcceptance.overflowRE ?? "n/a"}RE/` +
+        `${scenario.metrics.fairnessAcceptance.softOverflowAllowance ?? "n/a"}RE soft allowance`
+      );
     } else {
       reasons.push(`soft fit ${scenario.metrics?.fitScore ?? "n/a"}/${scenario.metrics?.softFitLimit ?? SOFT_CANDIDATE_RETENTION_LIMIT}`);
     }
@@ -2392,7 +2389,7 @@ function formatPresentedDifficultyLabel(metrics = null) {
   return formatLegacyDifficultyLabel(metrics?.difficultyRaw);
 }
 
-function formatActualLengthLabel(lengthRaw) {
+function formatLegacyLengthLabel(lengthRaw) {
   const value = Number(lengthRaw);
   if (!Number.isFinite(value)) return "Unknown";
   const thresholds = getLengthThresholds();
@@ -2403,14 +2400,75 @@ function formatActualLengthLabel(lengthRaw) {
   return value < thresholds.short[0] ? "Short" : "Epic";
 }
 
+function formatActualLengthLabel(lengthWallClockTurnIndex) {
+  const value = Number(lengthWallClockTurnIndex);
+  if (!Number.isFinite(value)) return "Unknown";
+  const thresholds = getProductionLengthThresholds();
+  const match = ["short", "moderate", "long", "epic"]
+    .find((band) => isValueInBand(value, thresholds[band]));
+  if (match) return formatSummaryBandLabel(formatLengthLabel(match));
+  return value < thresholds.short[0] ? "Short" : "Epic";
+}
+
+function getProductionLengthTurnIndex(metrics = null) {
+  const direct = Number(metrics?.lengthWallClockTurnIndex);
+  if (Number.isFinite(direct)) return direct;
+  const nested = Number(
+    metrics?.lengthMetrics?.productionWallClockOwner?.effectiveWallClockTurnIndex
+  );
+  return Number.isFinite(nested) ? nested : NaN;
+}
+
+function formatPresentedLengthLabel(metrics = null) {
+  const wallClockTurnIndex = getProductionLengthTurnIndex(metrics);
+  if (Number.isFinite(wallClockTurnIndex)) {
+    return formatActualLengthLabel(wallClockTurnIndex);
+  }
+  return formatLegacyLengthLabel(metrics?.lengthFitRaw ?? metrics?.lengthRaw);
+}
+
+const GAME_TURN_APPROX_RECOVERY_SHARE_THRESHOLD = 0.20;
+const GAME_TURN_APPROX_RECOVERY_REGISTERS_THRESHOLD = 5;
+
 function getEstimatedGameTurnsLabel(scenario) {
   const lengthMetrics = scenario?.metrics?.lengthMetrics;
+  const productionExtent = lengthMetrics?.productionExtentOwner ?? null;
+  const productionTurns = Number(
+    productionExtent?.expectedPlayProgrammingTurns
+      ?? lengthMetrics?.ownerObservationV49dl?.playTimeAmplification?.expectedPlayProgrammingTurns
+  );
+  if (Number.isFinite(productionTurns)) {
+    const rounded = Math.max(1, Math.ceil(productionTurns));
+    const nominalRegisters = Number(productionExtent?.nominalRegisters);
+    const recoveryRegisters = Number(productionExtent?.reNativeExpectedExtraRegisters);
+    const recoveryShare = Number.isFinite(nominalRegisters) && nominalRegisters > 0 && Number.isFinite(recoveryRegisters)
+      ? recoveryRegisters / nominalRegisters
+      : 0;
+    const materiallyApproximate = Boolean(
+      Number.isFinite(recoveryRegisters) &&
+      recoveryRegisters >= GAME_TURN_APPROX_RECOVERY_REGISTERS_THRESHOLD &&
+      recoveryShare >= GAME_TURN_APPROX_RECOVERY_SHARE_THRESHOLD
+    );
+    const prefix = materiallyApproximate ? "~" : "";
+    return `${prefix}${rounded}+ game turn${rounded === 1 ? "" : "s"}`;
+  }
   const routeActions = Number(lengthMetrics?.inputs?.totalActionLoad);
   if (!Number.isFinite(routeActions)) return null;
-  const uncertaintyActions = Number(lengthMetrics?.contributions?.forecastEquivalentActions);
-  const adjustedActions = routeActions + (Number.isFinite(uncertaintyActions) ? uncertaintyActions : 0);
+  const recoveryActions = Number(lengthMetrics?.contributions?.forecastEquivalentActions);
+  const adjustedActions = routeActions + (Number.isFinite(recoveryActions) ? recoveryActions : 0);
   const turns = Math.max(1, Math.ceil(adjustedActions / 5));
-  return `${turns}+ game turn${turns === 1 ? "" : "s"}`;
+  // Compatibility fallback lacks the full RE-native extent owner, so keep the
+  // approximation marker while still presenting the rounded-up floor.
+  return `~${turns}+ game turn${turns === 1 ? "" : "s"}`;
+}
+
+function updateCourseNotesTogglePresentation(toggleEl, visible) {
+  if (!toggleEl) return;
+  const expanded = Boolean(visible);
+  toggleEl.setAttribute("aria-expanded", expanded ? "true" : "false");
+  toggleEl.textContent = expanded ? "Hide notes" : "Show notes";
+  toggleEl.title = expanded ? "Hide Course Notes" : "Show Course Notes";
+  toggleEl.setAttribute("aria-label", expanded ? "Hide Course Notes" : "Show Course Notes");
 }
 
 function getScenarioPresentationMetrics(scenario) {
@@ -2548,17 +2606,32 @@ function getLegacyDifficultyThresholds() {
 }
 
 function getLengthThresholds() {
+  // Legacy raw-score envelopes retained for construction/preflight guidance
+  // and saved-presentation fallback only. Production semantic length no longer
+  // uses this score space after v49dv.
   return {
-    // Keep only a small five-point neighbor overlap. Ordinary construction is
-    // target-centered; closest-match fallback remains responsible for courses
-    // that miss these exact envelopes after the search budget is exhausted.
     short: [MIN_LENGTH_RAW, 150],
     moderate: [145, 210],
     long: [205, 270],
-    // Epic is a bounded top-end target, not an unbounded "Long+" bucket.
-    // Keeping the five-point overlap preserves the same neighbor-band behavior
-    // as the existing tiers while giving very large courses an explicit ceiling.
     epic: [265, 400]
+  };
+}
+
+// v49dv production wall-clock bands. These use the final relative wall-clock
+// turn index (five wall-clock register-index units per reference turn), not the
+// transitional raw score. The cuts preserve the accepted v49dl 4-player
+// elapsed-play anchors while allowing player count, Act Fast and upgrade-economy
+// phase time to move the same physical course between semantic length bands.
+// Epic remains bounded for fit purposes so an extremely long course can still
+// be reported as "very long, even for Epic".
+const WALL_CLOCK_LENGTH_FIT_POINTS_PER_TURN = 20;
+const MIN_WALL_CLOCK_TURN_INDEX = MIN_LENGTH_RAW / WALL_CLOCK_LENGTH_FIT_POINTS_PER_TURN;
+function getProductionLengthThresholds() {
+  return {
+    short: [MIN_WALL_CLOCK_TURN_INDEX, 6.25],
+    moderate: [6.25, 9.5],
+    long: [9.5, 13],
+    epic: [13, 20]
   };
 }
 
@@ -3338,7 +3411,7 @@ function updateSetupSummary(scenario) {
     flagsEl.textContent = "";
     explanationCopyEl.innerHTML = "";
     explanationPanelEl.classList.add("hidden");
-    explanationToggleEl.setAttribute("aria-expanded", "false");
+    updateCourseNotesTogglePresentation(explanationToggleEl, false);
     courseExplanationState = {
       ...courseExplanationState,
       scenarioRef: null,
@@ -3371,9 +3444,7 @@ function updateSetupSummary(scenario) {
     : formatPresentedDifficultyLabel(presentationMetrics);
   const actualLengthLabel = presentationUnavailable
     ? "Analysis unavailable"
-    : formatActualLengthLabel(
-      presentationMetrics?.lengthFitRaw ?? presentationMetrics?.lengthRaw
-    );
+    : formatPresentedLengthLabel(presentationMetrics);
   const estimatedTurnsLabel = presentationUnavailable
     ? null
     : getEstimatedGameTurnsLabel(presentationScenario);
@@ -3428,7 +3499,7 @@ function updateSetupSummary(scenario) {
     );
     explanationCopyEl.innerHTML = explanationVisible ? unavailableExplanation : "";
     explanationPanelEl.classList.toggle("hidden", !explanationVisible);
-    explanationToggleEl.setAttribute("aria-expanded", explanationVisible ? "true" : "false");
+    updateCourseNotesTogglePresentation(explanationToggleEl, explanationVisible);
     summary.classList.remove("hidden");
     return;
   }
@@ -3452,13 +3523,39 @@ function updateSetupSummary(scenario) {
   const strongDifficultyThreshold = requestedDifficulty === "easy" ? 48 : 42;
   const difficultyStrength = difficultyMismatch.strength;
   const lengthStrength = lengthMismatch.strength;
-  const epicUpperLength = getLengthThresholds().epic[1];
+  const epicUpperLength = getProductionLengthThresholds().epic[1];
+  const presentedWallClockTurnIndex = getProductionLengthTurnIndex(presentationMetrics);
   const epicVeryLong = (
     scenario.preferences.length === "epic" &&
     presentationMetrics.lengthDirection === "high" &&
-    Number.isFinite(presentationMetrics.lengthFitRaw) &&
-    presentationMetrics.lengthFitRaw > epicUpperLength
+    Number.isFinite(presentedWallClockTurnIndex) &&
+    presentedWallClockTurnIndex > epicUpperLength
   );
+
+  const fairnessAcceptance = presentationMetrics?.fairnessAcceptance ?? null;
+  const fairnessOverflowRE = Math.max(
+    0,
+    Number(fairnessAcceptance?.overflowRE) || 0
+  );
+  const fairnessOverflowWarning = Boolean(
+    fairnessAcceptance?.active && fairnessOverflowRE > 1e-9
+  );
+  const fairnessOverflowSentence = fairnessOverflowWarning
+    ? ` Starting positions are ${fairnessAcceptance?.ordinaryAcceptable ? "slightly" : "more"} uneven than the usual balance range for a course this length.`
+    : "";
+  const forcedEconomyEffect = presentationMetrics?.forcedEconomyEffect ?? null;
+  const forcedEconomyNoEffect = Boolean(
+    forcedEconomyEffect?.noMeaningfulEnergyAdjustment
+  );
+  const forcedEconomyNoEffectSentence = forcedEconomyNoEffect
+    ? ` ${forcedEconomyEffect?.variantId === "subsidizedStarts" ? "Subsidized Starts" : "Pay to Win"} was required, but this course produced no starting-Energy changes, so that variant has little practical setup effect here.`
+    : "";
+  // Energy-adjustment cap saturation is generator telemetry, not player-facing
+  // course advice. Players only need the actual displayed Energy adjustments and
+  // the surviving/pruned starting-space set.
+  const selectionWarningSentence =
+    `${fairnessOverflowSentence}${forcedEconomyNoEffectSentence}`;
+  const hasSelectionWarning = Boolean(selectionWarningSentence);
 
   if (difficultyMismatch.active && difficultyStrength) {
     noteParts.push(difficultyMismatch.direction === "low"
@@ -3475,6 +3572,7 @@ function updateSetupSummary(scenario) {
   const shouldSuggestReroll = (
     difficultyFit >= strongDifficultyThreshold ||
     lengthFit >= 24 ||
+    hasSelectionWarning ||
     (noteParts.length > 0 && (Number(presentationMetrics?.fitScore) || 0) >= 30)
   );
   const checkpointPlacementAdvisory = courseNoteFacts.checkpointPlacement;
@@ -3525,20 +3623,20 @@ function updateSetupSummary(scenario) {
       `${formatDifficultyLabel(scenario.preferences.difficulty)} / ${formatLengthLabel(scenario.preferences.length)} acceptance range. ` +
       `The course itself is unchanged.`;
     fitNoteEl.classList.remove("hidden");
-  } else if (scenario.generationBestMatch && (extraDocksRequestMismatch || noteParts.length || epicVeryLong || competitiveSoftMismatch)) {
+  } else if (scenario.generationBestMatch && (extraDocksRequestMismatch || noteParts.length || epicVeryLong || competitiveSoftMismatch || hasSelectionWarning)) {
     const extraDocksMismatchText = extraDocksRequestMismatch
       ? " Extra Docks was required, but this course uses one docking bay."
       : "";
     const mismatchText = noteParts.length
       ? ` It is ${noteParts.join(" and ")} than requested.`
       : "";
-    const regenerateText = extraDocksRequestMismatch && !noteParts.length
+    const regenerateText = extraDocksRequestMismatch && !noteParts.length && !hasSelectionWarning
       ? " Regenerating may find a course with multiple docking bays."
-      : noteParts.length
+      : (noteParts.length || hasSelectionWarning)
         ? " Regenerating may find a closer match."
         : "";
     fitNoteEl.textContent =
-      `Closest match found.${extraDocksMismatchText}${mismatchText}${competitiveMismatchSentence}${epicLengthSentence}${checkpointPlacementSentence}${boardUseSentence}${regenerateText}`;
+      `Closest match found.${extraDocksMismatchText}${mismatchText}${competitiveMismatchSentence}${selectionWarningSentence}${epicLengthSentence}${checkpointPlacementSentence}${boardUseSentence}${regenerateText}`;
     fitNoteEl.classList.remove("hidden");
   } else if (scenario.generationBestMatch && (checkpointPlacementAdvisory?.active || weakBoardCount > 0)) {
     const regenerateText = checkpointPlacementAdvisory?.active
@@ -3550,13 +3648,13 @@ function updateSetupSummary(scenario) {
     const rerollText = shouldSuggestReroll || checkpointPlacementAdvisory?.active
       ? " Regenerating may give a better match."
       : "";
-    fitNoteEl.textContent = `Closest fit: this course is ${noteParts.join(" and ")} than requested.${epicLengthSentence}${checkpointPlacementSentence}${boardUseSentence}${rerollText}`;
+    fitNoteEl.textContent = `Closest fit: this course is ${noteParts.join(" and ")} than requested.${selectionWarningSentence}${epicLengthSentence}${checkpointPlacementSentence}${boardUseSentence}${rerollText}`;
     fitNoteEl.classList.remove("hidden");
-  } else if (epicVeryLong || checkpointPlacementAdvisory?.active || weakBoardCount > 0) {
+  } else if (epicVeryLong || checkpointPlacementAdvisory?.active || weakBoardCount > 0 || hasSelectionWarning) {
     const regenerateText = checkpointPlacementAdvisory?.active
       ? " Regenerate if you prefer a more conventional layout."
       : "";
-    fitNoteEl.textContent = `Course generated.${epicLengthSentence}${checkpointPlacementSentence}${boardUseSentence}${regenerateText}`;
+    fitNoteEl.textContent = `Course generated.${selectionWarningSentence}${epicLengthSentence}${checkpointPlacementSentence}${boardUseSentence}${regenerateText}`;
     fitNoteEl.classList.remove("hidden");
   } else {
     fitNoteEl.textContent = "";
@@ -3583,7 +3681,7 @@ function updateSetupSummary(scenario) {
     explanationCopyEl.innerHTML = "";
   }
   explanationPanelEl.classList.toggle("hidden", !explanationVisible);
-  explanationToggleEl.setAttribute("aria-expanded", explanationVisible ? "true" : "false");
+  updateCourseNotesTogglePresentation(explanationToggleEl, explanationVisible);
   summary.classList.remove("hidden");
 }
 
@@ -4361,7 +4459,6 @@ function updateRulesNote(scenario) {
   if (scenario.subsidizedStarts) {
     const subsidyPricing = scenario.sequence.firstLeg.summary.payToWin;
     const baseStartingEnergy = subsidyPricing?.startingEnergy ?? DEFAULT_STARTING_ENERGY;
-    const maximumEnergy = subsidyPricing?.maxEnergy ?? ROUTE_ENERGY_ECONOMY_DEFAULTS.maxEnergy;
     if (subsidyPricing?.hasLatePriceDifference) {
       const firstLatePlayer = subsidyPricing.lateSelectorStart ?? scenario.playerCount;
       const lastLatePlayer = subsidyPricing.lateSelectorEnd ?? scenario.playerCount;
@@ -4377,10 +4474,10 @@ function updateRulesNote(scenario) {
         ? " A dash in either position means that starting space cannot be sufficiently compensated for that selector group; a fully unavailable space uses the prohibited-start marker instead of a subsidy."
         : "";
       notes.push(
-        `Subsidized Starts: light-blue starting spaces show extra starting Energy granted for choosing that space. Add the shown amount to the normal ${baseStartingEnergy} starting Energy, never exceeding the ${maximumEnergy}E storage limit. ${latePlayerText} ${singleLatePlayer ? "uses" : "use"} the second value after the slash; earlier players use the first subsidy.${dashText} Resolve starting-space selection and subsidies before dealing or revealing any starting upgrade cards.`
+        `Subsidized Starts: light-blue starting spaces show extra starting Energy granted for choosing that space. Add the shown amount to the normal ${baseStartingEnergy} starting Energy. ${latePlayerText} ${singleLatePlayer ? "uses" : "use"} the second value after the slash; earlier players use the first subsidy.${dashText} Resolve starting-space selection and subsidies before dealing or revealing any starting upgrade cards.`
       );
     } else {
-      notes.push(`Subsidized Starts: light-blue starting spaces show extra starting Energy granted for choosing that space. Add the shown amount to the normal ${baseStartingEnergy} starting Energy, never exceeding the ${maximumEnergy}E storage limit; a prohibited starting space cannot be sufficiently compensated even at the storage cap. Resolve starting-space selection and subsidies before dealing or revealing any starting upgrade cards.`);
+      notes.push(`Subsidized Starts: light-blue starting spaces show extra starting Energy granted for choosing that space. Add the shown amount to the normal ${baseStartingEnergy} starting Energy. Prohibited starting spaces are not available for selection. Resolve starting-space selection and subsidies before dealing or revealing any starting upgrade cards.`);
     }
   }
 
@@ -10471,18 +10568,28 @@ function isSubsidizedStartsPricing(options = {}) {
   return Boolean(options.subsidizedStarts);
 }
 
+function getSubsidizedStartsMaximumEnergy(options = {}) {
+  const startingEnergy = getCourseStartingEnergy(options);
+  const storageCap = getCourseMaxEnergy(options);
+  return Math.min(
+    storageCap,
+    startingEnergy + SUBSIDIZED_STARTS_MAX_EXTRA_ENERGY
+  );
+}
+
 function getStartEnergyAdjustmentLimit(options = {}) {
   const startingEnergy = getCourseStartingEnergy(options);
   if (isSubsidizedStartsPricing(options)) {
-    return Math.max(0, getCourseMaxEnergy(options) - startingEnergy);
+    return Math.max(0, getSubsidizedStartsMaximumEnergy(options) - startingEnergy);
   }
   return startingEnergy;
 }
 
 function getPayToWinDenialCost(options = {}) {
   // Kept under the mature P2W helper name because the pricing/pruning engine is
-  // shared. For Subsidized Starts this is max subsidy + 1, i.e. 8E with the
-  // standard 3E start and 10E storage cap.
+  // shared. Subsidized Starts intentionally has a modest setup correction cap:
+  // at most +3E above the scenario's normal starting Energy, while still
+  // respecting the game's storage cap.
   return getStartEnergyAdjustmentLimit(options) + 1;
 }
 
@@ -10695,7 +10802,7 @@ function getPayToWinRouteEconomyPricingOptions(firstLeg, options = {}) {
     upgradePowerRegistersPerEnergy: config.powerRegistersPerEnergy,
     routeRegistersPerTurn: config.registersPerTurn,
     payToWinMaxPayment: config.startingEnergy,
-    subsidizedStartsMaxSubsidy: Math.max(0, config.maxEnergy - config.startingEnergy)
+    subsidizedStartsMaxSubsidy: Math.max(0, Math.min(config.maxEnergy, config.startingEnergy + SUBSIDIZED_STARTS_MAX_EXTRA_ENERGY) - config.startingEnergy)
   };
 }
 
@@ -11049,178 +11156,151 @@ function summarizeEconomyCompensationObjective(entries = [], adjustmentByIndex =
   };
 }
 
-function getEconomyPhaseNormalStyleRemovalPressure(balanceEntries = [], playerCount = 1) {
-  const minimumStarts = Math.max(1, playerCount || 1);
-  if (balanceEntries.length <= minimumStarts) {
-    return {
-      wouldPrune: false,
-      currentPenalty: 0,
-      selected: null
-    };
-  }
-
-  const currentPenalty = getEconomyEnergyActionableResidualBalanceSelectionPenalty(balanceEntries);
-  if (!(currentPenalty.total > 1e-9)) {
-    return {
-      wouldPrune: false,
-      currentPenalty: currentPenalty.total,
-      selected: null
-    };
-  }
-
-  const currentOutlierIndices = new Set(
-    rankNormalEffectiveREOutliers(
-      balanceEntries,
-      NORMAL_EFFECTIVE_RE_OUTLIER_Z
-    ).map((item) => item.entry.index)
+function chooseEconomyStartAdjustmentClosestToTarget(entry, targetEffectiveRE, options = {}) {
+  const subsidizedStarts = isSubsidizedStartsPricing(options);
+  const epsilon = 1e-9;
+  const rawRE = Number(entry?.fullScore);
+  const maxAdjustment = Math.min(
+    getStartEnergyAdjustmentLimit(options),
+    Math.max(0, (entry?.paymentScores?.length ?? 1) - 1)
   );
-  const candidates = balanceEntries.map((entry) => {
-    const retained = balanceEntries.filter((item) => item.index !== entry.index);
-    if (retained.length < minimumStarts) return null;
-    const afterPenalty = getEconomyEnergyActionableResidualBalanceSelectionPenalty(retained);
-    const improvement = currentPenalty.total - afterPenalty.total;
-    const diagnostics = getNormalStartBalanceDiagnostics(
-      entry,
-      balanceEntries,
-      "normalFairnessEffectiveRE"
-    );
+  const rawDelta = rawRE - targetEffectiveRE;
+  const compensable = Number.isFinite(rawRE) && Number.isFinite(targetEffectiveRE) && (
+    subsidizedStarts
+      ? rawDelta > epsilon
+      : rawDelta < -epsilon
+  );
+
+  if (!compensable || maxAdjustment <= 0) {
     return {
-      index: entry.index,
-      improvement,
-      afterPenalty: afterPenalty.total,
-      isOutlier: currentOutlierIndices.has(entry.index),
-      scoreDelta: Math.abs(Number(diagnostics?.scoreDelta) || 0)
+      adjustment: 0,
+      rawRE,
+      postRE: rawRE,
+      rawGap: Number.isFinite(rawDelta) ? Math.abs(rawDelta) : 0,
+      residualGap: Number.isFinite(rawDelta) ? Math.abs(rawDelta) : 0,
+      capLimited: false,
+      compensable,
+      crossedTarget: false
     };
-  }).filter(Boolean);
+  }
+
+  const candidates = [];
+  for (let adjustment = 0; adjustment <= maxAdjustment; adjustment += 1) {
+    const postRE = Number(entry.paymentScores?.[adjustment]);
+    if (!Number.isFinite(postRE)) continue;
+    const delta = postRE - targetEffectiveRE;
+    candidates.push({
+      adjustment,
+      postRE,
+      delta,
+      gap: Math.abs(delta),
+      // In an exact tie, prefer the result that has not crossed past the
+      // directional anchor. This keeps compensation from overcorrecting when
+      // two integer Energy choices are equally close.
+      nonOvercompensating: subsidizedStarts
+        ? delta >= -epsilon
+        : delta <= epsilon
+    });
+  }
 
   if (!candidates.length) {
     return {
-      wouldPrune: false,
-      currentPenalty: currentPenalty.total,
-      selected: null
+      adjustment: 0,
+      rawRE,
+      postRE: rawRE,
+      rawGap: Math.abs(rawDelta),
+      residualGap: Math.abs(rawDelta),
+      capLimited: false,
+      compensable,
+      crossedTarget: false
     };
   }
 
-  // Mirror the one-phase version of the production economy removal preference:
-  // Energy-actionable RE outlier/dispersion first; literal duration is diagnostic only.
   candidates.sort((left, right) => (
-    Number(right.isOutlier) - Number(left.isOutlier) ||
-    right.improvement - left.improvement ||
-    left.afterPenalty - right.afterPenalty ||
-    right.scoreDelta - left.scoreDelta ||
-    left.index - right.index
+    left.gap - right.gap ||
+    Number(right.nonOvercompensating) - Number(left.nonOvercompensating) ||
+    left.adjustment - right.adjustment
   ));
   const selected = candidates[0];
+  const capLimited = Boolean(
+    selected.adjustment === maxAdjustment &&
+    (subsidizedStarts
+      ? selected.postRE > targetEffectiveRE + epsilon
+      : selected.postRE < targetEffectiveRE - epsilon)
+  );
+
   return {
-    wouldPrune: Boolean(selected && selected.improvement > 0.025),
-    currentPenalty: currentPenalty.total,
-    selected
+    adjustment: selected.adjustment,
+    rawRE,
+    postRE: selected.postRE,
+    rawGap: Math.abs(rawDelta),
+    residualGap: selected.gap,
+    capLimited,
+    compensable,
+    crossedTarget: subsidizedStarts
+      ? selected.postRE < targetEffectiveRE - epsilon
+      : selected.postRE > targetEffectiveRE + epsilon
   };
 }
 
 function optimizeEconomyStartingEnergyAdjustments(entries = [], options = {}) {
-  const maxAdjustment = getStartEnergyAdjustmentLimit(options);
-  const adjustmentByIndex = new Map(
-    entries.map((entry) => [entry.index, 0])
-  );
-  let current = summarizeEconomyCompensationObjective(
-    entries,
-    adjustmentByIndex
-  );
-  const raw = current;
-  const steps = [];
-  const playerCount = Math.max(1, options.playerCount ?? 4);
-  const maximumIterations = Math.max(1, entries.length * Math.max(1, maxAdjustment));
+  const subsidizedStarts = isSubsidizedStartsPricing(options);
+  const finiteRaw = entries
+    .map((entry) => Number(entry.fullScore))
+    .filter(Number.isFinite);
+  const targetEffectiveRE = finiteRaw.length
+    ? (subsidizedStarts ? Math.min(...finiteRaw) : Math.max(...finiteRaw))
+    : 0;
+  const fieldMedianEffectiveRE = finiteRaw.length ? medianValue(finiteRaw) : 0;
+  const adjustmentByIndex = new Map();
+  const choiceByIndex = new Map();
 
-  for (let iteration = 0; iteration < maximumIterations; iteration += 1) {
-    // v49ct: Energy is an alternative to an Energy-actionable RE removal, not a mandate
-    // to erase every residual imperfection. Before spending another 1E, ask
-    // whether this selector phase would actually prune one start under the same
-    // material-improvement rule. If not, preserve the smallest current price.
-    const prunePressure = getEconomyPhaseNormalStyleRemovalPressure(
-      current.balanceEntries,
-      playerCount
+  for (const entry of entries) {
+    const choice = chooseEconomyStartAdjustmentClosestToTarget(
+      entry,
+      targetEffectiveRE,
+      options
     );
-    if (!prunePressure.wouldPrune) break;
-
-    const candidates = [];
-    for (const entry of entries) {
-      const currentAdjustment = adjustmentByIndex.get(entry.index) ?? 0;
-      const curveLimit = Math.min(
-        maxAdjustment,
-        Math.max(0, (entry.paymentScores?.length ?? 1) - 1)
-      );
-      // v49ct keeps v49ck's genuine 1E stepping, but the next loop iteration
-      // now stops as soon as Energy-actionable RE removal pressure disappears. A 3E
-      // price can therefore arise only after 1E and 2E were each independently
-      // useful AND a material one-start removal was still justified afterward.
-      const nextAdjustment = currentAdjustment + 1;
-      if (nextAdjustment > curveLimit) continue;
-      const nextRE = Number(entry.paymentScores?.[nextAdjustment]);
-      if (!Number.isFinite(nextRE)) continue;
-
-      const proposal = new Map(adjustmentByIndex);
-      proposal.set(entry.index, nextAdjustment);
-      const objective = summarizeEconomyCompensationObjective(entries, proposal);
-      const improvement = current.penalty.total - objective.penalty.total;
-      const stdDevImprovement = current.balance.stdDev - objective.balance.stdDev;
-      const addedEnergySteps = 1;
-      if (improvement > 1e-9 || stdDevImprovement > 1e-9) {
-        candidates.push({
-          entry,
-          proposal,
-          objective,
-          nextAdjustment,
-          addedEnergySteps,
-          improvement,
-          stdDevImprovement,
-          improvementPerStep: improvement
-        });
-      }
-    }
-
-    if (!candidates.length) break;
-    candidates.sort((left, right) => (
-      right.improvement - left.improvement ||
-      right.improvementPerStep - left.improvementPerStep ||
-      right.stdDevImprovement - left.stdDevImprovement ||
-      left.addedEnergySteps - right.addedEnergySteps ||
-      left.entry.index - right.entry.index
-    ));
-    const selected = candidates[0];
-
-    // Match Normal's "measurable improvement" rule. A tiny SD nudge that does not
-    // materially improve the residual objective should not spend starting Energy.
-    if (!(selected.improvement > 0.025)) break;
-
-    adjustmentByIndex.clear();
-    selected.proposal.forEach((value, key) => adjustmentByIndex.set(key, value));
-    current = selected.objective;
-    const postStepPrunePressure = getEconomyPhaseNormalStyleRemovalPressure(
-      current.balanceEntries,
-      playerCount
-    );
-    steps.push({
-      index: selected.entry.index,
-      adjustment: selected.nextAdjustment,
-      addedSteps: selected.addedEnergySteps,
-      improvement: Number(selected.improvement.toFixed(3)),
-      residualPenalty: Number(current.penalty.total.toFixed(3)),
-      residualStdDev: Number(current.balance.stdDev.toFixed(3)),
-      pruneStillJustified: postStepPrunePressure.wouldPrune,
-      pruneCandidateIndex: postStepPrunePressure.selected?.index ?? null,
-      pruneImprovement: Number(
-        (postStepPrunePressure.selected?.improvement ?? 0).toFixed(3)
-      )
-    });
+    adjustmentByIndex.set(entry.index, choice.adjustment);
+    choiceByIndex.set(entry.index, choice);
   }
+
+  const rawAdjustmentByIndex = new Map(entries.map((entry) => [entry.index, 0]));
+  const raw = summarizeEconomyCompensationObjective(entries, rawAdjustmentByIndex);
+  const final = summarizeEconomyCompensationObjective(entries, adjustmentByIndex);
+  const choices = entries.map((entry) => ({
+    index: entry.index,
+    ...(choiceByIndex.get(entry.index) ?? {})
+  }));
+  const capLimitedIndices = choices
+    .filter((choice) => choice.capLimited)
+    .map((choice) => choice.index);
+  const steps = choices
+    .filter((choice) => choice.adjustment > 0)
+    .map((choice) => ({
+      index: choice.index,
+      adjustment: choice.adjustment,
+      addedSteps: choice.adjustment,
+      improvement: Number(Math.max(0, choice.rawGap - choice.residualGap).toFixed(3)),
+      rawGap: Number(choice.rawGap.toFixed(3)),
+      residualGap: Number(choice.residualGap.toFixed(3)),
+      capLimited: Boolean(choice.capLimited),
+      crossedTarget: Boolean(choice.crossedTarget)
+    }));
 
   return {
     adjustmentByIndex,
+    choiceByIndex,
     raw,
-    final: current,
+    final,
     steps,
-    maxAdjustment
+    maxAdjustment: getStartEnergyAdjustmentLimit(options),
+    targetEffectiveRE,
+    fieldMedianEffectiveRE,
+    targetPolicy: subsidizedStarts
+      ? "strongest-start-directional-anchor"
+      : "weakest-start-directional-anchor",
+    capLimitedIndices
   };
 }
 
@@ -11271,22 +11351,29 @@ function buildPayToWinEffectiveREPricingState(
   }
 
   const optimized = optimizeEconomyStartingEnergyAdjustments(rawEntries, options);
-  const centerRE = medianValue(rawEntries.map((entry) => entry.fullScore));
+  const targetRE = Number(optimized.targetEffectiveRE);
+  const centerRE = Number(optimized.fieldMedianEffectiveRE);
+  const targetEntry = [...rawEntries].sort((left, right) => (
+    subsidizedStarts
+      ? left.fullScore - right.fullScore || left.index - right.index
+      : right.fullScore - left.fullScore || left.index - right.index
+  ))[0] ?? null;
   const entries = rawEntries.map((entry) => {
     const energyCost = optimized.adjustmentByIndex.get(entry.index) ?? 0;
+    const choice = optimized.choiceByIndex.get(entry.index) ?? null;
     const postRE = Number(entry.paymentScores?.[energyCost]);
     const directionalAdvantage = subsidizedStarts
-      ? Math.max(0, entry.fullScore - centerRE)
-      : Math.max(0, centerRE - entry.fullScore);
+      ? Math.max(0, entry.fullScore - targetRE)
+      : Math.max(0, targetRE - entry.fullScore);
     const remainingDirectionalAdvantage = Number.isFinite(postRE)
       ? subsidizedStarts
-        ? Math.max(0, postRE - centerRE)
-        : Math.max(0, centerRE - postRE)
+        ? Math.max(0, postRE - targetRE)
+        : Math.max(0, targetRE - postRE)
       : directionalAdvantage;
     return {
       ...entry,
       advantage: Number(directionalAdvantage.toFixed(3)),
-      registerEquivalent: Number((entry.fullScore - centerRE).toFixed(3)),
+      registerEquivalent: Number((entry.fullScore - targetRE).toFixed(3)),
       energyCost,
       postPaymentFullScore: Number.isFinite(postRE)
         ? Number(postRE.toFixed(3))
@@ -11300,11 +11387,16 @@ function buildPayToWinEffectiveREPricingState(
       remainingAdvantage: Number(remainingDirectionalAdvantage.toFixed(3)),
       remainingRegisterEquivalent: Number(remainingDirectionalAdvantage.toFixed(3)),
       postAdjustmentDeltaScore: Number.isFinite(postRE)
-        ? Number((postRE - centerRE).toFixed(3))
+        ? Number((postRE - targetRE).toFixed(3))
         : null,
       postAdjustmentDeltaRegisters: Number.isFinite(postRE)
-        ? Number((postRE - centerRE).toFixed(3))
+        ? Number((postRE - targetRE).toFixed(3))
         : null,
+      targetEffectiveRE: Number.isFinite(targetRE) ? Number(targetRE.toFixed(3)) : null,
+      rawTargetGap: Number.isFinite(choice?.rawGap) ? Number(choice.rawGap.toFixed(3)) : null,
+      residualTargetGap: Number.isFinite(choice?.residualGap) ? Number(choice.residualGap.toFixed(3)) : null,
+      capLimited: Boolean(choice?.capLimited),
+      crossedTarget: Boolean(choice?.crossedTarget),
       paymentScores: entry.paymentScores.map((value) => (
         Number.isFinite(Number(value)) ? Number(Number(value).toFixed(6)) : null
       ))
@@ -11317,16 +11409,18 @@ function buildPayToWinEffectiveREPricingState(
     : 0;
   const pricingModel = {
     method: subsidizedStarts
-      ? "selector-aware-effective-re-compensation-first-subsidy-v49ct"
-      : "selector-aware-effective-re-compensation-first-payment-v49ct",
+      ? "selector-aware-start-specific-effective-re-balance-subsidy-v49dz"
+      : "selector-aware-start-specific-effective-re-balance-payment-v49dz",
     mode: subsidizedStarts ? "subsidy" : "payment",
     ownership: "completed-effective-re",
     occupancyQualityOwner: "completed-effective-re",
-    energyStepPolicy: "incremental-1E-stop-when-energy-actionable-re-prune-no-longer-justified",
+    energyStepPolicy: "per-start-discrete-closest-to-directional-anchor-before-pruning-v49dz",
     compensationFirst: true,
-    target: "energy-actionable-effective-re-prune-avoidance-objective-duration-diagnostic-only",
-    baselineIndex: null,
-    baselineFullScore: null,
+    target: "minimize-each-start-effective-re-gap-before-range-first-pruning",
+    baselineIndex: targetEntry?.index ?? null,
+    baselineFullScore: Number.isFinite(targetRE) ? Number(targetRE.toFixed(3)) : null,
+    targetEffectiveRE: Number.isFinite(targetRE) ? Number(targetRE.toFixed(3)) : null,
+    targetPolicy: optimized.targetPolicy,
     centerEffectiveRE: Number(centerRE.toFixed(3)),
     registerScore: 1,
     horizonTurns: null,
@@ -11334,6 +11428,9 @@ function buildPayToWinEffectiveREPricingState(
     maxEnergy: getCourseMaxEnergy(options),
     maxAdjustment,
     maxSubsidy: subsidizedStarts ? maxAdjustment : 0,
+    subsidyStartingEnergyCeiling: subsidizedStarts
+      ? getSubsidizedStartsMaximumEnergy(options)
+      : null,
     denialCost: getPayToWinDenialCost(options),
     paymentPenalties: [],
     maxRegisterAdvantage: Number(Math.max(
@@ -11351,6 +11448,8 @@ function buildPayToWinEffectiveREPricingState(
     adjustmentSteps: optimized.steps,
     nonzeroAdjustmentCount: nonzeroCount,
     maximumChosenAdjustment,
+    capLimitedAdjustmentCount: optimized.capLimitedIndices.length,
+    capLimitedAdjustmentIndices: [...optimized.capLimitedIndices],
     comparatorOnly: false
   };
 
@@ -12721,7 +12820,7 @@ function chooseEconomyCompensatedStartRemoval(
     residualPenaltyAfterEstimate: Number(selected.afterWorstPenalty.toFixed(3)),
     removalImprovement: Number(selected.improvement.toFixed(3)),
     reason:
-      `Energy compensation exhausted before Energy-actionable RE residual balance; ` +
+      `start-specific Energy balancing left residual range overflow; ` +
       `removal improves worst early/late residual penalty ` +
       `${Number(currentWorstPenalty.toFixed(3))}->${Number(selected.afterWorstPenalty.toFixed(3))}`
   };
@@ -12759,10 +12858,10 @@ function evaluatePayToWinSelectorAwarePricingState(
   const lateEntries = lateCostState.entries ?? [];
   const latePricingActive = Boolean(lateCostState.active);
 
-  // v49ck: all physically/routably valid starts remain offerable while Energy
-  // compensation is being attempted. Failure to hit an extreme baseline is not
-  // an availability failure. Only the later Energy-actionable RE prune step may remove a
-  // start, and only when doing so materially improves RE dispersion/outlier balance.
+  // v49dz: all physically/routably valid starts remain offerable while each
+  // start receives its best legal discrete Energy adjustment toward the directional
+  // field anchor. Only the later range-first residual prune step may remove a start,
+  // after which traffic/economy are rebuilt and every remaining start is rebalanced.
   // Literal register-duration disparity remains diagnostic and cannot trigger Energy or pruning.
   const earlyResidual = summarizeEconomyPricedREPhase(
     earlyEntries,
@@ -12772,7 +12871,7 @@ function evaluatePayToWinSelectorAwarePricingState(
     ? summarizeEconomyPricedREPhase(lateEntries, "lateEnergyCost")
     : earlyResidual;
   const residualBalance = {
-    method: "selector-aware-compensation-first-energy-actionable-re-v49ct",
+    method: "selector-aware-start-specific-energy-balance-then-range-prune-v49dz",
     early: earlyResidual,
     late: lateResidual,
     worstStdDev: Math.max(earlyResidual.stddev, lateResidual.stddev),
@@ -12783,6 +12882,33 @@ function evaluatePayToWinSelectorAwarePricingState(
     worstResidualPenalty: Math.max(
       earlyResidual.residualPenalty,
       lateResidual.residualPenalty
+    ),
+    worstRange: Math.max(
+      earlyResidual.rangeRE ?? 0,
+      lateResidual.rangeRE ?? 0
+    ),
+    worstRangeLimit: Math.max(
+      earlyResidual.residualPenaltyComponents?.rangeLimit ?? 0,
+      lateResidual.residualPenaltyComponents?.rangeLimit ?? 0
+    ),
+    worstRangeExcess: Math.max(
+      earlyResidual.residualPenaltyComponents?.rangeExcess ?? 0,
+      lateResidual.residualPenaltyComponents?.rangeExcess ?? 0
+    ),
+    worstSoftOverflowAllowance: Math.max(
+      earlyResidual.residualPenaltyComponents?.softOverflowAllowance ?? 0,
+      lateResidual.residualPenaltyComponents?.softOverflowAllowance ?? 0
+    ),
+    worstSoftOverflowOverage: Math.max(
+      0,
+      (earlyResidual.residualPenaltyComponents?.rangeExcess ?? 0) -
+        (earlyResidual.residualPenaltyComponents?.softOverflowAllowance ?? 0),
+      (lateResidual.residualPenaltyComponents?.rangeExcess ?? 0) -
+        (lateResidual.residualPenaltyComponents?.softOverflowAllowance ?? 0)
+    ),
+    softOverflowAcceptable: Boolean(
+      earlyResidual.residualPenaltyComponents?.overflowWithinSoftAllowance !== false &&
+      lateResidual.residualPenaltyComponents?.overflowWithinSoftAllowance !== false
     ),
     worstIgnoredDurationPenalty: Math.max(
       earlyResidual.residualPenaltyComponents?.ignoredDuration ?? 0,
@@ -12823,12 +12949,12 @@ function evaluatePayToWinSelectorAwarePricingState(
     availabilityValid,
     residualBalance,
     reOwnershipAudit: {
-      model: "economy-start-re-ownership-v49ct",
+      model: "economy-start-re-ownership-v49dz",
       observationalOnly: false,
       behaviorChanged: true,
       ownership: "completed-effective-re",
       occupancyQualityOwner: "completed-effective-re",
-      energyStepPolicy: "incremental-1E-stop-when-energy-actionable-re-prune-no-longer-justified",
+      energyStepPolicy: "per-start-discrete-closest-to-directional-anchor-before-pruning-v49dz",
       compensationFirst: true,
       selectorAware: true,
       mode: isSubsidizedStartsPricing(pricingOptions) ? "subsidy" : "payment",
@@ -12841,6 +12967,9 @@ function evaluatePayToWinSelectorAwarePricingState(
         ignoredDurationPenalty: earlyResidual.residualPenaltyComponents?.ignoredDuration ?? 0,
         normalStylePenaltyIncludingDuration: earlyResidual.residualPenaltyComponents?.normalTotal ?? earlyResidual.residualPenalty,
         nonzeroAdjustments: earlyEntries.filter((entry) => entry.energyCost > 0).length,
+        capLimitedAdjustments: earlyEntries.filter((entry) => entry.capLimited).length,
+        targetEffectiveRE: costState?.effectiveREPricingState?.pricingModel?.targetEffectiveRE ?? null,
+        targetPolicy: costState?.effectiveREPricingState?.pricingModel?.targetPolicy ?? null,
         maxAdjustment: earlyEntries.length
           ? Math.max(...earlyEntries.map((entry) => entry.energyCost))
           : 0
@@ -12856,6 +12985,15 @@ function evaluatePayToWinSelectorAwarePricingState(
         nonzeroAdjustments: latePricingActive
           ? lateEntries.filter((entry) => entry.lateEnergyCost > 0).length
           : earlyEntries.filter((entry) => entry.energyCost > 0).length,
+        capLimitedAdjustments: latePricingActive
+          ? lateEntries.filter((entry) => entry.capLimited).length
+          : earlyEntries.filter((entry) => entry.capLimited).length,
+        targetEffectiveRE: latePricingActive
+          ? (lateCostState?.pricingModel?.targetEffectiveRE ?? null)
+          : (costState?.effectiveREPricingState?.pricingModel?.targetEffectiveRE ?? null),
+        targetPolicy: latePricingActive
+          ? (lateCostState?.pricingModel?.targetPolicy ?? null)
+          : (costState?.effectiveREPricingState?.pricingModel?.targetPolicy ?? null),
         maxAdjustment: latePricingActive && lateEntries.length
           ? Math.max(...lateEntries.map((entry) => entry.lateEnergyCost))
           : (earlyEntries.length
@@ -13246,11 +13384,11 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
     details: []
   };
 
-  // v49ck semantics retained: price/compensate the whole currently routed field first. If the
-  // selector-aware RE field is still materially imbalanced, apply the same
-  // one-start-at-a-time residual-improvement principle as Normal, rebuild
-  // occupancy/traffic, and then re-run compensation. Never prune merely because
-  // the legal Energy range cannot hit an extreme baseline exactly.
+  // v49dz: balance every currently routed start toward the legal directional
+  // anchor first. If the selector-aware RE field still exceeds the Normal range,
+  // prune one residual outlier, rebuild occupancy/traffic, then recompute the
+  // directional anchor and rebalance every remaining start. The Energy cap itself
+  // never makes a start unavailable; cap-limited residuals are explicit telemetry.
   const choosePayToWinBalancingRemoval = ({ baseFirstLeg, currentFirstLeg, excludedIndices }) => {
     let costState = getPayToWinCostEntries(
       currentFirstLeg,
@@ -13501,9 +13639,24 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
       lateUnavailable: Boolean(lateEntry?.lateUnavailable),
       lateFullScore: lateEntry?.fullScore ?? null,
       latePostPaymentFullScore: lateEntry?.postPaymentFullScore ?? null,
-      latePostAdjustmentDeltaRegisters: lateEntry?.postAdjustmentDeltaRegisters ?? null
+      latePostAdjustmentDeltaRegisters: lateEntry?.postAdjustmentDeltaRegisters ?? null,
+      targetEffectiveRE: entry.targetEffectiveRE ?? null,
+      rawTargetGap: entry.rawTargetGap ?? null,
+      residualTargetGap: entry.residualTargetGap ?? null,
+      capLimited: Boolean(entry.capLimited),
+      lateCapLimited: Boolean(lateEntry?.capLimited)
     };
   });
+  const meaningfulEnergyAdjustmentCount = pricingEntries.filter((entry) => (
+    Math.max(
+      Math.max(0, Number(entry.energyCost) || 0),
+      Math.max(0, Number(entry.lateEnergyCost) || 0)
+    ) > 0
+  )).length;
+  const capLimitedEnergyAdjustmentIndices = pricingEntries
+    .filter((entry) => entry.capLimited || entry.lateCapLimited)
+    .map((entry) => entry.index);
+  const capLimitedEnergyAdjustmentCount = capLimitedEnergyAdjustmentIndices.length;
 
   return {
     ...currentFirstLeg,
@@ -13523,16 +13676,23 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
       // For priced starts, public fairness is the residual field after the
       // displayed Energy adjustment, not the raw pre-price route spread.
       scoreStdDev: Number(residualBalance.worstStdDev.toFixed(2)),
-      fairnessScore: Number(Math.max(0, 100 - residualBalance.worstStdDev * 4).toFixed(2)),
+      fairnessScore: Number(Math.max(
+        0,
+        100 - (
+          (residualBalance.worstRangeLimit ?? 0) > 1e-9
+            ? ((residualBalance.worstRange ?? 0) / residualBalance.worstRangeLimit) * 35
+            : 0
+        )
+      ).toFixed(2)),
       outliers,
       payToWin: {
         active: true,
         mode: isSubsidizedStartsPricing(options) ? "subsidy" : "payment",
         subsidizedStarts: isSubsidizedStartsPricing(options),
         pricingEconomyMethod: "card-aware-fixed-route-expected-economy-v37",
-        pruningPolicy: "selector-aware-re-compensation-energy-actionable-targeted-rescue-before-prune-v49ct",
+        pruningPolicy: "selector-aware-start-specific-energy-balance-then-range-prune-v49dz",
         compensationFirst: true,
-        routeReselectionPolicy: "existing-full-course-candidates-then-prune-gated-direction-aware-energy-rescue-v49ct",
+        routeReselectionPolicy: "completed-effective-re-existing-candidates-then-prune-gated-direction-aware-energy-rescue-v49dw",
         freshEnergySpecificReroutes: targetedRescueTelemetry.attempts,
         targetedEnergyRescue: {
           ...targetedRescueTelemetry,
@@ -13542,6 +13702,9 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
         maxEnergy,
         startingUpgradeCards,
         maxSubsidy: isSubsidizedStartsPricing(options) ? getStartEnergyAdjustmentLimit(options) : 0,
+        subsidyStartingEnergyCeiling: isSubsidizedStartsPricing(options)
+          ? getSubsidizedStartsMaximumEnergy(options)
+          : null,
         denialCost,
         costUnit: earlyCostState.costUnit,
         lateCostUnit: lateCostState.costUnit,
@@ -13565,6 +13728,10 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
         pruned,
         pricingEntries,
         pricedStartCount,
+        meaningfulEnergyAdjustmentCount,
+        hasMeaningfulEnergyAdjustment: meaningfulEnergyAdjustmentCount > 0,
+        capLimitedEnergyAdjustmentCount,
+        capLimitedEnergyAdjustmentIndices,
         trafficScaleMultiplier: getPayToWinTrafficScaleMultiplier(playerCount),
         lateSelectorStart: lateCostState.lateSelectorStart,
         lateSelectorEnd: lateCostState.lateSelectorEnd,
@@ -13572,7 +13739,7 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
         latePricingActive,
         lateTrafficModel: latePricingActive
           ? "adaptive-one-breakpoint"
-          : (selectorPricingEligible ? "adaptive-no-meaningful-split" : "inactive-no-surplus"),
+          : (finalEconomyState.selectorPricingEligible ? "adaptive-no-meaningful-split" : "inactive-no-surplus"),
         lateScenarioSamples: lateCostState.scenarioSamples,
         earlyUnavailableCount,
         maxEarlyUnavailable,
@@ -13985,6 +14152,46 @@ function rankNormalEffectiveREOutliers(
     ));
 }
 
+function getNormalEffectiveRERangeTarget(entries = []) {
+  const active = (entries || []).filter((entry) =>
+    Number.isFinite(getNormalEffectiveREFairnessValue(entry))
+  );
+  const registerCounts = active
+    .map((entry) => Number(
+      entry?.normalFairnessRegisterCount ?? entry?.bestActions
+    ))
+    .filter(Number.isFinite)
+    .sort((left, right) => left - right);
+  const medianRegisters = registerCounts.length ? medianValue(registerCounts) : 0;
+  const medianTurns = Math.max(1, medianRegisters / 5);
+  const rangeLimit = Math.max(
+    NORMAL_EFFECTIVE_RE_RANGE_MIN,
+    medianTurns * NORMAL_EFFECTIVE_RE_RANGE_PER_TURN
+  );
+  const values = active.map(getNormalEffectiveREFairnessValue);
+  const min = values.length ? Math.min(...values) : null;
+  const max = values.length ? Math.max(...values) : null;
+  const range = Number.isFinite(min) && Number.isFinite(max) ? max - min : 0;
+  return {
+    medianRegisters: Number(medianRegisters.toFixed(2)),
+    medianTurns: Number(medianTurns.toFixed(2)),
+    rangeLimit: Number(rangeLimit.toFixed(3)),
+    range: Number(range.toFixed(3)),
+    rangeExcess: Number(Math.max(0, range - rangeLimit).toFixed(3)),
+    min: Number.isFinite(min) ? Number(min.toFixed(3)) : null,
+    max: Number.isFinite(max) ? Number(max.toFixed(3)) : null,
+    policy: "best-worst-completed-re-range-max3-or-0.6-per-median-programming-turn-v49dx"
+  };
+}
+
+function getNormalFairnessSoftOverflowAllowance(rangeLimit) {
+  const limit = Math.max(0, Number(rangeLimit) || 0);
+  return Number(Math.max(
+    NORMAL_EFFECTIVE_RE_SOFT_OVERFLOW_MIN,
+    limit * NORMAL_EFFECTIVE_RE_SOFT_OVERFLOW_FRACTION
+  ).toFixed(3));
+}
+
 function summarizeNormalRetainedREBalance(entries = []) {
   const active = (entries || []).filter((entry) =>
     Number.isFinite(getNormalEffectiveREFairnessValue(entry))
@@ -14022,6 +14229,7 @@ function summarizeNormalRetainedREBalance(entries = []) {
 
   const min = Math.min(...values);
   const max = Math.max(...values);
+  const rangeTarget = getNormalEffectiveRERangeTarget(active);
   return {
     count: active.length,
     stdDev: Number(
@@ -14033,6 +14241,10 @@ function summarizeNormalRetainedREBalance(entries = []) {
     min: Number(min.toFixed(3)),
     max: Number(max.toFixed(3)),
     range: Number((max - min).toFixed(3)),
+    rangeLimit: rangeTarget.rangeLimit,
+    rangeExcess: rangeTarget.rangeExcess,
+    medianRegisters: rangeTarget.medianRegisters,
+    medianTurns: rangeTarget.medianTurns,
     worstScoreZ: Number(Math.max(0, worstScore.z).toFixed(2)),
     worstScoreIndex: worstScore.index,
     // Literal register spread is diagnostic/guardrail only. Keep this so Dev
@@ -14089,14 +14301,22 @@ function getNormalResidualBalanceSelectionPenalty(entries = []) {
   const active = (entries || []).filter((entry) =>
     Number.isFinite(getNormalEffectiveREFairnessValue(entry))
   );
+  const rangeTarget = getNormalEffectiveRERangeTarget(active);
   if (!active.length) {
     return {
       total: 0,
+      range: 0,
+      rangeLimit: rangeTarget.rangeLimit,
+      rangeExcess: 0,
+      rangePenalty: 0,
+      softOverflowAllowance: getNormalFairnessSoftOverflowAllowance(rangeTarget.rangeLimit),
+      overflowWithinSoftAllowance: true,
       reDispersion: 0,
       duration: 0,
       outlier: 0,
       reStdDev: 0,
       reStdDevLimit: NORMAL_EFFECTIVE_RE_FAIRNESS_STDDEV_LIMIT,
+      medianTurns: rangeTarget.medianTurns,
       durationGuardrail: getNormalRegisterDurationGuardrail(active),
       worstScoreZ: 0
     };
@@ -14108,49 +14328,51 @@ function getNormalResidualBalanceSelectionPenalty(entries = []) {
   );
   const durationGuardrail = getNormalRegisterDurationGuardrail(active);
   const retained = summarizeNormalRetainedREBalance(active);
-  const outliers = rankNormalEffectiveREOutliers(
-    active,
-    NORMAL_EFFECTIVE_RE_OUTLIER_Z
-  );
-
-  // These are scorer weights, not new RE definitions. Keep them deliberately
-  // simple and visible until broad calibration.
-  const reDispersion = Math.max(
-    0,
-    reStdDev - NORMAL_EFFECTIVE_RE_FAIRNESS_STDDEV_LIMIT
-  ) * NORMAL_EFFECTIVE_RE_SCORE_PER_RE * 0.5;
+  const rangePenalty =
+    rangeTarget.rangeExcess * NORMAL_EFFECTIVE_RE_SCORE_PER_RE;
   const durationExcess = Math.max(
     0,
     (durationGuardrail.range || 0) -
       (durationGuardrail.allowedRange || 0)
   );
   const duration = durationExcess * 0.75;
-  const outlier = Math.max(
-    0,
-    (retained.worstScoreZ || 0) - NORMAL_EFFECTIVE_RE_OUTLIER_Z
-  ) * 3;
 
   return {
-    total: Number((reDispersion + duration + outlier).toFixed(3)),
-    reDispersion: Number(reDispersion.toFixed(3)),
+    // Range is the semantic fairness owner. Duration stays a separate
+    // course-selection/readability guardrail; SD/z are diagnostics only.
+    total: Number((rangePenalty + duration).toFixed(3)),
+    range: rangeTarget.range,
+    rangeLimit: rangeTarget.rangeLimit,
+    rangeExcess: rangeTarget.rangeExcess,
+    rangePenalty: Number(rangePenalty.toFixed(3)),
+    softOverflowAllowance: getNormalFairnessSoftOverflowAllowance(rangeTarget.rangeLimit),
+    overflowWithinSoftAllowance:
+      rangeTarget.rangeExcess <= getNormalFairnessSoftOverflowAllowance(rangeTarget.rangeLimit) + 1e-9,
+    reDispersion: 0,
     duration: Number(duration.toFixed(3)),
-    outlier: Number(outlier.toFixed(3)),
+    outlier: 0,
     reStdDev: Number(reStdDev.toFixed(3)),
     reStdDevLimit: NORMAL_EFFECTIVE_RE_FAIRNESS_STDDEV_LIMIT,
+    medianTurns: rangeTarget.medianTurns,
+    medianRegisters: rangeTarget.medianRegisters,
     durationGuardrail,
     worstScoreZ: retained.worstScoreZ,
-    remainingOutlierCount: outliers.length,
+    remainingOutlierCount: rankNormalEffectiveREOutliers(
+      active,
+      NORMAL_EFFECTIVE_RE_OUTLIER_Z
+    ).length,
     policy:
-      "residual-normal-imbalance-is-course-selection-penalty-not-rejection"
+      "range-first-length-responsive-normal-fairness-v49dx; sd-z-diagnostic-only"
   };
 }
 
 function getEconomyEnergyActionableResidualBalanceSelectionPenalty(entries = []) {
   const normalPenalty = getNormalResidualBalanceSelectionPenalty(entries);
+  // Starting Energy compensates the same range-first RE imbalance that Normal
+  // would otherwise prune. Literal-duration guardrails are not Energy-actionable.
   const actionableTotal = Math.max(
     0,
-    (Number(normalPenalty.reDispersion) || 0) +
-      (Number(normalPenalty.outlier) || 0)
+    Number(normalPenalty.rangePenalty) || 0
   );
   return {
     ...normalPenalty,
@@ -14158,7 +14380,7 @@ function getEconomyEnergyActionableResidualBalanceSelectionPenalty(entries = [])
     normalTotal: Number((Number(normalPenalty.total) || 0).toFixed(3)),
     ignoredDuration: Number((Number(normalPenalty.duration) || 0).toFixed(3)),
     durationActionable: false,
-    policy: "economy-energy-actionable-re-dispersion-outlier-duration-diagnostic-v49ct"
+    policy: "economy-energy-actionable-range-first-effective-re-v49dx"
   };
 }
 
@@ -14172,60 +14394,78 @@ function chooseNormalStartBalanceRemoval(entries, playerCount, stdDevLimit = nul
   );
   if (active.length <= minimumStarts) return null;
 
-  const currentPenalty = getNormalResidualBalanceSelectionPenalty(active);
-  if (!(currentPenalty.total > 0)) {
-    // Already balanced enough: retain every surplus start.
+  const currentRange = getNormalEffectiveRERangeTarget(active);
+  if (!(currentRange.rangeExcess > 1e-9)) {
     return null;
   }
-
-  const rankedOutliers = rankNormalEffectiveREOutliers(
+  const currentStdDev = getNormalStartDispersion(
     active,
-    NORMAL_EFFECTIVE_RE_OUTLIER_Z
+    "normalFairnessEffectiveRE"
+  );
+  const currentOutlierIndices = new Set(
+    rankNormalEffectiveREOutliers(
+      active,
+      NORMAL_EFFECTIVE_RE_OUTLIER_Z
+    ).map((item) => item.entry.index)
   );
 
   const candidates = active.map((entry) => {
     const retained = active.filter((item) => item.index !== entry.index);
     if (retained.length < minimumStarts) return null;
 
-    const afterPenalty = getNormalResidualBalanceSelectionPenalty(retained);
+    const afterRange = getNormalEffectiveRERangeTarget(retained);
+    const afterStdDev = getNormalStartDispersion(
+      retained,
+      "normalFairnessEffectiveRE"
+    );
     const diagnostics = getNormalStartBalanceDiagnostics(
       entry,
       active,
       "normalFairnessEffectiveRE"
     );
-    const isOutlier = rankedOutliers.some(
-      (candidate) => candidate.entry.index === entry.index
-    );
-
+    const value = getNormalEffectiveREFairnessValue(entry);
+    const atRangeEdge =
+      Math.abs(value - currentRange.min) <= 1e-9 ||
+      Math.abs(value - currentRange.max) <= 1e-9;
     return {
       entry,
       retained,
-      afterPenalty,
+      afterRange,
+      afterStdDev,
       diagnostics,
-      isOutlier,
-      improvement: currentPenalty.total - afterPenalty.total
+      isOutlier: currentOutlierIndices.has(entry.index),
+      atRangeEdge,
+      rangeExcessImprovement:
+        currentRange.rangeExcess - afterRange.rangeExcess,
+      rawRangeImprovement: currentRange.range - afterRange.range,
+      stdDevImprovement: currentStdDev - afterStdDev
     };
   }).filter(Boolean);
 
   if (!candidates.length) return null;
 
   candidates.sort((left, right) => (
-    // Prefer a genuine effective-RE outlier when it is also useful to remove.
+    // Range owns pruning. SD only chooses direction/ties among removals that
+    // address the current best↔worst gap.
+    right.rangeExcessImprovement - left.rangeExcessImprovement ||
+    right.rawRangeImprovement - left.rawRangeImprovement ||
+    Number(right.atRangeEdge) - Number(left.atRangeEdge) ||
+    right.stdDevImprovement - left.stdDevImprovement ||
     Number(right.isOutlier) - Number(left.isOutlier) ||
-    right.improvement - left.improvement ||
-    left.afterPenalty.total - right.afterPenalty.total ||
     Math.abs(right.diagnostics.scoreDelta) -
       Math.abs(left.diagnostics.scoreDelta) ||
     left.entry.index - right.entry.index
   ));
 
   const selected = candidates[0];
-
-  // "Tried its best" rule: while surplus starts exist, continue pruning only
-  // when one removal actually improves the residual balance objective. If no
-  // removal helps, stop with surplus starts and send the residual to the final
-  // course scorer instead of deleting arbitrarily.
-  if (!(selected.improvement > 0.025)) {
+  const materiallyImprovesRange =
+    selected.rangeExcessImprovement > 0.025 ||
+    selected.rawRangeImprovement > 0.025;
+  const peelsDuplicateRangeEdge =
+    selected.atRangeEdge &&
+    selected.stdDevImprovement > 0.025 &&
+    currentRange.rangeExcess > 0.025;
+  if (!(materiallyImprovesRange || peelsDuplicateRangeEdge)) {
     return null;
   }
 
@@ -14235,21 +14475,34 @@ function chooseNormalStartBalanceRemoval(entries, playerCount, stdDevLimit = nul
     actions:
       selected.entry.normalFairnessRegisterCount ??
       selected.entry.bestActions,
-    balanceDispersionPruned: !selected.isOutlier,
-    effectiveREPruned: selected.isOutlier,
+    balanceDispersionPruned: false,
+    effectiveREPruned: true,
+    rangePruned: true,
+    isRobustOutlier: selected.isOutlier,
     scoreZ: selected.diagnostics.scoreZ,
     actionZ: selected.diagnostics.actionZ,
     scoreDelta: selected.diagnostics.scoreDelta,
     actionDelta: selected.diagnostics.actionDelta,
-    balanceStdDevBefore: currentPenalty.reStdDev,
-    balanceStdDevAfterEstimate: selected.afterPenalty.reStdDev,
+    balanceStdDevBefore: currentStdDev,
+    balanceStdDevAfterEstimate: selected.afterStdDev,
     balanceStdDevLimit: NORMAL_EFFECTIVE_RE_FAIRNESS_STDDEV_LIMIT,
-    residualPenaltyBefore: currentPenalty.total,
-    residualPenaltyAfterEstimate: selected.afterPenalty.total,
-    removalImprovement: Number(selected.improvement.toFixed(3)),
-    removalPolicy: selected.isOutlier
-      ? "effective-re-outlier-improvement"
-      : "effective-re-balance-improvement-above-player-floor"
+    rangeBefore: currentRange.range,
+    rangeAfterEstimate: selected.afterRange.range,
+    rangeLimit: currentRange.rangeLimit,
+    rangeExcessBefore: currentRange.rangeExcess,
+    rangeExcessAfterEstimate: selected.afterRange.rangeExcess,
+    medianTurns: currentRange.medianTurns,
+    residualPenaltyBefore:
+      currentRange.rangeExcess * NORMAL_EFFECTIVE_RE_SCORE_PER_RE,
+    residualPenaltyAfterEstimate:
+      selected.afterRange.rangeExcess * NORMAL_EFFECTIVE_RE_SCORE_PER_RE,
+    removalImprovement: Number(
+      Math.max(
+        selected.rangeExcessImprovement,
+        selected.rawRangeImprovement
+      ).toFixed(3)
+    ),
+    removalPolicy: "range-first-effective-re-length-responsive-v49dx"
   };
 }
 
@@ -14928,10 +15181,16 @@ function adjustNormalStartsAfterFullTraffic(
           residualSelectionPenaltyComponents: residualBalancePenalty,
           residualImbalanceFeedsCourseScorer: true,
           fairnessMetric: "full-course-effective-RE",
+          fairnessModel: "range-first-length-responsive-v49dx",
+          retainedEffectiveRERange: residualBalancePenalty.range,
+          retainedEffectiveRERangeLimit: residualBalancePenalty.rangeLimit,
+          retainedEffectiveRERangeExcess: residualBalancePenalty.rangeExcess,
+          fairnessMedianTurns: residualBalancePenalty.medianTurns,
           actionPruningActive: false,
-          dispersionPruningActive: true,
-        dispersionPruningPolicy:
-          "RE-native improvement only while retained starts exceed player floor",
+          dispersionPruningActive: false,
+          rangePruningActive: true,
+          dispersionPruningPolicy:
+            "SD/z diagnostic only; best-worst completed-RE range owns pruning",
           remainingBadStarts: remainingOutliers.map((item) => ({
             index: item.entry.index,
             score: item.score,
@@ -14986,9 +15245,7 @@ function adjustNormalStartsAfterFullTraffic(
     diagnostics: {
       normalBalancePruned: true,
       balanceDispersionPruned: Boolean(removed.balanceDispersionPruned),
-      stage: removed.balanceDispersionPruned
-        ? "iterative-full-traffic-dispersion"
-        : "iterative-full-traffic-outlier",
+      stage: "iterative-full-traffic-range-first",
       scoreZ: Number((removed.scoreZ ?? 0).toFixed(2)),
       actionZ: Number((removed.actionZ ?? 0).toFixed(2)),
       scoreDelta: Number((removed.scoreDelta ?? 0).toFixed(2)),
@@ -14996,7 +15253,12 @@ function adjustNormalStartsAfterFullTraffic(
       balanceStdDevBefore: Number((removed.balanceStdDevBefore ?? 0).toFixed(2)),
       balanceStdDevAfterEstimate: Number((removed.balanceStdDevAfterEstimate ?? 0).toFixed(2)),
       balanceStdDevLimit: Number((removed.balanceStdDevLimit ?? NORMAL_START_FAIRNESS_STDDEV_LIMIT).toFixed(2)),
-      removalReason: "removed after full-course traffic/rerouting, then recomputed occupancy before the next feedback pass",
+      rangeBefore: Number((removed.rangeBefore ?? 0).toFixed(2)),
+      rangeAfterEstimate: Number((removed.rangeAfterEstimate ?? 0).toFixed(2)),
+      rangeLimit: Number((removed.rangeLimit ?? 0).toFixed(2)),
+      rangeExcessBefore: Number((removed.rangeExcessBefore ?? 0).toFixed(2)),
+      rangeExcessAfterEstimate: Number((removed.rangeExcessAfterEstimate ?? 0).toFixed(2)),
+      removalReason: "removed to reduce the length-responsive best-worst completed-RE range, then recomputed traffic occupancy",
       totalCourseLength: Number((totalLength || 0).toFixed(2)),
       fullTrafficRemovalIndex: removalIndex
     }
@@ -15050,10 +15312,16 @@ function adjustNormalStartsAfterFullTraffic(
         residualSelectionPenaltyComponents: residualBalancePenalty,
         residualImbalanceFeedsCourseScorer: true,
         fairnessMetric: "full-course-effective-RE",
+        fairnessModel: "range-first-length-responsive-v49dx",
+        retainedEffectiveRERange: residualBalancePenalty.range,
+        retainedEffectiveRERangeLimit: residualBalancePenalty.rangeLimit,
+        retainedEffectiveRERangeExcess: residualBalancePenalty.rangeExcess,
+        fairnessMedianTurns: residualBalancePenalty.medianTurns,
         actionPruningActive: false,
-        dispersionPruningActive: true,
+        dispersionPruningActive: false,
+        rangePruningActive: true,
         dispersionPruningPolicy:
-          "RE-native improvement only while retained starts exceed player floor",
+          "SD/z diagnostic only; best-worst completed-RE range owns pruning",
         remainingBadStarts: remainingOutliers.map((item) => ({
           index: item.entry.index,
           effectiveRE: Number(item.score.toFixed(3)),
@@ -15626,9 +15894,7 @@ function adjustStartOutliersForCourseLength(firstLeg, totalLength, tileMap, play
         normalBalancePruned: true,
         balanceDispersionPruned: Boolean(removed.balanceDispersionPruned),
         finalTailCleanupPruned: Boolean(removed.finalTailCleanupPruned),
-        stage: removed.balanceDispersionPruned
-          ? "iterative-effective-re-balance-improvement"
-          : "iterative-effective-re-fairness-outlier",
+        stage: "iterative-effective-re-range-first",
         scoreZ: Number((removed.scoreZ ?? 0).toFixed(2)),
         ordinaryScoreZ: Number.isFinite(Number(removed.ordinaryScoreZ))
           ? Number(Number(removed.ordinaryScoreZ).toFixed(2))
@@ -15640,9 +15906,13 @@ function adjustStartOutliersForCourseLength(firstLeg, totalLength, tileMap, play
         balanceStdDevAfter: Number((actualStdDevAfter ?? 0).toFixed(2)),
         balanceStdDevAfterEstimate: Number((removed.balanceStdDevAfterEstimate ?? 0).toFixed(2)),
         balanceStdDevLimit: Number((removed.balanceStdDevLimit ?? NORMAL_START_FAIRNESS_STDDEV_LIMIT).toFixed(2)),
-        removalReason: removed.balanceDispersionPruned
-          ? "removed because this surplus start measurably improved full-course effective-RE balance; never prune below player count"
-          : "removed a genuine full-course effective-RE outlier, then recomputed traffic occupancy; never prune below player count",
+        rangeBefore: Number((removed.rangeBefore ?? 0).toFixed(2)),
+        rangeAfterEstimate: Number((removed.rangeAfterEstimate ?? 0).toFixed(2)),
+        rangeLimit: Number((removed.rangeLimit ?? 0).toFixed(2)),
+        rangeExcessBefore: Number((removed.rangeExcessBefore ?? 0).toFixed(2)),
+        rangeExcessAfterEstimate: Number((removed.rangeExcessAfterEstimate ?? 0).toFixed(2)),
+        medianTurns: Number((removed.medianTurns ?? 0).toFixed(2)),
+        removalReason: "removed to reduce the length-responsive best-worst completed-RE range; SD/z only chose direction/ties; never prune below player count",
         totalCourseLength: Number((totalLength || 0).toFixed(2)),
         totalCourseActions: Number(
           (options.totalActions || 0).toFixed(2)
@@ -15692,7 +15962,14 @@ function adjustStartOutliersForCourseLength(firstLeg, totalLength, tileMap, play
       // legacy score-space spread separately for audit; do not mix its units
       // into the pruning decision.
       scoreStdDev: Number(remainingStdDev.toFixed(3)),
-      fairnessScore: Number(Math.max(0, 100 - remainingStdDev * 8).toFixed(2)),
+      fairnessScore: Number(Math.max(
+        0,
+        100 - (
+          retainedBalance.rangeLimit > 1e-9
+            ? (retainedBalance.range / retainedBalance.rangeLimit) * 35
+            : 0
+        )
+      ).toFixed(2)),
       outliers: allOutliers,
       normalStartBalance: {
         active: true,
@@ -15732,6 +16009,10 @@ function adjustStartOutliersForCourseLength(firstLeg, totalLength, tileMap, play
         retainedEffectiveREMin: retainedBalance.min,
         retainedEffectiveREMax: retainedBalance.max,
         retainedEffectiveRERange: retainedBalance.range,
+        retainedEffectiveRERangeLimit: retainedBalance.rangeLimit,
+        retainedEffectiveRERangeExcess: retainedBalance.rangeExcess,
+        fairnessMedianRegisters: retainedBalance.medianRegisters,
+        fairnessMedianTurns: retainedBalance.medianTurns,
         worstRemainingScoreZ: retainedBalance.worstScoreZ,
         worstRemainingScoreIndex: retainedBalance.worstScoreIndex,
         worstRemainingActionZ: retainedBalance.worstActionZ,
@@ -15740,9 +16021,10 @@ function adjustStartOutliersForCourseLength(firstLeg, totalLength, tileMap, play
           ? Number(legacyAdjustedScoreStdDev.toFixed(2))
           : null,
         fairnessMetric: "full-course-effective-RE",
-        fairnessModel: "normal-full-course-effective-re-v49bp-player-floor",
+        fairnessModel: "range-first-length-responsive-v49dx",
         actionPruningActive: false,
         dispersionPruningActive: false,
+        rangePruningActive: true,
         durationGuardrail,
         playerFloor,
         floorReached,
@@ -15882,7 +16164,53 @@ function chooseNearBestCandidate(candidates = []) {
   };
 }
 
-function getCompetitiveBalanceProfile(entries = []) {
+function getCompetitiveEffectiveRERangeTarget(
+  entries = [],
+  calibration = getCompetitiveDifficultyCalibration()
+) {
+  const active = (entries || []).filter((entry) => (
+    Number.isFinite(entry?.normalFairnessEffectiveRE)
+  ));
+  const registerCounts = active
+    .map((entry) => Number(
+      entry?.normalFairnessRegisterCount ?? entry?.bestActions
+    ))
+    .filter(Number.isFinite)
+    .sort((left, right) => left - right);
+  const medianRegisters = registerCounts.length ? medianValue(registerCounts) : 0;
+  const medianTurns = Math.max(1, medianRegisters / 5);
+  const baseRangeLimit = Math.max(
+    COMPETITIVE_EFFECTIVE_RE_RANGE_MIN,
+    medianTurns * COMPETITIVE_EFFECTIVE_RE_RANGE_PER_TURN
+  );
+  const softRangeLimit = baseRangeLimit * Number(calibration.softRangeMultiplier ?? 1);
+  const hardRangeLimit =
+    baseRangeLimit * COMPETITIVE_EFFECTIVE_RE_HARD_RANGE_MULTIPLIER *
+    Number(calibration.hardRangeMultiplier ?? 1);
+  const values = active.map((entry) => Number(entry.normalFairnessEffectiveRE));
+  const min = values.length ? Math.min(...values) : null;
+  const max = values.length ? Math.max(...values) : null;
+  const range = Number.isFinite(min) && Number.isFinite(max) ? max - min : 0;
+  return {
+    medianRegisters: Number(medianRegisters.toFixed(2)),
+    medianTurns: Number(medianTurns.toFixed(2)),
+    baseRangeLimit: Number(baseRangeLimit.toFixed(3)),
+    softRangeLimit: Number(softRangeLimit.toFixed(3)),
+    hardRangeLimit: Number(hardRangeLimit.toFixed(3)),
+    range: Number(range.toFixed(3)),
+    rangeExcess: Number(Math.max(0, range - softRangeLimit).toFixed(3)),
+    hardRangeExcess: Number(Math.max(0, range - hardRangeLimit).toFixed(3)),
+    minRE: Number.isFinite(min) ? Number(min.toFixed(3)) : null,
+    maxRE: Number.isFinite(max) ? Number(max.toFixed(3)) : null,
+    requestedDifficulty: calibration.requestedDifficulty,
+    policy: "competitive-best-p-range-max3-or-0.6-per-median-turn-v49ec"
+  };
+}
+
+function getCompetitiveBalanceProfile(
+  entries = [],
+  calibration = getCompetitiveDifficultyCalibration()
+) {
   const active = (entries || []).filter((entry) => (
     Number.isFinite(entry?.normalFairnessEffectiveRE)
   ));
@@ -15891,24 +16219,29 @@ function getCompetitiveBalanceProfile(entries = []) {
     active,
     FULL_START_OUTLIER_Z
   );
-  const hardOutliers = rankNormalEffectiveREOutliers(
-    active,
-    COMPETITIVE_START_HARD_OUTLIER_Z
-  );
+  const rangePolicy = getCompetitiveEffectiveRERangeTarget(active, calibration);
   return {
     outliers: softOutliers,
     softOutliers,
-    hardOutliers,
     stdDev: retained.stdDev,
     scoreRange: retained.range,
+    selectedRangeRE: rangePolicy.range,
+    softRangeLimit: rangePolicy.softRangeLimit,
+    hardRangeLimit: rangePolicy.hardRangeLimit,
+    rangeExcess: rangePolicy.rangeExcess,
+    hardRangeExcess: rangePolicy.hardRangeExcess,
+    medianRegisters: rangePolicy.medianRegisters,
+    medianTurns: rangePolicy.medianTurns,
+    minRE: rangePolicy.minRE,
+    maxRE: rangePolicy.maxRE,
     worstScoreZ: retained.worstScoreZ,
     worstScoreIndex: retained.worstScoreIndex,
-    // Register spread remains diagnostic only in v49cq. Competitive production
-    // balance ownership is completed effective RE; readability/difficulty
-    // calibration can decide later how much literal duration should matter.
+    // SD/z/register spread remain diagnostic only. Competitive production
+    // acceptance is the best↔worst completed-RE range of the post-block best-P set.
     worstActionZ: retained.worstActionZ,
     worstActionIndex: retained.worstActionIndex,
-    metric: "full-course-effective-RE"
+    metric: "full-course-effective-RE-range",
+    rangePolicy
   };
 }
 
@@ -15923,57 +16256,11 @@ function getCombinationCount(n, k, cap = 50001) {
   return Math.round(value);
 }
 
-function chooseCompetitiveLegacyStrategicBlock(entries = []) {
-  const active = (entries || []).filter((entry) => Number.isFinite(entry?.balanceScore));
-  if (!active.length) return null;
-
-  // Competitive blocks are player decisions, not generator fairness repairs.
-  // A rational blocker removes the strongest currently available start: lower
-  // full-course balanceScore means a faster/easier start after current traffic.
-  // Recompute the field after every single block before choosing the next one.
-  const ordered = [...active].sort((left, right) => (
-    left.balanceScore - right.balanceScore ||
-    (left.bestActions ?? Infinity) - (right.bestActions ?? Infinity) ||
-    left.index - right.index
-  ));
-  const chosen = ordered[0];
-  const runnerUp = ordered[1] ?? null;
-  const scoreStats = getRobustOutlierStats(active, "balanceScore");
-  const robustScale = Math.max(0.01, Number(scoreStats.robustScale) || 0.01);
-  const advantageVsMedian = Math.max(0, scoreStats.center - chosen.balanceScore);
-  const decisionMargin = runnerUp
-    ? Math.max(0, runnerUp.balanceScore - chosen.balanceScore)
-    : 0;
-  const advantageZ = advantageVsMedian / robustScale;
-  const decisionMarginZ = decisionMargin / robustScale;
-  const ambiguity = 1 - Math.min(1, decisionMarginZ / 1.25);
-  const consequence = Math.min(1, advantageZ / 1.5);
-  // Ambiguity itself is a Competitive skill burden even when a wrong block is
-  // cheap; meaningful consequences amplify it. This feeds only the provisional
-  // Competitive difficulty modifier, not the blocking choice or fairness gate.
-  const strategicChallenge = ambiguity * (0.55 + 0.45 * consequence);
-  return {
-    index: chosen.index,
-    score: chosen.balanceScore,
-    actions: chosen.bestActions,
-    intrinsic: Number(chosen.fullCourseRoute?.score),
-    traffic: Number(chosen.fullCourseTrafficPenalty ?? 0),
-    runnerUpIndex: runnerUp?.index ?? null,
-    runnerUpScore: Number.isFinite(runnerUp?.balanceScore) ? runnerUp.balanceScore : null,
-    advantageVsMedian: Number(advantageVsMedian.toFixed(2)),
-    advantageZ: Number(advantageZ.toFixed(3)),
-    decisionMargin: Number(decisionMargin.toFixed(2)),
-    decisionMarginZ: Number(decisionMarginZ.toFixed(3)),
-    ambiguity: Number(ambiguity.toFixed(3)),
-    consequence: Number(consequence.toFixed(3)),
-    strategicChallenge: Number(strategicChallenge.toFixed(3))
-  };
-}
 
 function getCompetitiveStrategicDifficulty(
   blockSequence = [],
-  selectedStdDev = 0,
-  balanceStdDevLimit = COMPETITIVE_EFFECTIVE_RE_SOFT_STDDEV_LIMIT
+  selectedRangeRE = 0,
+  balanceRangeLimit = COMPETITIVE_EFFECTIVE_RE_RANGE_MIN
 ) {
   const challenges = (blockSequence || [])
     .map((entry) => Number(entry?.strategicChallenge))
@@ -15983,15 +16270,16 @@ function getCompetitiveStrategicDifficulty(
     : 0.5;
   const selectionAmbiguity = Math.max(
     0,
-    Math.min(1, 1 - (Number(selectedStdDev) || 0) / Math.max(0.001, Number(balanceStdDevLimit) || COMPETITIVE_EFFECTIVE_RE_SOFT_STDDEV_LIMIT))
+    Math.min(
+      1,
+      1 - (Number(selectedRangeRE) || 0) /
+        Math.max(0.001, Number(balanceRangeLimit) || COMPETITIVE_EFFECTIVE_RE_RANGE_MIN)
+    )
   );
 
-  // Provisional v36c scale. Competitive previously carried a hand-tuned +1.8
-  // difficulty adjustment. Preserve that approximate magnitude while letting the
-  // actual strategic reading burden move it modestly: subtle block choices and a
-  // close remaining field are harder to read; obvious choices are easier. Keep
-  // this bounded until the later special-rules/calibration review can fit it from
-  // generated-course evidence instead of hand tuning.
+  // Keep the existing bounded Competitive strategic/setup burden, but derive it
+  // entirely from completed-RE block ambiguity and the closeness of the final
+  // best-P field. Legacy score-space readability is no longer consulted.
   const difficulty = Math.max(
     1.2,
     Math.min(
@@ -16005,21 +16293,11 @@ function getCompetitiveStrategicDifficulty(
     selectionAmbiguity: Number(selectionAmbiguity.toFixed(3)),
     calibrationCenter: 1.8,
     calibrationRange: [1.2, 2.4],
+    evidenceOwner: "completed-effective-re-only",
     provisional: true
   };
 }
 
-function selectCompetitiveBestStarts(entries = [], playerCount = 4) {
-  const count = Math.max(1, Math.floor(Number(playerCount) || 1));
-  return [...(entries || [])]
-    .filter((entry) => Number.isFinite(entry?.balanceScore))
-    .sort((left, right) => (
-      left.balanceScore - right.balanceScore ||
-      (left.bestActions ?? Infinity) - (right.bestActions ?? Infinity) ||
-      left.index - right.index
-    ))
-    .slice(0, count);
-}
 
 function getCompetitiveIntendedChoiceSetCount(playerCount = 4) {
   // v49cp corrected observational ownership target: after n_players strategic
@@ -16154,8 +16432,6 @@ function applyCompetitiveStrategicBlocking(
 ) {
   const count = Math.max(1, Math.floor(Number(playerCount) || 1));
   const competitiveCalibration = getCompetitiveDifficultyCalibration(options);
-  const competitiveSoftStdDevLimit = competitiveCalibration.softStdDevLimit;
-  const competitiveHardStdDevLimit = competitiveCalibration.hardStdDevLimit;
   const requiredOfferedStarts = count * 2;
   const sourceStartCount = firstLeg?.starts?.length ?? 0;
   const routedStarts = computeCourseReachableStarts(firstLeg);
@@ -16175,7 +16451,6 @@ function applyCompetitiveStrategicBlocking(
   };
   const excludedIndices = new Set();
   const blockSequence = [];
-  const completedREBlockComparisons = [];
   const desiredBlockCount = Math.min(
     count,
     Math.max(0, routedStarts.length - count)
@@ -16185,9 +16460,6 @@ function applyCompetitiveStrategicBlocking(
   const sharedPressureOptions = {
     ...getRouteAnalysisVariantOptions(options),
     playerCount: count,
-    // v49cq: occupancy attractiveness follows completed effective RE. A per-field
-    // override below supplies the current RE ordering while preserving the
-    // historical traffic-temperature scale through the 6.4 bridge.
     trafficOccupancyUseBalanceScore: false,
     carryOccupancyScores: true,
     fullCourseTrafficPasses:
@@ -16197,7 +16469,6 @@ function applyCompetitiveStrategicBlocking(
   };
   const blockPressureOptions = {
     ...sharedPressureOptions,
-    // Competitive strategic evaluation is always full-course in v49cq.
     openingTrafficOnly: false,
     balanceTrafficScope: "full"
   };
@@ -16210,10 +16481,7 @@ function applyCompetitiveStrategicBlocking(
 
   let trafficRecomputations = 0;
   if (recomputeTraffic) {
-    // COMPETITIVE_TRAFFIC_FIELD: establish the real traffic-aware ranking before
-    // the first strategic block. This uses the same common quality-weighted
-    // surplus-start dilution as Normal; no provisional best-P field is promoted
-    // to certain occupancy.
+    // Establish the full traffic-aware field before the first player block.
     currentFirstLeg = recomputeFirstLegPressure(
       tileMap,
       currentFirstLeg,
@@ -16222,32 +16490,14 @@ function applyCompetitiveStrategicBlocking(
     trafficRecomputations += 1;
   }
 
+  // Authoritative Competitive simulation: players block the currently best
+  // completed-RE start ONE AT A TIME. After each block, traffic/occupancy is
+  // recomputed before the next player decides which start is now best.
   for (let blockIndex = 0; blockIndex < desiredBlockCount; blockIndex += 1) {
     const activeStarts = getActivePruningStarts(currentFirstLeg, excludedIndices);
     if (activeStarts.length <= count) break;
     const block = chooseCompetitiveCompletedREBlock(activeStarts);
-    const legacyShadowBlock = chooseCompetitiveLegacyStrategicBlock(activeStarts);
     if (!block || excludedIndices.has(block.index)) break;
-
-    completedREBlockComparisons.push({
-      order: blockIndex + 1,
-      fieldSizeBefore: activeStarts.length,
-      productionIndex: block.index,
-      completedREIndex: block.index,
-      completedREEffectiveRE: block.effectiveRE ?? null,
-      completedRERunnerUpIndex: block.runnerUpIndex ?? null,
-      completedRERunnerUpEffectiveRE: block.runnerUpEffectiveRE ?? null,
-      completedREAdvantageVsMedianRE: block.advantageVsMedianRE ?? null,
-      completedREAdvantageZ: block.advantageZ ?? null,
-      completedREDecisionMarginRE: block.decisionMarginRE ?? null,
-      completedREDecisionMarginZ: block.decisionMarginZ ?? null,
-      legacyShadowIndex: legacyShadowBlock?.index ?? null,
-      legacyIndex: legacyShadowBlock?.index ?? null,
-      legacyScore: Number.isFinite(legacyShadowBlock?.score)
-        ? Number(legacyShadowBlock.score.toFixed(2))
-        : null,
-      agrees: legacyShadowBlock?.index === block.index
-    });
 
     excludedIndices.add(block.index);
     blockSequence.push({
@@ -16256,8 +16506,6 @@ function applyCompetitiveStrategicBlocking(
       fieldSizeBefore: activeStarts.length
     });
 
-    // Each block removes a real starting choice, so the player-count mass is
-    // redistributed over the smaller field before the next block decision.
     if (recomputeTraffic) {
       currentFirstLeg = recomputeFirstLegPressure(
         tileMap,
@@ -16268,12 +16516,10 @@ function applyCompetitiveStrategicBlocking(
     }
   }
 
-  // The final block recomputation (or the initial one when no block was possible)
-  // is also the traffic field used to judge the remaining starts. Do NOT collapse
-  // traffic to the provisional best P starts: all unblocked choices still exist,
-  // and their quality-weighted occupancy materially changes congestion. Rational
-  // players are modeled by selecting the best P *after* this remaining-field
-  // traffic evaluation.
+  // After all P sequential blocks, judge the best P choices left under the
+  // final recomputed traffic field. If more than P starts remain physically
+  // available, this is the next-best P set; there is no simultaneous pre-block
+  // best-P shortcut anywhere in the blocking sequence.
   const remainingStarts = getActivePruningStarts(currentFirstLeg, excludedIndices);
   const selectedAfterRemainingTraffic = selectCompetitiveBestStartsByEffectiveRE(
     remainingStarts,
@@ -16295,10 +16541,6 @@ function applyCompetitiveStrategicBlocking(
     Number.isFinite(entry.normalFairnessEffectiveRE)
   ));
   const intendedChoiceSetCount = getCompetitiveIntendedChoiceSetCount(count);
-  const legacyChoiceSetEntries = selectCompetitiveBestStarts(
-    remainingStarts,
-    intendedChoiceSetCount
-  );
   const completedREChoiceSetEntries = selectedAfterRemainingTraffic.slice(
     0,
     intendedChoiceSetCount
@@ -16306,18 +16548,19 @@ function applyCompetitiveStrategicBlocking(
   const completedREChoiceProfile = summarizeCompetitiveCompletedREChoiceSet(
     completedREChoiceSetEntries
   );
-  const legacyChoiceSetIndices = legacyChoiceSetEntries.map((entry) => entry.index);
   const completedREChoiceSetIndices = completedREChoiceSetEntries.map((entry) => entry.index);
-  const completedREChoiceSetIndexSet = new Set(completedREChoiceSetIndices);
-  const choiceSetOverlap = legacyChoiceSetIndices.filter((index) => (
-    completedREChoiceSetIndexSet.has(index)
-  )).length;
-  const profile = getCompetitiveBalanceProfile(selectedEntries);
+  const profile = getCompetitiveBalanceProfile(
+    selectedEntries,
+    competitiveCalibration
+  );
   const selectedStdDev = profile.stdDev;
+  const selectedRangeRE = Number(profile.selectedRangeRE) || 0;
+  const competitiveSoftRangeLimit = Number(profile.softRangeLimit) || 0;
+  const competitiveHardRangeLimit = Number(profile.hardRangeLimit) || 0;
   const strategicDifficulty = getCompetitiveStrategicDifficulty(
     blockSequence,
-    selectedStdDev,
-    competitiveSoftStdDevLimit
+    selectedRangeRE,
+    competitiveSoftRangeLimit
   );
   const sufficientPhysicalField = (
     sourceStartCount >= requiredOfferedStarts &&
@@ -16328,19 +16571,16 @@ function applyCompetitiveStrategicBlocking(
     sufficientPhysicalField &&
     blockSequence.length === count &&
     selectedEntries.length === count &&
-    profile.softOutliers.length === 0 &&
-    selectedStdDev <= competitiveSoftStdDevLimit
+    selectedRangeRE <= competitiveSoftRangeLimit + 1e-9
   );
   const hardAcceptable = (
     sufficientPhysicalField &&
     blockSequence.length === count &&
     selectedEntries.length === count &&
-    profile.hardOutliers.length === 0 &&
-    selectedStdDev <= competitiveHardStdDevLimit
+    selectedRangeRE <= competitiveHardRangeLimit + 1e-9
   );
   const blockReadability = summarizeCompetitiveBlockReadability(
     blockSequence,
-    completedREBlockComparisons,
     competitiveCalibration
   );
   const remainingIndices = remainingStarts
@@ -16362,19 +16602,27 @@ function applyCompetitiveStrategicBlocking(
     selectedStartCount: selectedEntries.length,
     selectedIndices,
     unselectedRemainingIndices,
+    selectedRangeRE: Number(selectedRangeRE.toFixed(3)),
+    balanceRangeLimit: Number(competitiveSoftRangeLimit.toFixed(3)),
+    hardBalanceRangeLimit: Number(competitiveHardRangeLimit.toFixed(3)),
+    balanceRangeExcess: Number(Math.max(0, selectedRangeRE - competitiveSoftRangeLimit).toFixed(3)),
+    hardBalanceRangeExcess: Number(Math.max(0, selectedRangeRE - competitiveHardRangeLimit).toFixed(3)),
+    selectedMinRE: profile.minRE,
+    selectedMaxRE: profile.maxRE,
+    selectedMedianTurns: profile.medianTurns,
+    // Kept for Dev diagnostics only; neither SD nor outlier z participates in
+    // Competitive acceptance or final candidate fit in v49ec.
     selectedStdDev: Number(selectedStdDev.toFixed(3)),
-    balanceStdDevLimit: Number(competitiveSoftStdDevLimit.toFixed(3)),
-    hardBalanceStdDevLimit: Number(competitiveHardStdDevLimit.toFixed(3)),
     difficultyCalibration: {
       requestedDifficulty: competitiveCalibration.requestedDifficulty,
-      baseSoftStdDevLimit: Number(COMPETITIVE_EFFECTIVE_RE_SOFT_STDDEV_LIMIT.toFixed(3)),
-      baseHardStdDevLimit: Number(COMPETITIVE_EFFECTIVE_RE_HARD_STDDEV_LIMIT.toFixed(3)),
-      softStdDevMultiplier: competitiveCalibration.softStdDevMultiplier,
-      hardStdDevMultiplier: competitiveCalibration.hardStdDevMultiplier
+      baseRangePolicy: `max(${COMPETITIVE_EFFECTIVE_RE_RANGE_MIN}RE, ${COMPETITIVE_EFFECTIVE_RE_RANGE_PER_TURN}RE × median programming turns)`,
+      hardRangeMultiplier: COMPETITIVE_EFFECTIVE_RE_HARD_RANGE_MULTIPLIER,
+      softRangeMultiplier: competitiveCalibration.softRangeMultiplier,
+      difficultyHardRangeMultiplier: competitiveCalibration.hardRangeMultiplier
     },
     blockReadability,
     selectedOutlierCount: profile.softOutliers.length,
-    selectedHardOutlierCount: profile.hardOutliers.length,
+    selectedHardOutlierCount: 0,
     remainingOutlierCount: profile.softOutliers.length,
     scoreRange: profile.scoreRange,
     worstScoreZ: profile.worstScoreZ,
@@ -16387,7 +16635,7 @@ function applyCompetitiveStrategicBlocking(
     strategicDifficulty: strategicDifficulty.difficulty,
     strategicDifficultyEvidence: strategicDifficulty,
     completedREOwnershipAudit: {
-      model: "competitive-completed-re-production-v49cq",
+      model: "competitive-sequential-re-range-production-v49ec",
       observationalOnly: false,
       productionRankingOwner: "completed-effective-re",
       intendedRankingOwner: "completed-effective-re",
@@ -16396,21 +16644,31 @@ function applyCompetitiveStrategicBlocking(
       productionTrafficScope: "full",
       intendedTrafficScope: "full",
       trafficScopeMatchesIntent: true,
-      blockComparisons: completedREBlockComparisons,
-      blockDisagreementCount: completedREBlockComparisons.filter((entry) => !entry.agrees).length,
-      legacyShadowOwner: "legacy-balance-score-same-production-field",
+      blockSequence: blockSequence.map((entry) => ({
+        order: entry.order,
+        fieldSizeBefore: entry.fieldSizeBefore,
+        index: entry.index,
+        effectiveRE: entry.effectiveRE,
+        runnerUpIndex: entry.runnerUpIndex,
+        runnerUpEffectiveRE: entry.runnerUpEffectiveRE,
+        decisionMarginRE: entry.decisionMarginRE,
+        advantageVsMedianRE: entry.advantageVsMedianRE
+      })),
+      legacyShadowOwner: null,
+      legacyComparatorRemoved: true,
       occupancyOwner: "completed-effective-re",
       occupancyQualityScale: "effective-RE×6.4-score-temperature-bridge",
-      legacyChoiceSetIndices,
       completedREChoiceSetIndices,
-      choiceSetOverlap,
       completedREChoiceProfile,
+      finalFairnessOwner: "best-worst-completed-effective-re-range",
+      finalRangePolicy: profile.rangePolicy,
       difficultyCalibration: {
         blockReadabilityAffectsFit: true,
-        tighterEasyChoiceBalance: true,
+        blockReadabilityOwner: "completed-effective-re-only",
+        legacyShadowReadabilityRemoved: true,
         requestedDifficulty: competitiveCalibration.requestedDifficulty,
-        softStdDevLimit: Number(competitiveSoftStdDevLimit.toFixed(3)),
-        hardStdDevLimit: Number(competitiveHardStdDevLimit.toFixed(3)),
+        softRangeLimit: Number(competitiveSoftRangeLimit.toFixed(3)),
+        hardRangeLimit: Number(competitiveHardRangeLimit.toFixed(3)),
         blockReadability
       },
       futureStartBalanceCalibration: {
@@ -16423,9 +16681,9 @@ function applyCompetitiveStrategicBlocking(
     softMismatch: hardAcceptable && !softBalanced,
     hardAcceptable,
     acceptable: hardAcceptable,
-    method: "full-course-re-native-common-field+sequential-re-blocks+remaining-field-best-p+difficulty-calibration-v49cr",
-    ownershipAuditModel: "competitive-completed-re-production-v49cq",
-    calibrationModel: "competitive-difficulty-calibration-v49cr"
+    method: "full-course-re-native+P-sequential-best-blocks+recompute-each-block+post-block-best-P-range-v49ec",
+    ownershipAuditModel: "competitive-sequential-re-range-production-v49ec",
+    calibrationModel: "competitive-re-native-legibility+range-v49ec"
   };
 
   return {
@@ -16435,7 +16693,8 @@ function applyCompetitiveStrategicBlocking(
       scoreStdDev: Number(selectedStdDev.toFixed(3)),
       fairnessScore: Number(Math.max(
         0,
-        100 - selectedStdDev * NORMAL_EFFECTIVE_RE_SCORE_PER_RE * 4
+        100 - Math.max(0, selectedRangeRE - competitiveSoftRangeLimit) *
+          NORMAL_EFFECTIVE_RE_SCORE_PER_RE * 4
       ).toFixed(2)),
       outliers: [],
       competitiveStartBalance,
@@ -16452,7 +16711,7 @@ function applyCompetitiveStrategicBlocking(
         selectedIndices,
         preliminaryScoreStdDev: Number(firstLeg.summary?.scoreStdDev ?? 0),
         trafficFieldMethod: "completed-re-quality-weighted-remaining-field",
-        method: "normal-route-foundation+full-traffic-before-blocking+sequential-completed-re-blocks"
+        method: "normal-route-foundation+full-traffic-before-blocking+P-sequential-completed-re-blocks"
       }
     }
   };
@@ -17315,7 +17574,7 @@ function getProductionRETurnDifficulty(sequence, preferences = {}, context = {},
 
 
 const LENGTH_OWNER_OBSERVATION_MODEL_ID =
-  "re-native-routing-horizon-plus-calibrated-play-time-v49dl";
+  "re-native-wall-clock-length-bands-v49dv";
 
 // v49dl provisional elapsed-play calibration. These coefficients are explicit
 // empirical anchors, not hidden semantic weights. They were chosen against the
@@ -17334,6 +17593,70 @@ const PLAY_TIME_HORIZON_SLOPE_TURNS = 1.5;
 // conversion, not an additional semantic owner; final wall-clock bands will
 // replace it later.
 const LENGTH_EXPECTED_PLAY_RAW_POINTS_PER_REGISTER = 4.0;
+// v49dt provisional wall-clock calibration. Four players remain the 1.0
+// reference. Each additional/removed player changes the per-turn table-time
+// multiplicatively rather than through a fixed additive length tax. The
+// logarithmic slope gives a smooth ~10% step per player and makes an 8-player
+// table materially slower without tripling the estimate.
+const WALL_CLOCK_PLAYER_LOG_SLOPE = 0.11;
+const WALL_CLOCK_PLAYER_MULTIPLIER_MIN = 0.65;
+const WALL_CLOCK_PLAYER_MULTIPLIER_MAX = 1.65;
+// v49du provisional non-register economy-time calibration. These are relative
+// wall-clock register-index units, not literal programmed registers or minutes.
+// A paid upgrade-card draw and an upgrade install/play are the only transaction
+// primitives promoted into time. Energy gains and abstract install-investment
+// units affect whether those transactions are useful, but do not get separate
+// time taxes.
+const ENERGY_ECONOMY_DRAW_EVENT_WALL_CLOCK_REGISTERS = 0.35;
+const ENERGY_ECONOMY_INSTALL_EVENT_WALL_CLOCK_REGISTERS = 0.50;
+
+// Act Fast has two deliberately separate mechanisms in v49dt:
+// 1) time pressure amplifies non-tempo RE burden, which can indirectly extend
+//    expected play through mistakes/recovery; and
+// 2) the explicit timer can directly shorten the programming phase.
+// Even the 3m/2m modes carry some pressure. Their direct clock saving is near
+// zero at small tables and grows with player count, while 1m/30s retain a
+// meaningful direct effect even with few players.
+const ACT_FAST_RE_PRESSURE_MAX_UPLIFT = 0.18;
+const ACT_FAST_WALL_CLOCK_PLAYER_EXPOSURE_EXPONENT = 1.5;
+const ACT_FAST_DIRECT_TIMER_REDUCTION = Object.freeze({
+  countdown_3m: { low: 0.00, high: 0.04 },
+  countdown_2m: { low: 0.005, high: 0.09 },
+  last_player_30s: { low: 0.01, high: 0.13 },
+  countdown_1m: { low: 0.05, high: 0.24 },
+  countdown_30s: { low: 0.14, high: 0.38 }
+});
+
+function getPlayerWallClockMultiplier(playerCount = 4) {
+  const players = Math.max(1, Number(playerCount) || 4);
+  return clamp(
+    Math.exp(WALL_CLOCK_PLAYER_LOG_SLOPE * (players - 4)),
+    WALL_CLOCK_PLAYER_MULTIPLIER_MIN,
+    WALL_CLOCK_PLAYER_MULTIPLIER_MAX
+  );
+}
+
+function getActFastREPressureMultiplier(mode) {
+  const weight = getActFastPressureWeight(mode);
+  return 1 + ACT_FAST_RE_PRESSURE_MAX_UPLIFT * weight;
+}
+
+function getActFastDirectTimerReduction(mode, playerCount = 4) {
+  const config = ACT_FAST_DIRECT_TIMER_REDUCTION[mode];
+  if (!config) return 0;
+  const players = Math.max(1, Number(playerCount) || 4);
+  const normalizedExposure = clamp((players - 2) / 6, 0, 1);
+  const exposure = normalizedExposure ** ACT_FAST_WALL_CLOCK_PLAYER_EXPOSURE_EXPONENT;
+  return clamp(
+    config.low + (config.high - config.low) * exposure,
+    0,
+    0.6
+  );
+}
+
+function getActFastDirectTimingMultiplier(mode, playerCount = 4) {
+  return 1 - getActFastDirectTimerReduction(mode, playerCount);
+}
 const PLAY_TIME_REFERENCE_TURN_BANDS = Object.freeze({
   short: [0, 6.25],
   moderate: [6.25, 9.5],
@@ -17357,11 +17680,214 @@ function classifyReferencePlayTimeTurns(programmingTurns = 0) {
   return "epic";
 }
 
+function getLengthEconomyActivityOptions(sequence, preferences = {}) {
+  const production = sequence?.firstLeg?.summary?.coursePreflight?.routeAwareBatteryScoring ?? null;
+  const config = getRouteEnergyEconomyConfig(preferences);
+  const fallbackHorizonTurns = Math.max(
+    0,
+    (Number(sequence?.summary?.totalActions) || 0) / config.registersPerTurn
+  );
+  const horizonTurns = Number(production?.horizonTurns) > 0
+    ? Number(production.horizonTurns)
+    : fallbackHorizonTurns;
+  const registerScore = Number(production?.registerScore) > 0
+    ? Number(production.registerScore)
+    : 6.4;
+  return {
+    ...preferences,
+    routeAwareBatteryScoring: Boolean(
+      !preferences.lighterGame && horizonTurns > 0 && registerScore > 0
+    ),
+    routeEnergyHorizonTurns: horizonTurns,
+    routeEnergyRegisterScore: registerScore,
+    startingEnergy: Number.isFinite(Number(production?.startingReserve))
+      ? Number(production.startingReserve)
+      : config.startingEnergy,
+    startingUpgradeCards: config.startingUpgradeCards,
+    maxEnergy: config.maxEnergy,
+    upgradeDrawsPerTurn: config.drawsPerTurn,
+    upgradeInstallsPerTurn: config.installsPerTurn,
+    upgradeDrawEnergyCost: Number.isFinite(Number(production?.drawEnergyCost))
+      ? Number(production.drawEnergyCost)
+      : config.drawEnergyCost,
+    upgradeUsefulCardRate: Number.isFinite(Number(production?.usefulUpgradeCardRate))
+      ? Number(production.usefulUpgradeCardRate)
+      : config.usefulUpgradeCardRate,
+    upgradeUsefulEnergyPerInstall: Number.isFinite(Number(production?.usefulEnergyPerInstall))
+      ? Number(production.usefulEnergyPerInstall)
+      : config.usefulEnergyPerInstall,
+    upgradePowerRegistersPerEnergy: config.powerRegistersPerEnergy,
+    routeRegistersPerTurn: config.registersPerTurn
+  };
+}
+
+function getLengthEconomyStartingEnergyOptions(baseOptions, startAnalysis, preferences = {}) {
+  if (!baseOptions || (!preferences.payToWin && !preferences.subsidizedStarts)) {
+    return baseOptions;
+  }
+  const adjustments = [
+    Number(startAnalysis?.energyCost),
+    Number(startAnalysis?.lateEnergyCost)
+  ].filter((value) => Number.isFinite(value) && value >= 0);
+  if (!adjustments.length) return baseOptions;
+  const adjustment = meanFinite(adjustments);
+  const baseEnergy = getCourseStartingEnergy(baseOptions);
+  const maxEnergy = getCourseMaxEnergy(baseOptions);
+  const signed = preferences.subsidizedStarts ? adjustment : -adjustment;
+  return {
+    ...baseOptions,
+    startingEnergy: clamp(Math.round(baseEnergy + signed), 0, maxEnergy)
+  };
+}
+
+function summarizeLengthEconomyWallClockActivity(
+  sequence,
+  preferences = {},
+  context = {},
+  reTurnDifficulty = null,
+  playTimeMultiplier = 1
+) {
+  if (preferences.lighterGame) {
+    return {
+      active: true,
+      removedByEnergyCrisis: true,
+      method: "card-aware-fixed-route-upgrade-activity-v49du",
+      drawEventsPerPlayer: 0,
+      installEventsPerPlayer: 0,
+      transactionEventsPerPlayer: 0,
+      nominalActivityRegisterEquivalents: 0,
+      expectedActivityRegisterEquivalents: 0,
+      note: "Energy Crisis removes the Energy/upgrade economy; no blanket wall-clock multiplier is applied."
+    };
+  }
+  const tileMap = context?.goalTileMap ?? context?.tileMap ?? null;
+  const reStarts = Array.isArray(reTurnDifficulty?.perStart)
+    ? reTurnDifficulty.perStart
+    : [];
+  if (!tileMap || !reStarts.length || typeof summarizeFixedRouteUpgradeEconomyActivity !== "function") {
+    return { active: false, reason: "economy-activity-inputs-unavailable" };
+  }
+
+  const startByIndex = new Map(
+    (sequence?.firstLeg?.starts ?? []).map((entry) => [entry.index, entry])
+  );
+  const occupancyMass = reStarts.reduce(
+    (sum, entry) => sum + Math.max(0, Number(entry?.occupancy) || 0),
+    0
+  );
+  const fallbackStartWeight = reStarts.length ? 1 / reStarts.length : 0;
+  const baseOptions = getLengthEconomyActivityOptions(sequence, preferences);
+  let drawEventsPerPlayer = 0;
+  let installEventsPerPlayer = 0;
+  let openingInstallEventsPerPlayer = 0;
+  let laterInstallEventsPerPlayer = 0;
+  let drawEnergySpentPerPlayer = 0;
+  let abstractInstallInvestmentPerPlayer = 0;
+  let summarizedStartWeight = 0;
+
+  for (const reStart of reStarts) {
+    const startAnalysis = startByIndex.get(reStart.index);
+    if (!startAnalysis) continue;
+    const startWeight = occupancyMass > 0
+      ? Math.max(0, Number(reStart.occupancy) || 0) / occupancyMass
+      : fallbackStartWeight;
+    if (!(startWeight > 0)) continue;
+    const routeEntries = getREDifficultyRouteMixtureEntries(
+      { sequence },
+      startAnalysis
+    );
+    if (!routeEntries.length) continue;
+    const routeWeightTotal = routeEntries.reduce(
+      (sum, entry) => sum + Math.max(0, Number(entry?.weight) || 0),
+      0
+    ) || routeEntries.length;
+    const startOptions = getLengthEconomyStartingEnergyOptions(
+      baseOptions,
+      startAnalysis,
+      preferences
+    );
+    let startDraws = 0;
+    let startInstalls = 0;
+    let startOpeningInstalls = 0;
+    let startLaterInstalls = 0;
+    let startDrawEnergy = 0;
+    let startAbstractInvestment = 0;
+    let usableRouteWeight = 0;
+
+    for (const routeEntry of routeEntries) {
+      const routeWeight = routeWeightTotal > 0
+        ? Math.max(0, Number(routeEntry?.weight) || 0) / routeWeightTotal
+        : 1 / routeEntries.length;
+      if (!(routeWeight > 0) || !routeEntry?.route) continue;
+      const activity = summarizeFixedRouteUpgradeEconomyActivity(
+        tileMap,
+        routeEntry.route,
+        startOptions
+      );
+      if (!activity?.active) continue;
+      usableRouteWeight += routeWeight;
+      startDraws += Math.max(0, Number(activity.drawEvents) || 0) * routeWeight;
+      startInstalls += Math.max(0, Number(activity.installEvents) || 0) * routeWeight;
+      startOpeningInstalls += Math.max(0, Number(activity.openingInstallEvents) || 0) * routeWeight;
+      startLaterInstalls += Math.max(0, Number(activity.laterInstallEvents) || 0) * routeWeight;
+      startDrawEnergy += Math.max(0, Number(activity.drawEnergySpent) || 0) * routeWeight;
+      startAbstractInvestment += Math.max(0, Number(activity.abstractInstallInvestment) || 0) * routeWeight;
+    }
+    if (!(usableRouteWeight > 0)) continue;
+    const normalization = 1 / usableRouteWeight;
+    drawEventsPerPlayer += startDraws * normalization * startWeight;
+    installEventsPerPlayer += startInstalls * normalization * startWeight;
+    openingInstallEventsPerPlayer += startOpeningInstalls * normalization * startWeight;
+    laterInstallEventsPerPlayer += startLaterInstalls * normalization * startWeight;
+    drawEnergySpentPerPlayer += startDrawEnergy * normalization * startWeight;
+    abstractInstallInvestmentPerPlayer += startAbstractInvestment * normalization * startWeight;
+    summarizedStartWeight += startWeight;
+  }
+
+  if (!(summarizedStartWeight > 0)) {
+    return { active: false, reason: "economy-activity-routes-unavailable" };
+  }
+  const normalize = 1 / summarizedStartWeight;
+  drawEventsPerPlayer *= normalize;
+  installEventsPerPlayer *= normalize;
+  openingInstallEventsPerPlayer *= normalize;
+  laterInstallEventsPerPlayer *= normalize;
+  drawEnergySpentPerPlayer *= normalize;
+  abstractInstallInvestmentPerPlayer *= normalize;
+
+  const transactionEventsPerPlayer = drawEventsPerPlayer + installEventsPerPlayer;
+  const nominalActivityRegisterEquivalents =
+    drawEventsPerPlayer * ENERGY_ECONOMY_DRAW_EVENT_WALL_CLOCK_REGISTERS +
+    installEventsPerPlayer * ENERGY_ECONOMY_INSTALL_EVENT_WALL_CLOCK_REGISTERS;
+  const expectedActivityRegisterEquivalents =
+    nominalActivityRegisterEquivalents * Math.max(1, Number(playTimeMultiplier) || 1);
+
+  return {
+    active: true,
+    removedByEnergyCrisis: false,
+    method: "card-aware-fixed-route-upgrade-activity-v49du",
+    drawEventsPerPlayer: Number(drawEventsPerPlayer.toFixed(3)),
+    installEventsPerPlayer: Number(installEventsPerPlayer.toFixed(3)),
+    openingInstallEventsPerPlayer: Number(openingInstallEventsPerPlayer.toFixed(3)),
+    laterInstallEventsPerPlayer: Number(laterInstallEventsPerPlayer.toFixed(3)),
+    transactionEventsPerPlayer: Number(transactionEventsPerPlayer.toFixed(3)),
+    drawEnergySpentPerPlayer: Number(drawEnergySpentPerPlayer.toFixed(3)),
+    abstractInstallInvestmentPerPlayer: Number(abstractInstallInvestmentPerPlayer.toFixed(3)),
+    drawEventWallClockRegisters: ENERGY_ECONOMY_DRAW_EVENT_WALL_CLOCK_REGISTERS,
+    installEventWallClockRegisters: ENERGY_ECONOMY_INSTALL_EVENT_WALL_CLOCK_REGISTERS,
+    nominalActivityRegisterEquivalents: Number(nominalActivityRegisterEquivalents.toFixed(3)),
+    expectedActivityRegisterEquivalents: Number(expectedActivityRegisterEquivalents.toFixed(3)),
+    playTimeScaling: Number(Math.max(1, Number(playTimeMultiplier) || 1).toFixed(4)),
+    note: "Paid upgrade-card draws and upgrade install/play events are the wall-clock primitives. Energy/card gains affect the DP and therefore event opportunity, but get no independent time tax; abstract install-investment Energy is diagnostic only."
+  };
+}
+
 function computeLengthOwnerObservation(
   sequence,
   preferences = {},
   lengthMetrics = null,
-  reTurnDifficulty = null
+  reTurnDifficulty = null,
+  context = {}
 ) {
   if (!sequence?.firstLeg || !lengthMetrics) {
     return { active: false, reason: "missing-length-inputs" };
@@ -17461,16 +17987,27 @@ function computeLengthOwnerObservation(
   // mapping.
   const cardMentalInteractionSignal = cardREPerTurn * mentalREPerTurn;
 
-  // v49dk keeps planningPressure outside the new owner. The RE-native route
-  // uncertainty candidate and play-time amplification now derive from completed
-  // Register-Equivalent evidence. Player count remains a separate wall-clock
-  // factor because it changes table-time per turn rather than route reliability.
+  // v49dt keeps planningPressure outside the new owner. Player count changes
+  // wall-clock table resolution, not route reliability, so it remains a
+  // downstream multiplier. Four players are the 1.0 reference and every
+  // one-player change affects elapsed time smoothly.
   const playerCount = Math.max(1, Number(preferences.playerCount) || 4);
-  const fourPlayerResolutionLoad = computePlayerTimeLoad(4);
-  const currentPlayerResolutionLoad = computePlayerTimeLoad(playerCount);
-  const playerResolutionMultiplierIndex = fourPlayerResolutionLoad > 0
-    ? currentPlayerResolutionLoad / fourPlayerResolutionLoad
-    : 1;
+  const playerResolutionMultiplierIndex = getPlayerWallClockMultiplier(
+    playerCount
+  );
+  const actFastMode = preferences.actFastMode ?? null;
+  const actFastPressureWeight = getActFastPressureWeight(actFastMode);
+  const actFastREPressureMultiplier = getActFastREPressureMultiplier(
+    actFastMode
+  );
+  const actFastDirectTimerReduction = getActFastDirectTimerReduction(
+    actFastMode,
+    playerCount
+  );
+  const explicitTimingMultiplierIndex = getActFastDirectTimingMultiplier(
+    actFastMode,
+    playerCount
+  );
 
   const weightedTotal = (selector) => reStarts.reduce((sum, entry) => (
     sum + Math.max(0, Number(selector(entry)) || 0) * startWeight(entry)
@@ -17519,8 +18056,14 @@ function computeLengthOwnerObservation(
     Math.max(0, Number(start?.fullCourseTrafficNearby) || 0) /
       NORMAL_EFFECTIVE_RE_SCORE_PER_RE
   ));
-  const playTimeAdverseRE =
+  const basePlayTimeAdverseRE =
     chronologicalPlayTimeAdverseRE + downstreamTrafficControlAdverseRE;
+  // v49dt: the timer does not create a separate fake hazard tax. Instead it
+  // amplifies the completed non-tempo RE burden already present. This lets even
+  // 3m/2m timers indirectly extend play through recovery without pretending the
+  // timer itself adds route distance or programmed registers.
+  const playTimeAdverseRE =
+    basePlayTimeAdverseRE * actFastREPressureMultiplier;
   const playTimeAdverseRatio = nominalRegisters > 0
     ? playTimeAdverseRE / nominalRegisters
     : 0;
@@ -17545,12 +18088,38 @@ function computeLengthOwnerObservation(
     expectedPlayProgrammingTurns
   );
 
-  const upgradePhaseMultiplierIndex = 1;
-  const explicitTimingMultiplierIndex = 1;
-  const wallClockMultiplierIndex =
+  const economyActivity = summarizeLengthEconomyWallClockActivity(
+    sequence,
+    preferences,
+    context,
+    reTurnDifficulty,
+    playTimeMultiplier
+  );
+  const economyNominalActivityRegisterEquivalents = Math.max(
+    0,
+    Number(economyActivity?.nominalActivityRegisterEquivalents) || 0
+  );
+  const economyExpectedActivityRegisterEquivalents = Math.max(
+    0,
+    Number(economyActivity?.expectedActivityRegisterEquivalents) || 0
+  );
+  // Direct Act Fast timers compress programming time, not the separate Upgrade
+  // Phase. Player-count table-resolution scaling applies to both components.
+  const programmingWallClockRegisterIndex =
+    expectedPlayRegisters *
     playerResolutionMultiplierIndex *
-    upgradePhaseMultiplierIndex *
     explicitTimingMultiplierIndex;
+  const economyWallClockRegisterIndex =
+    economyExpectedActivityRegisterEquivalents *
+    playerResolutionMultiplierIndex;
+  const effectiveWallClockRegisterIndex =
+    programmingWallClockRegisterIndex + economyWallClockRegisterIndex;
+  const upgradePhaseMultiplierIndex = expectedPlayRegisters > 0
+    ? 1 + economyExpectedActivityRegisterEquivalents / expectedPlayRegisters
+    : 1;
+  const wallClockMultiplierIndex = expectedPlayRegisters > 0
+    ? effectiveWallClockRegisterIndex / expectedPlayRegisters
+    : playerResolutionMultiplierIndex * explicitTimingMultiplierIndex;
   const baselineExpectedProgrammingTurns = baselineExpectedRegisters / 5;
   const uncertaintyShare = nominalRegisters > 0
     ? intrinsicForecastExtraRegisters / nominalRegisters
@@ -17597,6 +18166,10 @@ function computeLengthOwnerObservation(
       chronologicalPlayTimeAdverseRE: Number(chronologicalPlayTimeAdverseRE.toFixed(2)),
       directLostTempoRE: Number(directLostTempoRE.toFixed(2)),
       downstreamTrafficControlAdverseRE: Number(downstreamTrafficControlAdverseRE.toFixed(2)),
+      baseAdverseREBeforeActFastPressure: Number(basePlayTimeAdverseRE.toFixed(2)),
+      actFastMode,
+      actFastPressureWeight: Number(actFastPressureWeight.toFixed(4)),
+      actFastREPressureMultiplier: Number(actFastREPressureMultiplier.toFixed(4)),
       totalAdverseRE: Number(playTimeAdverseRE.toFixed(2)),
       adverseRatio: Number(playTimeAdverseRatio.toFixed(4)),
       responseShape: Number(playTimeResponseShape.toFixed(4)),
@@ -17614,24 +18187,46 @@ function computeLengthOwnerObservation(
     },
     wallClockComposite: {
       calibrationReady: false,
+      productionOwner: true,
       semanticRole: "relative-elapsed-time-index-not-minutes",
       reference: "four-player = 1.0 table-resolution multiplier",
       playerCount,
       playerResolutionMultiplierIndex: Number(
         playerResolutionMultiplierIndex.toFixed(4)
       ),
-      upgradePhaseMultiplierIndex,
-      explicitTimingMultiplierIndex,
+      actFastMode,
+      actFastDirectTimerReduction: Number(actFastDirectTimerReduction.toFixed(4)),
+      upgradePhaseMultiplierIndex: Number(upgradePhaseMultiplierIndex.toFixed(4)),
+      economyActivity,
+      economyNominalActivityRegisterEquivalents: Number(
+        economyNominalActivityRegisterEquivalents.toFixed(3)
+      ),
+      economyExpectedActivityRegisterEquivalents: Number(
+        economyExpectedActivityRegisterEquivalents.toFixed(3)
+      ),
+      programmingWallClockRegisterIndex: Number(
+        programmingWallClockRegisterIndex.toFixed(2)
+      ),
+      economyWallClockRegisterIndex: Number(
+        economyWallClockRegisterIndex.toFixed(2)
+      ),
+      explicitTimingMultiplierIndex: Number(explicitTimingMultiplierIndex.toFixed(4)),
       wallClockMultiplierIndex: Number(wallClockMultiplierIndex.toFixed(4)),
+      effectiveWallClockRegisterIndex: Number(
+        effectiveWallClockRegisterIndex.toFixed(2)
+      ),
       effectiveLengthIndex: Number((
         expectedPlayProgrammingTurns * wallClockMultiplierIndex
       ).toFixed(4)),
-      missingOwners: [
-        "upgrade-opportunity-phase-time",
-        "variant-specific-phase-time",
-        "act-fast-programming-time-reduction"
+      productionComponents: [
+        "player-count table-resolution multiplier",
+        "Act Fast direct programming-time multiplier",
+        "card-aware upgrade draw/install transaction time"
       ],
-      note: "Wall-clock factors are downstream of the calibrated RE-native expected-play turns. This effective-length index is still observational because player-count, upgrade-phase, variants and Act Fast wall-clock scaling are not broadly calibrated. planningPressure is not an owner."
+      missingOwners: [
+        "variant-specific-phase-time"
+      ],
+      note: "v49du adds card-aware upgrade-economy transaction time to the production wall-clock owner. Paid draws and upgrade install/play events add non-register phase time; Energy/card gains affect opportunity but have no independent time tax. Act Fast direct timing compresses programming only, not upgrade phase. Energy Crisis removes this economy component instead of blanket-scaling total length. planningPressure is not a wall-clock owner."
     },
     pressureEvidence: {
       cleanCardREPerTurn: Number(cleanCardREPerTurn.toFixed(4)),
@@ -17684,13 +18279,16 @@ function computeLengthOwnerObservation(
     },
     phaseTimeOwnership: {
       playerCount: Math.max(1, Number(preferences.playerCount) || 4),
+      playerCountOwner: "production-wall-clock-multiplier",
       upgradePhase: preferences.lighterGame
         ? "removed-by-energy-crisis"
-        : "pending-opportunity-model",
-      actFastMode: preferences.actFastMode ?? null
+        : "production-card-aware-draw-install-events",
+      actFastMode: preferences.actFastMode ?? null,
+      actFastPressureOwner: "production-adverse-re-multiplier",
+      actFastDirectTimingOwner: "production-wall-clock-multiplier"
     },
     note:
-      "v49ds candidate observation: calibrated adverse-RE expected-play registers are the production route/play extent owner after full replay. RE-native routing confidence remains the traffic owner; player/upgrade/timer/variant wall-clock ownership remains pending. Beginner remains [0,4.0)."
+      "v49du candidate observation: expected-play registers own route/play extent; player count, Act Fast direct programming timing and card-aware upgrade draw/install transactions own production wall-clock scaling. Energy Crisis removes the economy transaction component rather than blanket-scaling total length. Other variant phase-time ownership remains pending; Beginner remains [0,4.0)."
   };
 }
 
@@ -17711,9 +18309,8 @@ function buildLengthOwnerCandidatePoolShadow(selectedScenario) {
       selected: candidate === selectedScenario,
       requestedLength: candidate.preferences?.length ?? "any",
       currentLengthRaw: Number(candidate.metrics?.lengthRaw),
-      currentLengthLabel: formatActualLengthLabel(
-        candidate.metrics?.lengthRaw
-      ),
+      currentWallClockTurnIndex: getProductionLengthTurnIndex(candidate.metrics),
+      currentLengthLabel: formatPresentedLengthLabel(candidate.metrics),
       nominalRegisters: observation.nominalRegisters,
       intrinsicForecastExtraRegisters:
         observation.intrinsicForecastExtraRegisters,
@@ -17739,7 +18336,23 @@ function buildLengthOwnerCandidatePoolShadow(selectedScenario) {
       referenceFourPlayerLengthBand:
         observation.playTimeAmplification?.referenceFourPlayerLengthBand ?? "n/a",
       playerWallClockMultiplierIndex:
-        observation.wallClockComposite?.playerResolutionMultiplierIndex ?? 1
+        observation.wallClockComposite?.playerResolutionMultiplierIndex ?? 1,
+      actFastMode: observation.wallClockComposite?.actFastMode ?? null,
+      actFastDirectTimingMultiplierIndex:
+        observation.wallClockComposite?.explicitTimingMultiplierIndex ?? 1,
+      economyDrawEventsPerPlayer:
+        observation.wallClockComposite?.economyActivity?.drawEventsPerPlayer ?? 0,
+      economyInstallEventsPerPlayer:
+        observation.wallClockComposite?.economyActivity?.installEventsPerPlayer ?? 0,
+      economyExpectedActivityRegisterEquivalents:
+        observation.wallClockComposite?.economyExpectedActivityRegisterEquivalents ?? 0,
+      economyWallClockRegisterIndex:
+        observation.wallClockComposite?.economyWallClockRegisterIndex ?? 0,
+      wallClockMultiplierIndex:
+        observation.wallClockComposite?.wallClockMultiplierIndex ?? 1,
+      effectiveWallClockRegisterIndex:
+        observation.wallClockComposite?.effectiveWallClockRegisterIndex ??
+          observation.playTimeAmplification?.expectedPlayRegisters ?? 0
     };
   }).filter(Boolean);
   if (!entries.length) {
@@ -17829,14 +18442,22 @@ function computeRETurnVariantDifficultyAccounting(rawTurnRE, preferences = {}, s
   }
   if (preferences.actFastMode) {
     const timerWeight = getActFastPressureWeight(preferences.actFastMode);
-    addLegacyFitPoints(
+    const pressureMultiplier = getActFastREPressureMultiplier(
+      preferences.actFastMode
+    );
+    // v49dt: Act Fast is no longer a tiny legacy fit-point add-on in the
+    // production RE/turn owner. Time pressure amplifies the non-tempo burden
+    // itself, so card/control/damage/mental burden all become harder under the
+    // timer while programmed-register tempo remains unchanged.
+    scale(
       "actFast",
-      programmingPressure.timedPressure * 6.2 * timerWeight,
-      "residual-programming",
+      pressureMultiplier,
+      "timer-pressure",
       {
         mode: preferences.actFastMode,
         timerWeight,
-        timedPressure: programmingPressure.timedPressure
+        pressureMultiplier,
+        timedPressureLegacyDiagnostic: programmingPressure.timedPressure
       }
     );
   }
@@ -18202,11 +18823,14 @@ function computeProgrammingPressureProfile(sequence) {
 }
 
 function getActFastPressureWeight(mode) {
+  // v49dt: every explicit timer creates some programming pressure, including
+  // the slower 3m/2m modes. This weight is dimensionless and is used by the
+  // RE-pressure channel; direct wall-clock saving is modeled separately.
   return ({
-    countdown_3m: 0,
-    countdown_2m: 0.12,
-    last_player_30s: 0.44,
-    countdown_1m: 0.68,
+    countdown_3m: 0.08,
+    countdown_2m: 0.20,
+    last_player_30s: 0.35,
+    countdown_1m: 0.65,
     countdown_30s: 1
   })[mode] ?? 0;
 }
@@ -18623,26 +19247,32 @@ function computeLengthMetrics(sequence, flagCount, playerCount, boardCount, pref
   };
 }
 
-// v49ds production migration: route/play extent is now owned by calibrated
-// RE-native expected-play registers end-to-end. Raw travelled distance and
-// standalone congestion remain available as diagnostics/construction guidance,
-// but they no longer add independent production length. The 4.0 raw/register
-// bridge is only a transitional unit conversion so existing length bands can
-// remain stable until the downstream wall-clock owner is promoted.
+// v49du production migration: expected-play registers own route/play extent;
+// player-count resolution and Act Fast direct timing scale programming time;
+// card-aware upgrade draw/install transactions add explicit non-register phase
+// time. Energy Crisis removes that economy component rather than blanket-scaling
+// the whole game. Raw distance, standalone congestion, fixed player load and
+// legacy Act Fast raw deltas remain diagnostic/construction-only. The 4.0 raw
+// bridge remains transitional until final elapsed-time bands are calibrated.
 function applyRENativeExpectedPlayExtentToLengthMetrics(
   lengthMetrics,
   ownerObservation,
   preferences = {}
 ) {
   const play = ownerObservation?.playTimeAmplification;
+  const wallClock = ownerObservation?.wallClockComposite;
   const nominalRegisters = Number(ownerObservation?.nominalRegisters);
   const expectedPlayRegisters = Number(play?.expectedPlayRegisters);
+  const effectiveWallClockRegisterIndex = Number(
+    wallClock?.effectiveWallClockRegisterIndex
+  );
   if (
     !lengthMetrics ||
     !ownerObservation?.active ||
     !play?.calibrationReady ||
     !Number.isFinite(nominalRegisters) ||
-    !Number.isFinite(expectedPlayRegisters)
+    !Number.isFinite(expectedPlayRegisters) ||
+    !Number.isFinite(effectiveWallClockRegisterIndex)
   ) {
     return lengthMetrics;
   }
@@ -18673,6 +19303,38 @@ function applyRENativeExpectedPlayExtentToLengthMetrics(
     0,
     Number(contributions.congestionLoad) || 0
   );
+  const legacyPlayerLoad = Number(contributions.playerLoad) || 0;
+  const legacyActFastLoad = Number(contributions.actFastLoad) || 0;
+
+  const playerWallClockMultiplier = Number(
+    wallClock?.playerResolutionMultiplierIndex
+  ) || 1;
+  const actFastDirectTimingMultiplier = Number(
+    wallClock?.explicitTimingMultiplierIndex
+  ) || 1;
+  const actFastDirectTimerReduction = Number(
+    wallClock?.actFastDirectTimerReduction
+  ) || 0;
+  const actFastREPressureMultiplier = Number(
+    play?.actFastREPressureMultiplier
+  ) || 1;
+  const economyNominalActivityRegisterEquivalents = Math.max(
+    0,
+    Number(wallClock?.economyNominalActivityRegisterEquivalents) || 0
+  );
+  const economyExpectedActivityRegisterEquivalents = Math.max(
+    0,
+    Number(wallClock?.economyExpectedActivityRegisterEquivalents) || 0
+  );
+  const economyWallClockRegisterIndex = Math.max(
+    0,
+    Number(wallClock?.economyWallClockRegisterIndex) || 0
+  );
+  const programmingWallClockRegisterIndex = Math.max(
+    0,
+    Number(wallClock?.programmingWallClockRegisterIndex) ||
+      expectedPlayRegisters * playerWallClockMultiplier * actFastDirectTimingMultiplier
+  );
 
   const productionActionLoad =
     nominalRegisters * LENGTH_EXPECTED_PLAY_RAW_POINTS_PER_REGISTER;
@@ -18680,37 +19342,44 @@ function applyRENativeExpectedPlayExtentToLengthMetrics(
     productionEquivalentActions * LENGTH_EXPECTED_PLAY_RAW_POINTS_PER_REGISTER;
   const productionExpectedPlayExtentLoad =
     expectedPlayRegisters * LENGTH_EXPECTED_PLAY_RAW_POINTS_PER_REGISTER;
+  const productionWallClockExtentLoad =
+    effectiveWallClockRegisterIndex * LENGTH_EXPECTED_PLAY_RAW_POINTS_PER_REGISTER;
 
-  const playerLoad = Number(contributions.playerLoad) || 0;
-  const actFastLoad = Number(contributions.actFastLoad) || 0;
-  const baseWithProductionExtent =
-    playerLoad + productionExpectedPlayExtentLoad + actFastLoad;
   const planningPressure = Math.max(
     0,
     Number(lengthMetrics.programmingPressure?.planningPressure) || 0
   );
+  const baseWithProductionWallClock = productionWallClockExtentLoad;
   const lessForeshadowingLoad = preferences.lessForeshadowing
-    ? baseWithProductionExtent * planningPressure * 0.022
+    ? baseWithProductionWallClock * planningPressure * 0.022
     : 0;
   const sharedDeckPlayerPressure = preferences.classicSharedDeck
     ? getSharedDeckPlayerPressure(Number(lengthMetrics.inputs?.playerCount) || 4)
     : 0;
   const sharedDeckLoad = preferences.classicSharedDeck
-    ? baseWithProductionExtent * planningPressure *
+    ? baseWithProductionWallClock * planningPressure *
       (0.016 + sharedDeckPlayerPressure * 0.012)
     : 0;
   const programmingVariantLoad = lessForeshadowingLoad + sharedDeckLoad;
-  const frictionLoad = actFastLoad + programmingVariantLoad;
+  const frictionLoad = programmingVariantLoad;
 
-  let productionRaw =
-    playerLoad + productionExpectedPlayExtentLoad + frictionLoad;
-  const rawBeforeLighterGame = productionRaw;
-  if (preferences.lighterGame) {
-    productionRaw *= 0.89;
-  }
+  const productionRaw = productionWallClockExtentLoad + frictionLoad;
 
+  // Compactness/gross-mismatch comparison before recovery uses nominal route
+  // extent plus the nominal economy transaction load. Direct Act Fast timing
+  // still compresses only programming, not the Upgrade Phase.
+  const preRecoveryProgrammingWallClockRegisterIndex =
+    nominalRegisters *
+    playerWallClockMultiplier *
+    actFastDirectTimingMultiplier;
+  const preRecoveryEconomyWallClockRegisterIndex =
+    economyNominalActivityRegisterEquivalents * playerWallClockMultiplier;
+  const preRecoveryWallClockRegisterIndex =
+    preRecoveryProgrammingWallClockRegisterIndex +
+    preRecoveryEconomyWallClockRegisterIndex;
   const preForecastBase =
-    playerLoad + productionActionLoad + actFastLoad;
+    preRecoveryWallClockRegisterIndex *
+    LENGTH_EXPECTED_PLAY_RAW_POINTS_PER_REGISTER;
   const preForecastLessForeshadowingLoad = preferences.lessForeshadowing
     ? preForecastBase * planningPressure * 0.022
     : 0;
@@ -18718,13 +19387,10 @@ function applyRENativeExpectedPlayExtentToLengthMetrics(
     ? preForecastBase * planningPressure *
       (0.016 + sharedDeckPlayerPressure * 0.012)
     : 0;
-  let preForecastRaw =
+  const preForecastRaw =
     preForecastBase +
     preForecastLessForeshadowingLoad +
     preForecastSharedDeckLoad;
-  if (preferences.lighterGame) {
-    preForecastRaw *= 0.89;
-  }
 
   const byId = new Map(
     (lengthMetrics.variantLengthContributions ?? []).map((entry) => [entry.id, entry])
@@ -18746,30 +19412,68 @@ function applyRENativeExpectedPlayExtentToLengthMetrics(
       }
     });
   }
-  if (byId.has("lighterGame")) {
-    byId.set("lighterGame", {
-      ...byId.get("lighterGame"),
-      delta: Number((productionRaw - rawBeforeLighterGame).toFixed(2)),
-      multiplier: 0.89,
-      evidence: { provisional: true }
+  if (preferences.actFastMode) {
+    const preTimerProgrammingRegisterIndex =
+      expectedPlayRegisters * playerWallClockMultiplier;
+    const directTimerRawDelta =
+      (programmingWallClockRegisterIndex - preTimerProgrammingRegisterIndex) *
+      LENGTH_EXPECTED_PLAY_RAW_POINTS_PER_REGISTER;
+    byId.set("actFast", {
+      id: "actFast",
+      kind: "wall-clock-timer",
+      delta: Number(directTimerRawDelta.toFixed(2)),
+      evidence: {
+        mode: preferences.actFastMode,
+        playerCount: Number(lengthMetrics.inputs?.playerCount) || 4,
+        playerWallClockMultiplier: Number(playerWallClockMultiplier.toFixed(4)),
+        directTimingMultiplier: Number(actFastDirectTimingMultiplier.toFixed(4)),
+        directTimerReduction: Number(actFastDirectTimerReduction.toFixed(4)),
+        rePressureMultiplier: Number(actFastREPressureMultiplier.toFixed(4)),
+        legacyDirectRawDelta: Number(legacyActFastLoad.toFixed(2))
+      }
     });
+  } else {
+    byId.delete("actFast");
+  }
+  if (preferences.lighterGame) {
+    byId.set("lighterGame", {
+      id: "lighterGame",
+      kind: "mechanically-represented-economy-removal",
+      delta: 0,
+      evidence: {
+        economyTransactionsRemoved: true,
+        legacyBlanketMultiplier: 0.89,
+        legacyBlanketApplied: false
+      }
+    });
+  } else {
+    byId.delete("lighterGame");
   }
 
-  ownerObservation.productionOwner = false;
-  ownerObservation.productionRole = "route-play-extent-plus-pending-wall-clock";
+  ownerObservation.productionOwner = true;
+  ownerObservation.productionRole =
+    "expected-play-plus-energy-economy-wall-clock";
   if (ownerObservation.legacyProductionTermsPendingRetirement) {
     ownerObservation.legacyProductionTermsPendingRetirement = {
       ...ownerObservation.legacyProductionTermsPendingRetirement,
       distanceLoad: 0,
       congestionLoad: 0,
+      actFastLoad: 0,
+      playerLoad: 0,
       legacyDistanceLoadDiagnostic: Number(legacyDistanceLoad.toFixed(2)),
-      legacyCongestionLoadDiagnostic: Number(legacyCongestionLoad.toFixed(2))
+      legacyCongestionLoadDiagnostic: Number(legacyCongestionLoad.toFixed(2)),
+      legacyPlayerLoadDiagnostic: Number(legacyPlayerLoad.toFixed(2)),
+      legacyActFastLoadDiagnostic: Number(legacyActFastLoad.toFixed(2))
     };
   }
   ownerObservation.note =
-    "v49ds makes calibrated expected-play registers the sole production route/play extent owner. Raw route distance and standalone congestion are diagnostic/construction-only. Player/upgrade/timer/variant wall-clock ownership remains pending; Beginner remains [0,4.0).";
+    "v49dv keeps expected-play registers as route/play extent, applies player-count and Act Fast direct programming-time scaling, and adds card-aware upgrade draw/install transaction time. Final Short/Medium/Long/Epic classification and requested-length fit now use the resulting wall-clock turn index directly. Distance, standalone congestion, fixed player load, legacy Act Fast raw deltas and residual raw-score variant length terms are diagnostic/construction-only. Other variant phase-time mechanisms remain pending.";
   play.productionOwner = true;
-  play.productionRole = "full-route-play-extent";
+  play.productionRole = "full-route-play-extent-with-act-fast-pressure";
+  if (wallClock) {
+    wallClock.productionOwner = true;
+    wallClock.productionRole = "player-act-fast-plus-energy-economy-wall-clock";
+  }
 
   lengthMetrics.raw = Number(productionRaw.toFixed(2));
   lengthMetrics.compactnessRaw = Number(productionRaw.toFixed(2));
@@ -18780,6 +19484,8 @@ function applyRENativeExpectedPlayExtentToLengthMetrics(
     legacyForecastUncertaintyLoad: Number(legacyForecastUncertaintyLoad.toFixed(2)),
     legacyDistanceLoad: Number(legacyDistanceLoad.toFixed(2)),
     legacyCongestionLoad: Number(legacyCongestionLoad.toFixed(2)),
+    legacyPlayerLoad: Number(legacyPlayerLoad.toFixed(2)),
+    legacyActFastLoad: Number(legacyActFastLoad.toFixed(2)),
     actionLoad: Number(productionActionLoad.toFixed(2)),
     forecastEquivalentActions: Number(productionEquivalentActions.toFixed(2)),
     forecastUncertaintyLoad: Number(productionForecastUncertaintyLoad.toFixed(2)),
@@ -18788,16 +19494,40 @@ function applyRENativeExpectedPlayExtentToLengthMetrics(
       LENGTH_EXPECTED_PLAY_RAW_POINTS_PER_REGISTER,
     productionExpectedPlayRegisters: Number(expectedPlayRegisters.toFixed(2)),
     productionExpectedPlayProgrammingTurns: Number((expectedPlayRegisters / 5).toFixed(2)),
+    productionPlayerWallClockMultiplier: Number(playerWallClockMultiplier.toFixed(4)),
+    productionActFastDirectTimingMultiplier: Number(actFastDirectTimingMultiplier.toFixed(4)),
+    productionActFastDirectTimerReduction: Number(actFastDirectTimerReduction.toFixed(4)),
+    productionActFastREPressureMultiplier: Number(actFastREPressureMultiplier.toFixed(4)),
+    productionProgrammingWallClockRegisterIndex: Number(
+      programmingWallClockRegisterIndex.toFixed(2)
+    ),
+    productionEconomyNominalActivityRegisterEquivalents: Number(
+      economyNominalActivityRegisterEquivalents.toFixed(3)
+    ),
+    productionEconomyExpectedActivityRegisterEquivalents: Number(
+      economyExpectedActivityRegisterEquivalents.toFixed(3)
+    ),
+    productionEconomyWallClockRegisterIndex: Number(
+      economyWallClockRegisterIndex.toFixed(2)
+    ),
+    productionWallClockMultiplierIndex: Number(
+      (Number(wallClock?.wallClockMultiplierIndex) || 1).toFixed(4)
+    ),
+    productionWallClockRegisterIndex: Number(effectiveWallClockRegisterIndex.toFixed(2)),
+    productionWallClockExtentLoad: Number(productionWallClockExtentLoad.toFixed(2)),
     preUncertaintyRaw: Number(preForecastRaw.toFixed(2)),
+    playerLoad: 0,
     distanceLoad: 0,
     congestionLoad: 0,
+    actFastLoad: 0,
     lessForeshadowingLoad: Number(lessForeshadowingLoad.toFixed(2)),
     sharedDeckLoad: Number(sharedDeckLoad.toFixed(2)),
     programmingVariantLoad: Number(programmingVariantLoad.toFixed(2)),
-    routeLoad: Number(productionExpectedPlayExtentLoad.toFixed(2)),
+    routeLoad: Number(productionWallClockExtentLoad.toFixed(2)),
     frictionLoad: Number(frictionLoad.toFixed(2))
   };
   lengthMetrics.variantLengthContributions = Array.from(byId.values());
+
   const productionExtentOwner = {
     active: true,
     model: LENGTH_OWNER_OBSERVATION_MODEL_ID,
@@ -18811,14 +19541,50 @@ function applyRENativeExpectedPlayExtentToLengthMetrics(
       LENGTH_EXPECTED_PLAY_RAW_POINTS_PER_REGISTER,
     legacyDistanceLoadDiagnostic: Number(legacyDistanceLoad.toFixed(2)),
     legacyCongestionLoadDiagnostic: Number(legacyCongestionLoad.toFixed(2)),
-    note: "v49ds promotes expected-play registers to the full production route/play extent. Distance and standalone congestion no longer vote independently. Player/table, upgrade, Act Fast and variant phase-time ownership remain pending."
+    note: "Expected-play registers remain the route/play extent owner; player count, direct programming timer effects and economy transactions are downstream wall-clock factors."
+  };
+  const productionWallClockOwner = {
+    active: true,
+    model: LENGTH_OWNER_OBSERVATION_MODEL_ID,
+    semanticRole: "relative wall-clock elapsed-time index",
+    playerCount: Number(lengthMetrics.inputs?.playerCount) || 4,
+    playerWallClockMultiplier: Number(playerWallClockMultiplier.toFixed(4)),
+    actFastMode: preferences.actFastMode ?? null,
+    actFastREPressureMultiplier: Number(actFastREPressureMultiplier.toFixed(4)),
+    actFastDirectTimerReduction: Number(actFastDirectTimerReduction.toFixed(4)),
+    actFastDirectTimingMultiplier: Number(actFastDirectTimingMultiplier.toFixed(4)),
+    economyActivity: wallClock?.economyActivity ?? null,
+    economyNominalActivityRegisterEquivalents: Number(
+      economyNominalActivityRegisterEquivalents.toFixed(3)
+    ),
+    economyExpectedActivityRegisterEquivalents: Number(
+      economyExpectedActivityRegisterEquivalents.toFixed(3)
+    ),
+    programmingWallClockRegisterIndex: Number(
+      programmingWallClockRegisterIndex.toFixed(2)
+    ),
+    economyWallClockRegisterIndex: Number(
+      economyWallClockRegisterIndex.toFixed(2)
+    ),
+    wallClockMultiplierIndex: Number(
+      (Number(wallClock?.wallClockMultiplierIndex) || 1).toFixed(4)
+    ),
+    effectiveWallClockRegisterIndex: Number(effectiveWallClockRegisterIndex.toFixed(2)),
+    effectiveWallClockTurnIndex: Number((effectiveWallClockRegisterIndex / 5).toFixed(2)),
+    legacyPlayerLoadDiagnostic: Number(legacyPlayerLoad.toFixed(2)),
+    legacyActFastLoadDiagnostic: Number(legacyActFastLoad.toFixed(2)),
+    legacyEnergyCrisisBlanketLengthMultiplier: 0.89,
+    legacyEnergyCrisisBlanketApplied: false,
+    missingOwners: [
+      "variant-specific-phase-time"
+    ],
+    note: "v49dv production wall-clock owner. Upgrade-economy time comes only from card-aware paid draw and install/play events. Energy/card gains influence those events through the existing economy DP but are not independent time taxes. Act Fast direct saving applies to programming only. Energy Crisis removes economy transactions and does not apply the legacy 0.89 blanket length multiplier. This effective wall-clock turn index now owns final semantic length classification and requested-length fit."
   };
   lengthMetrics.productionExtentOwner = productionExtentOwner;
-  // Compatibility alias for any diagnostics written during the v49dr recovery
-  // slice; new code should prefer productionExtentOwner.
+  lengthMetrics.productionWallClockOwner = productionWallClockOwner;
   lengthMetrics.productionRecoveryOwner = productionExtentOwner;
   lengthMetrics.method =
-    "re-native-expected-play-extent-plus-pending-wall-clock-residuals-v49ds";
+    "re-native-wall-clock-length-bands-v49dv";
   return lengthMetrics;
 }
 
@@ -19695,15 +20461,16 @@ function classifyCandidate(sequence, preferences, context = {}) {
     : null;
   const difficultyTurnRE = Number(reTurnVariantDifficultyAccounting?.final);
 
-  // v49ds promotes calibrated RE-native expected-play registers to own the
-  // complete production route/play extent. Distance and standalone congestion
-  // remain only in construction/diagnostic metrics. Downstream wall-clock phase
-  // factors (player resolution, upgrades, timers, variants) are still pending.
+  // v49du keeps RE-native expected-play registers as route/play extent, then
+  // applies player-count + Act Fast programming-time scaling and explicit
+  // card-aware upgrade draw/install transaction time. Energy Crisis removes
+  // that economy component instead of blanket-scaling total length.
   lengthMetrics.ownerObservationV49dl = computeLengthOwnerObservation(
     sequence,
     preferences,
     lengthMetrics,
-    reTurnDifficulty
+    reTurnDifficulty,
+    context
   );
   if (!context.skipProductionDifficulty) {
     applyRENativeExpectedPlayExtentToLengthMetrics(
@@ -19716,13 +20483,30 @@ function classifyCandidate(sequence, preferences, context = {}) {
   const lengthFitRaw = shouldUseCompactLengthFit(preferences)
     ? lengthMetrics.compactnessRaw
     : lengthRaw;
+  const lengthWallClockTurnIndex = Number(
+    lengthMetrics?.productionWallClockOwner?.effectiveWallClockTurnIndex
+  );
+  const productionLengthOwnerActive = Boolean(
+    !context.skipProductionDifficulty && Number.isFinite(lengthWallClockTurnIndex)
+  );
+  const lengthSemanticValue = productionLengthOwnerActive
+    ? lengthWallClockTurnIndex
+    : lengthFitRaw;
 
   const difficultyThresholds = getDifficultyThresholds();
-  const lengthThresholds = getLengthThresholds();
+  const lengthThresholds = productionLengthOwnerActive
+    ? getProductionLengthThresholds()
+    : getLengthThresholds();
+  const lengthFitPointScale = productionLengthOwnerActive
+    ? WALL_CLOCK_LENGTH_FIT_POINTS_PER_TURN
+    : 1;
+  const minimumLengthValue = productionLengthOwnerActive
+    ? MIN_WALL_CLOCK_TURN_INDEX
+    : MIN_LENGTH_RAW;
 
   const hardFailures = [];
   const softFailures = [];
-  if (lengthFitRaw < MIN_LENGTH_RAW) {
+  if (lengthSemanticValue < minimumLengthValue) {
     softFailures.push("too-short");
   }
   if (usableStarts.length < preferences.playerCount) {
@@ -19743,6 +20527,31 @@ function classifyCandidate(sequence, preferences, context = {}) {
     sequence.firstLeg.summary.payToWin?.balanceValid === false
   ) {
     softFailures.push("priced-start-balance");
+  }
+
+  if (!preferences.competitiveMode) {
+    const normalOverflow = Math.max(
+      0,
+      Number(sequence.firstLeg.summary.normalStartBalance?.retainedEffectiveRERangeExcess) || 0
+    );
+    const pricedOverflow = Math.max(
+      0,
+      Number(sequence.firstLeg.summary.payToWin?.residualBalance?.worstRangeExcess) || 0
+    );
+    if (Math.max(normalOverflow, pricedOverflow) > 1e-9) {
+      softFailures.push("fairness-range-overflow");
+    }
+  }
+
+  if (
+    (
+      preferences.subsidizedStarts && isVariantForced(preferences, "subsidizedStarts") ||
+      preferences.payToWin && isVariantForced(preferences, "payToWin")
+    ) &&
+    sequence.firstLeg.summary.payToWin?.active &&
+    !(Number(sequence.firstLeg.summary.payToWin?.meaningfulEnergyAdjustmentCount) > 0)
+  ) {
+    softFailures.push("forced-economy-no-effect");
   }
 
   if (preferences.competitiveMode) {
@@ -19800,7 +20609,9 @@ function classifyCandidate(sequence, preferences, context = {}) {
   const difficultyGuidanceFit = Number.isFinite(difficultyDistanceRE)
     ? difficultyDistanceRE * RE_TURN_DIFFICULTY_FIT_POINTS_PER_RE
     : Infinity;
-  const lengthGuidanceFit = bandDistance(lengthFitRaw, preferences.length, lengthThresholds);
+  const lengthGuidanceFit =
+    bandDistance(lengthSemanticValue, preferences.length, lengthThresholds) *
+    lengthFitPointScale;
   const difficultyFit = preferences.targetGuidanceOnlyDifficulty ? 0 : difficultyGuidanceFit;
   const lengthFit = preferences.targetGuidanceOnlyLength ? 0 : lengthGuidanceFit;
   if (difficultyFit > 0 && Number.isFinite(difficultyFit)) {
@@ -19820,9 +20631,9 @@ function classifyCandidate(sequence, preferences, context = {}) {
           : "matched";
   const lengthDirection = (preferences.length === "any" || preferences.targetGuidanceOnlyLength)
     ? "matched"
-    : lengthFitRaw < lengthThresholds[preferences.length][0]
+    : lengthSemanticValue < lengthThresholds[preferences.length][0]
       ? "low"
-      : lengthFitRaw >= lengthThresholds[preferences.length][1]
+      : lengthSemanticValue >= lengthThresholds[preferences.length][1]
         ? "high"
         : "matched";
   const difficultyTargetBand = preferences.difficulty === "any"
@@ -19839,7 +20650,8 @@ function classifyCandidate(sequence, preferences, context = {}) {
       min: lengthThresholds[preferences.length][0],
       maxExclusive: Number.isFinite(lengthThresholds[preferences.length][1])
         ? lengthThresholds[preferences.length][1]
-        : null
+        : null,
+      unit: productionLengthOwnerActive ? "wall-clock-turn-index" : "legacy-raw"
     };
   const normalFairnessIsRE =
     sequence.firstLeg.summary.normalStartBalance?.fairnessMetric ===
@@ -19851,16 +20663,14 @@ function classifyCandidate(sequence, preferences, context = {}) {
       : fairnessStdDev >= 14
         ? fairnessStdDev - 14
         : 0;
+  // Competitive candidate-fit is also a plateau: once the post-block best-P
+  // completed-RE range is inside its Competitive range, more equality is not
+  // preferable. Only missing choices or range overflow add fit pressure.
   const competitiveBlockPenalty = preferences.competitiveMode && !skipCompetitiveBlockImpact
     ? (
       Math.max(0, preferences.playerCount - (competitiveBlockImpact?.selectedStartCount ?? 0)) * 18 +
-      (competitiveBlockImpact?.selectedOutlierCount ?? competitiveBlockImpact?.remainingOutlierCount ?? 0) * 24 +
-      Math.max(
-        0,
-        (competitiveBlockImpact?.selectedStdDev ?? 0) -
-          (competitiveBlockImpact?.balanceStdDevLimit ?? COMPETITIVE_EFFECTIVE_RE_SOFT_STDDEV_LIMIT)
-      ) * NORMAL_EFFECTIVE_RE_SCORE_PER_RE * 2 +
-      Math.max(0, (competitiveBlockImpact?.worstScoreZ ?? 0) - FULL_START_OUTLIER_Z) * 4
+      Math.max(0, Number(competitiveBlockImpact?.balanceRangeExcess) || 0) *
+        NORMAL_EFFECTIVE_RE_SCORE_PER_RE * 2
     )
     : 0;
   // Moving-target volatility has not yet been adapted to RE-native Competitive
@@ -19935,22 +20745,100 @@ function classifyCandidate(sequence, preferences, context = {}) {
       0,
       Number(normalBalance?.residualSelectionPenalty) || 0
     );
-  const pricedResidual = sequence.firstLeg.summary.payToWin?.residualBalance ?? null;
+  const pricedSummary = sequence.firstLeg.summary.payToWin ?? null;
+  const pricedResidual = pricedSummary?.residualBalance ?? null;
   const pricedStartBalancePenalty = (preferences.payToWin || preferences.subsidizedStarts) &&
-    sequence.firstLeg.summary.payToWin?.balanceValid === false
-    ? (
-      Math.max(0, (pricedResidual?.worstStdDev ?? 0) - NORMAL_START_FAIRNESS_STDDEV_LIMIT) +
-      (pricedResidual?.worstOutlierCount ?? 0) * 8
-    )
+    pricedSummary?.balanceValid === false
+    ? Math.max(0, Number(pricedResidual?.worstResidualPenalty) || 0)
     : 0;
+
+  const normalFairnessRangeLimit = Math.max(
+    0,
+    Number(normalBalance?.retainedEffectiveRERangeLimit) || 0
+  );
+  const normalFairnessOverflow = Math.max(
+    0,
+    Number(normalBalance?.retainedEffectiveRERangeExcess) || 0
+  );
+  const pricedFairnessRangeLimit = Math.max(
+    0,
+    Number(pricedResidual?.worstRangeLimit) || 0
+  );
+  const pricedFairnessOverflow = Math.max(
+    0,
+    Number(pricedResidual?.worstRangeExcess) || 0
+  );
+  const fairnessRangeLimit = preferences.competitiveMode
+    ? 0
+    : Math.max(normalFairnessRangeLimit, pricedFairnessRangeLimit);
+  const fairnessOverflowRE = preferences.competitiveMode
+    ? 0
+    : Math.max(normalFairnessOverflow, pricedFairnessOverflow);
+  const normalFairnessSoftOverflowAllowance =
+    getNormalFairnessSoftOverflowAllowance(normalFairnessRangeLimit);
+  const pricedFairnessSoftOverflowAllowance = Math.max(
+    0,
+    Number(pricedResidual?.worstSoftOverflowAllowance) || 0
+  );
+  const fairnessSoftOverflowAllowance = preferences.competitiveMode
+    ? 0
+    : Math.max(
+      normalBalance?.active ? normalFairnessSoftOverflowAllowance : 0,
+      pricedSummary?.active ? pricedFairnessSoftOverflowAllowance : 0
+    );
+  const fairnessOverflowFitPenalty = preferences.competitiveMode
+    ? 0
+    : fairnessOverflowRE * NORMAL_EFFECTIVE_RE_SCORE_PER_RE;
+  const fairnessAcceptance = {
+    active: !preferences.competitiveMode && fairnessRangeLimit > 0,
+    rangeLimit: Number(fairnessRangeLimit.toFixed(3)),
+    overflowRE: Number(fairnessOverflowRE.toFixed(3)),
+    softOverflowAllowance: Number(fairnessSoftOverflowAllowance.toFixed(3)),
+    fitPenalty: Number(fairnessOverflowFitPenalty.toFixed(3)),
+    ordinaryAcceptable:
+      preferences.competitiveMode ||
+      (
+        (!normalBalance?.active ||
+          normalFairnessOverflow <= normalFairnessSoftOverflowAllowance + 1e-9) &&
+        (!pricedSummary?.active || pricedResidual?.softOverflowAcceptable !== false)
+      ),
+    policy:
+      "zero-penalty-inside-range; increasing-overflow-penalty; bounded-soft-overflow-v49dy"
+  };
+
+  const forcedEconomyVariantId = preferences.subsidizedStarts &&
+    isVariantForced(preferences, "subsidizedStarts")
+      ? "subsidizedStarts"
+      : preferences.payToWin && isVariantForced(preferences, "payToWin")
+        ? "payToWin"
+        : null;
+  const forcedEconomyNoEffect = Boolean(
+    forcedEconomyVariantId &&
+    pricedSummary?.active &&
+    !(Number(pricedSummary.meaningfulEnergyAdjustmentCount) > 0)
+  );
+  const forcedEconomyEffectFitPenalty = forcedEconomyNoEffect
+    ? FORCED_ECONOMY_NO_EFFECT_FIT_PENALTY
+    : 0;
+  const forcedEconomyEffect = {
+    active: Boolean(forcedEconomyVariantId),
+    variantId: forcedEconomyVariantId,
+    meaningfulEnergyAdjustmentCount:
+      Number(pricedSummary?.meaningfulEnergyAdjustmentCount) || 0,
+    noMeaningfulEnergyAdjustment: forcedEconomyNoEffect,
+    fitPenalty: forcedEconomyEffectFitPenalty,
+    policy:
+      "forced-energy-economy-with-no-visible-energy-change-is-a-soft-fit-penalty-v49dy"
+  };
   const competitiveStaging = sequence.firstLeg.summary.competitiveStaging ?? null;
   const requiredCompetitiveStarts = Math.max(1, preferences.playerCount * 2);
   const competitiveRoutedStarts = competitiveStaging?.routedStartCount ?? reachableStarts.length;
   const competitiveStartAvailabilityPenalty = preferences.competitiveMode
     ? Math.max(0, requiredCompetitiveStarts - competitiveRoutedStarts) * 8
     : 0;
-  const tooShortShortfall = Math.max(0, MIN_LENGTH_RAW - lengthFitRaw);
-  const tooShortPenalty = tooShortShortfall * tooShortShortfall * 0.5;
+  const tooShortShortfall = Math.max(0, minimumLengthValue - lengthSemanticValue);
+  const tooShortShortfallFitPoints = tooShortShortfall * lengthFitPointScale;
+  const tooShortPenalty = tooShortShortfallFitPoints * tooShortShortfallFitPoints * 0.5;
   // Preserve the primary user target as a two-dimensional region: one modest
   // miss can trade against other soft qualities, while missing both requested
   // dimensions compounds. The cross-term is zero as soon as either dimension
@@ -19958,6 +20846,9 @@ function classifyCandidate(sequence, preferences, context = {}) {
   const targetInteractionPenalty = difficultyFit > 0 && lengthFit > 0
     ? (difficultyFit * 1.2 * lengthFit) / 100
     : 0;
+  // Selection plateaus: difficulty/length contribute exactly zero anywhere
+  // inside their requested semantic bands, and fairness contributes zero inside
+  // its length-responsive expected range. There is no center-of-band reward.
   const fitComponents = {
     difficulty: difficultyFit * 1.2,
     length: lengthFit,
@@ -19966,6 +20857,7 @@ function classifyCandidate(sequence, preferences, context = {}) {
     fairness: fairnessPenalty * 0.5,
     normalBalance: normalBalancePenalty,
     pricedStartBalance: pricedStartBalancePenalty,
+    forcedEconomyEffect: forcedEconomyEffectFitPenalty,
     competitiveStartAvailability: competitiveStartAvailabilityPenalty,
     competitiveBalance: competitiveBlockPenalty,
     competitiveReadability: preferences.competitiveMode && !skipCompetitiveBlockImpact
@@ -19996,6 +20888,7 @@ function classifyCandidate(sequence, preferences, context = {}) {
   const acceptable = Boolean(
     hardFailures.length === 0 &&
     targetAcceptance.ordinaryAcceptable &&
+    fairnessAcceptance.ordinaryAcceptable &&
     fitScore <= SOFT_CANDIDATE_RETENTION_LIMIT
   );
 
@@ -20011,6 +20904,15 @@ function classifyCandidate(sequence, preferences, context = {}) {
     reTurnVariantDifficultyAccounting,
     lengthRaw,
     lengthFitRaw,
+    lengthWallClockTurnIndex: Number.isFinite(lengthWallClockTurnIndex)
+      ? Number(lengthWallClockTurnIndex.toFixed(4))
+      : null,
+    lengthSemanticValue: Number.isFinite(lengthSemanticValue)
+      ? Number(lengthSemanticValue.toFixed(4))
+      : null,
+    lengthSemanticUnit: productionLengthOwnerActive
+      ? "wall-clock-turn-index"
+      : "legacy-raw",
     difficultyFit,
     difficultyDirection,
     difficultyTargetBand,
@@ -20040,6 +20942,15 @@ function classifyCandidate(sequence, preferences, context = {}) {
     routeDrama,
     checkpointSpacingExpectation,
     targetAcceptance,
+    fairnessAcceptance,
+    forcedEconomyEffect,
+    selectionPlateaus: {
+      difficultyInRequestedBand: difficultyFit === 0,
+      lengthInRequestedBand: lengthFit === 0,
+      fairnessWithinExpectedRange: fairnessOverflowRE <= 1e-9,
+      policy:
+        "zero-penalty-plateaus-for-requested-difficulty-length-and-expected-fairness-v49dy"
+    },
     acceptable,
     exactTargetMatch,
     hardFailures,
@@ -20168,7 +21079,7 @@ function buildScenarioCopySummary(scenario) {
     `Sets: ${selectedSets}`,
     `Variants: ${variantImpact}`,
     `Result: ${resultLabel}`,
-    `Soft fit: ${scenario.metrics?.fitScore ?? "n/a"}/${scenario.metrics?.softFitLimit ?? SOFT_CANDIDATE_RETENTION_LIMIT}; axis gate D/L ${scenario.metrics?.targetAcceptance?.grossDifficultyMismatch ? "gross" : "ok"}/${scenario.metrics?.targetAcceptance?.grossLengthMismatch ? "gross" : "ok"}; exact D/L ${scenario.metrics?.exactTargetMatch ? "yes" : "no"}; components ${Object.entries(scenario.metrics?.fitComponents ?? {}).filter(([, value]) => Number(value) > 0).map(([key, value]) => `${key} ${value}`).join(", ") || "none"}; near-best ${(diagnostics?.nearBestCandidateScores ?? []).join(", ") || "none"}; selected ${diagnostics?.selectedCandidateScore ?? scenario.metrics?.fitScore ?? "n/a"}`
+    `Soft fit: ${scenario.metrics?.fitScore ?? "n/a"}/${scenario.metrics?.softFitLimit ?? SOFT_CANDIDATE_RETENTION_LIMIT}; axis gate D/L ${scenario.metrics?.targetAcceptance?.grossDifficultyMismatch ? "gross" : "ok"}/${scenario.metrics?.targetAcceptance?.grossLengthMismatch ? "gross" : "ok"}; fairness gate ${scenario.metrics?.fairnessAcceptance?.ordinaryAcceptable === false ? "gross" : "ok"} (overflow ${scenario.metrics?.fairnessAcceptance?.overflowRE ?? 0}RE/soft ${scenario.metrics?.fairnessAcceptance?.softOverflowAllowance ?? 0}RE); zero-penalty plateaus D/L/F ${scenario.metrics?.selectionPlateaus?.difficultyInRequestedBand ? "yes" : "no"}/${scenario.metrics?.selectionPlateaus?.lengthInRequestedBand ? "yes" : "no"}/${scenario.metrics?.selectionPlateaus?.fairnessWithinExpectedRange ? "yes" : "no"}; exact D/L ${scenario.metrics?.exactTargetMatch ? "yes" : "no"}; components ${Object.entries(scenario.metrics?.fitComponents ?? {}).filter(([, value]) => Number(value) > 0).map(([key, value]) => `${key} ${value}`).join(", ") || "none"}; near-best ${(diagnostics?.nearBestCandidateScores ?? []).join(", ") || "none"}; selected ${diagnostics?.selectedCandidateScore ?? scenario.metrics?.fitScore ?? "n/a"}`
   ];
 
   if (scenario.hydrationAcceptanceDrift) {
@@ -20541,7 +21452,7 @@ function buildScenarioCopySummary(scenario) {
     }
   } else if (scenario.competitiveMode && competitive) {
     lines.push(
-      `Competitive balance: sequential completed-RE blocks ${competitive.blockedStartCount ?? 0}/${scenario.playerCount ?? scenario.preferences?.playerCount ?? "?"} [${(competitive.blockedIndices ?? []).map((index) => `#${index + 1}`).join(", ") || "none"}], remaining choices ${competitive.remainingStartCount ?? 0}, best-${scenario.playerCount ?? scenario.preferences?.playerCount ?? "P"} selected [${(competitive.selectedIndices ?? []).map((index) => `#${index + 1}`).join(", ") || "none"}], RE stddev ${competitive.selectedStdDev ?? "n/a"}/${competitive.balanceStdDevLimit ?? COMPETITIVE_EFFECTIVE_RE_SOFT_STDDEV_LIMIT} soft/${competitive.hardBalanceStdDevLimit ?? COMPETITIVE_EFFECTIVE_RE_HARD_STDDEV_LIMIT} hard, strategic difficulty +${competitive.strategicDifficulty ?? "n/a"} (block challenge ${competitive.strategicDifficultyEvidence?.meanBlockChallenge ?? "n/a"}, selection ambiguity ${competitive.strategicDifficultyEvidence?.selectionAmbiguity ?? "n/a"}), readability fit +${competitive.blockReadability?.fitPenalty ?? 0} (${competitive.blockReadability?.requestedDifficulty ?? "any"}), block traffic ${competitive.blockTrafficScope ?? "n/a"}, selectedOutliers soft/hard ${competitive.selectedOutlierCount ?? competitive.remainingOutlierCount ?? "n/a"}/${competitive.selectedHardOutlierCount ?? "n/a"}, traffic recomputations ${competitive.trafficRecomputations ?? 0}, softBalanced ${competitive.softBalanced ? "yes" : "no"}, hardAcceptable ${competitive.hardAcceptable ? "yes" : "no"}, method ${competitive.method ?? "n/a"}`
+      `Competitive balance v49ec: sequential best-one completed-RE blocks ${competitive.blockedStartCount ?? 0}/${scenario.playerCount ?? scenario.preferences?.playerCount ?? "?"} [${(competitive.blockedIndices ?? []).map((index) => `#${index + 1}`).join(", ") || "none"}], traffic recomputed after every block (${competitive.trafficRecomputations ?? 0} total); remaining choices ${competitive.remainingStartCount ?? 0}, post-block best-${scenario.playerCount ?? scenario.preferences?.playerCount ?? "P"} [${(competitive.selectedIndices ?? []).map((index) => `#${index + 1}`).join(", ") || "none"}], RE range ${competitive.selectedRangeRE ?? competitive.scoreRange ?? "n/a"}/${competitive.balanceRangeLimit ?? "n/a"} soft/${competitive.hardBalanceRangeLimit ?? "n/a"} hard (excess ${competitive.balanceRangeExcess ?? "n/a"}; median ${competitive.selectedMedianTurns ?? "n/a"} turns), SD ${competitive.selectedStdDev ?? "n/a"} diagnostic-only, strategic difficulty +${competitive.strategicDifficulty ?? "n/a"} (block challenge ${competitive.strategicDifficultyEvidence?.meanBlockChallenge ?? "n/a"}, selection ambiguity ${competitive.strategicDifficultyEvidence?.selectionAmbiguity ?? "n/a"}), RE-native legibility fit +${competitive.blockReadability?.fitPenalty ?? 0} (${competitive.blockReadability?.requestedDifficulty ?? "any"}; legacy shadow OFF), block traffic ${competitive.blockTrafficScope ?? "n/a"}, softBalanced ${competitive.softBalanced ? "yes" : "no"}, hardAcceptable ${competitive.hardAcceptable ? "yes" : "no"}, method ${competitive.method ?? "n/a"}`
     );
   } else if ((scenario.payToWin || scenario.subsidizedStarts) && payToWin?.active) {
     const subsidyMode = Boolean(scenario.subsidizedStarts);
@@ -20550,7 +21461,7 @@ function buildScenarioCopySummary(scenario) {
     const pricingModel = payToWin.pricingModel ?? {};
     const selectorSplit = payToWin.selectorSplit ?? null;
     lines.push(
-      `${pricingLabel}: model ${pricingModel.method ?? "n/a"}, economy ${payToWin.pricingEconomyMethod ?? "n/a"}, pruning ${payToWin.pruningPolicy ?? "legacy"}, target ${pricingModel.target ?? "n/a"}, startingEnergy ${payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY}/${payToWin.maxEnergy ?? ROUTE_ENERGY_ECONOMY_DEFAULTS.maxEnergy}, startingUpgradeCards ${payToWin.startingUpgradeCards ?? DEFAULT_STARTING_UPGRADE_CARDS} (unknown at start choice), offered ${payToWin.pricedStartCount ?? "n/a"}, pruned ${(payToWin.pruned ?? []).length}, selector-unavailable ${payToWin.fullyUnavailableCount ?? 0}, residualStdDev ${payToWin.residualBalance?.worstStdDev ?? "n/a"}/${payToWin.residualBalance?.early?.limit ?? NORMAL_EFFECTIVE_RE_FAIRNESS_STDDEV_LIMIT}, residualOutliers ${payToWin.residualBalance?.worstOutlierCount ?? "n/a"}, residualPenalty ${payToWin.residualBalance?.worstResidualPenalty ?? 0}, balance ${payToWin.balanceValid === false ? "residual" : "pass"}, surplusStarts ${payToWin.surplusStarts ?? 0}, latePricing ${payToWin.latePricingActive ? "active" : "inactive"}, slashPrices ${payToWin.hasLatePriceDifference ? "yes" : "no"}`
+      `${pricingLabel}: model ${pricingModel.method ?? "n/a"}, economy ${payToWin.pricingEconomyMethod ?? "n/a"}, pruning ${payToWin.pruningPolicy ?? "legacy"}, target ${pricingModel.target ?? "n/a"}, ${subsidyMode ? `startingEnergy ${payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY}E / subsidy-total ceiling ${payToWin.subsidyStartingEnergyCeiling ?? pricingModel.subsidyStartingEnergyCeiling ?? "n/a"}E / storage ${payToWin.maxEnergy ?? ROUTE_ENERGY_ECONOMY_DEFAULTS.maxEnergy}E` : `startingEnergy ${payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY}E / storage ${payToWin.maxEnergy ?? ROUTE_ENERGY_ECONOMY_DEFAULTS.maxEnergy}E`}, startingUpgradeCards ${payToWin.startingUpgradeCards ?? DEFAULT_STARTING_UPGRADE_CARDS} (unknown at start choice), offered ${payToWin.pricedStartCount ?? "n/a"}, pruned ${(payToWin.pruned ?? []).length}, selector-unavailable ${payToWin.fullyUnavailableCount ?? 0}, residualRange ${payToWin.residualBalance?.worstRange ?? "n/a"}/${payToWin.residualBalance?.worstRangeLimit ?? "n/a"}RE (overflow ${payToWin.residualBalance?.worstRangeExcess ?? 0}; soft +${payToWin.residualBalance?.worstSoftOverflowAllowance ?? "n/a"}), residualPenalty ${payToWin.residualBalance?.worstResidualPenalty ?? 0}, meaningfulEnergy ${payToWin.meaningfulEnergyAdjustmentCount ?? 0}, SD ${payToWin.residualBalance?.worstStdDev ?? "n/a"} diagnostic-only, balance ${payToWin.balanceValid === false ? "residual" : "pass"}, surplusStarts ${payToWin.surplusStarts ?? 0}, latePricing ${payToWin.latePricingActive ? "active" : "inactive"}, slashPrices ${payToWin.hasLatePriceDifference ? "yes" : "no"}`
     );
     if (payToWin.selectorPricingEvaluated && selectorSplit) {
       if (selectorSplit.selected) {
@@ -20609,7 +21520,7 @@ function buildScenarioCopySummary(scenario) {
           : `${entry.payment}E median/max +${entry.medianScore ?? "n/a"}/+${entry.maxScore ?? "n/a"} score (${entry.medianRegisters ?? "n/a"}/${entry.maxRegisters ?? "n/a"}R)`
       )).join(", ");
       const denialText = subsidyMode
-        ? `+${payToWin.maxSubsidy ?? pricingModel.maxSubsidy ?? 7}E max subsidy; ${pricingModel.denialCost ?? getPayToWinDenialCost({ startingEnergy: payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY, maxEnergy: payToWin.maxEnergy ?? 10, subsidizedStarts: true })}E = uncompensated/prune signal`
+        ? `+${payToWin.maxSubsidy ?? pricingModel.maxSubsidy ?? SUBSIDIZED_STARTS_MAX_EXTRA_ENERGY}E max subsidy; ${pricingModel.denialCost ?? getPayToWinDenialCost({ startingEnergy: payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY, maxEnergy: payToWin.maxEnergy ?? 10, subsidizedStarts: true })}E = uncompensated/prune signal`
         : `${pricingModel.denialCost ?? getPayToWinDenialCost({ startingEnergy: payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY })}E = deny/prune`;
       lines.push(
         `${pricingShortLabel} final-field ${subsidyMode ? "subsidy benefit" : "payment impact"}: register ${pricingModel.registerScore ?? "n/a"} score, horizon ${pricingModel.horizonTurns ?? "n/a"} turns; ${impactText}; ${denialText}`
@@ -21471,6 +22382,7 @@ function buildScenarioReport(scenario, selectedLegIndices = null) {
         ? `Pathfinder objective v49bf (unchanged through v49ch): programmed action tempo ${audit.registerTempoScore} score = 1 register for every card; action-type/reverse/heavy premiums OFF; conveyor/gear complexity premiums OFF; raw travelled-space premiums OFF (distance telemetry retained; Manhattan queue heuristic active); reboot skipped-register tempo ON, fixed discontinuity premium OFF; card plausibility, Energy and hazard guidance remain active.`
         : "Pathfinder objective v49bf (unchanged through v49ch): audit metadata unavailable.";
     })(),
+    "Contextual breadth v49dw SEARCH GUIDANCE: elapsed register horizon + cumulative completed intrinsic adverse RE from prior legs; raw hazard/board-chaos/interaction confidence decay OFF; physical first-goal search effort remains a computational budget signal only.",
     scenario.generationDiagnostics?.cooperativeIteratorTotals
       ? (() => {
         const cooperative = scenario.generationDiagnostics.cooperativeIteratorTotals;
@@ -21557,17 +22469,19 @@ function buildScenarioReport(scenario, selectedLegIndices = null) {
       : "Programming pressure v38: n/a",
     `Length raw: ${scenario.metrics.lengthRaw}`,
     `Length inputs: flags ${scenario.metrics.lengthMetrics.inputs.flagCount}, players ${scenario.metrics.lengthMetrics.inputs.playerCount}, actionScore ${scenario.metrics.lengthMetrics.inputs.totalActionLoad}, distanceScore ${scenario.metrics.lengthMetrics.inputs.totalRouteDistance}, congestion ${scenario.metrics.lengthMetrics.inputs.totalCongestion}, flagArea ${scenario.metrics.lengthMetrics.inputs.flagAreaScore}, totalDifficulty ${scenario.metrics.lengthMetrics.inputs.totalDifficulty}`,
-    `Length contributions: flags ${scenario.metrics.lengthMetrics.contributions.checkpointLoad}, players ${scenario.metrics.lengthMetrics.contributions.playerLoad}, expected-play nominal ${scenario.metrics.lengthMetrics.contributions.actionLoad}, recovery ${scenario.metrics.lengthMetrics.contributions.forecastUncertaintyLoad ?? 0}, distance ${scenario.metrics.lengthMetrics.contributions.distanceLoad} [legacy ${scenario.metrics.lengthMetrics.contributions.legacyDistanceLoad ?? 0}], congestion ${scenario.metrics.lengthMetrics.contributions.congestionLoad} [legacy ${scenario.metrics.lengthMetrics.contributions.legacyCongestionLoad ?? 0}; old weight ${scenario.metrics.lengthMetrics.contributions.congestionWeight}; harshness ${scenario.metrics.lengthMetrics.contributions.boardHarshness}], flagArea ${scenario.metrics.lengthMetrics.contributions.flagAreaLoad}, difficulty ${scenario.metrics.lengthMetrics.contributions.difficultyLoad}, moving-target residual ${scenario.metrics.lengthMetrics.contributions.movingTargetLoad} (legacy estimate ${scenario.metrics.lengthMetrics.contributions.movingTargetLegacyEstimate ?? 0}), act-fast ${scenario.metrics.lengthMetrics.contributions.actFastLoad}, reshuffle ${scenario.metrics.lengthMetrics.contributions.lessForeshadowingLoad ?? 0}, shared-deck ${scenario.metrics.lengthMetrics.contributions.sharedDeckLoad ?? 0}`,
-    `Length extent v49ds PRODUCTION: nominal ${scenario.metrics.lengthMetrics.inputs.totalActionLoad} reg + RE-native recovery ${scenario.metrics.lengthMetrics.contributions.forecastEquivalentActions ?? 0} = ${scenario.metrics.lengthMetrics.contributions.productionExpectedPlayRegisters ?? "n/a"} expected-play reg / ${scenario.metrics.lengthMetrics.contributions.productionExpectedPlayProgrammingTurns ?? "n/a"} turns; transitional scale ${scenario.metrics.lengthMetrics.contributions.productionExpectedPlayRawPointsPerRegister ?? LENGTH_EXPECTED_PLAY_RAW_POINTS_PER_REGISTER} raw/reg; route distance and standalone congestion have NO independent production vote; legacy distance/congestion ${scenario.metrics.lengthMetrics.contributions.legacyDistanceLoad ?? 0}/${scenario.metrics.lengthMetrics.contributions.legacyCongestionLoad ?? 0} diagnostic only; legacy confidence forecast +${scenario.metrics.lengthMetrics.contributions.legacyForecastEquivalentActions ?? scenario.metrics.lengthMetrics.forecastLengthProfile?.uncertaintyEquivalentActions ?? 0} reg diagnostic only`,
+    `Length contributions: flags ${scenario.metrics.lengthMetrics.contributions.checkpointLoad}, players ${scenario.metrics.lengthMetrics.contributions.playerLoad} [legacy additive ${scenario.metrics.lengthMetrics.contributions.legacyPlayerLoad ?? 0}], expected-play nominal ${scenario.metrics.lengthMetrics.contributions.actionLoad}, recovery ${scenario.metrics.lengthMetrics.contributions.forecastUncertaintyLoad ?? 0}, wall-clock extent ${scenario.metrics.lengthMetrics.contributions.productionWallClockExtentLoad ?? "n/a"}, distance ${scenario.metrics.lengthMetrics.contributions.distanceLoad} [legacy ${scenario.metrics.lengthMetrics.contributions.legacyDistanceLoad ?? 0}], congestion ${scenario.metrics.lengthMetrics.contributions.congestionLoad} [legacy ${scenario.metrics.lengthMetrics.contributions.legacyCongestionLoad ?? 0}; old weight ${scenario.metrics.lengthMetrics.contributions.congestionWeight}; harshness ${scenario.metrics.lengthMetrics.contributions.boardHarshness}], flagArea ${scenario.metrics.lengthMetrics.contributions.flagAreaLoad}, difficulty ${scenario.metrics.lengthMetrics.contributions.difficultyLoad}, moving-target residual ${scenario.metrics.lengthMetrics.contributions.movingTargetLoad} (legacy estimate ${scenario.metrics.lengthMetrics.contributions.movingTargetLegacyEstimate ?? 0}), act-fast direct raw ${scenario.metrics.lengthMetrics.contributions.actFastLoad} [legacy ${scenario.metrics.lengthMetrics.contributions.legacyActFastLoad ?? 0}], reshuffle ${scenario.metrics.lengthMetrics.contributions.lessForeshadowingLoad ?? 0}, shared-deck ${scenario.metrics.lengthMetrics.contributions.sharedDeckLoad ?? 0}`,
+    `Length extent v49ds PRODUCTION COMPONENT: nominal ${scenario.metrics.lengthMetrics.inputs.totalActionLoad} reg + RE-native recovery ${scenario.metrics.lengthMetrics.contributions.forecastEquivalentActions ?? 0} = ${scenario.metrics.lengthMetrics.contributions.productionExpectedPlayRegisters ?? "n/a"} expected-play reg / ${scenario.metrics.lengthMetrics.contributions.productionExpectedPlayProgrammingTurns ?? "n/a"} turns; route distance and standalone congestion have NO independent production vote; legacy distance/congestion ${scenario.metrics.lengthMetrics.contributions.legacyDistanceLoad ?? 0}/${scenario.metrics.lengthMetrics.contributions.legacyCongestionLoad ?? 0} diagnostic only; legacy confidence forecast +${scenario.metrics.lengthMetrics.contributions.legacyForecastEquivalentActions ?? scenario.metrics.lengthMetrics.forecastLengthProfile?.uncertaintyEquivalentActions ?? 0} reg diagnostic only`,
+    `Wall-clock length v49dv PRODUCTION: programming ${scenario.metrics.lengthMetrics.contributions.productionProgrammingWallClockRegisterIndex ?? "n/a"} wall-reg + upgrade-economy ${scenario.metrics.lengthMetrics.contributions.productionEconomyWallClockRegisterIndex ?? 0} wall-reg = ${scenario.metrics.lengthMetrics.contributions.productionWallClockRegisterIndex ?? "n/a"} total (${Number.isFinite(Number(scenario.metrics.lengthMetrics.contributions.productionWallClockRegisterIndex)) ? Number((Number(scenario.metrics.lengthMetrics.contributions.productionWallClockRegisterIndex) / 5).toFixed(2)) : "n/a"} turn-index); expected-play ${scenario.metrics.lengthMetrics.contributions.productionExpectedPlayRegisters ?? "n/a"} reg × player ${scenario.metrics.lengthMetrics.contributions.productionPlayerWallClockMultiplier ?? 1} × Act Fast direct-programming ${scenario.metrics.lengthMetrics.contributions.productionActFastDirectTimingMultiplier ?? 1}; economy activity ${scenario.metrics.lengthMetrics.productionWallClockOwner?.economyActivity?.drawEventsPerPlayer ?? 0} paid draw(s) + ${scenario.metrics.lengthMetrics.productionWallClockOwner?.economyActivity?.installEventsPerPlayer ?? 0} install/play event(s) per player, ${scenario.metrics.lengthMetrics.contributions.productionEconomyExpectedActivityRegisterEquivalents ?? 0} pre-player wall-reg; Act Fast RE pressure ×${scenario.metrics.lengthMetrics.contributions.productionActFastREPressureMultiplier ?? 1} feeds recovery upstream; Energy Crisis blanket ×0.89 OFF; transitional scale ${scenario.metrics.lengthMetrics.contributions.productionExpectedPlayRawPointsPerRegister ?? LENGTH_EXPECTED_PLAY_RAW_POINTS_PER_REGISTER} raw/index; other variant phase time pending`,
+    `Length bands v49dv PRODUCTION: wall-clock turn-index ${scenario.metrics.lengthWallClockTurnIndex ?? "n/a"}; Short [${MIN_WALL_CLOCK_TURN_INDEX},6.25), Medium [6.25,9.5), Long [9.5,13), Epic [13,20] with >20 still Epic but above target ceiling; requested-length fit ${scenario.metrics.lengthFit ?? "n/a"} uses ${WALL_CLOCK_LENGTH_FIT_POINTS_PER_TURN} fit pt/turn; transitional raw ${scenario.metrics.lengthRaw ?? "n/a"} is compatibility/construction diagnostic, not semantic owner`,
     scenario.metrics.lengthMetrics.ownerObservationV49dl?.active
       ? `Length owner v49dl ROUTING OBSERVATION: nominal ${scenario.metrics.lengthMetrics.ownerObservationV49dl.nominalRegisters} register(s); legacy confidence forecast +${scenario.metrics.lengthMetrics.ownerObservationV49dl.intrinsicForecastExtraRegisters} => ${scenario.metrics.lengthMetrics.ownerObservationV49dl.baselineExpectedProgrammingTurns} turn(s) diagnostic comparison; RE-native routing confidence mean/end ${scenario.metrics.lengthMetrics.ownerObservationV49dl.reNativeRoutingUncertainty.averageConfidence}/${scenario.metrics.lengthMetrics.ownerObservationV49dl.reNativeRoutingUncertainty.endConfidence}, end effective horizon ${scenario.metrics.lengthMetrics.ownerObservationV49dl.reNativeRoutingUncertainty.endEffectiveHorizonRE} register-equivalent unit(s), chronological adverse ${scenario.metrics.lengthMetrics.ownerObservationV49dl.reNativeRoutingUncertainty.chronologicalAdverseRE}RE, damage pressure ${scenario.metrics.lengthMetrics.ownerObservationV49dl.reNativeRoutingUncertainty.chronologicalDamagePressureRE}RE; optional reroute effort ${scenario.metrics.lengthMetrics.ownerObservationV49dl.reNativeRoutingUncertainty.baseEffortScale} -> ${scenario.metrics.lengthMetrics.ownerObservationV49dl.reNativeRoutingUncertainty.damageModeratedEffortScale}, low-confidence restore ceiling ${scenario.metrics.lengthMetrics.ownerObservationV49dl.reNativeRoutingUncertainty.damageEffortCeiling}; NO independent hazard/board-chaos/interaction decay in candidate`
       : `Length owner v49dl ROUTING OBSERVATION: ${scenario.metrics.lengthMetrics.ownerObservationV49dl?.reason ?? "n/a"}`,
     scenario.metrics.lengthMetrics.ownerObservationV49dl?.active
-      ? `Play-time calibration v49dl / extent owner v49ds PRODUCTION: adverse RE ${scenario.metrics.lengthMetrics.ownerObservationV49dl.playTimeAmplification.totalAdverseRE} [intrinsic+lost ${scenario.metrics.lengthMetrics.ownerObservationV49dl.playTimeAmplification.chronologicalPlayTimeAdverseRE}, downstream-control ${scenario.metrics.lengthMetrics.ownerObservationV49dl.playTimeAmplification.downstreamTrafficControlAdverseRE}] over nominal ${scenario.metrics.lengthMetrics.ownerObservationV49dl.nominalRegisters} => ratio ${scenario.metrics.lengthMetrics.ownerObservationV49dl.playTimeAmplification.adverseRatio}, response ${scenario.metrics.lengthMetrics.ownerObservationV49dl.playTimeAmplification.responseShape}, horizon gate ${scenario.metrics.lengthMetrics.ownerObservationV49dl.playTimeAmplification.horizonActivation}, multiplier ${scenario.metrics.lengthMetrics.ownerObservationV49dl.playTimeAmplification.multiplier} => ${scenario.metrics.lengthMetrics.ownerObservationV49dl.playTimeAmplification.expectedPlayRegisters} expected reg / ${scenario.metrics.lengthMetrics.ownerObservationV49dl.playTimeAmplification.expectedPlayProgrammingTurns} turn(s); expected-play registers own full production route/play extent; distance/congestion independent votes OFF; final downstream wall-clock phase factors still pending; planningPressure NOT an owner`
+      ? `Play-time calibration v49dl / extent owner v49dv PRODUCTION: base adverse RE ${scenario.metrics.lengthMetrics.ownerObservationV49dl.playTimeAmplification.baseAdverseREBeforeActFastPressure ?? scenario.metrics.lengthMetrics.ownerObservationV49dl.playTimeAmplification.totalAdverseRE} [intrinsic+lost ${scenario.metrics.lengthMetrics.ownerObservationV49dl.playTimeAmplification.chronologicalPlayTimeAdverseRE}, downstream-control ${scenario.metrics.lengthMetrics.ownerObservationV49dl.playTimeAmplification.downstreamTrafficControlAdverseRE}] × Act Fast RE pressure ${scenario.metrics.lengthMetrics.ownerObservationV49dl.playTimeAmplification.actFastREPressureMultiplier ?? 1} = ${scenario.metrics.lengthMetrics.ownerObservationV49dl.playTimeAmplification.totalAdverseRE} adverse RE; ratio ${scenario.metrics.lengthMetrics.ownerObservationV49dl.playTimeAmplification.adverseRatio}, response ${scenario.metrics.lengthMetrics.ownerObservationV49dl.playTimeAmplification.responseShape}, horizon gate ${scenario.metrics.lengthMetrics.ownerObservationV49dl.playTimeAmplification.horizonActivation}, multiplier ${scenario.metrics.lengthMetrics.ownerObservationV49dl.playTimeAmplification.multiplier} => ${scenario.metrics.lengthMetrics.ownerObservationV49dl.playTimeAmplification.expectedPlayRegisters} expected reg / ${scenario.metrics.lengthMetrics.ownerObservationV49dl.playTimeAmplification.expectedPlayProgrammingTurns} turn(s); expected-play registers own route/play extent; player/timer wall-clock factors are downstream; planningPressure NOT an owner`
       : `Play-time calibration v49dl OBSERVATIONAL: n/a`,
     lengthOwnerCandidatePoolShadow?.active
-      ? `Length owner candidate pool v49dl/v49ds: ${lengthOwnerCandidatePoolShadow.candidateCount} acceptable candidate(s); ${(lengthOwnerCandidatePoolShadow.entries ?? []).map((entry) => `c${entry.candidate}${entry.selected ? "*" : ""} req${entry.requestedLength} extentRaw${entry.currentLengthRaw}/${entry.currentLengthLabel} nom${entry.nominalRegisters} REconf${entry.reNativeForecastConfidenceMean}/${entry.reNativeForecastConfidenceEnd} adverse${entry.playTimeAdverseRE}RE ratio${entry.playTimeAdverseRatio} resp${entry.playTimeResponseShape} gate${entry.playTimeHorizonActivation} ×play${entry.playTimeMultiplier} => ${entry.expectedPlayProgrammingTurns}t/${entry.referenceFourPlayerLengthBand} ×player${entry.playerWallClockMultiplierIndex}`).join(" | ")}; no new pathfinding; expected-play registers are the production route/play extent owner; distance/congestion independent votes OFF; downstream wall-clock phase ownership remains pending`
-      : `Length owner candidate pool v49dl/v49ds: ${lengthOwnerCandidatePoolShadow?.reason ?? "n/a"}`,
+      ? `Length owner candidate pool v49dv: ${lengthOwnerCandidatePoolShadow.candidateCount} acceptable candidate(s); ${(lengthOwnerCandidatePoolShadow.entries ?? []).map((entry) => `c${entry.candidate}${entry.selected ? "*" : ""} req${entry.requestedLength} raw${entry.currentLengthRaw}/wall${Number.isFinite(Number(entry.currentWallClockTurnIndex)) ? Number(Number(entry.currentWallClockTurnIndex).toFixed(2)) : "n/a"}t/${entry.currentLengthLabel} nom${entry.nominalRegisters} REconf${entry.reNativeForecastConfidenceMean}/${entry.reNativeForecastConfidenceEnd} adverse${entry.playTimeAdverseRE}RE ratio${entry.playTimeAdverseRatio} resp${entry.playTimeResponseShape} gate${entry.playTimeHorizonActivation} ×play${entry.playTimeMultiplier} => ${entry.expectedPlayProgrammingTurns}t/${entry.referenceFourPlayerLengthBand} ×player${entry.playerWallClockMultiplierIndex} ×timer${entry.actFastDirectTimingMultiplierIndex} +econ(${entry.economyDrawEventsPerPlayer}d/${entry.economyInstallEventsPerPlayer}i=${entry.economyWallClockRegisterIndex}wall) = ${entry.effectiveWallClockRegisterIndex} wall-reg-index`).join(" | ")}; no new pathfinding; expected-play extent plus player/Act Fast programming timing and card-aware economy transaction time own production length; other variant phase time pending`
+      : `Length owner candidate pool v49dv: ${lengthOwnerCandidatePoolShadow?.reason ?? "n/a"}`,
     `Variant length accounting v38: ${(scenario.metrics.lengthMetrics.variantLengthContributions ?? []).map((entry) => `${entry.id} ${entry.delta >= 0 ? "+" : ""}${entry.delta} [${entry.kind}]`).join(", ") || "none"}; method ${scenario.metrics.lengthMetrics.method ?? "n/a"}`,
     `Moving target profile: active ${scenario.movingTargetStats?.activeCount ?? 0}, pathTiles ${scenario.movingTargetStats?.totalPathLength ?? 0}, uniqueCoverage ${scenario.movingTargetStats?.coverageTiles ?? 0}, turns ${scenario.movingTargetStats?.totalTurns ?? 0}, fastSegments ${scenario.movingTargetStats?.fastSegments ?? 0}, difficultyBonus ${scenario.movingTargetStats?.difficultyBonus ?? 0}, lengthBonus ${scenario.movingTargetStats?.lengthBonus ?? 0}`,
     `Moving target volatility penalty: ${scenario.metrics.movingTargetVolatilityPenalty ?? 0}`,
@@ -21624,39 +22538,40 @@ function buildScenarioReport(scenario, selectedLegIndices = null) {
     scenario.metrics.routeDrama
       ? `Route drama: ${scenario.metrics.routeDrama.level}, score ${scenario.metrics.routeDrama.score}, penalty ${scenario.metrics.routeDrama.penalty}, sharedTiles ${scenario.metrics.routeDrama.sharedTiles}, crossings ${scenario.metrics.routeDrama.crossings}, reverseEdges ${scenario.metrics.routeDrama.reverseEdges}`
       : "Route drama: n/a",    scenario.metrics.competitiveBlockImpact
-      ? `Competitive balance simulation: sequential completed-RE blocks ${(scenario.metrics.competitiveBlockImpact.blockSequence ?? []).map((entry) => `p${entry.order}:#${entry.index + 1}@${entry.effectiveRE ?? entry.score}RE${Number.isFinite(entry.advantageVsMedianRE ?? entry.advantageVsMedian) ? ` (adv ${entry.advantageVsMedianRE ?? entry.advantageVsMedian}RE` : ""}${Number.isFinite(entry.decisionMarginRE ?? entry.decisionMargin) ? `, gap ${entry.decisionMarginRE ?? entry.decisionMargin}RE` : ""}${Number.isFinite(entry.strategicChallenge) ? `, challenge ${entry.strategicChallenge}` : ""}${Number.isFinite(entry.advantageVsMedianRE ?? entry.advantageVsMedian) ? ")" : ""}`).join(" -> ") || "none"}; remaining ${scenario.metrics.competitiveBlockImpact.remainingStartCount}, best-${scenario.playerCount ?? scenario.preferences?.playerCount ?? "P"} selected ${scenario.metrics.competitiveBlockImpact.selectedStartCount ?? "n/a"} [${(scenario.metrics.competitiveBlockImpact.selectedIndices ?? []).map((index) => index + 1).join(", ")}], RE stddev ${scenario.metrics.competitiveBlockImpact.selectedStdDev ?? "n/a"}/${scenario.metrics.competitiveBlockImpact.balanceStdDevLimit ?? COMPETITIVE_EFFECTIVE_RE_SOFT_STDDEV_LIMIT} soft/${scenario.metrics.competitiveBlockImpact.hardBalanceStdDevLimit ?? COMPETITIVE_EFFECTIVE_RE_HARD_STDDEV_LIMIT} hard, strategicDifficulty +${scenario.metrics.competitiveBlockImpact.strategicDifficulty ?? "n/a"} (center ${scenario.metrics.competitiveBlockImpact.strategicDifficultyEvidence?.calibrationCenter ?? 1.8}, blockChallenge ${scenario.metrics.competitiveBlockImpact.strategicDifficultyEvidence?.meanBlockChallenge ?? "n/a"}, selectionAmbiguity ${scenario.metrics.competitiveBlockImpact.strategicDifficultyEvidence?.selectionAmbiguity ?? "n/a"}, provisional ${scenario.metrics.competitiveBlockImpact.strategicDifficultyEvidence?.provisional ? "yes" : "no"}), readability ${scenario.metrics.competitiveBlockImpact.blockReadability?.meanBlockChallenge ?? "n/a"}/${scenario.metrics.competitiveBlockImpact.blockReadability?.meanBlockChallengeTarget ?? "n/a"} mean, max ${scenario.metrics.competitiveBlockImpact.blockReadability?.maxBlockChallenge ?? "n/a"}/${scenario.metrics.competitiveBlockImpact.blockReadability?.maxBlockChallengeTarget ?? "n/a"}, hidden ${scenario.metrics.competitiveBlockImpact.blockReadability?.hiddenValueDisagreements ?? "n/a"}/${(scenario.metrics.competitiveBlockImpact.completedREOwnershipAudit?.blockComparisons ?? []).length || 0}, fitPenalty ${scenario.metrics.competitiveBlockImpact.blockReadability?.fitPenalty ?? 0}, outliers soft/hard ${scenario.metrics.competitiveBlockImpact.selectedOutlierCount ?? scenario.metrics.competitiveBlockImpact.remainingOutlierCount}/${scenario.metrics.competitiveBlockImpact.selectedHardOutlierCount ?? "n/a"}, RE range ${scenario.metrics.competitiveBlockImpact.scoreRange}, worstREz ${scenario.metrics.competitiveBlockImpact.worstScoreZ}, registerZ diagnostic ${scenario.metrics.competitiveBlockImpact.worstActionZ}, blockTraffic ${scenario.metrics.competitiveBlockImpact.blockTrafficScope ?? "n/a"}, trafficRecomputations ${scenario.metrics.competitiveBlockImpact.trafficRecomputations ?? 0}, softBalanced ${scenario.metrics.competitiveBlockImpact.softBalanced ? "yes" : "no"}, hardAcceptable ${scenario.metrics.competitiveBlockImpact.hardAcceptable ? "yes" : "no"}, method ${scenario.metrics.competitiveBlockImpact.method}`
+      ? `Competitive balance simulation v49ec: sequential best-one completed-RE blocks ${(scenario.metrics.competitiveBlockImpact.blockSequence ?? []).map((entry) => `p${entry.order}:#${entry.index + 1}@${entry.effectiveRE ?? entry.score}RE${Number.isFinite(entry.advantageVsMedianRE ?? entry.advantageVsMedian) ? ` (adv ${entry.advantageVsMedianRE ?? entry.advantageVsMedian}RE` : ""}${Number.isFinite(entry.decisionMarginRE ?? entry.decisionMargin) ? `, gap ${entry.decisionMarginRE ?? entry.decisionMargin}RE` : ""}${Number.isFinite(entry.strategicChallenge) ? `, challenge ${entry.strategicChallenge}` : ""}${Number.isFinite(entry.advantageVsMedianRE ?? entry.advantageVsMedian) ? ")" : ""}`).join(" -> ") || "none"}; traffic recomputations ${scenario.metrics.competitiveBlockImpact.trafficRecomputations ?? 0}; remaining ${scenario.metrics.competitiveBlockImpact.remainingStartCount}, post-block best-${scenario.playerCount ?? scenario.preferences?.playerCount ?? "P"} ${scenario.metrics.competitiveBlockImpact.selectedStartCount ?? "n/a"} [${(scenario.metrics.competitiveBlockImpact.selectedIndices ?? []).map((index) => index + 1).join(", ")}], RE range ${scenario.metrics.competitiveBlockImpact.selectedRangeRE ?? scenario.metrics.competitiveBlockImpact.scoreRange ?? "n/a"}/${scenario.metrics.competitiveBlockImpact.balanceRangeLimit ?? "n/a"} soft/${scenario.metrics.competitiveBlockImpact.hardBalanceRangeLimit ?? "n/a"} hard (excess ${scenario.metrics.competitiveBlockImpact.balanceRangeExcess ?? "n/a"}; median ${scenario.metrics.competitiveBlockImpact.selectedMedianTurns ?? "n/a"} programming turns), SD ${scenario.metrics.competitiveBlockImpact.selectedStdDev ?? "n/a"} diagnostic-only, strategicDifficulty +${scenario.metrics.competitiveBlockImpact.strategicDifficulty ?? "n/a"} (center ${scenario.metrics.competitiveBlockImpact.strategicDifficultyEvidence?.calibrationCenter ?? 1.8}, blockChallenge ${scenario.metrics.competitiveBlockImpact.strategicDifficultyEvidence?.meanBlockChallenge ?? "n/a"}, selectionAmbiguity ${scenario.metrics.competitiveBlockImpact.strategicDifficultyEvidence?.selectionAmbiguity ?? "n/a"}, provisional ${scenario.metrics.competitiveBlockImpact.strategicDifficultyEvidence?.provisional ? "yes" : "no"}), RE-native legibility ${scenario.metrics.competitiveBlockImpact.blockReadability?.meanBlockChallenge ?? "n/a"}/${scenario.metrics.competitiveBlockImpact.blockReadability?.meanBlockChallengeTarget ?? "n/a"} mean, max ${scenario.metrics.competitiveBlockImpact.blockReadability?.maxBlockChallenge ?? "n/a"}/${scenario.metrics.competitiveBlockImpact.blockReadability?.maxBlockChallengeTarget ?? "n/a"}, fitPenalty ${scenario.metrics.competitiveBlockImpact.blockReadability?.fitPenalty ?? 0}, legacy-shadow OFF, worstREz ${scenario.metrics.competitiveBlockImpact.worstScoreZ ?? "n/a"} diagnostic, registerZ ${scenario.metrics.competitiveBlockImpact.worstActionZ ?? "n/a"} diagnostic, blockTraffic ${scenario.metrics.competitiveBlockImpact.blockTrafficScope ?? "n/a"}, softBalanced ${scenario.metrics.competitiveBlockImpact.softBalanced ? "yes" : "no"}, hardAcceptable ${scenario.metrics.competitiveBlockImpact.hardAcceptable ? "yes" : "no"}, method ${scenario.metrics.competitiveBlockImpact.method}`
       : "Competitive balance simulation: n/a",
     scenario.metrics.competitiveBlockImpact?.completedREOwnershipAudit
       ? (() => {
         const audit = scenario.metrics.competitiveBlockImpact.completedREOwnershipAudit;
-        const blockText = (audit.blockComparisons ?? []).map((entry) => (
-          `p${entry.order}:RE#${Number.isInteger(entry.productionIndex ?? entry.completedREIndex) ? (entry.productionIndex ?? entry.completedREIndex) + 1 : "?"}` +
-          `/legacy-shadow#${Number.isInteger(entry.legacyShadowIndex ?? entry.legacyIndex) ? (entry.legacyShadowIndex ?? entry.legacyIndex) + 1 : "?"}` +
-          `${entry.agrees ? "=agree" : "=DIFF"}` +
-          `${Number.isFinite(entry.completedREEffectiveRE) ? `@${entry.completedREEffectiveRE}RE` : ""}` +
-          `${Number.isFinite(entry.completedREDecisionMarginRE) ? `(gap ${entry.completedREDecisionMarginRE}RE)` : ""}`
-        )).join(" -> ") || "none";
         const choice = audit.completedREChoiceProfile ?? {};
-        return `Competitive completed-RE ownership v49cr LIVE: production block/choice owner ${audit.productionRankingOwner ?? "completed-effective-re"}; same-field legacy-shadow disagreements ${audit.blockDisagreementCount ?? 0}/${(audit.blockComparisons ?? []).length} [${blockText}]; choice set best-${audit.intendedChoiceSetCount ?? audit.productionChoiceSetCount ?? "P"}; legacy-shadow [${(audit.legacyChoiceSetIndices ?? []).map((index) => index + 1).join(", ") || "none"}] vs production RE [${(audit.completedREChoiceSetIndices ?? []).map((index) => index + 1).join(", ") || "none"}], overlap ${audit.choiceSetOverlap ?? 0}/${audit.intendedChoiceSetCount ?? audit.productionChoiceSetCount ?? "P"}, RE sd/range ${choice.stdDev ?? "n/a"}/${choice.rangeRE ?? "n/a"}RE, outliers ${choice.outlierCount ?? "n/a"}; occupancy ${audit.occupancyOwner ?? "completed-effective-re"} (${audit.occupancyQualityScale ?? "RE-native"}); traffic ${audit.productionTrafficScope ?? "full"}; difficulty calibration LIVE; future Start Balance applies via Competitive-specific calibration pending; Dev ★ = expected selected start`;
+        const trace = (audit.blockSequence ?? []).map((entry) => (
+          `p${entry.order}:#${Number.isInteger(entry.index) ? entry.index + 1 : "?"}` +
+          `${Number.isFinite(entry.effectiveRE) ? `@${entry.effectiveRE}RE` : ""}` +
+          `${Number.isFinite(entry.decisionMarginRE) ? `(gap ${entry.decisionMarginRE}RE)` : ""}`
+        )).join(" -> ") || "none";
+        return `Competitive completed-RE ownership v49ec LIVE: production block/choice owner ${audit.productionRankingOwner ?? "completed-effective-re"}; P sequential best-one blocks [${trace}] with traffic recomputed between decisions; post-block choice set best-${audit.intendedChoiceSetCount ?? audit.productionChoiceSetCount ?? "P"} [${(audit.completedREChoiceSetIndices ?? []).map((index) => index + 1).join(", ") || "none"}], RE sd/range ${choice.stdDev ?? "n/a"}/${choice.rangeRE ?? "n/a"}RE; final fairness owner ${audit.finalFairnessOwner ?? "best-worst-completed-effective-re-range"}, soft/hard ${audit.finalRangePolicy?.softRangeLimit ?? "n/a"}/${audit.finalRangePolicy?.hardRangeLimit ?? "n/a"}RE; legacy ranking/readability comparator OFF; occupancy ${audit.occupancyOwner ?? "completed-effective-re"} (${audit.occupancyQualityScale ?? "RE-native"}); traffic ${audit.productionTrafficScope ?? "full"}; RE-native difficulty legibility LIVE; future Start Balance via Competitive-specific calibration pending; Dev ★ = expected selected start`;
       })()
-      : "Competitive completed-RE ownership v49cr: n/a",
+      : "Competitive completed-RE ownership v49ec: n/a",
     summary.payToWin?.active
-      ? `${summary.payToWin.subsidizedStarts ? "Subsidized Starts" : "Pay to Win"}: model ${summary.payToWin.pricingModel?.method ?? "n/a"}, economy ${summary.payToWin.pricingEconomyMethod ?? "n/a"}, target ${summary.payToWin.pricingModel?.target ?? "n/a"}, start ${summary.payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY}E/max ${summary.payToWin.maxEnergy ?? ROUTE_ENERGY_ECONOMY_DEFAULTS.maxEnergy}E, startingCards ${summary.payToWin.startingUpgradeCards ?? DEFAULT_STARTING_UPGRADE_CARDS}, offered ${summary.payToWin.pricedStartCount ?? "n/a"}, pruned ${(summary.payToWin.pruned ?? []).length}, residualStdDev ${summary.payToWin.residualBalance?.worstStdDev ?? "n/a"}/${summary.payToWin.residualBalance?.early?.limit ?? NORMAL_EFFECTIVE_RE_FAIRNESS_STDDEV_LIMIT}, residualPenalty ${summary.payToWin.residualBalance?.worstResidualPenalty ?? 0}, availability ${summary.payToWin.availabilityValid === false ? "FAIL" : "pass"}, balance ${summary.payToWin.balanceValid === false ? "residual" : "pass"}, latePricing ${summary.payToWin.latePricingActive ? "active" : "inactive"}, selectorSplit ${summary.payToWin.selectorSplit?.selected ? `after-p${summary.payToWin.selectorSplit.cutoffAfter}` : "none"}`
+      ? `${summary.payToWin.subsidizedStarts ? "Subsidized Starts" : "Pay to Win"}: model ${summary.payToWin.pricingModel?.method ?? "n/a"}, economy ${summary.payToWin.pricingEconomyMethod ?? "n/a"}, target ${summary.payToWin.pricingModel?.target ?? "n/a"}, ${summary.payToWin.subsidizedStarts ? `start ${summary.payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY}E / subsidy-total ceiling ${summary.payToWin.subsidyStartingEnergyCeiling ?? summary.payToWin.pricingModel?.subsidyStartingEnergyCeiling ?? "n/a"}E / storage ${summary.payToWin.maxEnergy ?? ROUTE_ENERGY_ECONOMY_DEFAULTS.maxEnergy}E` : `start ${summary.payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY}E / storage ${summary.payToWin.maxEnergy ?? ROUTE_ENERGY_ECONOMY_DEFAULTS.maxEnergy}E`}, startingCards ${summary.payToWin.startingUpgradeCards ?? DEFAULT_STARTING_UPGRADE_CARDS}, offered ${summary.payToWin.pricedStartCount ?? "n/a"}, pruned ${(summary.payToWin.pruned ?? []).length}, residualRange ${summary.payToWin.residualBalance?.worstRange ?? "n/a"}/${summary.payToWin.residualBalance?.worstRangeLimit ?? "n/a"}RE (overflow ${summary.payToWin.residualBalance?.worstRangeExcess ?? 0}; soft +${summary.payToWin.residualBalance?.worstSoftOverflowAllowance ?? "n/a"}), residualPenalty ${summary.payToWin.residualBalance?.worstResidualPenalty ?? 0}, meaningfulEnergy ${summary.payToWin.meaningfulEnergyAdjustmentCount ?? 0}, capLimited ${summary.payToWin.capLimitedEnergyAdjustmentCount ?? 0}, SD ${summary.payToWin.residualBalance?.worstStdDev ?? "n/a"} diagnostic-only, availability ${summary.payToWin.availabilityValid === false ? "FAIL" : "pass"}, balance ${summary.payToWin.balanceValid === false ? "residual" : "pass"}, latePricing ${summary.payToWin.latePricingActive ? "active" : "inactive"}, selectorSplit ${summary.payToWin.selectorSplit?.selected ? `after-p${summary.payToWin.selectorSplit.cutoffAfter}` : "none"}`
       : "Priced starts: n/a",
     summary.payToWin?.reOwnershipAudit?.early
       ? (() => {
         const audit = summary.payToWin.reOwnershipAudit;
         const early = audit.early;
         const late = audit.late;
-        return `Economy start RE ownership v49ct LIVE: ${audit.mode}; RE-native occupancy + incremental 1E until Energy-actionable RE prune is avoided; literal duration diagnostic-only; early raw/post sd ${early.rawStdDev ?? "n/a"}/${early.postStdDev ?? "n/a"}, penalty ${early.residualPenalty ?? 0}, ignored-duration ${early.ignoredDurationPenalty ?? 0}, nonzero ${early.nonzeroAdjustments ?? 0}, max ${summary.payToWin.subsidizedStarts ? "+" : ""}${early.maxAdjustment ?? 0}E${summary.payToWin.latePricingActive ? `; late raw/post sd ${late.rawStdDev ?? "n/a"}/${late.postStdDev ?? "n/a"}, penalty ${late.residualPenalty ?? 0}, ignored-duration ${late.ignoredDurationPenalty ?? 0}, nonzero ${late.nonzeroAdjustments ?? 0}, max ${summary.payToWin.subsidizedStarts ? "+" : ""}${late.maxAdjustment ?? 0}E` : ""}; extreme-baseline availability retired`;
+        return `Economy start RE ownership v49ea LIVE: ${audit.mode}; start-specific completed-RE Energy balancing toward the directional field anchor BEFORE range-first pruning; each start chooses the closest legal integer Energy result, then residual outliers are pruned and the field is rebalanced; ${summary.payToWin.subsidizedStarts ? "Subsidized Starts cap total starting Energy at min(base+3, storage max); " : ""}literal duration diagnostic-only; early range ${summary.payToWin.residualBalance?.early?.rangeRE ?? "n/a"}/${summary.payToWin.residualBalance?.early?.residualPenaltyComponents?.rangeLimit ?? "n/a"}RE, penalty ${early.residualPenalty ?? 0}, nonzero ${early.nonzeroAdjustments ?? 0}, max ${summary.payToWin.subsidizedStarts ? "+" : ""}${early.maxAdjustment ?? 0}E${summary.payToWin.latePricingActive ? `; late range ${summary.payToWin.residualBalance?.late?.rangeRE ?? "n/a"}/${summary.payToWin.residualBalance?.late?.residualPenaltyComponents?.rangeLimit ?? "n/a"}RE, penalty ${late.residualPenalty ?? 0}, nonzero ${late.nonzeroAdjustments ?? 0}, max ${summary.payToWin.subsidizedStarts ? "+" : ""}${late.maxAdjustment ?? 0}E` : ""}; target ${early.targetPolicy ?? "n/a"}@${early.targetEffectiveRE ?? "n/a"}RE${summary.payToWin.latePricingActive ? ` / late ${late.targetPolicy ?? "n/a"}@${late.targetEffectiveRE ?? "n/a"}RE` : ""}; cap-limited ${early.capLimitedAdjustments ?? 0}${summary.payToWin.latePricingActive ? `/${late.capLimitedAdjustments ?? 0}` : ""}; SD is diagnostic/tiebreak only; balance→prune→rebalance loop LIVE`;
       })()
-      : "Economy start RE ownership v49ct: n/a",
+      : "Economy start RE ownership v49ea: n/a",
     summary.payToWin?.selectorRuntimeOptimization
       ? (() => {
         const runtime = summary.payToWin.selectorRuntimeOptimization;
         return `Economy selector runtime v49cl: exact frozen-field reuse ${runtime.finalPricingStateReused ? "HIT" : "MISS"}; reused ${runtime.reusedBaseStartCurves ?? 0} base start curve(s) + ${runtime.reusedSelectorScenarioSamples ?? 0} selector scenario(s); selector sampling unchanged`;
       })()
       : "Economy selector runtime v49cl: n/a",
+    summary.payToWin?.active
+      ? "Economy route-choice v49dw LIVE: completed effective RE + card-aware starting-Energy delta selects among already-discovered full-course candidates at each payment/subsidy; legacy intrinsic + traffic + 4% raw-gap is comparator/pricing-space telemetry only."
+      : "Economy route-choice v49dw: n/a",
     summary.payToWin?.targetedEnergyRescue
       ? (() => {
         const rescue = summary.payToWin.targetedEnergyRescue;
@@ -21681,7 +22596,7 @@ function buildScenarioReport(scenario, selectedLegIndices = null) {
       }).join(" | ")}`
       : "Priced start residuals: n/a",
     summary.normalStartBalance?.active
-      ? `Normal start balance v49bq: RE-native iterative, pruned ${(summary.normalStartBalance.pressurePruned ?? []).length ? (summary.normalStartBalance.pressurePruned ?? []).map((item) => `#${item.index + 1}(RE outlier; z ${item.diagnostics?.scoreZ ?? "n/a"}; ΔRE ${item.diagnostics?.scoreDelta ?? "n/a"}; regs ${item.actions ?? "n/a"}; pass ${item.pass ?? "n/a"})`).join(", ") : "none"}, retained ${summary.normalStartBalance.retainedCount ?? scenario.metrics?.usableStarts?.length ?? "n/a"}, effectiveRE ${summary.normalStartBalance.retainedEffectiveREMin ?? summary.normalStartBalance.retainedScoreMin ?? "n/a"}..${summary.normalStartBalance.retainedEffectiveREMax ?? summary.normalStartBalance.retainedScoreMax ?? "n/a"}, RE stddev ${summary.normalStartBalance.balanceStdDevBefore ?? "n/a"}->${summary.normalStartBalance.balanceStdDevAfter ?? "n/a"}/${summary.normalStartBalance.balanceStdDevLimit ?? NORMAL_EFFECTIVE_RE_FAIRNESS_STDDEV_LIMIT}, action pruning OFF, RE-balance pruning ON only above player floor, duration guardrail ${(summary.normalStartBalance.durationGuardrail?.min ?? "n/a")}..${(summary.normalStartBalance.durationGuardrail?.max ?? "n/a")} regs (range ${summary.normalStartBalance.durationGuardrail?.range ?? "n/a"}/${summary.normalStartBalance.durationGuardrail?.allowedRange ?? "n/a"}; ${summary.normalStartBalance.durationGuardrail?.violation ? "VIOLATION" : "pass"}), worst remaining RE z ${summary.normalStartBalance.worstRemainingScoreZ ?? "n/a"}, traffic recomputations ${summary.normalStartBalance.trafficRecomputations ?? 0}, remainingBad ${(summary.normalStartBalance.remainingBadStarts ?? []).length}, floor ${summary.normalStartBalance.retainedCount ?? "n/a"}/${summary.normalStartBalance.playerFloor ?? scenario.playerCount ?? "?"}${summary.normalStartBalance.floorReached ? " reached" : ""}, residual scorer penalty ${summary.normalStartBalance.residualSelectionPenalty ?? 0}, hard-fail ${summary.normalStartBalance.belowPlayerFloor ? "yes" : "no"}`
+      ? `Normal start balance v49dx: RANGE-FIRST completed-RE, pruned ${(summary.normalStartBalance.pressurePruned ?? []).length ? (summary.normalStartBalance.pressurePruned ?? []).map((item) => `#${item.index + 1}(ΔRE ${item.diagnostics?.scoreDelta ?? "n/a"}; range ${item.diagnostics?.rangeBefore ?? "n/a"}->${item.diagnostics?.rangeAfterEstimate ?? "n/a"}/${item.diagnostics?.rangeLimit ?? "n/a"}; SD ${item.diagnostics?.balanceStdDevBefore ?? "n/a"}->${item.diagnostics?.balanceStdDevAfter ?? item.diagnostics?.balanceStdDevAfterEstimate ?? "n/a"}; pass ${item.pass ?? "n/a"})`).join(", ") : "none"}, retained ${summary.normalStartBalance.retainedCount ?? scenario.metrics?.usableStarts?.length ?? "n/a"}, effectiveRE ${summary.normalStartBalance.retainedEffectiveREMin ?? summary.normalStartBalance.retainedScoreMin ?? "n/a"}..${summary.normalStartBalance.retainedEffectiveREMax ?? summary.normalStartBalance.retainedScoreMax ?? "n/a"}, range ${summary.normalStartBalance.retainedEffectiveRERange ?? "n/a"}/${summary.normalStartBalance.retainedEffectiveRERangeLimit ?? "n/a"} (excess ${summary.normalStartBalance.retainedEffectiveRERangeExcess ?? "n/a"}; soft +${summary.normalStartBalance.residualSelectionPenaltyComponents?.softOverflowAllowance ?? "n/a"}; median ${summary.normalStartBalance.fairnessMedianTurns ?? "n/a"} turns), SD ${summary.normalStartBalance.balanceStdDevBefore ?? "n/a"}->${summary.normalStartBalance.balanceStdDevAfter ?? "n/a"} diagnostic/tiebreak only, action pruning OFF, duration guardrail ${(summary.normalStartBalance.durationGuardrail?.min ?? "n/a")}..${(summary.normalStartBalance.durationGuardrail?.max ?? "n/a")} regs (range ${summary.normalStartBalance.durationGuardrail?.range ?? "n/a"}/${summary.normalStartBalance.durationGuardrail?.allowedRange ?? "n/a"}; ${summary.normalStartBalance.durationGuardrail?.violation ? "VIOLATION" : "pass"}), traffic recomputations ${summary.normalStartBalance.trafficRecomputations ?? 0}, floor ${summary.normalStartBalance.retainedCount ?? "n/a"}/${summary.normalStartBalance.playerFloor ?? scenario.playerCount ?? "?"}${summary.normalStartBalance.floorReached ? " reached" : ""}, residual scorer penalty ${summary.normalStartBalance.residualSelectionPenalty ?? 0}, hard-fail ${summary.normalStartBalance.belowPlayerFloor ? "yes" : "no"}`
       : "Normal start balance: n/a",
     reDifficultyShadow?.active
       ? `RE-turn difficulty starts v49de: ${(reDifficultyShadow.perStart ?? []).map((entry) => `#${entry.index + 1} occ${Number(entry.occupancy).toFixed(3)} mix${entry.routeCount} eff${Number(entry.effectiveRE).toFixed(2)}RE regs${Number(entry.programmedRegisters).toFixed(2)} turns${Number(entry.programmingTurns).toFixed(2)} lost${Number(entry.lostRegisterTempoRE).toFixed(2)} burden${Number(entry.burdenRE).toFixed(2)} meanTurn${Number(entry.meanTurnBurdenRE).toFixed(3)} peakTurn${Number(entry.turnTailBurdenRE).toFixed(3)} composite${Number(entry.routeTurnDifficultyRE).toFixed(3)}`).join(" | ")}`
@@ -26542,6 +27457,8 @@ function buildScenarioPresentationSnapshot(scenario) {
     difficultyRaw: metrics.difficultyRaw ?? null,
     lengthRaw: metrics.lengthRaw ?? null,
     lengthFitRaw: metrics.lengthFitRaw ?? null,
+    lengthWallClockTurnIndex: metrics.lengthWallClockTurnIndex ?? null,
+    lengthSemanticUnit: metrics.lengthSemanticUnit ?? null,
     difficultyFit: metrics.difficultyFit ?? 0,
     difficultyDirection: metrics.difficultyDirection ?? "matched",
     difficultyTargetBand: metrics.difficultyTargetBand ?? null,
@@ -26561,7 +27478,19 @@ function buildScenarioPresentationSnapshot(scenario) {
       },
       contributions: {
         forecastEquivalentActions: lengthMetrics.contributions?.forecastEquivalentActions ?? null
-      }
+      },
+      productionExtentOwner: lengthMetrics.productionExtentOwner
+        ? {
+          expectedPlayProgrammingTurns:
+            lengthMetrics.productionExtentOwner.expectedPlayProgrammingTurns ?? null
+        }
+        : null,
+      productionWallClockOwner: lengthMetrics.productionWallClockOwner
+        ? {
+          effectiveWallClockTurnIndex:
+            lengthMetrics.productionWallClockOwner.effectiveWallClockTurnIndex ?? null
+        }
+        : null
     },
     openingLegAnticlimax: metrics.openingLegAnticlimax ?? null,
     intermediateCheckpointPacing: metrics.intermediateCheckpointPacing ?? null,
@@ -28601,6 +29530,10 @@ function summarizeCalibrationScenario(assets, scenario) {
       difficultyRaw: Number.isFinite(Number(metrics.difficultyRaw)) ? Number(metrics.difficultyRaw) : null,
       difficultyTurnRE: Number.isFinite(Number(metrics.difficultyTurnRE)) ? Number(metrics.difficultyTurnRE) : null,
       lengthRaw: Number.isFinite(Number(metrics.lengthRaw)) ? Number(metrics.lengthRaw) : null,
+      lengthWallClockTurnIndex: Number.isFinite(Number(metrics.lengthWallClockTurnIndex))
+        ? Number(metrics.lengthWallClockTurnIndex)
+        : null,
+      lengthSemanticUnit: metrics.lengthSemanticUnit ?? null,
       difficultyFit: Number.isFinite(Number(metrics.difficultyFit)) ? Number(metrics.difficultyFit) : null,
       lengthFit: Number.isFinite(Number(metrics.lengthFit)) ? Number(metrics.lengthFit) : null,
       fitScore: Number.isFinite(Number(metrics.fitScore)) ? Number(metrics.fitScore) : null,
@@ -29543,4 +30476,4 @@ if (typeof document !== "undefined") {
   init().catch(console.error);
 
 }
-// VERSION END: v49ds-re-native-expected-play-extent-production
+// VERSION END: v49ec-competitive-range-cleanup

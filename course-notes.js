@@ -1,4 +1,4 @@
-// VERSION START: v49dg-re-turn-difficulty-semantics
+// VERSION START: v49ed-owner-editorial-cleanup
 // Robo Rally Course Randomizer - player-facing course notes
 const notesCache = new WeakMap();
 
@@ -53,19 +53,6 @@ function getOpeningFacingChanges(routes) {
   }));
 }
 
-function getLegPressure(leg) {
-  const summary = leg?.analysis?.summary || {};
-  return (summary.difficultyScore ?? summary.averageRouteScore ?? 0) +
-    (summary.congestionScore ?? 0) * 0.45 +
-    (summary.crossLegOverlap ?? 0) * 6 -
-    (summary.diversityScore ?? 0) * 0.12;
-}
-
-function getLegLabel(leg, scenario) {
-  if (leg?.from === "dock") return scenario?.virtualBots ? "Entry → 1" : "Dock → 1";
-  return `${leg?.from ?? "?"} → ${leg?.to ?? "?"}`;
-}
-
 const CHECKPOINT_PLACEMENT_ADVISORY_THRESHOLD = 6;
 const SHORT_CHECKPOINT_PLACEMENT_ADVISORY_THRESHOLD = 9;
 const CHECKPOINT_PLACEMENT_COMPONENT_NOTE_THRESHOLD = 1.5;
@@ -92,7 +79,10 @@ function getTargetMismatchFact(scenario, kind) {
   // rejected at the saved-course schema boundary.
   const rawValue = Number(isDifficulty
     ? metrics.difficultyTurnRE
-    : (metrics.lengthFitRaw ?? metrics.lengthRaw));
+    : (metrics.lengthWallClockTurnIndex
+      ?? metrics.lengthMetrics?.productionWallClockOwner?.effectiveWallClockTurnIndex
+      ?? metrics.lengthFitRaw
+      ?? metrics.lengthRaw));
   const fit = Number(isDifficulty ? metrics.difficultyFit : metrics.lengthFit) || 0;
   const fallbackDirection = isDifficulty
     ? (metrics.difficultyDirection ?? "matched")
@@ -333,13 +323,9 @@ export function getCheckpointPlacementAdvisory(scenario) {
 export function buildCourseNoteEvidence(scenario, fitNotes = []) {
   const first = scenario?.sequence?.firstLeg?.summary || {};
   const openingRoutes = selectedOpeningRoutes(scenario);
-  const laterLegs = (scenario?.sequence?.legs || []).slice(1);
-  const laterSummaries = laterLegs.map((leg) => leg?.analysis?.summary || {});
-  const routeDrama = scenario?.metrics?.routeDrama || {};
-  const contributions = scenario?.metrics?.lengthMetrics?.contributions || {};
   const fullTraffic = first.fullCourseTraffic || null;
   const contextualProfile = first.contextualSearchProfile || null;
-  const normalBalance = first.normalStartBalance || null;
+  const fairnessAcceptance = scenario?.metrics?.fairnessAcceptance ?? null;
   const competitiveBalance = first.competitiveStartBalance || null;
   const trafficByLeg = Array.isArray(fullTraffic?.averageTrafficByLeg)
     ? fullTraffic.averageTrafficByLeg
@@ -350,25 +336,44 @@ export function buildCourseNoteEvidence(scenario, fitNotes = []) {
   const usableStartAnalyses = Array.isArray(scenario?.metrics?.usableStarts)
     ? scenario.metrics.usableStarts
     : (scenario?.sequence?.firstLeg?.starts || []).filter((item) => item.reachable && item.fullCourseRoute);
-  const energyRoutes = usableStartAnalyses.map((item) => item.fullCourseRoute).filter(Boolean);
-  const energyRewardValues = energyRoutes
+  const ownedRoutes = usableStartAnalyses
+    .map((item) => item.fullCourseRoute)
+    .filter(Boolean);
+  const energyRewardValues = ownedRoutes
     .map((route) => Number(route.routeEnergyEconomyRewardScore))
     .filter(Number.isFinite);
-  const batteryRewardValues = energyRoutes
+  const batteryRewardValues = ownedRoutes
     .map((route) => Number(route.batteryEconomyRewardScore))
     .filter(Number.isFinite);
-  const powerUpRewardValues = energyRoutes
+  const powerUpRewardValues = ownedRoutes
     .map((route) => Number(route.powerUpEconomyRewardScore))
     .filter(Number.isFinite);
-  const chopShopRewardValues = energyRoutes
+  const chopShopRewardValues = ownedRoutes
     .map((route) => Number(route.chopShopEconomyRewardScore))
     .filter(Number.isFinite);
-  const legs = scenario?.sequence?.legs || [];
-  const rankedLegs = legs
-    .map((leg) => ({ leg, pressure: getLegPressure(leg) }))
-    .sort((a, b) => b.pressure - a.pressure);
-  const averageLegPressure = average(rankedLegs.map((entry) => entry.pressure));
-  const programmingPressure = scenario?.metrics?.programmingPressure || {};
+
+  const routeOwnerBurdenPerTurn = (route, keys) => {
+    const components = route?.normalFairnessIntrinsicREComponents ?? null;
+    if (!components) return null;
+    const programmed = Number(components.programmedRegisterRE ?? route?.actions);
+    if (!(programmed > 0)) return null;
+    const total = keys.reduce((sum, key) => {
+      const value = Number(components[key]);
+      return sum + (Number.isFinite(value) ? value : 0);
+    }, 0);
+    return total * 5 / programmed;
+  };
+  const cardBurdenPerTurn = average(ownedRoutes
+    .map((route) => routeOwnerBurdenPerTurn(route, ["cleanCardPlausibilityRE"]))
+    .filter(Number.isFinite));
+  const damageBurdenPerTurn = average(ownedRoutes
+    .map((route) => routeOwnerBurdenPerTurn(route, ["damageCardSupplyRE", "clogRE"]))
+    .filter(Number.isFinite));
+  const mentalBurdenPerTurn = average(ownedRoutes
+    .map((route) => routeOwnerBurdenPerTurn(route, ["mentalRE"]))
+    .filter(Number.isFinite));
+  const burdenCoverage = ownedRoutes.filter((route) => route?.normalFairnessIntrinsicREComponents).length;
+
   const facts = buildCourseNoteFacts(scenario);
   const checkpointPlacement = facts.checkpointPlacement;
   const {
@@ -379,6 +384,16 @@ export function buildCourseNoteEvidence(scenario, fitNotes = []) {
     sandwichedMissingSideCount
   } = facts.boardUse;
 
+  const competitiveBlockSequence = Array.isArray(competitiveBalance?.blockSequence)
+    ? competitiveBalance.blockSequence
+    : [];
+  const competitiveAdvantageRE = competitiveBlockSequence
+    .map((entry) => Number(entry?.advantageVsMedianRE ?? entry?.advantageVsMedian))
+    .filter(Number.isFinite);
+  const competitiveDecisionMarginsRE = competitiveBlockSequence
+    .map((entry) => Number(entry?.decisionMarginRE ?? entry?.decisionMargin))
+    .filter(Number.isFinite);
+
   return {
     fitNotes: [...fitNotes],
     difficultyTurnRE: scenario?.metrics?.difficultyTurnRE ?? null,
@@ -387,6 +402,20 @@ export function buildCourseNoteEvidence(scenario, fitNotes = []) {
     lengthFit: scenario?.metrics?.lengthFit ?? 0,
     lengthDirection: facts.targetMismatch.length.direction,
     targetMismatch: facts.targetMismatch,
+    fairnessOverflow: {
+      active: Boolean(
+        fairnessAcceptance?.active &&
+        (Number(fairnessAcceptance?.overflowRE) || 0) > 1e-9
+      ),
+      overflowRE: Math.max(0, Number(fairnessAcceptance?.overflowRE) || 0),
+      rangeLimit: Math.max(0, Number(fairnessAcceptance?.rangeLimit) || 0),
+      softOverflowAllowance: Math.max(
+        0,
+        Number(fairnessAcceptance?.softOverflowAllowance) || 0
+      ),
+      fitPenalty: Math.max(0, Number(fairnessAcceptance?.fitPenalty) || 0),
+      ordinaryAcceptable: fairnessAcceptance?.ordinaryAcceptable !== false
+    },
     bestMatch: Boolean(scenario?.generationBestMatch),
     terminationReason: scenario?.generationTerminationReason ?? null,
     attempts: scenario?.attempts ?? 0,
@@ -404,108 +433,27 @@ export function buildCourseNoteEvidence(scenario, fitNotes = []) {
       sandwichedMissingSideCount
     },
     opening: {
-      traffic: first.averageTrafficPenalty ?? 0,
-      overlap: first.averageOverlapPenalty ?? 0,
-      rear: first.averageRearThreat ?? 0,
-      lateral: first.averageLateralThreat ?? 0,
-      flagArea: first.flagAreaScore ?? 0,
       forcedDistance: average(openingRoutes.map((route) => route.forcedDistance ?? 0)),
       facingChanges: getOpeningFacingChanges(openingRoutes)
-    },
-    later: {
-      congestion: average(laterSummaries.map((summary) => summary.congestionScore ?? 0)),
-      overlap: average(laterSummaries.map((summary) => summary.crossLegOverlap ?? 0)),
-      diversity: average(laterSummaries.map((summary) => summary.diversityScore ?? 0)),
-      distinctRoutes: average(laterSummaries.map((summary) => summary.distinctRouteCount ?? 0)),
-      hardestLeg: rankedLegs[0]
-        ? { label: getLegLabel(rankedLegs[0].leg, scenario), pressure: rankedLegs[0].pressure }
-        : null,
-      averagePressure: averageLegPressure
-    },
-    drama: {
-      level: routeDrama.level ?? "low",
-      score: routeDrama.score ?? 0,
-      sharedTiles: routeDrama.sharedTiles ?? 0,
-      crossings: routeDrama.crossings ?? 0,
-      reverseEdges: routeDrama.reverseEdges ?? 0
-    },
-    pace: {
-      actions: contributions.actionLoad ?? 0,
-      distance: contributions.distanceLoad ?? 0,
-      checkpoints: contributions.checkpointLoad ?? 0,
-      congestion: contributions.congestionLoad ?? 0
     },
     trafficModel: {
       enabled: Boolean(contextualProfile?.trafficEnabled),
       confidenceWeighted: Boolean(fullTraffic?.confidenceWeighted),
       averageEffective: fullTraffic?.averagePenalty ?? first.averageTrafficPenalty ?? 0,
-      averageRaw: fullTraffic?.averageRawPenalty ?? null,
-      averageConfidence: fullTraffic?.averageForecastConfidence ?? 1,
-      minimumConfidence: fullTraffic?.minimumForecastConfidence ?? 1,
       byLeg: trafficByLeg,
-      epochs: fullTraffic?.trafficEpochsExecuted ?? 0,
-      alternateDemandStarts: fullTraffic?.alternateDemandStarts ?? 0,
-      alternateDemandLegs: fullTraffic?.alternateDemandLegs ?? 0,
-      alternateCandidatesAdded: fullTraffic?.alternateCandidatesAdded ?? 0,
-      effectiveDemandLegs: fullTraffic?.alternateEffectiveDemandLegs ?? 0,
-      exploratoryDemandLegs: fullTraffic?.alternateExploratoryDemandLegs ?? 0,
-      explorationUncertaintyShare: fullTraffic?.explorationUncertaintyShare ?? contextualProfile?.trafficExplorationUncertaintyShare ?? 0,
-      explorationConfidenceFloor: fullTraffic?.explorationConfidenceFloor ?? contextualProfile?.trafficExplorationConfidenceFloor ?? 1,
       routeSwitches: fullTraffic?.routeSwitches ?? 0,
       startsWithAlternatives: trafficCandidates.filter((item) => (item?.candidateCount ?? 0) > 1).length,
-      candidateCountMax: trafficCandidates.length
-        ? Math.max(...trafficCandidates.map((item) => item?.candidateCount ?? 0))
-        : 0
+      alternateCandidatesAdded: fullTraffic?.alternateCandidatesAdded ?? 0
     },
-    normalBalance: normalBalance?.active
-      ? {
-        active: true,
-        pruned: (normalBalance.pressurePruned || []).length,
-        retained: normalBalance.retainedCount ?? null,
-        stdDevBefore: normalBalance.balanceStdDevBefore ?? null,
-        stdDevAfter: normalBalance.balanceStdDevAfter ?? null,
-        limit: normalBalance.balanceStdDevLimit ?? null,
-        scoreRange: normalBalance.retainedScoreRange ?? null,
-        worstScoreZ: normalBalance.worstRemainingScoreZ ?? null,
-        worstActionZ: normalBalance.worstRemainingActionZ ?? null,
-        reject: Boolean(normalBalance.reject),
-        startResiduals: normalBalance.startResiduals?.active
-          ? {
-            active: true,
-            retainedCount: normalBalance.startResiduals.retainedCount ?? null,
-            notableCount: normalBalance.startResiduals.notableCount ?? 0,
-            courseNoteCandidate: normalBalance.startResiduals.courseNoteCandidate?.active
-              ? {
-                active: true,
-                kind: normalBalance.startResiduals.courseNoteCandidate.kind ?? null,
-                strength: Number(normalBalance.startResiduals.courseNoteCandidate.strength) || 0,
-                severity: normalBalance.startResiduals.courseNoteCandidate.severity ?? "minor",
-                reasonId: normalBalance.startResiduals.courseNoteCandidate.reasonId ?? "overall",
-                reasonLabel: normalBalance.startResiduals.courseNoteCandidate.reasonLabel ?? "overall route burden",
-                notableCount: normalBalance.startResiduals.courseNoteCandidate.notableCount ?? 1
-              }
-              : { active: false }
-          }
-          : null
-      }
-      : null,
     competitiveBalance: competitiveBalance?.active
       ? {
         active: true,
         meanBlockChallenge: competitiveBalance.strategicDifficultyEvidence?.meanBlockChallenge ?? null,
         selectionAmbiguity: competitiveBalance.strategicDifficultyEvidence?.selectionAmbiguity ?? null,
-        maxAdvantageZ: Math.max(
-          0,
-          ...(competitiveBalance.blockSequence || [])
-            .map((entry) => Number(entry?.advantageZ))
-            .filter(Number.isFinite)
-        ),
-        minDecisionMarginZ: Math.min(
-          Infinity,
-          ...(competitiveBalance.blockSequence || [])
-            .map((entry) => Number(entry?.decisionMarginZ))
-            .filter(Number.isFinite)
-        )
+        maxAdvantageRE: competitiveAdvantageRE.length ? Math.max(...competitiveAdvantageRE) : null,
+        minDecisionMarginRE: competitiveDecisionMarginsRE.length ? Math.min(...competitiveDecisionMarginsRE) : null,
+        selectedRangeRE: Number(competitiveBalance.selectedRangeRE ?? competitiveBalance.scoreRange),
+        softRangeRE: Number(competitiveBalance.balanceRangeLimit)
       }
       : null,
     energy: {
@@ -516,17 +464,13 @@ export function buildCourseNoteEvidence(scenario, fitNotes = []) {
       averagePowerUpReward: average(powerUpRewardValues),
       averageChopShopReward: average(chopShopRewardValues)
     },
-    programming: {
-      active: Boolean(programmingPressure.active),
-      planningPressure: Number(programmingPressure.planningPressure) || 0,
-      timedPressure: Number(programmingPressure.timedPressure) || 0,
-      hazardPressure: Number(programmingPressure.hazardPressure) || 0,
-      trafficPressure: Number(programmingPressure.trafficPressure) || 0,
-      controlPressure: Number(programmingPressure.controlPressure) || 0,
-      cardPressure: Number(programmingPressure.cardPressure) || 0,
-      averageGearTurns: Number(programmingPressure.averageGearTurns) || 0,
-      averageConveyorTurns: Number(programmingPressure.averageConveyorTurns) || 0,
-      averageForcedSpaces: Number(programmingPressure.averageForcedSpaces) || 0
+    ownedBurden: {
+      active: burdenCoverage > 0,
+      routeCount: ownedRoutes.length,
+      coveredRouteCount: burdenCoverage,
+      cardPerTurn: cardBurdenPerTurn,
+      damagePerTurn: damageBurdenPerTurn,
+      mentalPerTurn: mentalBurdenPerTurn
     },
     variants: {
       actFast: Boolean(scenario?.actFast),
@@ -552,9 +496,9 @@ function concept(id, score, title, text) {
 
 export function buildCourseNoteConcepts(evidence) {
   const concepts = [];
-  const { opening, later, drama, pace } = evidence;
+  const { opening } = evidence;
   const trafficModel = evidence.trafficModel || {};
-  const programming = evidence.programming || {};
+  const ownedBurden = evidence.ownedBurden || {};
 
   if (evidence.checkpointPlacement?.active) {
     concepts.push(concept(
@@ -569,11 +513,11 @@ export function buildCourseNoteConcepts(evidence) {
   if (sandwichedMissingSideCount > 0) {
     concepts.push(concept(
       "sandwiched-side-use",
-      9.4,
+      6.2,
       "Sandwiched Dock Use",
       sandwichedMissingSideCount === 1
-        ? "One side of the Sandwiched Dock has no checkpoints and may see little direct race use. Its boards are kept because they preserve the intended sandwich."
-        : "The Sandwiched Dock sides have no checkpoints and may see little direct race use. Their boards are kept because they preserve the intended sandwich."
+        ? "One side of the Sandwiched Dock has no checkpoints and may see little direct race use. Keep the full sandwich assembled; the unused-looking side is part of the intended setup."
+        : "The Sandwiched Dock sides have no checkpoints and may see little direct race use. Keep the full sandwich assembled; those boards are part of the intended setup."
     ));
   }
 
@@ -582,134 +526,113 @@ export function buildCourseNoteConcepts(evidence) {
   if (limitedFootprintCount > 0) {
     concepts.push(concept(
       "limited-board-footprint",
-      8.2 + Math.min(0.6, Math.max(0, limitedFootprintCount - 1) * 0.2),
-      "Board Use",
+      4.6 + Math.min(0.4, Math.max(0, limitedFootprintCount - 1) * 0.15),
+      "Board Footprint",
       limitedFootprintCount === 1
         ? (
           zeroRouteInfluenceCount > 0
-            ? "One board has little or no direct race footprint. This is mainly a table-space observation: the course uses only a small part of that physical board."
-            : "One board sees only a small part of its area used by the race. This can be completely reasonable when the course needs only a narrow corridor or edge section."
+            ? "One board has little direct race footprint. It is still part of the generated setup; the course simply uses a narrow part of the available table space."
+            : "One board is used mainly as a narrow corridor or edge section. That is intentional; the race does not need to fill every part of every board."
         )
-        : "Some boards see only a small part of their area used by the race. This is a table-space observation, not a suggestion that those boards are unnecessary."
+        : "Several boards are used mainly as narrow corridors or edge sections. That is intentional; the race does not need to fill every part of every board."
     ));
   }
 
-  // TRAFFIC: describe where robot interaction is likely to be felt, without
-  // exposing forecast confidence, search effort, or route-selection internals.
+  // TRAFFIC / ALTERNATE LINES: completed-RE traffic owns the interaction forecast.
+  // Alternate-line advice is folded into the same note so one traffic feature does
+  // not consume two of the three player-facing Course Notes slots.
   if (trafficModel.enabled && trafficModel.confidenceWeighted) {
     const effective = Number(trafficModel.averageEffective) || 0;
+    const hasAlternatives = trafficModel.startsWithAlternatives > 0 || trafficModel.alternateCandidatesAdded > 0;
     const trafficScore = Math.max(
       effective / 8,
-      trafficModel.routeSwitches > 0 ? 7 : 0,
-      trafficModel.alternateDemandStarts > 0 ? 5 : 0
+      trafficModel.routeSwitches > 0 ? 7.4 : 0,
+      hasAlternatives ? 5.4 : 0
     );
     if (trafficScore >= 3.5) {
       const firstLegTraffic = trafficModel.byLeg?.[0] || null;
       const strongestLeg = [...(trafficModel.byLeg || [])]
         .sort((a, b) => (b?.effective ?? 0) - (a?.effective ?? 0))[0] || null;
-      const text = (strongestLeg?.effective ?? 0) > (firstLegTraffic?.effective ?? 0) * 1.4
-        ? "Robot interaction is likely to build after the opening. Shared lanes and nearby robots may make a clean line more useful than the shortest-looking one."
+      const buildsLater = (strongestLeg?.effective ?? 0) > (firstLegTraffic?.effective ?? 0) * 1.4;
+      let text = buildsLater
+        ? "Robot interaction is likely to build after the opening. Shared lanes can make a clean line more useful than the shortest-looking one."
         : "The main racing lines are likely to be busy. Leave room for other robots and be ready to change plans when several players want the same spaces.";
+      if (trafficModel.routeSwitches > 0) {
+        text += " At least one busy section has a worthwhile alternate line when the obvious route is crowded.";
+      } else if (hasAlternatives) {
+        text += " Some busy sections also have useful alternate lines worth keeping in mind.";
+      }
       concepts.push(concept("traffic", trafficScore, "Traffic", text));
     }
-
-    const hasAlternatives = trafficModel.startsWithAlternatives > 0 || trafficModel.alternateCandidatesAdded > 0;
-    const routeScore = trafficModel.routeSwitches > 0 ? 8 : hasAlternatives ? 6.5 : 0;
-    if (routeScore >= 4) {
-      const text = trafficModel.routeSwitches > 0
-        ? "At least one part of the course has a worthwhile second way through when the obvious line gets crowded. A small detour can be a real racing option here."
-        : "There are useful alternate lines in some busy parts of the course. Keep them in mind if another robot occupies the most direct route.";
-      concepts.push(concept("route-choice", routeScore, "Alternate Lines", text));
-    }
-  } else if (!trafficModel.enabled && evidence.normalBalance?.active) {
-    // A traffic-disabled generation mode should not make multiplayer predictions.
-  } else {
-    const trafficScore = Math.max(
-      opening.rear / 3.2,
-      opening.overlap / 3.5,
-      later.congestion / 3.2,
-      later.overlap * 5,
-      drama.level === "high" ? 9 : drama.level === "moderate" ? 6 : 0
-    );
-    if (trafficScore >= 3.5) {
-      concepts.push(concept(
-        "traffic",
-        trafficScore,
-        "Traffic",
-        "Several racing lines cross or overlap, so other robots are likely to matter when choosing where to go."
-      ));
-    }
   }
 
-  // STARTING SPACES: detailed residuals stay in Dev. Player-facing notes only
-  // surface a meaningful minor residual. Ordinary pruning, trivial residuals,
-  // and the visible count of available starts are intentionally silent.
+  // STARTING SPACES: ordinary in-range fairness is silent. Only a meaningful
+  // accepted overflow or fallback mismatch is worth telling the player about.
   {
-    const balance = evidence.normalBalance?.active ? evidence.normalBalance : null;
-    const residualCandidate = balance?.startResiduals?.courseNoteCandidate?.active
-      ? balance.startResiduals.courseNoteCandidate
-      : null;
-    const residual = residualCandidate?.severity === "minor" ? residualCandidate : null;
+    const fairnessOverflow = evidence.fairnessOverflow ?? null;
+    const meaningfulRangeOverflow = Boolean(
+      fairnessOverflow?.active &&
+      (
+        (Number(fairnessOverflow.fitPenalty) || 0) >= 4 ||
+        (Number(fairnessOverflow.overflowRE) || 0) >=
+          Math.max(0.4, (Number(fairnessOverflow.softOverflowAllowance) || 0) * 0.5)
+      )
+    );
 
-    if (residual) {
-      const reasonText = {
-        traffic: "some starting spaces may see a little more robot traffic than others",
-        actions: "some starting spaces may require a little more programmed route work than others",
-        hazard: "some starting spaces may face slightly more hazard exposure than others",
-        conveyor: "some starting spaces may have to work a little harder through conveyors and forced movement than others",
-        forced: "some starting spaces may have to work a little harder around forced movement than others",
-        distance: "some starting spaces may have a slightly longer line through the course than others",
-        overall: "some starting spaces may require a little more effort through the course than others"
-      }[residual.reasonId] ?? "some starting spaces may require a little more effort through the course than others";
-      const residualScore = Math.min(1.2, (Number(residual.strength) || 0) * 0.8);
+    if (meaningfulRangeOverflow) {
       concepts.push(concept(
-        "start-balance",
-        4.9 + residualScore,
+        "start-balance-range",
+        fairnessOverflow.ordinaryAcceptable ? 5.8 : 7.2,
         "Starting Spaces",
-        `A minor imbalance may remain: ${reasonText}.`
+        fairnessOverflow.ordinaryAcceptable
+          ? "The remaining starting choices are a little more uneven than usual for a course this length. Starting position may matter a bit more in the opening."
+          : "The remaining starting choices are noticeably uneven for a course this length. Starting position may matter more than usual."
       ));
     }
   }
 
-  // COMPETITIVE: Special Rules explains the procedure; Course Notes only gives a
-  // useful pointer about this particular set of starting choices.
+  // COMPETITIVE: Special Rules explains the procedure. This note describes only
+  // the RE-native strategic shape of the actual block sequence / final choice set.
   if (evidence.competitiveBalance?.active) {
     const balance = evidence.competitiveBalance;
     const blockChallenge = Number(balance.meanBlockChallenge);
     const selectionAmbiguity = Number(balance.selectionAmbiguity);
-    const maxAdvantageZ = Number(balance.maxAdvantageZ);
-    const minDecisionMarginZ = Number(balance.minDecisionMarginZ);
+    const maxAdvantageRE = Number(balance.maxAdvantageRE);
+    const minDecisionMarginRE = Number(balance.minDecisionMarginRE);
+    const softRangeRE = Number(balance.softRangeRE);
+    const selectedRangeRE = Number(balance.selectedRangeRE);
     if (Number.isFinite(blockChallenge) && blockChallenge >= 0.68) {
       concepts.push(concept(
         "competitive-start-reading",
         6.4 + Math.min(1.2, (blockChallenge - 0.68) * 3),
         "Starting Choices",
-        "The stronger starting spaces are fairly close in value, so the best blocks may not be obvious. Looking over the opening routes before choosing can pay off."
+        "The strongest starting spaces are close enough that the best blocks may not be obvious. Looking over the opening routes before choosing can pay off."
       ));
     } else if (
-      Number.isFinite(maxAdvantageZ) && maxAdvantageZ >= 1.25 &&
-      Number.isFinite(minDecisionMarginZ) && minDecisionMarginZ >= 0.75
+      Number.isFinite(maxAdvantageRE) &&
+      maxAdvantageRE >= Math.max(1.5, Number.isFinite(softRangeRE) ? softRangeRE * 0.5 : 1.5) &&
+      Number.isFinite(minDecisionMarginRE) && minDecisionMarginRE >= 0.75
     ) {
       concepts.push(concept(
         "competitive-start-reading",
-        5.8 + Math.min(1, (maxAdvantageZ - 1.25) * 0.5),
+        5.9 + Math.min(1, (maxAdvantageRE - 1.5) * 0.2),
         "Starting Choices",
-        "At least one starting space stands out as especially strong. Spotting the clearest advantage can have a noticeable effect before the race begins."
+        "At least one starting space has a clear advantage before the blocks are resolved. Identifying that advantage can matter before the race begins."
       ));
     } else if (
       Number.isFinite(selectionAmbiguity) && selectionAmbiguity >= 0.72 &&
-      Number.isFinite(maxAdvantageZ) && maxAdvantageZ >= 0.55
+      Number.isFinite(selectedRangeRE) && Number.isFinite(softRangeRE) && selectedRangeRE <= softRangeRE
     ) {
       concepts.push(concept(
         "competitive-start-reading",
         5.6,
         "Starting Choices",
-        "Once the strongest spaces are dealt with, the remaining starts are fairly close. Small details in the opening route may decide which one you prefer."
+        "After the strongest spaces are dealt with, the expected choices are fairly close. Small details in the opening route may decide which one you prefer."
       ));
     }
   }
 
-  // ENERGY: this is about visible course opportunities, not how the analyzer valued them.
+  // ENERGY: describe visible course opportunities, not internal pricing math.
   if (evidence.energy?.active && evidence.energy.averageReward >= 5) {
     const energy = evidence.energy;
     const dominant = [
@@ -719,76 +642,54 @@ export function buildCourseNoteConcepts(evidence) {
     ].sort((a, b) => b.value - a.value)[0];
     const text = dominant?.value >= 2
       ? `${dominant.label} are worth watching on this course. A small detour can pay off when you can put the extra Energy to use soon.`
-      : "Energy opportunities are important enough that a small early detour may be worthwhile if you can use the Energy soon.";
+      : "Energy opportunities are important enough that a small detour may be worthwhile when you can use the Energy soon.";
     concepts.push(concept("energy", Math.min(8, 4.5 + energy.averageReward / 5), "Energy", text));
   }
 
-  // FACTORY MOVEMENT.
+  // FACTORY MOVEMENT: direct selected-route facts, not a semantic difficulty owner.
   const movementScore = opening.forcedDistance * 1.25 + opening.facingChanges * 1.1;
   if (movementScore >= 4.2) {
     const text = opening.facingChanges >= 2
-      ? "The factory floor does a lot of the moving and turning here. Keep track of where conveyors and gears leave your robot facing, not just how far your cards move it."
-      : "Forced movement does a useful share of the work on this course. Using the floor well can save cards, while fighting it can make the same section much slower.";
+      ? "The factory floor does a lot of the moving and turning here. Track where conveyors and gears leave your robot facing, not just how far the programmed cards move it."
+      : "Forced movement does a useful share of the work here. Using the floor well can save cards; fighting it can make the same section much slower.";
     concepts.push(concept("factory-movement", movementScore, "Factory Movement", text));
   }
 
-  // HAZARDS: reflect the resulting course, not the optional-rule explanation.
-  const hazardScore = Math.max(opening.flagArea / 4.5, programming.hazardPressure * 5);
-  if (hazardScore >= 4.5) {
-    const text = programming.hazardPressure >= 0.9
-      ? "Hazards sit close enough to useful racing lines that a small mistake can be costly. The shortest-looking route is not always the safest choice."
-      : "A few important areas put hazards close to the racing line. Give yourself some margin when a shortcut leaves little room for error.";
-    concepts.push(concept("hazards", hazardScore, "Hazards", text));
-  }
-
-  // PROGRAMMING: describe course demands only. Timers/deck variants themselves are
-  // explained in Special Rules and never appear here just for being active.
-  if (programming.active && programming.planningPressure >= 0.52) {
-    const drivers = [
-      { id: "traffic", value: programming.trafficPressure },
-      { id: "control", value: programming.controlPressure },
-      { id: "hazard", value: programming.hazardPressure },
-      { id: "cards", value: programming.cardPressure }
+  // COMPLETED-RE BURDEN: one narrow programming note, chosen from the production
+  // ledger rather than the retired planningPressure / flagAreaScore composites.
+  // Only the strongest non-tempo owner is surfaced to avoid redundant notes.
+  if (ownedBurden.active) {
+    const burdens = [
+      { id: "card", value: Number(ownedBurden.cardPerTurn) || 0 },
+      { id: "damage", value: Number(ownedBurden.damagePerTurn) || 0 },
+      { id: "mental", value: Number(ownedBurden.mentalPerTurn) || 0 }
     ].sort((a, b) => b.value - a.value);
-    const dominant = drivers[0]?.id;
-    let text = "This course rewards careful programming because small mistakes can be hard to recover from.";
-    if (dominant === "control") {
-      text = "Several sections ask you to keep track of forced movement and facing changes. Plan where the factory leaves your robot at the end of each register.";
-    } else if (dominant === "traffic") {
-      text = "Busy racing lines make timing and positioning important. Programs that leave a little flexibility may fare better than plans that depend on every shared space staying clear.";
-    } else if (dominant === "hazard") {
-      text = "Precise programming matters around the dangerous sections. A small error can put the robot somewhere much less forgiving than intended.";
-    } else if (dominant === "cards") {
-      text = "Some efficient lines ask for fairly specific movement cards. It may be worth keeping a simpler backup line in mind when the hand does not cooperate.";
+    const dominant = burdens[0];
+    if (dominant?.value >= 1.25) {
+      const score = Math.min(7.4, 4.5 + dominant.value * 1.15);
+      if (dominant.id === "card") {
+        concepts.push(concept(
+          "card-demands",
+          score,
+          "Card Demands",
+          "The efficient routes put noticeable pressure on card availability. Keep a workable backup line in mind for hands that do not support the ideal program."
+        ));
+      } else if (dominant.id === "damage") {
+        concepts.push(concept(
+          "damage-pressure",
+          score,
+          "Damage Pressure",
+          "The expected routes carry a meaningful amount of damage and control-clog pressure. Leaving some recovery margin can be more valuable than squeezing every register out of the shortest line."
+        ));
+      } else {
+        concepts.push(concept(
+          "planning-load",
+          score,
+          "Planning Load",
+          "Several turns combine enough board-state and timing decisions that it is easy to lose track of one detail. Check the full register sequence before committing to a tight line."
+        ));
+      }
     }
-    concepts.push(concept("programming", 4.6 + programming.planningPressure * 2.2, "Programming", text));
-  }
-
-  // TOUGHEST STRETCH: call out a distinctive leg when one clearly stands above the rest.
-  const hardest = later.hardestLeg;
-  if (
-    hardest && Number.isFinite(hardest.pressure) && Number.isFinite(later.averagePressure) &&
-    later.averagePressure > 0 && hardest.pressure >= later.averagePressure * 1.28
-  ) {
-    concepts.push(concept(
-      "toughest-stretch",
-      5.4 + Math.min(2, (hardest.pressure / later.averagePressure - 1.28) * 3),
-      "Toughest Stretch",
-      `${hardest.label} looks like the most demanding part of the course. Saving a little flexibility for that section may be worthwhile.`
-    ));
-  }
-
-  // PACE: plain-language course character only.
-  const paceScore = Math.max(
-    Math.abs(evidence.lengthFit) / 4,
-    pace.actions / 10,
-    pace.distance / 7
-  );
-  if (paceScore >= 5.2) {
-    const text = pace.distance >= pace.actions * 0.65
-      ? "This is a travel-heavy course: much of its length comes from covering ground rather than from one especially complicated obstacle."
-      : "The course gets much of its length from the number of programmed moves. Good use of conveyors and other forced movement can shorten the race noticeably.";
-    concepts.push(concept("pace", paceScore, "Pace", text));
   }
 
   return concepts.sort((a, b) => b.score - a.score);
@@ -801,8 +702,8 @@ export function renderCourseNotes(concepts, evidence, options = {}) {
 
   if (!chosen.length) {
     parts.push(evidence.trafficModel?.enabled
-      ? "<div><strong>Course Character:</strong> No single feature dominates this course. Expect the cards, robot positions, and how well you use the factory floor to matter more than one obvious obstacle.</div>"
-      : "<div><strong>Course Character:</strong> No single feature dominates this course. Expect the cards and how well you use the factory floor to matter more than one obvious obstacle.</div>");
+      ? "<div><strong>Course Character:</strong> No single feature stands out. Route choice, robot positions, and efficient use of the factory floor should matter more than any one obstacle.</div>"
+      : "<div><strong>Course Character:</strong> No single feature stands out. Card flexibility and efficient use of the factory floor should matter more than any one obstacle.</div>");
   } else {
     chosen.forEach((item) => {
       parts.push(`<div><strong>${escapeHtml(item.title)}:</strong> ${escapeHtml(item.text)}</div>`);
@@ -815,7 +716,7 @@ export function renderCourseNotes(concepts, evidence, options = {}) {
 export function buildCourseNotesHtml(scenario, fitNotes = [], options = {}) {
   if (!scenario) return "";
 
-  const cacheKey = "player-facing-shared-facts-v49dg-re-turn-difficulty";
+  const cacheKey = "player-facing-shared-facts-v49ed-owner-editorial-cleanup";
   let scenarioCache = notesCache.get(scenario);
   if (!scenarioCache) {
     scenarioCache = new Map();
@@ -837,4 +738,4 @@ export function clearCourseNotesCache(scenario = null) {
     notesCache.delete(scenario);
   }
 }
-// VERSION END: v49dg-re-turn-difficulty-semantics
+// VERSION END: v49ed-owner-editorial-cleanup

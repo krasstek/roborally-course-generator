@@ -1,6 +1,6 @@
-// VERSION START: v49dq-route-score-null-hardening
+// VERSION START: v49dw-route-search-re-ownership
 // Robo Rally Course Randomizer - route analysis and scoring runtime
-export const ANALYZE_BUILD_ID = "v49dq-route-score-null-hardening";
+export const ANALYZE_BUILD_ID = "v49dw-route-search-re-ownership";
 const ASSET_VERSION = new URL(import.meta.url).searchParams.get("v") ?? "";
 const VERSION_SUFFIX = ASSET_VERSION ? `?v=${encodeURIComponent(ASSET_VERSION)}` : "";
 const versionedPath = (path) => `${path}${VERSION_SUFFIX}`;
@@ -1408,6 +1408,7 @@ export function clearAnalysisCaches() {
   LATERAL_THREAT_CACHE.clear();
   REAR_THREAT_CACHE.clear();
   FIXED_ROUTE_PRICING_ECONOMY_CACHE = new WeakMap();
+  FIXED_ROUTE_PRICING_ECONOMY_ACTIVITY_CACHE = new WeakMap();
   FIXED_ROUTE_PRICING_RE_LEDGER_CACHE = new WeakMap();
   TRAFFIC_INTRINSIC_RE_LEDGER_CACHE = new WeakMap();
   RE_NATIVE_TRAFFIC_CONFIDENCE_PROFILE_CACHE = new WeakMap();
@@ -2333,6 +2334,7 @@ function getRouteEnergyShadowStep(
 // It never changes route legality, Normal balance, Competitive balance, or search
 // dominance; it is a downstream valuation layer used only by priced starts.
 let FIXED_ROUTE_PRICING_ECONOMY_CACHE = new WeakMap();
+let FIXED_ROUTE_PRICING_ECONOMY_ACTIVITY_CACHE = new WeakMap();
 let FIXED_ROUTE_PRICING_RE_LEDGER_CACHE = new WeakMap();
 let TRAFFIC_INTRINSIC_RE_LEDGER_CACHE = new WeakMap();
 // v49dm production traffic confidence caches only its own intrinsic completed-route
@@ -2371,13 +2373,58 @@ function getTrafficIntrinsicRELedger(tileMap, route, options = {}) {
   return ledger;
 }
 
-function addFixedRoutePricingEconomyState(states, energy, cardUnits, utilityR, config) {
+function getFixedRouteEconomyActivity(state = {}) {
+  return {
+    drawEvents: Math.max(0, Number(state.drawEvents) || 0),
+    installEvents: Math.max(0, Number(state.installEvents) || 0),
+    openingInstallEvents: Math.max(0, Number(state.openingInstallEvents) || 0),
+    laterInstallEvents: Math.max(0, Number(state.laterInstallEvents) || 0),
+    drawEnergySpent: Math.max(0, Number(state.drawEnergySpent) || 0),
+    abstractInstallInvestment: Math.max(0, Number(state.abstractInstallInvestment) || 0)
+  };
+}
+
+function isPreferredFixedRouteEconomyState(candidate, prior) {
+  if (!prior) return true;
+  if (candidate.utilityR > prior.utilityR + 1e-9) return true;
+  if (candidate.utilityR < prior.utilityR - 1e-9) return false;
+
+  // v49du wall-clock observability: when two routes through the abstract
+  // economy reach the exact same Energy/card state with the same strategic
+  // utility, keep the one that requires fewer player-facing transactions.
+  // This avoids inventing wall-clock work from strategically pointless draws.
+  const candidateEvents = candidate.drawEvents + candidate.installEvents;
+  const priorEvents = prior.drawEvents + prior.installEvents;
+  if (candidateEvents !== priorEvents) return candidateEvents < priorEvents;
+  if (candidate.drawEvents !== prior.drawEvents) {
+    return candidate.drawEvents < prior.drawEvents;
+  }
+  if (candidate.drawEnergySpent !== prior.drawEnergySpent) {
+    return candidate.drawEnergySpent < prior.drawEnergySpent;
+  }
+  return candidate.abstractInstallInvestment < prior.abstractInstallInvestment;
+}
+
+function addFixedRoutePricingEconomyState(
+  states,
+  energy,
+  cardUnits,
+  utilityR,
+  config,
+  activity = {}
+) {
   const safeEnergy = clamp(Math.floor(Number(energy) || 0), 0, config.maxEnergy);
   const safeCards = Math.max(0, Math.round(Number(cardUnits) || 0));
   const key = `${safeEnergy}:${safeCards}`;
+  const candidate = {
+    energy: safeEnergy,
+    cardUnits: safeCards,
+    utilityR,
+    ...getFixedRouteEconomyActivity(activity)
+  };
   const prior = states.get(key);
-  if (!prior || utilityR > prior.utilityR + 1e-9) {
-    states.set(key, { energy: safeEnergy, cardUnits: safeCards, utilityR });
+  if (isPreferredFixedRouteEconomyState(candidate, prior)) {
+    states.set(key, candidate);
   }
 }
 
@@ -2403,7 +2450,8 @@ function applyFixedRoutePricingUpgradePhase(states, boundaryAction, fullHorizonA
         state.energy,
         cappedCards,
         state.utilityR,
-        config
+        config,
+        state
       );
       continue;
     }
@@ -2413,7 +2461,23 @@ function applyFixedRoutePricingUpgradePhase(states, boundaryAction, fullHorizonA
         choice.energyAfter,
         choice.cardUnitsAfter,
         state.utilityR + choice.immediateValueR,
-        config
+        config,
+        {
+          ...state,
+          drawEvents: state.drawEvents + choice.draw,
+          installEvents: state.installEvents + choice.install,
+          openingInstallEvents: state.openingInstallEvents + (
+            boundaryAction === 0 ? choice.install : 0
+          ),
+          laterInstallEvents: state.laterInstallEvents + (
+            boundaryAction === 0 ? 0 : choice.install
+          ),
+          drawEnergySpent: state.drawEnergySpent + choice.draw * config.drawEnergyCost,
+          // This remains a strategic-value budget, NOT a claim about literal
+          // upgrade-card price. It is exposed only as an audit diagnostic.
+          abstractInstallInvestment:
+            state.abstractInstallInvestment + choice.installInvestment
+        }
       );
     }
   }
@@ -2428,7 +2492,8 @@ function applyFixedRoutePricingResourceGain(states, energyGain, cardGainUnits, c
       Math.min(config.maxEnergy, state.energy + Math.max(0, Math.floor(Number(energyGain) || 0))),
       state.cardUnits + Math.max(0, Math.round(Number(cardGainUnits) || 0)),
       state.utilityR,
-      config
+      config,
+      state
     );
   }
   return next;
@@ -2466,7 +2531,8 @@ function applyFixedRoutePricingTransitionEconomy(tileMap, states, transition, co
       Math.min(config.maxEnergy, state.energy + 1),
       state.cardUnits + (options.upgradeWorld ? unknownCardUnits : 0),
       state.utilityR,
-      config
+      config,
+      state
     );
     // Card option: one normal unknown card, plus Upgrade World's extra card.
     addFixedRoutePricingEconomyState(
@@ -2474,7 +2540,8 @@ function applyFixedRoutePricingTransitionEconomy(tileMap, states, transition, co
       state.energy,
       state.cardUnits + unknownCardUnits * (1 + (options.upgradeWorld ? 1 : 0)),
       state.utilityR,
-      config
+      config,
+      state
     );
   }
   return branched;
@@ -2525,7 +2592,15 @@ function evaluateFixedRoutePricingEconomyUtilityR(tileMap, route, options = {}) 
     config.startingEnergy,
     getInitialRouteUsefulCardUnits(options),
     0,
-    config
+    config,
+    {
+      drawEvents: 0,
+      installEvents: 0,
+      openingInstallEvents: 0,
+      laterInstallEvents: 0,
+      drawEnergySpent: 0,
+      abstractInstallInvestment: 0
+    }
   );
 
   // Starting cards and starting Energy are available before the opening Upgrade
@@ -2557,10 +2632,92 @@ function evaluateFixedRoutePricingEconomyUtilityR(tileMap, route, options = {}) 
     }
   }
 
-  const utilityR = Math.max(0, ...[...states.values()].map((state) => state.utilityR));
+  const finalStates = [...states.values()];
+  const bestState = finalStates.reduce((best, state) => {
+    if (!best) return state;
+    if (state.utilityR > best.utilityR + 1e-9) return state;
+    if (state.utilityR < best.utilityR - 1e-9) return best;
+    return isPreferredFixedRouteEconomyState(state, best) ? state : best;
+  }, null);
+  const utilityR = Math.max(0, Number(bestState?.utilityR) || 0);
   const result = Number(utilityR.toFixed(6));
   routeCache.set(signature, result);
+
+  let activityRouteCache = FIXED_ROUTE_PRICING_ECONOMY_ACTIVITY_CACHE.get(route);
+  if (!activityRouteCache) {
+    activityRouteCache = new Map();
+    FIXED_ROUTE_PRICING_ECONOMY_ACTIVITY_CACHE.set(route, activityRouteCache);
+  }
+  activityRouteCache.set(signature, {
+    active: true,
+    method: "card-aware-fixed-route-upgrade-activity-v49du",
+    utilityR: result,
+    startingEnergy: config.startingEnergy,
+    startingUpgradeCards: config.startingUpgradeCards,
+    endingEnergy: Math.max(0, Number(bestState?.energy) || 0),
+    endingUsefulCardUnits: Math.max(0, Number(bestState?.cardUnits) || 0),
+    drawEvents: Math.max(0, Number(bestState?.drawEvents) || 0),
+    installEvents: Math.max(0, Number(bestState?.installEvents) || 0),
+    openingInstallEvents: Math.max(0, Number(bestState?.openingInstallEvents) || 0),
+    laterInstallEvents: Math.max(0, Number(bestState?.laterInstallEvents) || 0),
+    drawEnergySpent: Math.max(0, Number(bestState?.drawEnergySpent) || 0),
+    abstractInstallInvestment: Math.max(
+      0,
+      Number(bestState?.abstractInstallInvestment) || 0
+    ),
+    transactionEvents: Math.max(
+      0,
+      (Number(bestState?.drawEvents) || 0) + (Number(bestState?.installEvents) || 0)
+    ),
+    horizonActions: fullHorizonActions,
+    horizonTurns: Number((fullHorizonActions / config.registersPerTurn).toFixed(3)),
+    note: "Draw/install counts are player-facing economy transactions from the existing card-aware fixed-route DP. abstractInstallInvestment remains strategic-value bookkeeping, not a literal Energy/card price."
+  });
   return result;
+}
+
+export function summarizeFixedRouteUpgradeEconomyActivity(
+  tileMap,
+  route,
+  options = {}
+) {
+  if (!route || !Array.isArray(route.transitions)) {
+    return { active: false, reason: "missing-route" };
+  }
+  if (options.lighterGame) {
+    return {
+      active: true,
+      removedByEnergyCrisis: true,
+      method: "card-aware-fixed-route-upgrade-activity-v49du",
+      utilityR: 0,
+      drawEvents: 0,
+      installEvents: 0,
+      openingInstallEvents: 0,
+      laterInstallEvents: 0,
+      drawEnergySpent: 0,
+      abstractInstallInvestment: 0,
+      transactionEvents: 0,
+      note: "Energy Crisis removes Energy/upgrades, so upgrade-economy wall-clock transactions are zero."
+    };
+  }
+  if (!isRouteAwareBatteryScoringActive(options)) {
+    return { active: false, reason: "route-economy-inactive" };
+  }
+
+  const signature = getFixedRoutePricingEconomySignature(options);
+  let activityRouteCache = FIXED_ROUTE_PRICING_ECONOMY_ACTIVITY_CACHE.get(route);
+  if (activityRouteCache?.has(signature)) {
+    return activityRouteCache.get(signature);
+  }
+
+  // The ordinary pricing evaluator and wall-clock activity observer share the
+  // same DP. Calling it here populates both caches without changing route value.
+  evaluateFixedRoutePricingEconomyUtilityR(tileMap, route, options);
+  activityRouteCache = FIXED_ROUTE_PRICING_ECONOMY_ACTIVITY_CACHE.get(route);
+  return activityRouteCache?.get(signature) ?? {
+    active: false,
+    reason: "activity-summary-unavailable"
+  };
 }
 
 // Reprice an already discovered physical/programming route without re-searching
@@ -12390,6 +12547,11 @@ export function scoreFlagArea(tileMap, goal, options = {}) {
   return Number(Math.max(0, score).toFixed(2));
 }
 
+// v49dw ownership audit: this first-leg selector is retained only for legacy
+// first-leg summary/construction/readability fields after full-course candidate
+// selection. It does NOT own the production full-course route. The remaining
+// route.score + traffic.total expression here is therefore descriptive debt for
+// the later Course Notes/legacy-summary cleanup, not a route-ownership exception.
 function assignRoutesWithOverlap(tileMap, startAnalyses, goal, activeIndices = null, options = {}) {
   const selections = startAnalyses.map(() => 0);
   const activeSet = activeIndices ?? new Set(
@@ -18219,7 +18381,7 @@ function getContextualLegCacheKey(
     namespace,
     `leg${legIndex}`,
     `fexact`,
-    `u${getContextualForecastBand(context.absoluteActions, context.hazardExposure, options)}`,
+    `u${getContextualForecastBand(context, options)}`,
     stateKey(context.state),
     `r${context.absoluteActions % REGISTER_COUNT}`,
     getContextualProgramCacheSignature(context),
@@ -18245,7 +18407,7 @@ function getContextualTemplateCacheKey(
     namespace,
     `leg${legIndex}`,
     `fexact`,
-    `u${getContextualForecastBand(context.absoluteActions, context.hazardExposure, options)}`,
+    `u${getContextualForecastBand(context, options)}`,
     stateKey(context.state),
     `r${context.absoluteActions % REGISTER_COUNT}`,
     isRouteAwareBatteryScoringActive(options) ? `a${context.absoluteActions}` : null,
@@ -18479,17 +18641,15 @@ function getContextualOptionalCompletionAllowance(
       CONTEXTUAL_OPTIONAL_COMPLETION_EFFORT_FADE_START
     );
 
-  // Exact long-horizon hand/economy forecasting becomes less trustworthy as
-  // the real game gets longer and intrinsically more hazardous. Player count is
-  // deliberately absent here: multiplayer uncertainty comes later from actual
-  // occupancy/interaction, not from counting robots twice.
-  const elapsedPrograms = Math.max(0, Number(context.absoluteActions) || 0) / REGISTER_COUNT;
-  const hazardExposure = Math.max(0, Number(context.hazardExposure) || 0);
-  const uncertaintyPenalty = Math.min(
-    0.60,
-    elapsedPrograms * 0.04 + hazardExposure / 140
+  // v49dw: optional completion breadth now uses the same RE-native horizon
+  // language as production traffic confidence: elapsed registers plus completed
+  // intrinsic adverse RE from prior legs. Raw hazard exposure no longer gets an
+  // independent semantic vote. The first-goal effort ratio above still provides
+  // a purely computational signal when the current physical leg itself is hard.
+  const forecastFactor = Math.max(
+    0.40,
+    getContextualRENativeForecastConfidence(context, options)
   );
-  const forecastFactor = Math.max(0.40, 1 - uncertaintyPenalty);
 
   // When only one route will be returned, a second completion is merely a
   // chance to improve that one choice, so give it half the ordinary allowance.
@@ -18513,28 +18673,36 @@ function getContextualTrafficUncertainty(options = {}) {
   return 0;
 }
 
-// Legacy contextual breadth still uses the pre-v49dm intrinsic confidence curve.
-// It is only an effort policy: exact card depletion, Energy replay and physical
-// legality remain unchanged at every horizon. Production multiplayer traffic no
-// longer shares this hazard-based owner; migrating this breadth policy to RE-native
-// evidence is the next remaining route-search ownership slice.
+// v49dw contextual breadth ownership. This is search-effort policy only: exact
+// card depletion, Energy replay and physical legality remain unchanged at every
+// horizon. Breadth now consumes elapsed register horizon + cumulative completed
+// intrinsic adverse RE. Raw hazard/board-chaos/interaction confidence decay has
+// no independent production vote.
 const CONTEXTUAL_FORECAST_BANDS = Object.freeze({
   SOLID: "solid",
   UNCERTAIN: "uncertain",
   SPECULATIVE: "speculative"
 });
 
+function getContextualRENativeForecastConfidence(context = {}, options = {}) {
+  const elapsedRegisters = getTrafficForecastElapsedRegisters(
+    context?.absoluteActions,
+    options
+  );
+  const adverseRE = Math.max(0, Number(context?.reNativeAdverseRE) || 0);
+  return getForecastTimeConfidence(elapsedRegisters + adverseRE);
+}
+
 function getContextualForecastBand(
-  absoluteActions,
-  hazardExposure = 0,
+  context = {},
   options = {}
 ) {
   if (!(options.contextualUncertaintyBreadth || options.contextualAdaptiveUncertaintyHorizon)) {
     return CONTEXTUAL_FORECAST_BANDS.SOLID;
   }
 
-  let confidence = getIntrinsicForecastConfidence(absoluteActions, hazardExposure, options);
-  // Compatibility-only diagnostic override. Production v33 leaves this at zero;
+  let confidence = getContextualRENativeForecastConfidence(context, options);
+  // Compatibility-only diagnostic override. Production leaves this at zero;
   // real multiplayer uncertainty comes later from occupancy/interaction itself.
   const explicitLegacyUncertainty = getContextualTrafficUncertainty(options);
   if (explicitLegacyUncertainty > 0) {
@@ -18563,8 +18731,7 @@ function getContextualBreadthPolicy(
   const beamWidth = Math.max(1, Math.floor(Number(requestedBeamWidth) || 1));
   const optional = Math.max(0, Math.floor(Number(requestedOptionalExpansions) || 0));
   const band = getContextualForecastBand(
-    context?.absoluteActions,
-    context?.hazardExposure,
+    context,
     options
   );
 
@@ -20041,8 +20208,7 @@ function enumerateContextualLegRoutes(
   // the previous and current five-register programs therefore cannot disappear
   // merely because a route is long. Uncertainty is handled only by route breadth.
   const forecastBandAtStart = getContextualForecastBand(
-    context.absoluteActions,
-    context.hazardExposure,
+    context,
     options
   );
   if (forecastBandAtStart === CONTEXTUAL_FORECAST_BANDS.SPECULATIVE) {
@@ -20300,8 +20466,7 @@ function enumerateContextualLegRoutes(
         goalReached: true,
         fullCourseLeg: true,
         contextualForecastBand: getContextualForecastBand(
-          current.absoluteActions,
-          current.hazardExposure,
+          { ...context, absoluteActions: current.absoluteActions },
           options
         ),
         contextualHazardExposure: current.hazardExposure,
@@ -20347,8 +20512,7 @@ function enumerateContextualLegRoutes(
         firstGoalExpansion = expansions;
         if (completionPool > 1) {
           const endpointBand = getContextualForecastBand(
-            current.absoluteActions,
-            current.hazardExposure,
+            { ...context, absoluteActions: current.absoluteActions },
             options
           );
           if (endpointBand === CONTEXTUAL_FORECAST_BANDS.SPECULATIVE) {
@@ -21557,15 +21721,20 @@ function realizeEstimatedLegsWithCardSolution(
         programPlausibilityPenalty +
         mental.searchIntrinsicMentalScore -
         economy.routeEnergyEconomyRewardScore
-      ).toFixed(2)),
-      contextualForecastBand: getContextualForecastBand(
-        absoluteActions,
-        contextualHazardExposure,
-        options
-      )
+      ).toFixed(2))
     };
+    const nextContext = getContextAfterLeg(
+      exactLeg,
+      context,
+      tileMap,
+      options
+    );
+    exactLeg.contextualForecastBand = getContextualForecastBand(
+      nextContext,
+      options
+    );
     exactLegs.push(exactLeg);
-    context = getContextAfterLeg(exactLeg, context);
+    context = nextContext;
     actionOffset += actionCount;
   }
 
@@ -21576,9 +21745,22 @@ function realizeEstimatedLegsWithCardSolution(
   };
 }
 
-function getContextAfterLeg(route, priorContext = null) {
+function getContextAfterLeg(
+  route,
+  priorContext = null,
+  tileMap = null,
+  options = {}
+) {
   const priorHazard = Math.max(0, Number(priorContext?.hazardExposure) || 0);
   const routeHazard = Math.max(0, Number(route?.hazard) || 0);
+  const priorAdverseRE = Math.max(0, Number(priorContext?.reNativeAdverseRE) || 0);
+  const routeUncertaintyProfile = tileMap && route
+    ? getRENativeProductionTrafficForecastProfile(tileMap, route, options)
+    : null;
+  const routeAdverseRE = Math.max(
+    0,
+    Number(routeUncertaintyProfile?.totalAdverseRE) || 0
+  );
   return {
     state: cloneState(route.finalState),
     rebootStart: priorContext?.rebootStart
@@ -21601,6 +21783,7 @@ function getContextAfterLeg(route, priorContext = null) {
     hazardExposure: Number.isFinite(Number(route.contextualHazardExposure))
       ? Number(route.contextualHazardExposure)
       : priorHazard + routeHazard,
+    reNativeAdverseRE: Number((priorAdverseRE + routeAdverseRE).toFixed(6)),
     dynamicArchivePoint: route?.dynamicArchivePointEnd
       ? { ...route.dynamicArchivePointEnd }
       : priorContext?.dynamicArchivePoint
@@ -23419,6 +23602,7 @@ function* analyzeFullCourseContextualSteps(
     searchIntrinsicMentalEventCountCurrentTurn: 0,
     upgradeCardUnits: null,
     hazardExposure: 0,
+    reNativeAdverseRE: 0,
     // Archive state is per robot. At the dock it differs by start; once robots
     // have touched the same checkpoint/Battery their contexts naturally converge.
     dynamicArchivePoint: options.recoveryRule === "dynamic_archiving"
@@ -25185,7 +25369,7 @@ function* analyzeFullCourseContextualSteps(
             : null
         };
         for (let index = 0; index < legIndex; index += 1) {
-          context = getContextAfterLeg(exactLegs[index], context);
+          context = getContextAfterLeg(exactLegs[index], context, tileMap, baseRouteOptions);
         }
         return context;
       };
@@ -26464,7 +26648,8 @@ function* analyzeFullCourseContextualSteps(
       },
       energyReserve: getInitialRouteEnergyShadowReserve(baseRouteOptions),
       upgradeCardUnits: null,
-      hazardExposure: 0
+      hazardExposure: 0,
+      reNativeAdverseRE: 0
     };
     const openingSeed = openingSeedByIndex.get(sourceIndex) ?? null;
     const normalizedSeedRoute = normalizeOpeningSeedRoute(
@@ -26493,7 +26678,7 @@ function* analyzeFullCourseContextualSteps(
     }
     const partials = openingRoutes.map((route) => ({
       legs: [route],
-      context: getContextAfterLeg(route, context),
+      context: getContextAfterLeg(route, context, tileMap, baseRouteOptions),
       score: route.score
     }));
     let selectedPartials = selectContextualPartialBeam(
@@ -26552,7 +26737,7 @@ function* analyzeFullCourseContextualSteps(
         if (rescuedRoutes.length) {
           const rescuedPartials = rescuedRoutes.map((route) => ({
             legs: [route],
-            context: getContextAfterLeg(route, unresolved.context),
+            context: getContextAfterLeg(route, unresolved.context, tileMap, baseRouteOptions),
             score: route.score
           }));
           unresolved.entry.partials = selectContextualPartialBeam(
@@ -26656,7 +26841,7 @@ function* analyzeFullCourseContextualSteps(
         for (const route of legRoutes) {
           extensions.push({
             legs: [...partial.legs, route],
-            context: getContextAfterLeg(route, partial.context),
+            context: getContextAfterLeg(route, partial.context, tileMap, baseRouteOptions),
             score: partial.score + route.score
           });
         }
@@ -26712,7 +26897,7 @@ function* analyzeFullCourseContextualSteps(
             for (const route of rescuedRoutes) {
               rescueExtensions.push({
                 legs: [...partial.legs, route],
-                context: getContextAfterLeg(route, partial.context),
+                context: getContextAfterLeg(route, partial.context, tileMap, baseRouteOptions),
                 score: partial.score + route.score
               });
             }
@@ -27743,11 +27928,11 @@ export function evaluateFullCourseFocusPaymentCurveUnderOccupancy(
       )
       : { ranged: 0, nearby: 0, competition: 0, total: 0 };
 
-    // v49ci observational economy ownership audit. The pricing mode's mature
+    // v49dw production economy route-choice ownership. The pricing mode's mature
     // fixed-route Energy DP remains authoritative for the VALUE of changing
-    // starting Energy. Re-anchor that exact adjustment on completed effective
-    // RE instead of the legacy pathfinder+traffic score, without changing the
-    // production price chosen in this revision.
+    // starting Energy. Completed effective RE plus that exact economy delta now
+    // selects among already-discovered coherent full-course candidates. Legacy
+    // pathfinder+traffic score remains only a comparator/pricing-space metric.
     const candidateLedger = getFixedRoutePricingBaseRELedger(
       tileMap,
       candidate,
@@ -27900,6 +28085,9 @@ export function evaluateFullCourseFocusPaymentCurveUnderOccupancy(
       }
     });
     if (!best) return null;
+    const selected = reBest ?? best;
+    const selectedIntrinsic = Number(selected.scores?.[paymentIndex]);
+    const selectedEffectiveRE = Number(selected.effectiveREs?.[paymentIndex]);
     const adjustedStartingEnergy = subsidizedStarts
       ? Math.min(maxEnergy, baseStartingEnergy + payment)
       : Math.max(0, baseStartingEnergy - payment);
@@ -27910,27 +28098,35 @@ export function evaluateFullCourseFocusPaymentCurveUnderOccupancy(
       subsidy: subsidizedStarts ? payment : 0,
       startingEnergyAfterPayment: adjustedStartingEnergy,
       startingEnergyAfterAdjustment: adjustedStartingEnergy,
-      fullCourseRouteIndex: best.routeIndex,
-      fullCourseIntrinsic: Number(best.intrinsic.toFixed(2)),
-      fullCourseTraffic: Number(best.traffic.total.toFixed(2)),
-      fullTotal: Number((best.intrinsic + best.traffic.total).toFixed(2)),
-      firstLegIntrinsic: Number(best.firstLegRoute?.score ?? Infinity),
-      firstLegTraffic: Number(best.firstTraffic.total.toFixed(2)),
-      firstLegTotal: Number.isFinite(Number(best.firstLegRoute?.score))
-        ? Number((Number(best.firstLegRoute.score) + best.firstTraffic.total).toFixed(2))
+      fullCourseRouteIndex: selected.routeIndex,
+      fullCourseIntrinsic: Number(selectedIntrinsic.toFixed(2)),
+      fullCourseTraffic: Number(selected.traffic.total.toFixed(2)),
+      fullTotal: Number((selectedIntrinsic + selected.traffic.total).toFixed(2)),
+      firstLegIntrinsic: Number(selected.firstLegRoute?.score ?? Infinity),
+      firstLegTraffic: Number(selected.firstTraffic.total.toFixed(2)),
+      firstLegTotal: Number.isFinite(Number(selected.firstLegRoute?.score))
+        ? Number((Number(selected.firstLegRoute.score) + selected.firstTraffic.total).toFixed(2))
         : Infinity,
-      fullEffectiveRE: Number.isFinite(Number(reBest?.effectiveRE))
-        ? Number(reBest.effectiveRE.toFixed(6))
+      fullEffectiveRE: Number.isFinite(selectedEffectiveRE)
+        ? Number(selectedEffectiveRE.toFixed(6))
+        : (Number.isFinite(Number(reBest?.effectiveRE))
+          ? Number(reBest.effectiveRE.toFixed(6))
+          : null),
+      fullEffectiveRERouteIndex: Number.isInteger(selected?.routeIndex)
+        ? selected.routeIndex
         : null,
-      fullEffectiveRERouteIndex: Number.isInteger(reBest?.routeIndex)
-        ? reBest.routeIndex
-        : null,
+      legacyFullCourseRouteIndex: best.routeIndex,
+      legacyFullCourseIntrinsic: Number(best.intrinsic.toFixed(2)),
+      legacyFullCourseTraffic: Number(best.traffic.total.toFixed(2)),
+      legacyFullTotal: Number((best.intrinsic + best.traffic.total).toFixed(2)),
       legacySelectedEffectiveRE: Number.isFinite(legacySelectedEffectiveRE)
         ? Number(legacySelectedEffectiveRE.toFixed(6))
         : null,
       legacySelectedEffectiveRERouteIndex: best.routeIndex,
-      completedREComparatorModel:
-        "completed-effective-re-plus-card-aware-starting-energy-delta-v49ci"
+      completedRERouteSelectionOwner:
+        "completed-effective-re-plus-card-aware-starting-energy-delta-v49dw",
+      legacyRouteSelectionComparator:
+        "intrinsic-score-plus-traffic-plus-4pct-raw-gap"
     };
   }).filter(Boolean);
 
@@ -28169,4 +28365,4 @@ export function analyzeFlagLeg(tileMap, from, goal, options = {}) {
     }
   };
 }
-// VERSION END: v49dq-route-score-null-hardening
+// VERSION END: v49du-energy-economy-wall-clock
