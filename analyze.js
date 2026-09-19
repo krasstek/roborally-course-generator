@@ -1,6 +1,6 @@
-// VERSION START: v49dd-damage-control-owner-extraction
+// VERSION START: v49dq-route-score-null-hardening
 // Robo Rally Course Randomizer - route analysis and scoring runtime
-export const ANALYZE_BUILD_ID = "v49dd-damage-control-owner-extraction";
+export const ANALYZE_BUILD_ID = "v49dq-route-score-null-hardening";
 const ASSET_VERSION = new URL(import.meta.url).searchParams.get("v") ?? "";
 const VERSION_SUFFIX = ASSET_VERSION ? `?v=${encodeURIComponent(ASSET_VERSION)}` : "";
 const versionedPath = (path) => `${path}${VERSION_SUFFIX}`;
@@ -1409,6 +1409,8 @@ export function clearAnalysisCaches() {
   REAR_THREAT_CACHE.clear();
   FIXED_ROUTE_PRICING_ECONOMY_CACHE = new WeakMap();
   FIXED_ROUTE_PRICING_RE_LEDGER_CACHE = new WeakMap();
+  TRAFFIC_INTRINSIC_RE_LEDGER_CACHE = new WeakMap();
+  RE_NATIVE_TRAFFIC_CONFIDENCE_PROFILE_CACHE = new WeakMap();
   PROGRAM_RESOURCE_SUMMARY_CACHE.clear();
   ROLLING_PROGRAM_CONTEXT_CACHE.clear();
   PROGRAM_ACTION_TRANSITION_CACHE.clear();
@@ -2332,6 +2334,11 @@ function getRouteEnergyShadowStep(
 // dominance; it is a downstream valuation layer used only by priced starts.
 let FIXED_ROUTE_PRICING_ECONOMY_CACHE = new WeakMap();
 let FIXED_ROUTE_PRICING_RE_LEDGER_CACHE = new WeakMap();
+let TRAFFIC_INTRINSIC_RE_LEDGER_CACHE = new WeakMap();
+// v49dm production traffic confidence caches only its own intrinsic completed-route
+// RE ledger so economy-pricing replays cannot contaminate traffic semantics (or
+// vice versa) when callers carry different option overlays.
+let RE_NATIVE_TRAFFIC_CONFIDENCE_PROFILE_CACHE = new WeakMap();
 
 function getFixedRoutePricingBaseRELedger(tileMap, route, options = {}) {
   if (!route) return null;
@@ -2344,6 +2351,23 @@ function getFixedRoutePricingBaseRELedger(tileMap, route, options = {}) {
     null
   );
   if (ledger) FIXED_ROUTE_PRICING_RE_LEDGER_CACHE.set(route, ledger);
+  return ledger;
+}
+
+function getTrafficIntrinsicRELedger(tileMap, route, options = {}) {
+  if (!route) return null;
+  const cached = TRAFFIC_INTRINSIC_RE_LEDGER_CACHE.get(route);
+  if (cached) return cached;
+  // Intrinsic means no multiplayer trafficContext. This makes the ledger safe
+  // to use as an input to production traffic confidence without a same-epoch
+  // traffic -> confidence -> traffic feedback loop.
+  const ledger = summarizeRegisterEquivalentLedger(
+    tileMap,
+    route,
+    options,
+    null
+  );
+  if (ledger) TRAFFIC_INTRINSIC_RE_LEDGER_CACHE.set(route, ledger);
   return ledger;
 }
 
@@ -8407,8 +8431,12 @@ function getDamageEconomyTrafficRangedRegisterInputs(
   }
 
   const damageUnit = getStandardRobotLaserCost();
-  let priorHazardExposure = Math.max(0, Number(options.trafficPriorHazardExposure) || 0);
-  let carriedConfidence = null;
+  const confidenceMaps = getRENativeProductionTrafficConfidenceMaps(
+    tileMap,
+    route,
+    options
+  );
+  let carriedConfidence = confidenceMaps.profile?.averageConfidence ?? 1;
   let rawRangedScore = 0;
   let effectiveRangedScore = 0;
   let expectedDamageUnits = 0;
@@ -8458,10 +8486,6 @@ function getDamageEconomyTrafficRangedRegisterInputs(
       }
     }
 
-    let confidence = carriedConfidence ?? getTrafficInitialForecastConfidence(
-      routeLeg,
-      { ...options, trafficPriorHazardExposure: priorHazardExposure }
-    );
     const legWeight = legIndex === 0
       ? FULL_COURSE_OPENING_LEG_TRAFFIC_WEIGHT
       : FULL_COURSE_LATER_LEG_TRAFFIC_WEIGHT;
@@ -8474,6 +8498,16 @@ function getDamageEconomyTrafficRangedRegisterInputs(
       const registerNearby = Math.min(nearbyByRegister[index], damageUnit * 3.25);
       const registerCompetition = Math.min(competitionByRegister[index], damageUnit);
       const registerRawInteraction = registerRanged + registerNearby + registerCompetition;
+      const absoluteAction = timelineA[index]?.absoluteRegister ??
+        getTransitionAbsoluteAction(
+          routeLeg.transitions?.[index],
+          Math.max(0, Number(routeLeg.absoluteStartAction) || 0) + index + 1
+        );
+      const confidence = getRENativeTrafficConfidenceForAbsoluteAction(
+        confidenceMaps.confidenceByAbsoluteAction,
+        absoluteAction,
+        carriedConfidence
+      );
       let registerExpectedHits = 0;
       const registerExpectedHitProbabilityByDirection = Object.fromEntries(
         ROTATION_ORDER.map((dir) => [dir, 0])
@@ -8496,11 +8530,6 @@ function getDamageEconomyTrafficRangedRegisterInputs(
       const weightedEffectiveCompetition = registerCompetition * confidence * legWeight;
       const weightedEffectiveInteraction = registerRawInteraction * confidence * legWeight;
       const registerExpectedDamageUnits = registerExpectedHits * confidence * legWeight;
-      const absoluteAction = timelineA[index]?.absoluteRegister ??
-        getTransitionAbsoluteAction(
-          routeLeg.transitions?.[index],
-          Math.max(0, Number(routeLeg.absoluteStartAction) || 0) + index + 1
-        );
 
       rawRangedScore += weightedRawRanged;
       effectiveRangedScore += weightedEffectiveRanged;
@@ -8529,19 +8558,12 @@ function getDamageEconomyTrafficRangedRegisterInputs(
         legWeight
       });
 
-      confidence = advanceTrafficForecastConfidenceForTransition(
-        confidence,
-        routeLeg.transitions?.[index]?.hazard,
-        registerRawInteraction,
-        damageUnit,
-        routeLeg.transitions?.[index] ?? null,
+      carriedConfidence = getRENativeTrafficConfidenceForAbsoluteAction(
+        confidenceMaps.confidenceAfterAbsoluteAction,
         absoluteAction,
-        options
+        confidence
       );
     }
-
-    priorHazardExposure += Math.max(0, Number(routeLeg?.hazard) || 0);
-    carriedConfidence = confidence;
   });
 
   return {
@@ -12077,11 +12099,26 @@ function routeSimilarity(routeA, routeB, goal) {
   return similarity;
 }
 
+function compareScoredRouteLike(left, right) {
+  const leftScore = Number(left?.score);
+  const rightScore = Number(right?.score);
+  const leftFinite = Number.isFinite(leftScore);
+  const rightFinite = Number.isFinite(rightScore);
+  if (leftFinite && rightFinite) return leftScore - rightScore;
+  if (leftFinite) return -1;
+  if (rightFinite) return 1;
+  return 0;
+}
+
 function dedupeRoutes(routes) {
   const seen = new Set();
   const out = [];
 
-  for (const route of routes) {
+  for (const route of routes || []) {
+    // Null/undefined entries are never meaningful route candidates.  Treating
+    // them as data allowed sparse search/cache results to survive until a later
+    // Array.sort comparator dereferenced left.score/right.score in Safari.
+    if (!route) continue;
     const key = getRoutePathKey(route);
     if (seen.has(key)) continue;
     seen.add(key);
@@ -12114,7 +12151,7 @@ function selectDistinctRoutes(routes, goal, limit = 4) {
 // contextual stitched beam. The ordinary route selector remains stricter.
 function selectContextualTrafficAlternativeRoutes(routes, goal, limit = 2) {
   const sorted = [...(routes || [])].filter(Boolean).sort(
-    (left, right) => left.score - right.score
+    compareScoredRouteLike
   );
   if (!sorted.length || limit <= 0) return [];
   const best = sorted[0];
@@ -12141,7 +12178,7 @@ function selectContextualTrafficAlternativeRoutes(routes, goal, limit = 2) {
   }
 
   return diverse && diverseNovelty >= 0.1
-    ? [best, diverse].sort((left, right) => left.score - right.score)
+    ? [best, diverse].sort(compareScoredRouteLike)
     : [best];
 }
 
@@ -12741,7 +12778,7 @@ export function analyzeCourse(tileMap, starts, goal, options = {}) {
       : enumerateRoutes(tileMap, start, goal, sharedRouteOptions);
     const routeSearchMeta = rawRoutes.searchMeta ?? rawRoutes.contextualSearchMeta ?? null;
     const routes = dedupeRoutes(rawRoutes)
-      .sort((left, right) => left.score - right.score)
+      .sort(compareScoredRouteLike)
       .slice(0, maxRoutes);
 
     const reachable = routes.length > 0;
@@ -12929,7 +12966,7 @@ function getFullCourseCorridorDiversity(routeA, routeB, flags) {
 
 function selectCorridorDiverseFullCourseRoutes(routes, flags, limit = 3) {
   if (!routes.length || limit <= 0) return [];
-  const remaining = [...routes].sort((left, right) => left.score - right.score);
+  const remaining = [...routes].sort(compareScoredRouteLike);
   const selected = [remaining.shift()];
 
   while (selected.length < limit && remaining.length) {
@@ -12949,7 +12986,7 @@ function selectCorridorDiverseFullCourseRoutes(routes, flags, limit = 3) {
     selected.push(remaining.splice(bestIndex, 1)[0]);
   }
 
-  return selected.sort((left, right) => left.score - right.score);
+  return selected.sort(compareScoredRouteLike);
 }
 
 
@@ -13964,11 +14001,10 @@ function getTrafficPairProfile(tileMap, route, otherRoute, options = {}) {
   return profile;
 }
 
-// Shared forecast-confidence model. Its primary purpose is to stop spending
-// route-search effort on increasingly fictional multiplayer futures. Primary
-// representative routes remain exact; only optional traffic-alternate demand and
-// breadth are attenuated as elapsed play, hazards, interactions and forced
-// movement make later robot positions less credible.
+// Legacy pre-v49dm forecast-confidence primitives. Production multiplayer
+// traffic no longer consumes hazard/interaction/board-chaos decay; it uses the
+// intrinsic RE-native profile below. These helpers remain temporarily for legacy
+// production length uncertainty and contextual breadth until those owners migrate.
 // Time alone stays highly credible through
 // the first two five-register programs, then steepens progressively. Hazards and
 // predicted interaction can still pull that horizon forward, but their uncertainty
@@ -14021,15 +14057,27 @@ function getTrafficAlternateHardPressureStrength(pressureRegisterEquivalents = 0
   );
 }
 
-function restoreTrafficAlternateEffortForPressure(
+// v49dm production RE-native routing-horizon moderation. Severe damage may
+// justify spending some optional reroute-search effort even when the positional
+// forecast is speculative, but it must not erase the horizon decay. A fully
+// saturated damage-pressure state can restore at most a half-budget optional
+// search envelope when the confidence-derived base effort is below that level.
+const RE_NATIVE_DAMAGE_EFFORT_CEILING = 0.50;
+
+function restoreRENativeTrafficAlternateEffortForDamagePressure(
   baseEffortScale,
   pressureRegisterEquivalents
 ) {
   const base = clamp(Number(baseEffortScale) || 0, 0, 1);
+  if (base >= RE_NATIVE_DAMAGE_EFFORT_CEILING) return base;
   const pressure = getTrafficAlternateHardPressureStrength(
     pressureRegisterEquivalents
   );
-  return clamp(base + (1 - base) * pressure, base, 1);
+  return clamp(
+    base + (RE_NATIVE_DAMAGE_EFFORT_CEILING - base) * pressure,
+    base,
+    RE_NATIVE_DAMAGE_EFFORT_CEILING
+  );
 }
 
 function getTrafficAlternateSearchEnvelope(effortScale = 1, options = {}) {
@@ -14274,6 +14322,326 @@ export function summarizeIntrinsicRouteForecastConfidence(route, options = {}) {
 }
 
 
+// v49dk observational RE-native routing-horizon candidate.
+//
+// Ownership rule: forecast uncertainty depends only on elapsed register horizon and
+// adverse Register-Equivalent burden. It must not invent separate hazard,
+// interaction or board-chaos prices when those mechanisms are already representable
+// in the RE ledger. Damage pressure does not make speculative future positions more
+// credible; it may restore only a capped amount of optional reroute-search effort
+// when the robot is under enough adverse pressure to justify looking.
+//
+// This helper is OBSERVATIONAL in v49dk. Production traffic confidence still uses
+// the legacy shared forecast curve until browser calibration validates the RE-native
+// replacement. A precomputed ledger can be supplied so RE-turn replay pays no extra
+// route-replay cost.
+export function summarizeRENativeRouteUncertaintyEvidence(
+  tileMap,
+  route,
+  options = {},
+  trafficContext = null,
+  precomputedLedger = null
+) {
+  const transitions = Array.isArray(route?.transitions) ? route.transitions : [];
+  if (!tileMap || !route || !transitions.length) {
+    return {
+      active: false,
+      reason: 'missing-route',
+      confidenceByRegister: []
+    };
+  }
+
+  const ledger = precomputedLedger ?? summarizeRegisterEquivalentLedger(
+    tileMap,
+    route,
+    options,
+    trafficContext
+  );
+  if (!ledger) {
+    return {
+      active: false,
+      reason: 'missing-re-ledger',
+      confidenceByRegister: []
+    };
+  }
+
+  const turnEvidence = new Map();
+  for (const turn of ledger.turns || []) {
+    const turnNumber = Math.max(1, Math.floor(Number(turn?.turn) || 1));
+    const cleanCardRE = Math.max(0, Number(turn?.cleanCardPlausibilityRE) || 0);
+    const damageCardSupplyRE = Math.max(0, Number(turn?.damageCardSupplyRE) || 0);
+    const clogRE = Math.max(0, Number(turn?.clogRE) || 0);
+    const mentalRE = Math.max(0, Number(turn?.mentalRegisterEquivalents) || 0);
+    const lostRegisterTempoRE = Math.max(0, Number(turn?.lostRegisterTempoRE) || 0);
+    // Energy is intentionally not allowed to cancel adverse burden here. Energy
+    // benefit remains an RE owner in route value, but positive resilience should
+    // only improve uncertainty once a specific reliability mechanism is modeled.
+    const adverseRE = cleanCardRE + damageCardSupplyRE + clogRE + mentalRE;
+    const damagePressureRE = damageCardSupplyRE + clogRE;
+    turnEvidence.set(turnNumber, {
+      turn: turnNumber,
+      programmedRegisterRE: Math.max(0, Number(turn?.programmedRegisterRE) || 0),
+      lostRegisterTempoRE,
+      cleanCardRE,
+      damageCardSupplyRE,
+      clogRE,
+      mentalRE,
+      adverseRE,
+      damagePressureRE
+    });
+  }
+
+  const absoluteStartAction = Math.max(0, Number(route?.absoluteStartAction) || 0);
+  let elapsedAbsoluteActions = absoluteStartAction;
+  let cumulativeAdverseRE = 0;
+  let cumulativeDamagePressureRE = 0;
+  const confidenceByRegister = [];
+  const confidenceAfterRegisterByRegister = [];
+  const absoluteActionByRegister = [];
+  const effectiveHorizonByRegister = [];
+  const baseEffortByRegister = [];
+  const damageModeratedEffortByRegister = [];
+  const appliedTurns = new Set();
+
+  const applyTurnEvidence = (turnNumber) => {
+    if (appliedTurns.has(turnNumber)) return;
+    const evidence = turnEvidence.get(turnNumber);
+    if (!evidence) return;
+    cumulativeAdverseRE += evidence.adverseRE;
+    cumulativeDamagePressureRE += evidence.damagePressureRE;
+    appliedTurns.add(turnNumber);
+  };
+
+  for (let index = 0; index < transitions.length; index += 1) {
+    const transition = transitions[index] ?? null;
+    const elapsedRegisters = getTrafficForecastElapsedRegisters(
+      elapsedAbsoluteActions,
+      options
+    );
+    const effectiveHorizonRE = elapsedRegisters + cumulativeAdverseRE;
+    const confidence = getForecastTimeConfidence(effectiveHorizonRE);
+    const baseEffortScale = getTrafficAlternateEffortScale(confidence, options);
+    const damageModeratedEffortScale =
+      restoreRENativeTrafficAlternateEffortForDamagePressure(
+        baseEffortScale,
+        cumulativeDamagePressureRE
+      );
+
+    const executedAbsoluteAction = getRegisterEquivalentLedgerAbsoluteAction(
+      transition,
+      elapsedAbsoluteActions + 1
+    );
+    absoluteActionByRegister.push(executedAbsoluteAction);
+    confidenceByRegister.push(confidence);
+    effectiveHorizonByRegister.push(effectiveHorizonRE);
+    baseEffortByRegister.push(baseEffortScale);
+    damageModeratedEffortByRegister.push(damageModeratedEffortScale);
+
+    const turnNumber = Math.floor(
+      (Math.max(1, executedAbsoluteAction) - 1) / REGISTER_COUNT
+    ) + 1;
+    const closesTurn = Boolean(transition?.rebooted) ||
+      getRegisterPosition(executedAbsoluteAction) === REGISTER_COUNT;
+    const isLast = index === transitions.length - 1;
+    if (closesTurn || isLast) applyTurnEvidence(turnNumber);
+
+    elapsedAbsoluteActions = transition?.rebooted
+      ? getRebootEndedAbsoluteActions(executedAbsoluteAction)
+      : executedAbsoluteAction;
+    const afterElapsedRegisters = getTrafficForecastElapsedRegisters(
+      elapsedAbsoluteActions,
+      options
+    );
+    confidenceAfterRegisterByRegister.push(
+      getForecastTimeConfidence(afterElapsedRegisters + cumulativeAdverseRE)
+    );
+  }
+
+  const endElapsedRegisters = getTrafficForecastElapsedRegisters(
+    elapsedAbsoluteActions,
+    options
+  );
+  const endEffectiveHorizonRE = endElapsedRegisters + cumulativeAdverseRE;
+  const endConfidence = getForecastTimeConfidence(endEffectiveHorizonRE);
+  const totalLostRegisterTempoRE = [...turnEvidence.values()].reduce(
+    (sum, entry) => sum + entry.lostRegisterTempoRE,
+    0
+  );
+  const totalAdverseRE = [...turnEvidence.values()].reduce(
+    (sum, entry) => sum + entry.adverseRE,
+    0
+  );
+  const totalDamagePressureRE = [...turnEvidence.values()].reduce(
+    (sum, entry) => sum + entry.damagePressureRE,
+    0
+  );
+  const programmedRegisters = Math.max(
+    0,
+    Number(ledger.programmedRegisterRE) || transitions.length
+  );
+  // v49dk separates evidence from elapsed-time calibration. Adverse RE remains
+  // the exclusive burden input, but one RE is NOT assumed to equal one extra
+  // register of actual play. Main combines downstream control RE once, computes
+  // adverseRE / nominalRegisters, and exposes a coefficient-free saturating
+  // response shape r/(1+r). The eventual elapsed-time multiplier is 1+k*response,
+  // with k intentionally uncalibrated here.
+  const playTimeAdverseRE = totalAdverseRE + totalLostRegisterTempoRE;
+
+  return {
+    active: true,
+    observationalOnly: true,
+    model: 'register-horizon-plus-adverse-re-v49dk',
+    programmedRegisters: Number(programmedRegisters.toFixed(4)),
+    totalAdverseRE: Number(totalAdverseRE.toFixed(4)),
+    totalLostRegisterTempoRE: Number(totalLostRegisterTempoRE.toFixed(4)),
+    playTimeAdverseRE: Number(playTimeAdverseRE.toFixed(4)),
+    totalDamagePressureRE: Number(totalDamagePressureRE.toFixed(4)),
+    damagePressureSearchRestorationStrength: Number(
+      getTrafficAlternateHardPressureStrength(totalDamagePressureRE).toFixed(4)
+    ),
+    damagePressureSearchEffortCeiling: RE_NATIVE_DAMAGE_EFFORT_CEILING,
+    averageConfidence: Number(average(confidenceByRegister).toFixed(4)),
+    minimumConfidence: Number(
+      Math.min(...confidenceByRegister, endConfidence).toFixed(4)
+    ),
+    endConfidence: Number(endConfidence.toFixed(4)),
+    endElapsedRegisters: Number(endElapsedRegisters.toFixed(4)),
+    endEffectiveHorizonRE: Number(endEffectiveHorizonRE.toFixed(4)),
+    averageBaseEffortScale: Number(average(baseEffortByRegister).toFixed(4)),
+    averageDamageModeratedEffortScale: Number(
+      average(damageModeratedEffortByRegister).toFixed(4)
+    ),
+    minimumDamageModeratedEffortScale: Number(
+      Math.min(...damageModeratedEffortByRegister).toFixed(4)
+    ),
+    confidenceByRegister: confidenceByRegister.map((value) => Number(value.toFixed(4))),
+    confidenceAfterRegisterByRegister: confidenceAfterRegisterByRegister.map(
+      (value) => Number(value.toFixed(4))
+    ),
+    absoluteActionByRegister: absoluteActionByRegister.map(
+      (value) => Math.max(1, Math.floor(Number(value) || 1))
+    ),
+    effectiveHorizonByRegister: effectiveHorizonByRegister.map(
+      (value) => Number(value.toFixed(4))
+    ),
+    turnEvidence: [...turnEvidence.values()].map((entry) => ({
+      ...entry,
+      programmedRegisterRE: Number(entry.programmedRegisterRE.toFixed(4)),
+      lostRegisterTempoRE: Number(entry.lostRegisterTempoRE.toFixed(4)),
+      cleanCardRE: Number(entry.cleanCardRE.toFixed(4)),
+      damageCardSupplyRE: Number(entry.damageCardSupplyRE.toFixed(4)),
+      clogRE: Number(entry.clogRE.toFixed(4)),
+      mentalRE: Number(entry.mentalRE.toFixed(4)),
+      adverseRE: Number(entry.adverseRE.toFixed(4)),
+      damagePressureRE: Number(entry.damagePressureRE.toFixed(4))
+    }))
+  };
+}
+
+
+// v49dm production traffic-confidence owner.
+//
+// Same-epoch multiplayer traffic is deliberately NOT part of this input. The
+// profile is built from the route's intrinsic completed RE chronology only:
+// clean-card burden, damage-card supply, clog/control and intrinsic mental RE,
+// plus elapsed register horizon. Traffic then consumes this confidence; it cannot
+// feed back into the confidence that priced the same traffic field.
+function getRENativeProductionTrafficForecastProfile(
+  tileMap,
+  route,
+  options = {}
+) {
+  if (!tileMap || !route) return null;
+  const graceRegisters = getTrafficForecastGraceRegisters(options);
+  const cached = RE_NATIVE_TRAFFIC_CONFIDENCE_PROFILE_CACHE.get(route);
+  if (cached && cached.graceRegisters === graceRegisters) {
+    return cached.profile;
+  }
+
+  const intrinsicLedger = getTrafficIntrinsicRELedger(tileMap, route, options);
+  if (!intrinsicLedger) return null;
+  const profile = summarizeRENativeRouteUncertaintyEvidence(
+    tileMap,
+    route,
+    options,
+    null,
+    intrinsicLedger
+  );
+  if (!profile?.active) return null;
+
+  const productionProfile = {
+    ...profile,
+    productionTrafficOwner: true,
+    trafficEvidenceMode: "intrinsic-re-only-no-same-epoch-traffic",
+    model: "register-horizon-plus-intrinsic-adverse-re-v49dm"
+  };
+  RE_NATIVE_TRAFFIC_CONFIDENCE_PROFILE_CACHE.set(route, {
+    graceRegisters,
+    profile: productionProfile
+  });
+  return productionProfile;
+}
+
+function getRENativeProductionTrafficConfidenceMaps(
+  tileMap,
+  route,
+  options = {}
+) {
+  const profile = getRENativeProductionTrafficForecastProfile(
+    tileMap,
+    route,
+    options
+  );
+  if (!profile) {
+    return {
+      profile: null,
+      confidenceByAbsoluteAction: new Map(),
+      confidenceAfterAbsoluteAction: new Map()
+    };
+  }
+  const confidenceByAbsoluteAction = new Map();
+  const confidenceAfterAbsoluteAction = new Map();
+  const actions = profile.absoluteActionByRegister || [];
+  const before = profile.confidenceByRegister || [];
+  const after = profile.confidenceAfterRegisterByRegister || [];
+  for (let index = 0; index < actions.length; index += 1) {
+    const action = Math.max(1, Math.floor(Number(actions[index]) || 1));
+    confidenceByAbsoluteAction.set(
+      action,
+      clamp(Number(before[index]) || 0, TRAFFIC_FORECAST_CONFIDENCE_FLOOR, 1)
+    );
+    confidenceAfterAbsoluteAction.set(
+      action,
+      clamp(
+        Number(after[index]) || Number(before[index]) || 0,
+        TRAFFIC_FORECAST_CONFIDENCE_FLOOR,
+        1
+      )
+    );
+  }
+  return {
+    profile,
+    confidenceByAbsoluteAction,
+    confidenceAfterAbsoluteAction
+  };
+}
+
+function getRENativeTrafficConfidenceForAbsoluteAction(
+  confidenceMap,
+  absoluteAction,
+  fallback = 1
+) {
+  const value = confidenceMap?.get?.(
+    Math.max(1, Math.floor(Number(absoluteAction) || 1))
+  );
+  return clamp(
+    Number.isFinite(Number(value)) ? Number(value) : Number(fallback) || 1,
+    TRAFFIC_FORECAST_CONFIDENCE_FLOOR,
+    1
+  );
+}
+
+
 // v49bj observational candidate: collapse repeated nearby opportunities within
 // a natural five-register turn into the probability of at least one meaningful
 // non-laser control episode. Register event mass is expected-count-like rather
@@ -14342,8 +14710,44 @@ function getExpectedTrafficBreakdownForLeg(
   options = {}
 ) {
   const timelineA = getRegisterTimeline(route);
+  const suppliedConfidenceMap =
+    options.trafficRENativeConfidenceByAbsoluteAction instanceof Map
+      ? options.trafficRENativeConfidenceByAbsoluteAction
+      : null;
+  const suppliedAfterConfidenceMap =
+    options.trafficRENativeConfidenceAfterAbsoluteAction instanceof Map
+      ? options.trafficRENativeConfidenceAfterAbsoluteAction
+      : null;
+  const ownConfidenceMaps = suppliedConfidenceMap
+    ? null
+    : getRENativeProductionTrafficConfidenceMaps(tileMap, route, options);
+  const confidenceByAbsoluteAction =
+    suppliedConfidenceMap ?? ownConfidenceMaps?.confidenceByAbsoluteAction ?? new Map();
+  const confidenceAfterAbsoluteAction =
+    suppliedAfterConfidenceMap ??
+    ownConfidenceMaps?.confidenceAfterAbsoluteAction ??
+    new Map();
+  const confidenceProfile =
+    options.trafficRENativeConfidenceProfile ??
+    ownConfidenceMaps?.profile ??
+    null;
+
+  const firstAbsoluteAction = timelineA.length
+    ? (
+      timelineA[0]?.absoluteRegister ??
+      getTransitionAbsoluteAction(
+        route?.transitions?.[0],
+        Math.max(0, Number(route?.absoluteStartAction) || 0) + 1
+      )
+    )
+    : Math.max(1, Number(route?.absoluteStartAction) || 1);
+  const profileStartConfidence = getRENativeTrafficConfidenceForAbsoluteAction(
+    confidenceByAbsoluteAction,
+    firstAbsoluteAction,
+    confidenceProfile?.averageConfidence ?? 1
+  );
+
   if (!timelineA.length || !selectedRouteEntries?.length) {
-    const confidence = getTrafficInitialForecastConfidence(route, options);
     return {
       ranged: 0,
       nearby: 0,
@@ -14362,9 +14766,11 @@ function getExpectedTrafficBreakdownForLeg(
       nearbyTurnEpisodeControlRegisterEquivalentsCandidate: 0,
       nearbyTurnEpisodeControlScoreCandidate: 0,
       nearbyTurnEpisodeByTurn: [],
-      confidenceStart: Number(confidence.toFixed(3)),
-      confidenceMean: Number(confidence.toFixed(3)),
-      confidenceEnd: Number(confidence.toFixed(3)),
+      confidenceStart: Number(profileStartConfidence.toFixed(3)),
+      confidenceMean: Number(profileStartConfidence.toFixed(3)),
+      confidenceEnd: Number(
+        (confidenceProfile?.endConfidence ?? profileStartConfidence).toFixed(3)
+      ),
       byRegister: []
     };
   }
@@ -14374,7 +14780,6 @@ function getExpectedTrafficBreakdownForLeg(
     .filter((entry) => entry.route && entry.occupancyWeight > 0);
 
   if (!preparedOthers.length) {
-    const confidence = getTrafficInitialForecastConfidence(route, options);
     return {
       ranged: 0,
       nearby: 0,
@@ -14393,9 +14798,11 @@ function getExpectedTrafficBreakdownForLeg(
       nearbyTurnEpisodeControlRegisterEquivalentsCandidate: 0,
       nearbyTurnEpisodeControlScoreCandidate: 0,
       nearbyTurnEpisodeByTurn: [],
-      confidenceStart: Number(confidence.toFixed(3)),
-      confidenceMean: Number(confidence.toFixed(3)),
-      confidenceEnd: Number(confidence.toFixed(3)),
+      confidenceStart: Number(profileStartConfidence.toFixed(3)),
+      confidenceMean: Number(profileStartConfidence.toFixed(3)),
+      confidenceEnd: Number(
+        (confidenceProfile?.endConfidence ?? profileStartConfidence).toFixed(3)
+      ),
       byRegister: []
     };
   }
@@ -14438,21 +14845,30 @@ function getExpectedTrafficBreakdownForLeg(
   let nearbyEventMass = 0;
   let nearbyControlLoad = 0;
   const nearbyControlLoadByTurn = new Map();
-  const confidenceStart = getTrafficInitialForecastConfidence(route, options);
-  let confidence = confidenceStart;
   let confidenceSum = 0;
+  let lastConfidence = profileStartConfidence;
+  let lastAbsoluteAction = firstAbsoluteAction;
   const byRegister = [];
 
   for (let index = 0; index < timelineA.length; index += 1) {
+    const executedAbsoluteAction = timelineA[index]?.absoluteRegister ??
+      getTransitionAbsoluteAction(
+        route.transitions?.[index],
+        Math.max(0, Number(route?.absoluteStartAction) || 0) + index + 1
+      );
+    const confidence = getRENativeTrafficConfidenceForAbsoluteAction(
+      confidenceByAbsoluteAction,
+      executedAbsoluteAction,
+      lastConfidence
+    );
+    lastConfidence = confidence;
+    lastAbsoluteAction = executedAbsoluteAction;
+
     let registerRanged = 0;
     // Robot lasers do not shoot through other robots. Traffic intentionally does
     // not carry literal per-square robot occupancy/occlusion into route search,
     // so aggregate predicted fire is capped at one normal laser equivalent per
-    // incoming cardinal direction in each register. This preserves the important
-    // gameplay consequence without pretending to know which predicted robot is
-    // physically first in line: robots stacked behind one another on one side do
-    // not multiply that register's hit, while a long corridor can still produce
-    // repeated hits on later registers as the same pursuit geometry persists.
+    // incoming cardinal direction in each register.
     for (const dir of ROTATION_ORDER) {
       registerRanged += Math.min(rangedByRegisterFacing[index][dir], damageUnit);
     }
@@ -14463,14 +14879,10 @@ function getExpectedTrafficBreakdownForLeg(
     const registerEffectiveNearby = registerNearby * confidence;
     const registerEffectiveCompetition = registerCompetition * confidence;
 
-    // Probability-like event mass may include more than one other robot; cap the
-    // per-register planning-event candidate at two meaningful interactions.
     const registerNearbyEventMass = Math.min(
       2,
       Math.max(0, nearbyEventMassByRegister[index] || 0)
     ) * confidence;
-    // Control load is expected affected-register mass amplified by mechanical
-    // displacement severity. It is deliberately not a score yet.
     const registerNearbyControlLoad = Math.min(
       3,
       Math.max(0, nearbyControlLoadByRegister[index] || 0)
@@ -14482,32 +14894,20 @@ function getExpectedTrafficBreakdownForLeg(
     rawRanged += registerRanged;
     rawNearby += registerNearby;
     rawCompetition += registerCompetition;
-
-    // v33 uncertainty curve: traffic at this register is trusted according to the
-    // confidence on arrival. The interaction then reduces confidence only for
-    // later registers, so congestion never discounts itself retroactively.
     ranged += registerEffectiveRanged;
     nearby += registerEffectiveNearby;
     competition += registerEffectiveCompetition;
     confidenceSum += confidence;
 
-    const executedAbsoluteAction = timelineA[index]?.absoluteRegister ??
-      getTransitionAbsoluteAction(
-        route.transitions?.[index],
-        Math.max(0, Number(route?.absoluteStartAction) || 0) + index + 1
-      );
-
     nearbyEventMass += registerNearbyEventMass;
     nearbyControlLoad += registerNearbyControlLoad;
-    const controlTurn = Math.floor(Math.max(0, executedAbsoluteAction - 1) / REGISTER_COUNT) + 1;
+    const controlTurn =
+      Math.floor(Math.max(0, executedAbsoluteAction - 1) / REGISTER_COUNT) + 1;
     nearbyControlLoadByTurn.set(
       controlTurn,
       (nearbyControlLoadByTurn.get(controlTurn) || 0) + registerNearbyControlLoad
     );
 
-    // v49ad: retain the already-computed register-local traffic signal so optional
-    // hotspot rerouting can branch near the heated register. This is diagnostic/
-    // search-location data only; aggregate production traffic scoring is unchanged.
     byRegister.push({
       index,
       absoluteAction: executedAbsoluteAction,
@@ -14520,17 +14920,13 @@ function getExpectedTrafficBreakdownForLeg(
       total: Number(registerEffectiveTotal.toFixed(4)),
       rawTotal: Number(registerRaw.toFixed(4))
     });
-    confidence = advanceTrafficForecastConfidenceForTransition(
-      confidence,
-      route.transitions?.[index]?.hazard,
-      registerRaw,
-      damageUnit,
-      route.transitions?.[index] ?? null,
-      executedAbsoluteAction,
-      options
-    );
   }
 
+  const confidenceEnd = getRENativeTrafficConfidenceForAbsoluteAction(
+    confidenceAfterAbsoluteAction,
+    lastAbsoluteAction,
+    confidenceProfile?.endConfidence ?? lastConfidence
+  );
   const rawTotal = rawRanged + rawNearby + rawCompetition;
   const nearbyControlRegisterEquivalentsCandidate = [...nearbyControlLoadByTurn.values()]
     .reduce(
@@ -14565,9 +14961,9 @@ function getExpectedTrafficBreakdownForLeg(
     nearbyTurnEpisodeControlScoreCandidate:
       nearbyTurnEpisodeCandidate.episodeControlScore,
     nearbyTurnEpisodeByTurn: nearbyTurnEpisodeCandidate.byTurn,
-    confidenceStart: Number(confidenceStart.toFixed(3)),
+    confidenceStart: Number(profileStartConfidence.toFixed(3)),
     confidenceMean: Number((confidenceSum / timelineA.length).toFixed(3)),
-    confidenceEnd: Number(confidence.toFixed(3)),
+    confidenceEnd: Number(confidenceEnd.toFixed(3)),
     byRegister
   };
 }
@@ -14581,15 +14977,11 @@ function getExpectedTrafficBreakdownsByLeg(
   const routeLegs = getTrafficLegs(route);
   if (!routeLegs.length) return [];
 
-  let priorHazardExposure = Math.max(0, Number(options.trafficPriorHazardExposure) || 0);
-  const explicitInitialConfidence = options.trafficInitialForecastConfidence;
-  let carriedConfidence = (
-    explicitInitialConfidence !== null &&
-    explicitInitialConfidence !== undefined &&
-    Number.isFinite(Number(explicitInitialConfidence))
-  )
-    ? clamp(Number(explicitInitialConfidence), TRAFFIC_FORECAST_CONFIDENCE_FLOOR, 1)
-    : null;
+  const confidenceMaps = getRENativeProductionTrafficConfidenceMaps(
+    tileMap,
+    route,
+    options
+  );
   return routeLegs.map((routeLeg, legIndex) => {
     const otherLegEntries = selectedRouteEntries
       .map(getTrafficRouteEntry)
@@ -14602,19 +14994,19 @@ function getExpectedTrafficBreakdownsByLeg(
       })
       .filter((entry) => entry.route);
 
-    const breakdown = getExpectedTrafficBreakdownForLeg(
+    return getExpectedTrafficBreakdownForLeg(
       tileMap,
       routeLeg,
       otherLegEntries,
       {
         ...options,
-        trafficPriorHazardExposure: priorHazardExposure,
-        trafficInitialForecastConfidence: carriedConfidence
+        trafficRENativeConfidenceByAbsoluteAction:
+          confidenceMaps.confidenceByAbsoluteAction,
+        trafficRENativeConfidenceAfterAbsoluteAction:
+          confidenceMaps.confidenceAfterAbsoluteAction,
+        trafficRENativeConfidenceProfile: confidenceMaps.profile
       }
     );
-    priorHazardExposure += Math.max(0, Number(routeLeg?.hazard) || 0);
-    carriedConfidence = breakdown.confidenceEnd;
-    return breakdown;
   });
 }
 
@@ -15099,7 +15491,8 @@ function buildEffectiveRERouteMixture(
   analysis,
   flags,
   trafficByRoute = null,
-  options = {}
+  options = {},
+  precomputedQualityByRoute = null
 ) {
   const qualityByRoute = new Map();
   for (const route of analysis?.fullCourseRoutes || []) {
@@ -15107,12 +15500,17 @@ function buildEffectiveRERouteMixture(
     const traffic = trafficByRoute instanceof Map
       ? trafficByRoute.get(route) ?? null
       : null;
-    const qualityRE = getTrafficRouteMixtureEffectiveREQuality(
-      tileMap,
-      route,
-      traffic,
-      options
-    );
+    const precomputed = precomputedQualityByRoute instanceof Map
+      ? Number(precomputedQualityByRoute.get(route))
+      : NaN;
+    const qualityRE = Number.isFinite(precomputed)
+      ? precomputed
+      : getTrafficRouteMixtureEffectiveREQuality(
+        tileMap,
+        route,
+        traffic,
+        options
+      );
     if (Number.isFinite(qualityRE)) {
       qualityByRoute.set(route, qualityRE);
     }
@@ -15917,6 +16315,9 @@ function summarizeFullCourseCandidateDiversity(
       : null,
     effectiveRE: Number.isFinite(entry?.effectiveRE)
       ? Number(entry.effectiveRE.toFixed(4))
+      : null,
+    effectiveREGain: Number.isFinite(entry?.effectiveREGain)
+      ? Number(entry.effectiveREGain.toFixed(4))
       : null
   }));
   const baselineEvaluation = normalizedEvaluations.find((entry) => entry.routeIndex === 0) ?? null;
@@ -15933,6 +16334,10 @@ function summarizeFullCourseCandidateDiversity(
     : null;
   const strategicGainSelectedVsBest = selectedEvaluation && Number.isFinite(selectedEvaluation.strategicGain)
     ? Number(selectedEvaluation.strategicGain.toFixed(2))
+    : null;
+  const effectiveREGainSelectedVsBest = selectedEvaluation &&
+    Number.isFinite(selectedEvaluation.effectiveREGain)
+    ? Number(selectedEvaluation.effectiveREGain.toFixed(4))
     : null;
 
   return {
@@ -15957,6 +16362,7 @@ function summarizeFullCourseCandidateDiversity(
     intrinsicCostSelectedVsBest,
     trafficAdvantageSelectedVsBest,
     strategicGainSelectedVsBest,
+    effectiveREGainSelectedVsBest,
     baselineTrafficPenalty: baselineEvaluation?.trafficPenalty ?? null,
     selectedTrafficPenalty: selectedEvaluation?.trafficPenalty ?? null,
     candidateEvaluations: normalizedEvaluations
@@ -16095,12 +16501,12 @@ function summarizeTrafficCompletedRouteOwnershipAudit(
   ));
 
   return {
-    model: "completed-route-ownership-audit-v49ch",
+    model: "completed-route-ownership-audit-v49dn",
     observationalOnly: true,
-    behaviorChanged: false,
+    behaviorChanged: true,
     comparisonSnapshot: "final frozen occupancy/route-mixture field",
-    currentObjective: "pathfinder search cost + traffic search pressure (+4% raw-gap stability after gain gate)",
-    comparatorObjective: "completed effective RE",
+    productionObjective: "completed effective RE",
+    legacyComparatorObjective: "pathfinder search cost + traffic search pressure (+4% raw-gap stability after gain gate)",
     minimumUsefulGainScore: Number(thresholdScore.toFixed(3)),
     minimumUsefulGainRE: Number(thresholdRE.toFixed(4)),
     startCount: perStart.length,
@@ -16194,12 +16600,12 @@ function selectFullCourseRoutesForStarts(tileMap, startAnalyses, flags, options 
         null
       ),
       completedRouteOwnershipAudit: {
-        model: "completed-route-ownership-audit-v49ch",
+        model: "completed-route-ownership-audit-v49dn",
         observationalOnly: true,
-        behaviorChanged: false,
+        behaviorChanged: true,
         comparisonSnapshot: "final frozen occupancy/route-mixture field",
-        currentObjective: "pathfinder search cost + traffic search pressure (+4% raw-gap stability after gain gate)",
-        comparatorObjective: "completed effective RE",
+        productionObjective: "completed effective RE",
+        legacyComparatorObjective: "pathfinder search cost + traffic search pressure (+4% raw-gap stability after gain gate)",
         minimumUsefulGainScore: 0,
         minimumUsefulGainRE: 0,
         startCount: reachable.length,
@@ -16227,6 +16633,12 @@ function selectFullCourseRoutesForStarts(tileMap, startAnalyses, flags, options 
     0,
     Number(options.contextualTrafficAlternateMinGain) || 0
   );
+  // v49dn route switching uses the same minimum-useful-gain idea in the
+  // authoritative unit. The existing score threshold was historically expressed
+  // at REGISTER_TEMPO_COST score per register-equivalent, so preserve its scale
+  // by converting it once rather than keeping a parallel score-space owner.
+  const minimumUsefulTrafficGainRE =
+    minimumUsefulTrafficGain / REGISTER_TEMPO_COST;
   const maxPasses = Math.max(1, Math.min(3, options.fullCourseTrafficPasses ?? 2));
   let routeSwitches = 0;
   let actualPasses = 0;
@@ -16309,22 +16721,26 @@ function selectFullCourseRoutesForStarts(tileMap, startAnalyses, flags, options 
           trafficRouteMixtureByIndex: frozenRouteMixtureByIndex
         }
       );
-      const baselineStrategicValue = baselineRoute.score + baselineTraffic.total;
-      let bestRoute = baselineRoute;
-      let bestValue = baselineStrategicValue;
-
-      // v49cb ownership split:
-      // - route switching remains the existing traffic-directed strategic search
-      //   comparison (pathfinder score + traffic);
-      // - occupancy MIXTURE attractiveness is completed effective RE.
-      //
-      // This means the traffic field estimates where players are likely to be
-      // among already-discovered route families using the same authoritative RE
-      // ownership as Normal fairness, without pushing the richer RE ledger into
-      // the hot physical route search.
+      // v49dn production ownership: once physical candidates exist, traffic route
+      // switching is judged in completed effective RE, the same semantic owner as
+      // route-family attractiveness and Normal fairness. Physical search cost is
+      // still allowed to discover candidates, but route.score no longer gets an
+      // independent vote after a completed route can be measured in RE.
       const mixtureTrafficByRoute = new Map([
         [baselineRoute, baselineTraffic]
       ]);
+      const effectiveREByRoute = new Map();
+      const baselineEffectiveRE = getTrafficRouteMixtureEffectiveREQuality(
+        tileMap,
+        baselineRoute,
+        baselineTraffic,
+        options
+      );
+      if (Number.isFinite(baselineEffectiveRE)) {
+        effectiveREByRoute.set(baselineRoute, baselineEffectiveRE);
+      }
+      let bestRoute = baselineRoute;
+      let bestEffectiveRE = baselineEffectiveRE;
 
       for (const candidate of analysis.fullCourseRoutes.slice(1)) {
         const trafficLegacy = getExpectedTrafficBreakdown(
@@ -16350,19 +16766,32 @@ function selectFullCourseRoutesForStarts(tileMap, startAnalyses, flags, options 
             trafficRouteMixtureByIndex: frozenRouteMixtureByIndex
           }
         );
-        const rawGap = Math.max(0, candidate.score - baselineRoute.score);
-        const strategicValue = candidate.score + traffic.total;
         mixtureTrafficByRoute.set(candidate, traffic);
-        const strategicGain = baselineStrategicValue - strategicValue;
-        if (strategicGain < minimumUsefulTrafficGain) {
-          continue;
-        }
-        // Keep the small baseline-stability surcharge as a tie/stability preference,
-        // but never let it replace the shared strategic-gain eligibility rule.
-        const value = strategicValue + rawGap * 0.04;
 
-        if (value < bestValue - 0.001) {
-          bestValue = value;
+        const candidateEffectiveRE = getTrafficRouteMixtureEffectiveREQuality(
+          tileMap,
+          candidate,
+          traffic,
+          options
+        );
+        if (!Number.isFinite(candidateEffectiveRE)) continue;
+        effectiveREByRoute.set(candidate, candidateEffectiveRE);
+
+        if (Number.isFinite(baselineEffectiveRE)) {
+          const gainRE = baselineEffectiveRE - candidateEffectiveRE;
+          if (gainRE < minimumUsefulTrafficGainRE) continue;
+        }
+
+        if (
+          !Number.isFinite(bestEffectiveRE) ||
+          candidateEffectiveRE < bestEffectiveRE - 0.0001 ||
+          (
+            Math.abs(candidateEffectiveRE - bestEffectiveRE) <= 0.0001 &&
+            analysis.fullCourseRoutes.indexOf(candidate) <
+              analysis.fullCourseRoutes.indexOf(bestRoute)
+          )
+        ) {
+          bestEffectiveRE = candidateEffectiveRE;
           bestRoute = candidate;
         }
       }
@@ -16378,7 +16807,8 @@ function selectFullCourseRoutesForStarts(tileMap, startAnalyses, flags, options 
         analysis,
         flags,
         mixtureTrafficByRoute,
-        options
+        options,
+        effectiveREByRoute
       );
       proposedRouteMixtureByIndex.set(analysis.index, proposedMixture);
       if (trafficRouteMixturesDiffer(
@@ -16548,9 +16978,14 @@ function selectFullCourseRoutesForStarts(tileMap, startAnalyses, flags, options 
       };
     });
     const baselineStrategicValue = candidateEvaluations[0]?.strategicValue ?? null;
+    const baselineEffectiveRE = Number(candidateEvaluations[0]?.effectiveRE);
     for (const evaluation of candidateEvaluations) {
       evaluation.strategicGain = Number.isFinite(baselineStrategicValue)
         ? baselineStrategicValue - evaluation.strategicValue
+        : null;
+      evaluation.effectiveREGain = Number.isFinite(baselineEffectiveRE) &&
+        Number.isFinite(Number(evaluation.effectiveRE))
+        ? baselineEffectiveRE - Number(evaluation.effectiveRE)
         : null;
     }
     candidateEvaluationsByIndex.set(analysis.index, candidateEvaluations);
@@ -18078,12 +18513,11 @@ function getContextualTrafficUncertainty(options = {}) {
   return 0;
 }
 
-// v33 breadth labels are now derived from the same continuous confidence curve
-// used by the traffic model. They are only an effort policy: exact card depletion,
-// Energy replay and physical legality remain unchanged at every horizon. Before a
-// traffic field exists, the breadth decision can use only elapsed registers and
-// accumulated intrinsic hazard. The old "turn 2 uncertain / turn 3 speculative"
-// rule and abstract player-count congestion proxy are retired from production.
+// Legacy contextual breadth still uses the pre-v49dm intrinsic confidence curve.
+// It is only an effort policy: exact card depletion, Energy replay and physical
+// legality remain unchanged at every horizon. Production multiplayer traffic no
+// longer shares this hazard-based owner; migrating this breadth policy to RE-native
+// evidence is the next remaining route-search ownership slice.
 const CONTEXTUAL_FORECAST_BANDS = Object.freeze({
   SOLID: "solid",
   UNCERTAIN: "uncertain",
@@ -19319,7 +19753,7 @@ function* enumeratePhysicalTimingLegTemplatesSteps(
       });
     })()
     : dedupeRoutes(completed)
-  ).sort((left, right) => left.score - right.score);
+  ).sort(compareScoredRouteLike);
   const selected = options.contextualReturnAllEstimatedPaths
     ? sortedCompleted.slice(0, maxRoutes)
     : selectDistinctRoutes(
@@ -19601,7 +20035,7 @@ function enumerateContextualLegRoutes(
     ? forcedActionIds.length
     : (options.maxActions ?? CONTEXTUAL_LEG_MAX_ACTIONS);
   const incumbentRoutes = Array.isArray(options.contextualIncumbentRoutes)
-    ? dedupeRoutes(options.contextualIncumbentRoutes.filter(Boolean)).sort((left, right) => left.score - right.score)
+    ? dedupeRoutes(options.contextualIncumbentRoutes.filter(Boolean)).sort(compareScoredRouteLike)
     : [];
   // v23: the dominance identity is exact at every horizon. Card depletion from
   // the previous and current five-register programs therefore cannot disappear
@@ -20187,7 +20621,7 @@ function enumerateContextualLegRoutes(
   }
 
   const deduped = dedupeRoutes(completed).sort(
-    (left, right) => left.score - right.score
+    compareScoredRouteLike
   );
   const selectedRoutes = options.contextualTrafficAlternativeRetention && maxOutputRoutes > 1
     ? selectContextualTrafficAlternativeRoutes(
@@ -21185,7 +21619,7 @@ function getContextualBeamWidthForPartials(partials, requestedWidth, options = {
     return width;
   }
   const best = [...partials].filter(Boolean).sort(
-    (left, right) => (left.score ?? Infinity) - (right.score ?? Infinity)
+    compareScoredRouteLike
   )[0];
   if (!best?.context) return width;
   return getContextualBreadthPolicy(
@@ -21208,18 +21642,26 @@ function selectContextualPartialBeam(
   // continuation for a start on a later leg. Whole-route diversity used to
   // fall through to sorted[0].score in that case, producing the intermittent
   // "best.score" generation crash instead of an ordinary zero-route result.
-  if (!Array.isArray(partials) || !partials.length || width <= 0) {
+  // A later stress run also proved that a sparse/null partial can reach this
+  // boundary: the width helper already ignored it, while this selector sorted
+  // it and Safari crashed on left.score. Null partials are non-routes, so drop
+  // them here before any score comparison.
+  if (!Array.isArray(partials) || width <= 0) {
+    return [];
+  }
+  const validPartials = partials.filter(Boolean);
+  if (!validPartials.length) {
     return [];
   }
 
-  if (partials.length <= width && !diversityOptions.wholePartialDiversity) {
-    return [...partials].sort(
-      (left, right) => left.score - right.score
+  if (validPartials.length <= width && !diversityOptions.wholePartialDiversity) {
+    return [...validPartials].sort(
+      compareScoredRouteLike
     );
   }
 
-  const sorted = [...partials].sort(
-    (left, right) => left.score - right.score
+  const sorted = [...validPartials].sort(
+    compareScoredRouteLike
   );
   const best = sorted[0];
   const scoreAllowance = Math.max(18, best.score * 0.1);
@@ -21270,7 +21712,7 @@ function selectContextualPartialBeam(
 
   return diverse && diverseNovelty >= 0.1
     ? [best, diverse].sort(
-      (left, right) => left.score - right.score
+      compareScoredRouteLike
     )
     : [best];
 }
@@ -22080,7 +22522,7 @@ function analyzeSeededFullCourseContextual(tileMap, starts, flags, options = {})
       .map(cloneContextualFullRouteForReuse)
       .filter(Boolean)
       .map((route) => applyIntrinsicDamageEconomyRoutingScore(tileMap, route, options))
-      .sort((left, right) => left.score - right.score);
+      .sort(compareScoredRouteLike);
     const fullCourseRoute = fullCourseRoutes[0] ?? null;
 
     return buildStartAnalysisForSelectedFullRoute({
@@ -22754,7 +23196,7 @@ function* analyzeFullCourseContextualSteps(
         .filter(Boolean)
         .map((candidate) => rebaseEstimatedRouteSoftGuidance(candidate, context))
         .filter((candidate) => !excluded.has(getEstimatedRouteIdentity(candidate)))
-        .sort((left, right) => left.score - right.score)[0] ?? null
+        .sort(compareScoredRouteLike)[0] ?? null
     );
 
     if (estimatedLegCache.has(cacheKey)) {
@@ -23560,7 +24002,7 @@ function* analyzeFullCourseContextualSteps(
         }
 
         const storedRoutes = dedupeRoutes(catalogueRoutes)
-          .sort((left, right) => left.score - right.score)
+          .sort(compareScoredRouteLike)
           .slice(0, CONTEXTUAL_TEMPLATE_POOL);
         catalogueWitnessesGenerated += storedRoutes.length;
         const unresolvedPhysical = !storedRoutes.length && Boolean(
@@ -23626,7 +24068,7 @@ function* analyzeFullCourseContextualSteps(
           break;
         }
       }
-      compatibleRoutes.sort((left, right) => left.score - right.score);
+      compatibleRoutes.sort(compareScoredRouteLike);
       const distinctCompatible = baseRouteOptions.contextualTrafficAlternativeRetention && targetRouteCount > 1
         ? selectContextualTrafficAlternativeRoutes(
           compatibleRoutes,
@@ -23742,7 +24184,7 @@ function* analyzeFullCourseContextualSteps(
             ...catalogueEntry.routes,
             ...canonicalTemplates
           ])
-            .sort((left, right) => left.score - right.score)
+            .sort(compareScoredRouteLike)
             .slice(0, CONTEXTUAL_TEMPLATE_POOL);
         }
         return distinct;
@@ -23785,7 +24227,7 @@ function* analyzeFullCourseContextualSteps(
         ...cachedTemplates,
         ...routes.filter(Boolean)
       ])
-        .sort((left, right) => left.score - right.score)
+        .sort(compareScoredRouteLike)
         .slice(0, CONTEXTUAL_TEMPLATE_POOL);
       templateCache.set(templateKey, mergedTemplates);
     }
@@ -23804,7 +24246,7 @@ function* analyzeFullCourseContextualSteps(
         ...catalogueEntry.routes,
         ...canonicalEnrichment
       ])
-        .sort((left, right) => left.score - right.score)
+        .sort(compareScoredRouteLike)
         .slice(0, CONTEXTUAL_TEMPLATE_POOL);
     }
 
@@ -23863,7 +24305,7 @@ function* analyzeFullCourseContextualSteps(
           baseRouteOptions
         ))
         .filter(Boolean)
-        .sort((left, right) => left.score - right.score);
+        .sort(compareScoredRouteLike);
       if (exactReplay.length) {
         capacityRescueSuccesses += 1;
         capacityPhysicalRescueSuccesses += 1;
@@ -24716,7 +25158,7 @@ function* analyzeFullCourseContextualSteps(
           .map((partial) => stitchContextualLegs(partial.legs, flags))
           .filter(Boolean)
           .map((route) => applyIntrinsicDamageEconomyRoutingScore(tileMap, route, baseRouteOptions))
-          .sort((left, right) => left.score - right.score);
+          .sort(compareScoredRouteLike);
         const fullCourseRoute = fullCourseRoutes[0] ?? null;
         return buildStartAnalysisForSelectedFullRoute({
           index: entry.index,
@@ -25081,14 +25523,22 @@ function* analyzeFullCourseContextualSteps(
               ? makeEstimatedReplayLeg(oldLeg, context)
               : null;
             if (!nextLeg) {
-              const downstreamConfidence = getIntrinsicForecastConfidence(
-                context.absoluteActions,
-                context.hazardExposure,
-                options
+              // v49dm: never reintroduce raw hazard exposure while rebuilding
+              // a traffic alternate. Carry the already RE-native parent effort
+              // envelope and allow only elapsed register horizon to tighten it
+              // until the rebuilt alternate has a completed RE ledger of its own.
+              const downstreamTimeConfidence = getForecastTimeConfidence(
+                getTrafficForecastElapsedRegisters(
+                  context.absoluteActions,
+                  options
+                )
               );
               const downstreamEffortScale = Math.min(
                 parentEffortScale,
-                getTrafficAlternateEffortScale(downstreamConfidence, options)
+                getTrafficAlternateEffortScale(
+                  downstreamTimeConfidence,
+                  options
+                )
               );
               nextLeg = yield* fetchTrafficEstimatedLeg(
                 context,
@@ -25452,10 +25902,11 @@ function* analyzeFullCourseContextualSteps(
                     ? "pressure"
                     : null;
               const baseEffortScale = getTrafficAlternateEffortScale(confidence, options);
-              const effortScale = restoreTrafficAlternateEffortForPressure(
-                baseEffortScale,
-                pressureRegisterEquivalents
-              );
+              const effortScale =
+                restoreRENativeTrafficAlternateEffortForDamagePressure(
+                  baseEffortScale,
+                  pressureRegisterEquivalents
+                );
               const hotspot = getTrafficHotspotPivot(
                 baselineRoute.legRoutes?.[legIndex] ?? null,
                 breakdown,
@@ -25647,7 +26098,7 @@ function* analyzeFullCourseContextualSteps(
               .map((route) => rebaseEstimatedRouteSoftGuidance(route, legStartContext))
               .filter(Boolean)
               .filter((route) => getEstimatedRouteIdentity(route) !== baselineLegId)
-              .sort((left, right) => left.score - right.score);
+              .sort(compareScoredRouteLike);
             // Reuse already-paid whole-leg witnesses as cheap evidence. In v49ad a
             // poor whole-leg witness may suppress another leg-start search, but it may
             // NOT veto a true mid-leg hotspot suffix: that is a different geometry
@@ -26352,7 +26803,7 @@ function* analyzeFullCourseContextualSteps(
         return legal;
       })
       .map((route) => applyIntrinsicDamageEconomyRoutingScore(tileMap, route, baseRouteOptions))
-      .sort((left, right) => left.score - right.score);
+      .sort(compareScoredRouteLike);
     const fullCourseRoute = fullCourseRoutes[0] ?? null;
 
     return buildStartAnalysisForSelectedFullRoute({
@@ -27001,12 +27452,12 @@ export function analyzeFullCourse(tileMap, starts, flags, options = {}) {
       diverseStateLabelsAfterFirstCheckpoint: diverseSearch,
       startupSpinUp: options.startupSpinUp,
       repairStations: options.repairStations
-    })).sort((left, right) => left.score - right.score);
+    })).sort(compareScoredRouteLike);
     const preparedRoutes = rawRoutes
       .map((route) => prepareFullCourseCandidate(route, flags))
       .filter(Boolean)
       .map((route) => applyIntrinsicDamageEconomyRoutingScore(tileMap, route, routeOptions))
-      .sort((left, right) => left.score - right.score);
+      .sort(compareScoredRouteLike);
     return diverseSearch
       ? selectCorridorDiverseFullCourseRoutes(preparedRoutes, flags, maxRoutes)
       : selectDistinctRoutes(preparedRoutes, flags.at(-1), maxRoutes);
@@ -27660,7 +28111,7 @@ export function analyzeFlagLeg(tileMap, from, goal, options = {}) {
     });
   });
 
-  const uniqueRoutes = dedupeRoutes(allRoutes).sort((a, b) => a.score - b.score);
+  const uniqueRoutes = dedupeRoutes(allRoutes).sort(compareScoredRouteLike);
   const distinctRoutes = selectDistinctRoutes(uniqueRoutes, goal, maxDistinctRoutes);
   const bestRoute = distinctRoutes[0] ?? null;
   const routeScores = distinctRoutes.map((route) => route.score);
@@ -27718,4 +28169,4 @@ export function analyzeFlagLeg(tileMap, from, goal, options = {}) {
     }
   };
 }
-// VERSION END: v49dd-damage-control-owner-extraction
+// VERSION END: v49dq-route-score-null-hardening

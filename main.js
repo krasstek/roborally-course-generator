@@ -1,6 +1,6 @@
-// VERSION START: v49dc-current-owner-reporting-cleanup
+// VERSION START: v49ds-re-native-expected-play-extent-production
 // Robo Rally Course Randomizer - production runtime
-const MAIN_BUILD_ID = "v49dc-current-owner-reporting-cleanup";
+const MAIN_BUILD_ID = "v49ds-re-native-expected-play-extent-production";
 // Mobile browsers may auto-detect number-like rule text and restyle it as a
 // tappable link even though the app emitted ordinary text. Keep rules/course
 // annotations visually plain; this is presentation-only and does not disable
@@ -57,7 +57,7 @@ const versionedPath = (path) => `${path}${VERSION_SUFFIX}`;
 
 const [
   { render },
-  { ANALYZE_BUILD_ID, analyzeCourse, analyzeFullCourse, analyzeFullCourseCooperative, analyzeFlagLeg, buildStartOccupancyMap, clearAnalysisCaches, evaluateFullCourseFocusPaymentCurveUnderOccupancy, evaluateRouteUpgradePotential, estimateInitialUpgradeOpportunitiesRemaining, getAnalysisTelemetrySnapshot, getDamageEconomyTelemetrySnapshot, getCourseMaxEnergy, getCourseStartingEnergy, getCourseStartingUpgradeCards, getRouteEnergyEconomyConfig, getRouteEnergyGainUtility, getRouteMarginalEnergyUtility, getRouteUpgradePotential, recomputeFirstLegPressure, rescoreFixedRouteUpgradeEconomy, resetAnalysisTelemetry, ROUTE_ENERGY_ECONOMY_DEFAULTS, scoreFlagArea, summarizeDamageEconomyFoundationForRoute, summarizeRegisterEquivalentLedger, summarizeCheapSearchRegisterEquivalentShadow, summarizeIntrinsicRouteForecastConfidence, summarizePowerUpOpportunityBenchmark, summarizeProgramSequencePressure, summarizePowerUpProgramFeasibility, summarizePathfinderObjectiveAudit, summarizeTrafficOwnershipAudit, summarizeFixedRouteBoardAblation },
+  { ANALYZE_BUILD_ID, analyzeCourse, analyzeFullCourse, analyzeFullCourseCooperative, analyzeFlagLeg, buildStartOccupancyMap, clearAnalysisCaches, evaluateFullCourseFocusPaymentCurveUnderOccupancy, evaluateRouteUpgradePotential, estimateInitialUpgradeOpportunitiesRemaining, getAnalysisTelemetrySnapshot, getDamageEconomyTelemetrySnapshot, getCourseMaxEnergy, getCourseStartingEnergy, getCourseStartingUpgradeCards, getRouteEnergyEconomyConfig, getRouteEnergyGainUtility, getRouteMarginalEnergyUtility, getRouteUpgradePotential, recomputeFirstLegPressure, rescoreFixedRouteUpgradeEconomy, resetAnalysisTelemetry, ROUTE_ENERGY_ECONOMY_DEFAULTS, scoreFlagArea, summarizeDamageEconomyFoundationForRoute, summarizeRegisterEquivalentLedger, summarizeRENativeRouteUncertaintyEvidence, summarizeCheapSearchRegisterEquivalentShadow, summarizeIntrinsicRouteForecastConfidence, summarizePowerUpOpportunityBenchmark, summarizeProgramSequencePressure, summarizePowerUpProgramFeasibility, summarizePathfinderObjectiveAudit, summarizeTrafficOwnershipAudit, summarizeFixedRouteBoardAblation },
   {
     buildMainFootprintTiles,
     buildResolvedMap,
@@ -613,6 +613,8 @@ const SCENARIO_RENDER_INTERVAL_MS = 125;
 const BOARD_PROFILE_HAZARD_DENSITY_THRESHOLD = 0.16;
 const BOARD_PROFILE_HAZARD_DENSITY_WEIGHT = 2.4;
 const SAVED_SCENARIO_KEY = "roborally-course-generator:last-scenario";
+const SAVED_SCENARIO_APP_ID = "roborally-course-generator";
+const SAVED_SCENARIO_SCHEMA_VERSION = 1;
 // Frozen observational fallback from the accepted v49cy 9-candidate Any-difficulty
 // Short/Medium/Long calibration batch. These are normalization anchors for the
 // Dev uncertainty shadow only; they are NOT production difficulty thresholds.
@@ -2354,10 +2356,23 @@ function isValueInBand(value, band) {
   return Array.isArray(band) && value >= band[0] && value < band[1];
 }
 
-function formatActualDifficultyLabel(difficultyRaw) {
-  const value = Number(difficultyRaw);
+function formatActualDifficultyLabel(difficultyTurnRE) {
+  const value = Number(difficultyTurnRE);
   if (!Number.isFinite(value)) return "Unknown";
   const thresholds = getDifficultyThresholds();
+  if (isValueInBand(value, thresholds.brutal)) {
+    return formatSummaryBandLabel(formatDifficultyLabel("brutal"));
+  }
+  const match = ["easy", "moderate", "hard"]
+    .find((band) => isValueInBand(value, thresholds[band]));
+  if (match) return formatSummaryBandLabel(formatDifficultyLabel(match));
+  return value < thresholds.easy[0] ? "Beginner" : "Robots. Must. Die.";
+}
+
+function formatLegacyDifficultyLabel(difficultyRaw) {
+  const value = Number(difficultyRaw);
+  if (!Number.isFinite(value)) return "Unknown";
+  const thresholds = getLegacyDifficultyThresholds();
   if (isValueInBand(value, thresholds.brutal)) {
     return formatSummaryBandLabel(formatDifficultyLabel("brutal"));
   }
@@ -2366,6 +2381,15 @@ function formatActualDifficultyLabel(difficultyRaw) {
     .map((band) => formatSummaryBandLabel(formatDifficultyLabel(band)));
   if (matches.length) return matches.join("–");
   return value < thresholds.easy[0] ? "Beginner" : "Advanced";
+}
+
+function formatPresentedDifficultyLabel(metrics = null) {
+  const turnDifficulty = Number(metrics?.difficultyTurnRE);
+  if (Number.isFinite(turnDifficulty)) return formatActualDifficultyLabel(turnDifficulty);
+  // Saved presentation snapshots from before the RE-turn production migration
+  // can still be shown while compatibility cleanup is pending. In that narrow
+  // fallback case, retain the label that belonged to the saved legacy scalar.
+  return formatLegacyDifficultyLabel(metrics?.difficultyRaw);
 }
 
 function formatActualLengthLabel(lengthRaw) {
@@ -2494,15 +2518,31 @@ function formatExpansionName(expansionId) {
   return labels[expansionId] ?? titleCaseWords(expansionId);
 }
 
+// v49dp production difficulty owner. These are deliberately non-overlapping
+// bands on completed non-tempo RE per programming turn. Intermediate,
+// Advanced and R.M.D. retain the v49de calibration cuts. Beginner is now
+// deliberately stricter: browser/visual review showed courses near the old
+// 4.3 boundary could still carry distinctly non-beginner local RE burdens.
+// The 4.0 ceiling creates a semantic safety margin while remaining purely
+// RE-native; no legacy hazard/visual score participates in classification.
 function getDifficultyThresholds() {
+  return {
+    easy: [0, 4.0],
+    moderate: [4.0, 4.8],
+    hard: [4.8, 5.8],
+    brutal: [5.8, Infinity]
+  };
+}
+
+// Construction guidance and the cheap preflight models were trained against
+// the historical score-space difficulty scalar. They remain generation-speed
+// infrastructure until the later construction-calibration pass; they are not
+// semantic difficulty owners after v49de.
+function getLegacyDifficultyThresholds() {
   return {
     easy: [0, 95],
     moderate: [90, 155],
     hard: [150, Infinity],
-    // Robots. Must. Die. is intentionally a distinct top-end target rather
-    // than merely Hard with a different label. The generation tuning still
-    // uses the hard profile, but acceptance continues until the raw course
-    // difficulty reaches this higher floor.
     brutal: [180, Infinity]
   };
 }
@@ -3328,7 +3368,7 @@ function updateSetupSummary(scenario) {
   const hydrationFailed = Boolean(scenario.hydrationReanalysisFailed);
   const actualDifficultyLabel = presentationUnavailable
     ? "Analysis unavailable"
-    : formatActualDifficultyLabel(presentationMetrics?.difficultyRaw);
+    : formatPresentedDifficultyLabel(presentationMetrics);
   const actualLengthLabel = presentationUnavailable
     ? "Analysis unavailable"
     : formatActualLengthLabel(
@@ -6167,7 +6207,7 @@ function getConstructionGuidancePredictionSignals(prediction, preferences = {}) 
   const difficultyDesirability = getConstructionGuidanceBandScore(
     prediction.difficulty,
     preferences.difficulty,
-    getDifficultyThresholds()
+    getLegacyDifficultyThresholds()
   );
   const targetDesirability = Math.max(
     1e-6,
@@ -6413,7 +6453,7 @@ function getConstructionGuidanceGrossMismatch(
     getConstructionGuidanceIntervalMismatch(
       prediction.difficulty,
       preferences.targetGuidanceOnlyDifficulty ? "any" : preferences.difficulty,
-      getDifficultyThresholds(),
+      getLegacyDifficultyThresholds(),
       "difficulty"
     )
   ].filter(Boolean);
@@ -16840,19 +16880,21 @@ function computeDifficultyRaw(sequence, checkpointPressure = 0) {
 }
 
 
-// v49cx observational difficulty ownership ---------------------------------
-// Production difficultyRaw remains unchanged in this revision. v49cu showed
-// that non-tempo burden per programmed register over-normalized long routes and
-// did not order legacy-selected difficulty tiers sensibly. v49cv instead asks
-// how demanding a typical programming turn is: completed effective RE still
-// owns the total non-tempo burden, while the turn ledger contributes only the
-// within-route peak shape. Course aggregation remains route-mixture aware and
-// occupancy weighted, with a deliberately small likely-start upper-tail term.
-// Candidate-pool comparison is lazy Dev Copy All only: generation stores refs
-// to already-built acceptable scenarios but performs no extra route replay.
+// v49de production difficulty ownership -----------------------------------
+// Completed effective RE owns the amount of non-tempo burden; the exact turn
+// ledger contributes only within-route peak shape. Course aggregation remains
+// route-mixture aware and occupancy weighted, with a deliberately small likely-
+// start upper-tail term. v49de moves this already-calibrated scalar onto the
+// production candidate-classification path. Construction guidance still uses
+// the historical raw scalar until its later dedicated calibration pass.
 const RE_TURN_DIFFICULTY_ROUTE_PEAK_WEIGHT = 0.20;
 const RE_TURN_DIFFICULTY_COURSE_TAIL_WEIGHT = 0.15;
 const RE_TURN_DIFFICULTY_TAIL_QUANTILE = 0.75;
+// Preserve the existing fit-score / gross-mismatch scale while changing the
+// semantic unit. The old Intermediate->Advanced floor gap was 60 raw points;
+// the accepted Any-difficulty calibration's median->q75 gap was ~1.0081 RE/turn.
+// 60 fit points per RE/turn therefore provides a transparent migration bridge.
+const RE_TURN_DIFFICULTY_FIT_POINTS_PER_RE = 60;
 
 function quantileFinite(values = [], quantile = 0.75) {
   const ordered = values
@@ -16888,6 +16930,10 @@ function weightedQuantileFinite(entries = [], quantile = 0.75) {
     if (cumulative + 1e-9 >= target) return entry.value;
   }
   return ordered.at(-1).value;
+}
+
+function createRETurnDifficultyReplayCache() {
+  return { ledgerByRoute: new WeakMap() };
 }
 
 function getREDifficultyRouteMixtureEntries(scenario, startAnalysis) {
@@ -16952,26 +16998,16 @@ function summarizeRETurnDifficultyRouteCandidate(
     : null;
   addDevTiming(devTiming, "reDifficultyReplayMs", replayStartedAt);
 
-  // v49cx decomposition uses a traffic-free replay for intrinsic ownership.
-  // The existing difficulty ledger above may include a traffic context because it
-  // is used only for turn-shape. Keep a separate cache so component totals never
-  // depend on which diagnostic happened to replay the route first.
-  const intrinsicLedgerStartedAt = typeof performance !== "undefined"
-    ? performance.now()
-    : NaN;
-  const intrinsicLedger = tileMap && typeof summarizeRegisterEquivalentLedger === "function"
-    ? getCachedRouteReplay(
-      replayCache?.intrinsicLedgerByRoute,
+  const reNativeUncertainty = tileMap && ledger &&
+      typeof summarizeRENativeRouteUncertaintyEvidence === "function"
+    ? summarizeRENativeRouteUncertaintyEvidence(
+      tileMap,
       route,
-      () => summarizeRegisterEquivalentLedger(
-        tileMap,
-        route,
-        damageOptions,
-        null
-      )
+      damageOptions,
+      trafficContext,
+      ledger
     )
     : null;
-  addDevTiming(devTiming, "reDifficultyDecompositionReplayMs", intrinsicLedgerStartedAt);
 
   const programmedRegisters = Math.max(
     0,
@@ -16986,26 +17022,6 @@ function summarizeRETurnDifficultyRouteCandidate(
     0,
     effectiveRE - programmedRegisters - lostRegisterTempoRE
   );
-
-  const intrinsicProgrammedRegisters = Math.max(
-    0,
-    Number(intrinsicLedger?.programmedRegisterRE) || programmedRegisters
-  );
-  const intrinsicLostRegisterTempoRE = Math.max(
-    0,
-    Number(intrinsicLedger?.lostRegisterTempoRE) || lostRegisterTempoRE
-  );
-  const intrinsicRE = Number(intrinsicLedger?.observationalSubtotalWithMentalRE);
-  const cleanCardPlausibilityRE = Number(intrinsicLedger?.cleanCardPlausibilityRE) || 0;
-  const damageCardSupplyRE = Number(intrinsicLedger?.damageCardSupplyRE) || 0;
-  const clogRE = Number(intrinsicLedger?.clogRE) || 0;
-  const energyRE = Number(intrinsicLedger?.energyRE) || 0;
-  const intrinsicMentalRE = Number(intrinsicLedger?.mentalRegisterEquivalents) || 0;
-  const downstreamTrafficControlRE = Number.isFinite(intrinsicRE)
-    ? effectiveRE - intrinsicRE
-    : burdenRE - (
-      cleanCardPlausibilityRE + damageCardSupplyRE + clogRE + energyRE + intrinsicMentalRE
-    );
 
   const turnBurdenShape = (ledger?.turns ?? [])
     .map((turn) => {
@@ -17032,8 +17048,6 @@ function summarizeRETurnDifficultyRouteCandidate(
     ? Math.max(1, ledgerTailTurnBurdenRE / ledgerMeanTurnBurdenRE)
     : 1;
   // Completed effective RE owns the amount; the ledger owns only the shape.
-  // This preserves downstream traffic/damage/control burden that is not fully
-  // represented inside the intrinsic turn ledger.
   const authoritativeTailTurnBurdenRE = meanTurnBurdenRE * peakRatio;
   const routeTurnDifficultyRE = meanTurnBurdenRE +
     RE_TURN_DIFFICULTY_ROUTE_PEAK_WEIGHT * Math.max(
@@ -17047,27 +17061,34 @@ function summarizeRETurnDifficultyRouteCandidate(
     effectiveRE: Number(effectiveRE.toFixed(3)),
     programmedRegisters: Number(programmedRegisters.toFixed(3)),
     lostRegisterTempoRE: Number(lostRegisterTempoRE.toFixed(3)),
+    // v49dk uncertainty ownership observation. Completed-route RE remains the
+    // evidence source; no independent hazard/board-chaos/traffic proxy is added.
+    cleanCardPlausibilityRE: Number((Number(ledger?.cleanCardPlausibilityRE) || 0).toFixed(4)),
+    damageCardSupplyRE: Number((Number(ledger?.damageCardSupplyRE) || 0).toFixed(4)),
+    clogRE: Number((Number(ledger?.clogRE) || 0).toFixed(4)),
+    energyRE: Number((Number(ledger?.energyRE) || 0).toFixed(4)),
+    mentalRE: Number((Number(ledger?.mentalRegisterEquivalents) || 0).toFixed(4)),
+    reNativeChronologicalAdverseRE: Number((Number(reNativeUncertainty?.totalAdverseRE) || 0).toFixed(4)),
+    reNativeChronologicalPlayTimeAdverseRE: Number((Number(reNativeUncertainty?.playTimeAdverseRE) || 0).toFixed(4)),
+    reNativeDamagePressureRE: Number((Number(reNativeUncertainty?.totalDamagePressureRE) || 0).toFixed(4)),
+    reNativeForecastAverageConfidence: Number((Number(reNativeUncertainty?.averageConfidence) || 1).toFixed(4)),
+    reNativeForecastEndConfidence: Number((Number(reNativeUncertainty?.endConfidence) || 1).toFixed(4)),
+    reNativeForecastEndEffectiveHorizonRE: Number((Number(reNativeUncertainty?.endEffectiveHorizonRE) || programmedRegisters).toFixed(4)),
+    reNativeBaseEffortScale: Number((Number(reNativeUncertainty?.averageBaseEffortScale) || 1).toFixed(4)),
+    reNativeDamageModeratedEffortScale: Number((Number(reNativeUncertainty?.averageDamageModeratedEffortScale) || 1).toFixed(4)),
+    reNativeDamageEffortCeiling: Number((Number(reNativeUncertainty?.damagePressureSearchEffortCeiling) || 0.5).toFixed(4)),
     burdenRE: Number(burdenRE.toFixed(3)),
     programmingTurns,
     meanTurnBurdenRE: Number(meanTurnBurdenRE.toFixed(4)),
     turnTailBurdenRE: Number(authoritativeTailTurnBurdenRE.toFixed(4)),
     peakRatio: Number(peakRatio.toFixed(4)),
-    routeTurnDifficultyRE: Number(routeTurnDifficultyRE.toFixed(4)),
-    componentRE: {
-      card: Number(cleanCardPlausibilityRE.toFixed(4)),
-      damageSupply: Number(damageCardSupplyRE.toFixed(4)),
-      clog: Number(clogRE.toFixed(4)),
-      energy: Number(energyRE.toFixed(4)),
-      intrinsicMental: Number(intrinsicMentalRE.toFixed(4)),
-      downstreamTrafficControl: Number(downstreamTrafficControlRE.toFixed(4)),
-      intrinsicTempoCheck: Number((intrinsicProgrammedRegisters + intrinsicLostRegisterTempoRE).toFixed(4))
-    }
+    routeTurnDifficultyRE: Number(routeTurnDifficultyRE.toFixed(4))
   };
 }
 
-function buildRETurnDifficultyShadow(scenario, options = {}) {
-  if (!isDevViewEnabled() || !scenario?.sequence?.firstLeg) {
-    return { active: false, reason: "not-dev-or-missing-first-leg" };
+function computeRETurnDifficulty(scenario, options = {}) {
+  if (!scenario?.sequence?.firstLeg) {
+    return { active: false, reason: "missing-first-leg" };
   }
 
   const firstLeg = scenario.sequence.firstLeg;
@@ -17116,7 +17137,7 @@ function buildRETurnDifficultyShadow(scenario, options = {}) {
     (analysis) => analysis.fullCourseRoute
   );
 
-  const replayCache = options.replayCache ?? getScenarioDevReplayCache(scenario);
+  const replayCache = options.replayCache ?? createRETurnDifficultyReplayCache();
   const devTiming = options.timing ?? null;
   const perStart = [];
   let routeMixtureEntryCount = 0;
@@ -17157,21 +17178,31 @@ function buildRETurnDifficultyShadow(scenario, options = {}) {
       effectiveRE: weighted("effectiveRE"),
       programmedRegisters: weighted("programmedRegisters"),
       lostRegisterTempoRE: weighted("lostRegisterTempoRE"),
+      cleanCardPlausibilityRE: weighted("cleanCardPlausibilityRE"),
+      damageCardSupplyRE: weighted("damageCardSupplyRE"),
+      clogRE: weighted("clogRE"),
+      energyRE: weighted("energyRE"),
+      mentalRE: weighted("mentalRE"),
+      reNativeChronologicalAdverseRE: weighted("reNativeChronologicalAdverseRE"),
+      reNativeChronologicalPlayTimeAdverseRE: weighted("reNativeChronologicalPlayTimeAdverseRE"),
+      reNativeDamagePressureRE: weighted("reNativeDamagePressureRE"),
+      reNativeForecastAverageConfidence: weighted("reNativeForecastAverageConfidence"),
+      reNativeForecastEndConfidence: weighted("reNativeForecastEndConfidence"),
+      reNativeForecastEndEffectiveHorizonRE: weighted("reNativeForecastEndEffectiveHorizonRE"),
+      reNativeBaseEffortScale: weighted("reNativeBaseEffortScale"),
+      reNativeDamageModeratedEffortScale: weighted("reNativeDamageModeratedEffortScale"),
+      reNativePlayTimeAmplificationMultiplierIndex: weighted("reNativePlayTimeAmplificationMultiplierIndex"),
       burdenRE: weighted("burdenRE"),
       programmingTurns: weighted("programmingTurns"),
       meanTurnBurdenRE: weighted("meanTurnBurdenRE"),
       turnTailBurdenRE: weighted("turnTailBurdenRE"),
       routeTurnDifficultyRE: weighted("routeTurnDifficultyRE"),
-      componentRE: {
-        card: routeSummaries.reduce((sum, entry) => sum + Number(entry.componentRE?.card || 0) * (Math.max(0, Number(entry.weight) || 0) / routeWeightTotal), 0),
-        damageSupply: routeSummaries.reduce((sum, entry) => sum + Number(entry.componentRE?.damageSupply || 0) * (Math.max(0, Number(entry.weight) || 0) / routeWeightTotal), 0),
-        clog: routeSummaries.reduce((sum, entry) => sum + Number(entry.componentRE?.clog || 0) * (Math.max(0, Number(entry.weight) || 0) / routeWeightTotal), 0),
-        energy: routeSummaries.reduce((sum, entry) => sum + Number(entry.componentRE?.energy || 0) * (Math.max(0, Number(entry.weight) || 0) / routeWeightTotal), 0),
-        intrinsicMental: routeSummaries.reduce((sum, entry) => sum + Number(entry.componentRE?.intrinsicMental || 0) * (Math.max(0, Number(entry.weight) || 0) / routeWeightTotal), 0),
-        downstreamTrafficControl: routeSummaries.reduce((sum, entry) => sum + Number(entry.componentRE?.downstreamTrafficControl || 0) * (Math.max(0, Number(entry.weight) || 0) / routeWeightTotal), 0)
-      },
       routes: routeSummaries
     });
+  }
+
+  if (!perStart.length) {
+    return { active: false, reason: "no-re-turn-route-summaries" };
   }
 
   const occupancyMass = perStart.reduce((sum, entry) => sum + entry.occupancy, 0);
@@ -17200,31 +17231,10 @@ function buildRETurnDifficultyShadow(scenario, options = {}) {
       likelyStartTailTurnBurdenRE - expectedPeakAdjustedTurnBurdenRE
     );
 
-  const componentKeys = [
-    "card",
-    "damageSupply",
-    "clog",
-    "energy",
-    "intrinsicMental",
-    "downstreamTrafficControl"
-  ];
-  const courseComponentREPerTurn = {};
-  for (const key of componentKeys) {
-    courseComponentREPerTurn[key] = perStart.reduce((sum, entry) => {
-      const turns = Math.max(1e-9, Number(entry.programmingTurns) || 0);
-      return sum + (Number(entry.componentRE?.[key]) || 0) / turns * normalizedWeight(entry);
-    }, 0);
-  }
-  const componentMeanSum = componentKeys.reduce(
-    (sum, key) => sum + (Number(courseComponentREPerTurn[key]) || 0),
-    0
-  );
-
   return {
     active: true,
-    method: "completed-re-nontempo-per-programming-turn-route-peak-start-tail-v49cx",
-    behaviorChanged: false,
-    productionOwner: false,
+    method: "completed-re-nontempo-per-programming-turn-route-peak-start-tail-v49de",
+    productionOwner: true,
     playerCount,
     startCount: perStart.length,
     occupancyMass: Number(occupancyMass.toFixed(3)),
@@ -17239,18 +17249,653 @@ function buildRETurnDifficultyShadow(scenario, options = {}) {
     expectedPeakAdjustedTurnBurdenRE: Number(expectedPeakAdjustedTurnBurdenRE.toFixed(4)),
     likelyStartTailTurnBurdenRE: Number(likelyStartTailTurnBurdenRE.toFixed(4)),
     courseTurnDifficultyRE: Number(courseTurnDifficultyRE.toFixed(4)),
-    courseComponentREPerTurn: Object.fromEntries(
-      Object.entries(courseComponentREPerTurn).map(([key, value]) => [key, Number(value.toFixed(4))])
-    ),
-    courseComponentMeanSum: Number(componentMeanSum.toFixed(4)),
-    componentReconciliationDelta: Number((expectedMeanTurnBurdenRE - componentMeanSum).toFixed(4)),
     currentForecastEquivalentActions: Number(
       scenario.metrics?.lengthMetrics?.contributions?.forecastEquivalentActions ?? 0
     ),
-    legacyDifficultyRaw: Number(scenario.metrics?.difficultyRaw),
-    legacyDifficultyLabel: formatActualDifficultyLabel(scenario.metrics?.difficultyRaw),
-    tierPolicy: "thresholds-uncalibrated-future-nonoverlap-advanced-bounded-brutal-top",
     perStart
+  };
+}
+
+const reTurnDifficultyBySequence = new WeakMap();
+
+function buildRETurnDifficultyScenario(sequence, preferences = {}, context = {}, lengthMetrics = null) {
+  const boardRects = context.boardRects ?? (
+    Array.isArray(context.boardPlacements) && context.pieceMap
+      ? buildBoardRects(context.boardPlacements, context.pieceMap)
+      : []
+  );
+  return {
+    sequence,
+    preferences,
+    playerCount: preferences.playerCount,
+    goalTileMap: context.goalTileMap ?? context.tileMap ?? null,
+    recoveryRule: preferences.recoveryRule,
+    boardRects,
+    rebootTokens: context.rebootTokens ?? [],
+    checkpoints: context.checkpoints ?? [],
+    virtualBots: Boolean(preferences.virtualBots),
+    competitiveMode: Boolean(preferences.competitiveMode),
+    payToWin: Boolean(preferences.payToWin),
+    subsidizedStarts: Boolean(preferences.subsidizedStarts),
+    moreDeadlyGame: Boolean(preferences.moreDeadlyGame),
+    lessSpammyGame: Boolean(preferences.lessSpammyGame),
+    criticalSpam: Boolean(preferences.criticalSpam),
+    criticalHaywire: Boolean(preferences.criticalHaywire),
+    permanentShutdown: Boolean(preferences.permanentShutdown),
+    factoryRejects: Boolean(preferences.factoryRejects),
+    repairStations: Boolean(preferences.repairStations),
+    cuttingFloor: Boolean(preferences.cuttingFloor),
+    flamingOil: Boolean(preferences.flamingOil),
+    repulsorOverdrive: Boolean(preferences.repulsorOverdrive),
+    upgradeWorld: Boolean(preferences.upgradeWorld),
+    lighterGame: Boolean(preferences.lighterGame),
+    setToKill: Boolean(preferences.setToKill),
+    setToStun: Boolean(preferences.setToStun),
+    metrics: { lengthMetrics }
+  };
+}
+
+function getProductionRETurnDifficulty(sequence, preferences = {}, context = {}, lengthMetrics = null) {
+  if (!sequence || (typeof sequence !== "object" && typeof sequence !== "function")) {
+    return { active: false, reason: "missing-sequence" };
+  }
+  const cached = reTurnDifficultyBySequence.get(sequence);
+  if (cached) return cached;
+  const scenario = buildRETurnDifficultyScenario(sequence, preferences, context, lengthMetrics);
+  const startedAt = typeof performance !== "undefined" ? performance.now() : NaN;
+  const result = computeRETurnDifficulty(scenario, {
+    replayCache: createRETurnDifficultyReplayCache()
+  });
+  if (Number.isFinite(startedAt) && result && typeof result === "object") {
+    result.computeMs = Number(Math.max(0, performance.now() - startedAt).toFixed(2));
+  }
+  reTurnDifficultyBySequence.set(sequence, result);
+  return result;
+}
+
+
+const LENGTH_OWNER_OBSERVATION_MODEL_ID =
+  "re-native-routing-horizon-plus-calibrated-play-time-v49dl";
+
+// v49dl provisional elapsed-play calibration. These coefficients are explicit
+// empirical anchors, not hidden semantic weights. They were chosen against the
+// accepted fixed-seed 4-player Short/Medium/Long/Epic batch so the new
+// adverse-RE model reproduces the previously accepted approximate game-turn
+// scale while preserving burden intensity as a separate input.
+const PLAY_TIME_RESPONSE_MAX_UPLIFT = 0.60;
+const PLAY_TIME_HORIZON_MIDPOINT_TURNS = 7.0;
+const PLAY_TIME_HORIZON_SLOPE_TURNS = 1.5;
+// v49ds transitional unit bridge. Production route/play length is now entirely
+// expected-play extent: nominal programmed registers plus calibrated RE-native
+// recovery/amplification. Four raw points per expected-play register preserves
+// the accepted 4-player Short/Medium/Long/Epic calibration anchors closely
+// enough to keep the existing raw-score bands usable while route distance and
+// standalone congestion stop voting independently. This is a score-space unit
+// conversion, not an additional semantic owner; final wall-clock bands will
+// replace it later.
+const LENGTH_EXPECTED_PLAY_RAW_POINTS_PER_REGISTER = 4.0;
+const PLAY_TIME_REFERENCE_TURN_BANDS = Object.freeze({
+  short: [0, 6.25],
+  moderate: [6.25, 9.5],
+  long: [9.5, 13.0],
+  epic: [13.0, Infinity]
+});
+
+function getPlayTimeHorizonActivation(nominalProgrammingTurns = 0) {
+  const turns = Math.max(0, Number(nominalProgrammingTurns) || 0);
+  return 1 / (1 + Math.exp(
+    -(turns - PLAY_TIME_HORIZON_MIDPOINT_TURNS) /
+      PLAY_TIME_HORIZON_SLOPE_TURNS
+  ));
+}
+
+function classifyReferencePlayTimeTurns(programmingTurns = 0) {
+  const turns = Math.max(0, Number(programmingTurns) || 0);
+  for (const [label, [min, max]] of Object.entries(PLAY_TIME_REFERENCE_TURN_BANDS)) {
+    if (turns >= min && turns < max) return label;
+  }
+  return "epic";
+}
+
+function computeLengthOwnerObservation(
+  sequence,
+  preferences = {},
+  lengthMetrics = null,
+  reTurnDifficulty = null
+) {
+  if (!sequence?.firstLeg || !lengthMetrics) {
+    return { active: false, reason: "missing-length-inputs" };
+  }
+
+  const nominalRegisters = Math.max(
+    0,
+    Number(lengthMetrics?.inputs?.totalActionLoad) || 0
+  );
+  const intrinsicForecastExtraRegisters = Math.max(
+    0,
+    Number(lengthMetrics?.contributions?.forecastEquivalentActions) || 0
+  );
+  const baselineExpectedRegisters =
+    nominalRegisters + intrinsicForecastExtraRegisters;
+
+  const reStarts = Array.isArray(reTurnDifficulty?.perStart)
+    ? reTurnDifficulty.perStart
+    : [];
+  const startByIndex = new Map(
+    (sequence.firstLeg.starts ?? []).map((entry) => [entry.index, entry])
+  );
+  const occupancyMass = reStarts.reduce(
+    (sum, entry) => sum + Math.max(0, Number(entry?.occupancy) || 0),
+    0
+  );
+  const fallbackWeight = reStarts.length ? 1 / reStarts.length : 0;
+  const startWeight = (entry) => occupancyMass > 0
+    ? Math.max(0, Number(entry?.occupancy) || 0) / occupancyMass
+    : fallbackWeight;
+  const weightedPerTurn = (selector) => reStarts.reduce((sum, entry) => {
+    const turns = Math.max(1, Number(entry?.programmingTurns) || 1);
+    return sum + Math.max(0, Number(selector(entry)) || 0) / turns * startWeight(entry);
+  }, 0);
+  const weightedStartValue = (selector, fallback = 0) => reStarts.reduce(
+    (sum, entry) => {
+      const start = startByIndex.get(entry.index);
+      const value = Number(selector(start, entry));
+      return sum + (Number.isFinite(value) ? value : fallback) * startWeight(entry);
+    },
+    0
+  );
+
+  const cleanCardREPerTurn = weightedPerTurn(
+    (entry) => entry.cleanCardPlausibilityRE
+  );
+  const damageCardSupplyREPerTurn = weightedPerTurn(
+    (entry) => entry.damageCardSupplyRE
+  );
+  const cardREPerTurn =
+    cleanCardREPerTurn + damageCardSupplyREPerTurn;
+  const intrinsicMentalREPerTurn = weightedPerTurn(
+    (entry) => entry.mentalRE
+  );
+  const trafficMentalREPerTurn = weightedStartValue((start, entry) => {
+    const turns = Math.max(1, Number(entry?.programmingTurns) || 1);
+    return Math.max(
+      0,
+      Number(start?.fullCourseTrafficAwarenessMentalRegisterEquivalents) || 0
+    ) / turns;
+  });
+  const mentalREPerTurn =
+    intrinsicMentalREPerTurn + trafficMentalREPerTurn;
+  const clogREPerTurn = weightedPerTurn((entry) => entry.clogRE);
+  const trafficControlREPerTurn = weightedStartValue((start, entry) => {
+    const turns = Math.max(1, Number(entry?.programmingTurns) || 1);
+    return Math.max(0, Number(start?.fullCourseTrafficNearby) || 0) /
+      NORMAL_EFFECTIVE_RE_SCORE_PER_RE /
+      turns;
+  });
+  const trafficDamageREPerTurn = weightedStartValue((start, entry) => {
+    const turns = Math.max(1, Number(entry?.programmingTurns) || 1);
+    return Math.max(
+      0,
+      Number(
+        start?.fullCourseTrafficDamageEconomyRobotLaserIncrementRegisterEquivalents
+      ) || 0
+    ) / turns;
+  });
+  const trafficForecastConfidenceMean = reStarts.length
+    ? weightedStartValue(
+      (start) => Number(start?.fullCourseTrafficForecastConfidence),
+      1
+    )
+    : 1;
+  const trafficForecastConfidenceEnd = reStarts.length
+    ? weightedStartValue(
+      (start) => Number(start?.fullCourseTrafficForecastConfidenceEnd),
+      1
+    )
+    : 1;
+
+  // Deliberately retain the card×mental product as an UNCALIBRATED interaction
+  // signal. The user-facing design hypothesis is that scarce/awkward cards are
+  // especially failure-prone when the same turn is cognitively dense. Do not
+  // turn this into extra registers until cross-length calibration supports a
+  // mapping.
+  const cardMentalInteractionSignal = cardREPerTurn * mentalREPerTurn;
+
+  // v49dk keeps planningPressure outside the new owner. The RE-native route
+  // uncertainty candidate and play-time amplification now derive from completed
+  // Register-Equivalent evidence. Player count remains a separate wall-clock
+  // factor because it changes table-time per turn rather than route reliability.
+  const playerCount = Math.max(1, Number(preferences.playerCount) || 4);
+  const fourPlayerResolutionLoad = computePlayerTimeLoad(4);
+  const currentPlayerResolutionLoad = computePlayerTimeLoad(playerCount);
+  const playerResolutionMultiplierIndex = fourPlayerResolutionLoad > 0
+    ? currentPlayerResolutionLoad / fourPlayerResolutionLoad
+    : 1;
+
+  const weightedTotal = (selector) => reStarts.reduce((sum, entry) => (
+    sum + Math.max(0, Number(selector(entry)) || 0) * startWeight(entry)
+  ), 0);
+  const chronologicalAdverseRE = weightedTotal(
+    (entry) => entry.reNativeChronologicalAdverseRE
+  );
+  const directLostTempoRE = weightedTotal(
+    (entry) => entry.lostRegisterTempoRE
+  );
+  const chronologicalPlayTimeAdverseRE = weightedTotal(
+    (entry) => entry.reNativeChronologicalPlayTimeAdverseRE
+  );
+  const chronologicalDamagePressureRE = weightedTotal(
+    (entry) => entry.reNativeDamagePressureRE
+  );
+  const reNativeForecastConfidenceMean = reStarts.length
+    ? reStarts.reduce((sum, entry) => (
+      sum + (Number(entry.reNativeForecastAverageConfidence) || 1) * startWeight(entry)
+    ), 0)
+    : 1;
+  const reNativeForecastConfidenceEnd = reStarts.length
+    ? reStarts.reduce((sum, entry) => (
+      sum + (Number(entry.reNativeForecastEndConfidence) || 1) * startWeight(entry)
+    ), 0)
+    : 1;
+  const reNativeForecastEndEffectiveHorizonRE = weightedTotal(
+    (entry) => entry.reNativeForecastEndEffectiveHorizonRE
+  );
+  const reNativeBaseEffortScale = reStarts.length
+    ? reStarts.reduce((sum, entry) => (
+      sum + (Number(entry.reNativeBaseEffortScale) || 1) * startWeight(entry)
+    ), 0)
+    : 1;
+  const reNativeDamageModeratedEffortScale = reStarts.length
+    ? reStarts.reduce((sum, entry) => (
+      sum + (Number(entry.reNativeDamageModeratedEffortScale) || 1) * startWeight(entry)
+    ), 0)
+    : 1;
+
+  // The chronological ledger already contains robot-laser damage-economy and
+  // traffic-awareness mental when trafficContext is present. Nearby mechanical
+  // control remains a downstream RE owner outside that ledger, so add ONLY that
+  // missing component here to avoid double-counting traffic.
+  const downstreamTrafficControlAdverseRE = weightedStartValue((start) => (
+    Math.max(0, Number(start?.fullCourseTrafficNearby) || 0) /
+      NORMAL_EFFECTIVE_RE_SCORE_PER_RE
+  ));
+  const playTimeAdverseRE =
+    chronologicalPlayTimeAdverseRE + downstreamTrafficControlAdverseRE;
+  const playTimeAdverseRatio = nominalRegisters > 0
+    ? playTimeAdverseRE / nominalRegisters
+    : 0;
+  // Burden intensity is coefficient-free and saturating. v49dl now calibrates
+  // how much that burden can extend actual play using a separate nominal-turn
+  // horizon gate: short races have little room for adverse burden to compound,
+  // while long races approach the full response.
+  const playTimeResponseShape = playTimeAdverseRatio > 0
+    ? playTimeAdverseRatio / (1 + playTimeAdverseRatio)
+    : 0;
+  const nominalProgrammingTurns = nominalRegisters / 5;
+  const playTimeHorizonActivation = getPlayTimeHorizonActivation(
+    nominalProgrammingTurns
+  );
+  const playTimeMultiplier = 1 +
+    PLAY_TIME_RESPONSE_MAX_UPLIFT *
+      playTimeHorizonActivation *
+      playTimeResponseShape;
+  const expectedPlayRegisters = nominalRegisters * playTimeMultiplier;
+  const expectedPlayProgrammingTurns = expectedPlayRegisters / 5;
+  const referencePlayTimeBand = classifyReferencePlayTimeTurns(
+    expectedPlayProgrammingTurns
+  );
+
+  const upgradePhaseMultiplierIndex = 1;
+  const explicitTimingMultiplierIndex = 1;
+  const wallClockMultiplierIndex =
+    playerResolutionMultiplierIndex *
+    upgradePhaseMultiplierIndex *
+    explicitTimingMultiplierIndex;
+  const baselineExpectedProgrammingTurns = baselineExpectedRegisters / 5;
+  const uncertaintyShare = nominalRegisters > 0
+    ? intrinsicForecastExtraRegisters / nominalRegisters
+    : 0;
+
+  return {
+    active: true,
+    productionOwner: false,
+    calibrationReady: false,
+    model: LENGTH_OWNER_OBSERVATION_MODEL_ID,
+    nominalRegisters: Number(nominalRegisters.toFixed(2)),
+    intrinsicForecastExtraRegisters: Number(
+      intrinsicForecastExtraRegisters.toFixed(2)
+    ),
+    baselineExpectedRegisters: Number(baselineExpectedRegisters.toFixed(2)),
+    baselineExpectedProgrammingTurns: Number(
+      baselineExpectedProgrammingTurns.toFixed(2)
+    ),
+    uncertaintyShareOfNominal: Number(uncertaintyShare.toFixed(4)),
+    playerResolutionLoadLegacyUnits: Number(
+      (Number(lengthMetrics?.contributions?.playerLoad) || 0).toFixed(2)
+    ),
+    reNativeRoutingUncertainty: {
+      calibrationReady: false,
+      productionOwner: false,
+      semanticRole: "credible-routing-horizon",
+      driverRule: "elapsed-registers + cumulative adverse RE only; damage pressure may restore capped optional search effort but not confidence",
+      averageConfidence: Number(reNativeForecastConfidenceMean.toFixed(4)),
+      endConfidence: Number(reNativeForecastConfidenceEnd.toFixed(4)),
+      endEffectiveHorizonRE: Number(reNativeForecastEndEffectiveHorizonRE.toFixed(2)),
+      chronologicalAdverseRE: Number(chronologicalAdverseRE.toFixed(2)),
+      chronologicalDamagePressureRE: Number(chronologicalDamagePressureRE.toFixed(2)),
+      baseEffortScale: Number(reNativeBaseEffortScale.toFixed(4)),
+      damageModeratedEffortScale: Number(reNativeDamageModeratedEffortScale.toFixed(4)),
+      damageEffortCeiling: Number((reStarts[0]?.reNativeDamageEffortCeiling ?? 0.5).toFixed(4)),
+      missingOwners: [
+        "iterative-traffic-adverse-re-chronology"
+      ]
+    },
+    playTimeAmplification: {
+      calibrationReady: true,
+      productionOwner: false,
+      semanticRole: "negative-re-plus-nominal-horizon-elapsed-play",
+      chronologicalPlayTimeAdverseRE: Number(chronologicalPlayTimeAdverseRE.toFixed(2)),
+      directLostTempoRE: Number(directLostTempoRE.toFixed(2)),
+      downstreamTrafficControlAdverseRE: Number(downstreamTrafficControlAdverseRE.toFixed(2)),
+      totalAdverseRE: Number(playTimeAdverseRE.toFixed(2)),
+      adverseRatio: Number(playTimeAdverseRatio.toFixed(4)),
+      responseShape: Number(playTimeResponseShape.toFixed(4)),
+      nominalProgrammingTurns: Number(nominalProgrammingTurns.toFixed(4)),
+      horizonActivation: Number(playTimeHorizonActivation.toFixed(4)),
+      maxResponseUplift: PLAY_TIME_RESPONSE_MAX_UPLIFT,
+      horizonMidpointTurns: PLAY_TIME_HORIZON_MIDPOINT_TURNS,
+      horizonSlopeTurns: PLAY_TIME_HORIZON_SLOPE_TURNS,
+      multiplier: Number(playTimeMultiplier.toFixed(4)),
+      expectedPlayRegisters: Number(expectedPlayRegisters.toFixed(2)),
+      expectedPlayProgrammingTurns: Number(expectedPlayProgrammingTurns.toFixed(2)),
+      referenceFourPlayerLengthBand: referencePlayTimeBand,
+      calibrationSource: "v49dk fixed-seed 4-player Any-difficulty Short/Medium/Long/Epic batch; candidate-pool cross-check",
+      note: "Adverse RE supplies burden intensity via r/(1+r); nominal turns gate how much burden can compound. Coefficients 0.60 / 7.0t / 1.5t are explicit provisional calibration anchors, not final wall-clock semantics."
+    },
+    wallClockComposite: {
+      calibrationReady: false,
+      semanticRole: "relative-elapsed-time-index-not-minutes",
+      reference: "four-player = 1.0 table-resolution multiplier",
+      playerCount,
+      playerResolutionMultiplierIndex: Number(
+        playerResolutionMultiplierIndex.toFixed(4)
+      ),
+      upgradePhaseMultiplierIndex,
+      explicitTimingMultiplierIndex,
+      wallClockMultiplierIndex: Number(wallClockMultiplierIndex.toFixed(4)),
+      effectiveLengthIndex: Number((
+        expectedPlayProgrammingTurns * wallClockMultiplierIndex
+      ).toFixed(4)),
+      missingOwners: [
+        "upgrade-opportunity-phase-time",
+        "variant-specific-phase-time",
+        "act-fast-programming-time-reduction"
+      ],
+      note: "Wall-clock factors are downstream of the calibrated RE-native expected-play turns. This effective-length index is still observational because player-count, upgrade-phase, variants and Act Fast wall-clock scaling are not broadly calibrated. planningPressure is not an owner."
+    },
+    pressureEvidence: {
+      cleanCardREPerTurn: Number(cleanCardREPerTurn.toFixed(4)),
+      damageCardSupplyREPerTurn: Number(
+        damageCardSupplyREPerTurn.toFixed(4)
+      ),
+      cardREPerTurn: Number(cardREPerTurn.toFixed(4)),
+      intrinsicMentalREPerTurn: Number(
+        intrinsicMentalREPerTurn.toFixed(4)
+      ),
+      trafficMentalREPerTurn: Number(
+        trafficMentalREPerTurn.toFixed(4)
+      ),
+      mentalREPerTurn: Number(mentalREPerTurn.toFixed(4)),
+      cardMentalInteractionSignal: Number(
+        cardMentalInteractionSignal.toFixed(4)
+      ),
+      clogREPerTurn: Number(clogREPerTurn.toFixed(4)),
+      trafficControlREPerTurn: Number(
+        trafficControlREPerTurn.toFixed(4)
+      ),
+      trafficDamageREPerTurn: Number(
+        trafficDamageREPerTurn.toFixed(4)
+      ),
+      trafficForecastConfidenceMean: Number(
+        trafficForecastConfidenceMean.toFixed(3)
+      ),
+      trafficForecastConfidenceEnd: Number(
+        trafficForecastConfidenceEnd.toFixed(3)
+      )
+    },
+    legacyProductionTermsPendingRetirement: {
+      distanceLoad: Number(
+        (Number(lengthMetrics?.contributions?.distanceLoad) || 0).toFixed(2)
+      ),
+      congestionLoad: Number(
+        (Number(lengthMetrics?.contributions?.congestionLoad) || 0).toFixed(2)
+      ),
+      programmingVariantLoad: Number(
+        (Number(
+          lengthMetrics?.contributions?.programmingVariantLoad
+        ) || 0).toFixed(2)
+      ),
+      actFastLoad: Number(
+        (Number(lengthMetrics?.contributions?.actFastLoad) || 0).toFixed(2)
+      ),
+      currentLengthRaw: Number(
+        (Number(lengthMetrics?.raw) || 0).toFixed(2)
+      )
+    },
+    phaseTimeOwnership: {
+      playerCount: Math.max(1, Number(preferences.playerCount) || 4),
+      upgradePhase: preferences.lighterGame
+        ? "removed-by-energy-crisis"
+        : "pending-opportunity-model",
+      actFastMode: preferences.actFastMode ?? null
+    },
+    note:
+      "v49ds candidate observation: calibrated adverse-RE expected-play registers are the production route/play extent owner after full replay. RE-native routing confidence remains the traffic owner; player/upgrade/timer/variant wall-clock ownership remains pending. Beginner remains [0,4.0)."
+  };
+}
+
+function buildLengthOwnerCandidatePoolShadow(selectedScenario) {
+  const candidates = getDevAcceptableCandidatePool(selectedScenario);
+  if (!isDevViewEnabled() || !candidates.length) {
+    return {
+      active: false,
+      reason: candidates.length ? "not-dev" : "candidate-pool-not-retained"
+    };
+  }
+  const entries = candidates.map((candidate, index) => {
+    const observation =
+      candidate.metrics?.lengthMetrics?.ownerObservationV49dl ?? null;
+    if (!observation?.active) return null;
+    return {
+      candidate: index + 1,
+      selected: candidate === selectedScenario,
+      requestedLength: candidate.preferences?.length ?? "any",
+      currentLengthRaw: Number(candidate.metrics?.lengthRaw),
+      currentLengthLabel: formatActualLengthLabel(
+        candidate.metrics?.lengthRaw
+      ),
+      nominalRegisters: observation.nominalRegisters,
+      intrinsicForecastExtraRegisters:
+        observation.intrinsicForecastExtraRegisters,
+      baselineExpectedRegisters: observation.baselineExpectedRegisters,
+      baselineExpectedProgrammingTurns:
+        observation.baselineExpectedProgrammingTurns,
+      reNativeForecastConfidenceMean:
+        observation.reNativeRoutingUncertainty?.averageConfidence ?? 1,
+      reNativeForecastConfidenceEnd:
+        observation.reNativeRoutingUncertainty?.endConfidence ?? 1,
+      playTimeAdverseRE:
+        observation.playTimeAmplification?.totalAdverseRE ?? 0,
+      playTimeAdverseRatio:
+        observation.playTimeAmplification?.adverseRatio ?? 0,
+      playTimeResponseShape:
+        observation.playTimeAmplification?.responseShape ?? 0,
+      playTimeHorizonActivation:
+        observation.playTimeAmplification?.horizonActivation ?? 0,
+      playTimeMultiplier:
+        observation.playTimeAmplification?.multiplier ?? 1,
+      expectedPlayProgrammingTurns:
+        observation.playTimeAmplification?.expectedPlayProgrammingTurns ?? 0,
+      referenceFourPlayerLengthBand:
+        observation.playTimeAmplification?.referenceFourPlayerLengthBand ?? "n/a",
+      playerWallClockMultiplierIndex:
+        observation.wallClockComposite?.playerResolutionMultiplierIndex ?? 1
+    };
+  }).filter(Boolean);
+  if (!entries.length) {
+    return { active: false, reason: "candidate-length-observation-unavailable" };
+  }
+  return {
+    active: true,
+    model: LENGTH_OWNER_OBSERVATION_MODEL_ID,
+    candidateCount: entries.length,
+    entries
+  };
+}
+
+function computeRETurnVariantDifficultyAccounting(rawTurnRE, preferences = {}, sequence = null) {
+  const programmingPressure = computeProgrammingPressureProfile(sequence);
+  let adjusted = Number(rawTurnRE) || 0;
+  const contributions = [];
+  const mechanicalRules = [];
+  const addLegacyFitPoints = (id, legacyDelta, kind = "residual", evidence = null) => {
+    const legacyValue = Number(legacyDelta) || 0;
+    const value = legacyValue / RE_TURN_DIFFICULTY_FIT_POINTS_PER_RE;
+    if (Math.abs(value) > 0.000001) adjusted += value;
+    contributions.push({
+      id,
+      kind,
+      delta: Number(value.toFixed(4)),
+      legacyFitPoints: Number(legacyValue.toFixed(2)),
+      evidence
+    });
+  };
+  const scale = (id, multiplier, kind = "residual", evidence = null) => {
+    const before = adjusted;
+    adjusted *= multiplier;
+    contributions.push({
+      id,
+      kind,
+      delta: Number((adjusted - before).toFixed(4)),
+      multiplier: Number(multiplier.toFixed(4)),
+      evidence
+    });
+  };
+  const mechanical = (id, note) => mechanicalRules.push({ id, note });
+
+  if (preferences.lessSpammyGame) mechanical("lessSpammyGame", "hazard/traffic/reboot model");
+  if (preferences.criticalSpam) mechanical("criticalSpam", "hazard/traffic/reboot model");
+  if (preferences.criticalHaywire) mechanical("criticalHaywire", "hazard/traffic/reboot model");
+  if (preferences.permanentShutdown && preferences.criticalSpam) mechanical("permanentShutdown", "damage-deck/reboot model");
+  if (preferences.cuttingFloor) mechanical("cuttingFloor", "laser damage model");
+  if (preferences.flamingOil) mechanical("flamingOil", "oil hazard model");
+  if (preferences.setToKill) mechanical("setToKill", "robot-laser traffic model");
+  if (preferences.setToStun) mechanical("setToStun", "robot-laser traffic model");
+  if (preferences.repairStations) mechanical("repairStations", "checkpoint repair route value");
+
+  // The multiplier is dimensionless, so preserving the historical 4% resource
+  // residual is a direct unit-safe migration.
+  if (preferences.lighterGame) {
+    scale("lighterGame", 0.96, "residual-resource", { provisional: true });
+  }
+
+  if (preferences.lessForeshadowing) {
+    addLegacyFitPoints(
+      "lessForeshadowing",
+      programmingPressure.planningPressure * 4.4,
+      "residual-programming",
+      { planningPressure: programmingPressure.planningPressure }
+    );
+  }
+  if (preferences.classicSharedDeck) {
+    const sharedDeckPressure = getSharedDeckPlayerPressure(preferences.playerCount);
+    addLegacyFitPoints(
+      "classicSharedDeck",
+      programmingPressure.planningPressure * (4.3 + sharedDeckPressure * 1.7),
+      "residual-programming",
+      {
+        planningPressure: programmingPressure.planningPressure,
+        playerPressure: Number(sharedDeckPressure.toFixed(3))
+      }
+    );
+  }
+  if (preferences.factoryRejects) {
+    addLegacyFitPoints(
+      "factoryRejects",
+      programmingPressure.planningPressure * 3.2,
+      "residual-programming",
+      { planningPressure: programmingPressure.planningPressure }
+    );
+  }
+  if (preferences.actFastMode) {
+    const timerWeight = getActFastPressureWeight(preferences.actFastMode);
+    addLegacyFitPoints(
+      "actFast",
+      programmingPressure.timedPressure * 6.2 * timerWeight,
+      "residual-programming",
+      {
+        mode: preferences.actFastMode,
+        timerWeight,
+        timedPressure: programmingPressure.timedPressure
+      }
+    );
+  }
+  if (preferences.movingTargetStats?.activeCount) {
+    addLegacyFitPoints(
+      "movingTargets",
+      (preferences.movingTargetStats.difficultyBonus ?? 0) * 0.35,
+      "residual-tracking",
+      { routeAware: true, retainedFraction: 0.35 }
+    );
+  }
+  if (preferences.competitiveMode) {
+    const strategicDifficulty = Number(preferences.competitiveStrategicDifficulty);
+    addLegacyFitPoints(
+      "competitiveMode",
+      Number.isFinite(strategicDifficulty) ? strategicDifficulty : 1.8,
+      "residual-setup",
+      { provisional: true }
+    );
+  }
+  if (preferences.payToWin || preferences.subsidizedStarts) {
+    addLegacyFitPoints(
+      preferences.subsidizedStarts ? "subsidizedStarts" : "payToWin",
+      1.4,
+      "residual-setup",
+      { provisional: true }
+    );
+  }
+
+  return {
+    base: Number((Number(rawTurnRE) || 0).toFixed(4)),
+    final: Number(adjusted.toFixed(4)),
+    delta: Number((adjusted - (Number(rawTurnRE) || 0)).toFixed(4)),
+    contributions,
+    mechanicalRules,
+    programmingPressure,
+    fitPointsPerRE: RE_TURN_DIFFICULTY_FIT_POINTS_PER_RE,
+    method: "completed-re-turn-plus-migrated-residual-variants-v49de"
+  };
+}
+
+function buildRETurnDifficultyShadow(scenario, options = {}) {
+  if (!isDevViewEnabled()) {
+    return { active: false, reason: "not-dev" };
+  }
+  const production = scenario?.metrics?.reTurnDifficulty ?? null;
+  if (!production?.active) {
+    return { active: false, reason: production?.reason ?? "production-metric-unavailable" };
+  }
+  return {
+    ...production,
+    productionFinalTurnRE: Number(scenario.metrics?.difficultyTurnRE),
+    productionLabel: formatActualDifficultyLabel(scenario.metrics?.difficultyTurnRE),
+    variantAccounting: scenario.metrics?.reTurnVariantDifficultyAccounting ?? null,
+    legacyDifficultyRaw: Number(scenario.metrics?.difficultyRaw),
+    legacyDifficultyLabel: formatLegacyDifficultyLabel(scenario.metrics?.difficultyRaw),
+    currentForecastEquivalentActions: Number(
+      scenario.metrics?.lengthMetrics?.contributions?.forecastEquivalentActions ?? 0
+    )
   };
 }
 
@@ -17259,28 +17904,27 @@ function buildRETurnDifficultyCandidatePoolShadow(selectedScenario, options = {}
   if (!isDevViewEnabled() || !candidates.length) {
     return { active: false, reason: candidates.length ? "not-dev" : "candidate-pool-not-retained" };
   }
-  const timing = options.timing ?? null;
   const entries = candidates.map((candidate, index) => {
-    const shadow = buildRETurnDifficultyShadow(candidate, {
-      replayCache: getScenarioDevReplayCache(candidate),
-      timing
-    });
+    const production = candidate.metrics?.reTurnDifficulty;
+    if (!production?.active) return null;
     return {
       candidate: index + 1,
       selected: candidate === selectedScenario,
       fitScore: Number(getAcceptableScenarioScore(candidate).toFixed(2)),
       legacyDifficultyRaw: Number(candidate.metrics?.difficultyRaw),
-      legacyDifficultyLabel: formatActualDifficultyLabel(candidate.metrics?.difficultyRaw),
+      legacyDifficultyLabel: formatLegacyDifficultyLabel(candidate.metrics?.difficultyRaw),
+      difficultyTurnRE: Number(candidate.metrics?.difficultyTurnRE),
+      difficultyLabel: formatActualDifficultyLabel(candidate.metrics?.difficultyTurnRE),
       lengthRaw: Number(candidate.metrics?.lengthRaw),
       usableStarts: Number(candidate.metrics?.usableStarts?.length ?? 0),
       currentForecastEquivalentActions: Number(
         candidate.metrics?.lengthMetrics?.contributions?.forecastEquivalentActions ?? 0
       ),
-      shadow
+      shadow: production
     };
-  }).filter((entry) => entry.shadow?.active);
-  if (!entries.length) return { active: false, reason: "candidate-shadows-unavailable" };
-  const composites = entries.map((entry) => Number(entry.shadow.courseTurnDifficultyRE));
+  }).filter(Boolean);
+  if (!entries.length) return { active: false, reason: "candidate-production-metrics-unavailable" };
+  const composites = entries.map((entry) => Number(entry.difficultyTurnRE));
   const selectedEntry = entries.find((entry) => entry.selected) ?? null;
   return {
     active: true,
@@ -17288,7 +17932,7 @@ function buildRETurnDifficultyCandidatePoolShadow(selectedScenario, options = {}
     minComposite: Number(Math.min(...composites).toFixed(4)),
     maxComposite: Number(Math.max(...composites).toFixed(4)),
     selectedComposite: selectedEntry
-      ? Number(selectedEntry.shadow.courseTurnDifficultyRE.toFixed(4))
+      ? Number(selectedEntry.difficultyTurnRE.toFixed(4))
       : null,
     entries
   };
@@ -17979,6 +18623,205 @@ function computeLengthMetrics(sequence, flagCount, playerCount, boardCount, pref
   };
 }
 
+// v49ds production migration: route/play extent is now owned by calibrated
+// RE-native expected-play registers end-to-end. Raw travelled distance and
+// standalone congestion remain available as diagnostics/construction guidance,
+// but they no longer add independent production length. The 4.0 raw/register
+// bridge is only a transitional unit conversion so existing length bands can
+// remain stable until the downstream wall-clock owner is promoted.
+function applyRENativeExpectedPlayExtentToLengthMetrics(
+  lengthMetrics,
+  ownerObservation,
+  preferences = {}
+) {
+  const play = ownerObservation?.playTimeAmplification;
+  const nominalRegisters = Number(ownerObservation?.nominalRegisters);
+  const expectedPlayRegisters = Number(play?.expectedPlayRegisters);
+  if (
+    !lengthMetrics ||
+    !ownerObservation?.active ||
+    !play?.calibrationReady ||
+    !Number.isFinite(nominalRegisters) ||
+    !Number.isFinite(expectedPlayRegisters)
+  ) {
+    return lengthMetrics;
+  }
+
+  const productionEquivalentActions = Math.max(
+    0,
+    expectedPlayRegisters - nominalRegisters
+  );
+  const contributions = lengthMetrics.contributions ?? {};
+  const legacyActionLoad = Math.max(
+    0,
+    Number(contributions.actionLoad) || 0
+  );
+  const legacyEquivalentActions = Math.max(
+    0,
+    Number(contributions.forecastEquivalentActions) || 0
+  );
+  const legacyForecastUncertaintyLoad = Math.max(
+    0,
+    Number(contributions.forecastUncertaintyLoad) ||
+      legacyEquivalentActions * 2.8
+  );
+  const legacyDistanceLoad = Math.max(
+    0,
+    Number(contributions.distanceLoad) || 0
+  );
+  const legacyCongestionLoad = Math.max(
+    0,
+    Number(contributions.congestionLoad) || 0
+  );
+
+  const productionActionLoad =
+    nominalRegisters * LENGTH_EXPECTED_PLAY_RAW_POINTS_PER_REGISTER;
+  const productionForecastUncertaintyLoad =
+    productionEquivalentActions * LENGTH_EXPECTED_PLAY_RAW_POINTS_PER_REGISTER;
+  const productionExpectedPlayExtentLoad =
+    expectedPlayRegisters * LENGTH_EXPECTED_PLAY_RAW_POINTS_PER_REGISTER;
+
+  const playerLoad = Number(contributions.playerLoad) || 0;
+  const actFastLoad = Number(contributions.actFastLoad) || 0;
+  const baseWithProductionExtent =
+    playerLoad + productionExpectedPlayExtentLoad + actFastLoad;
+  const planningPressure = Math.max(
+    0,
+    Number(lengthMetrics.programmingPressure?.planningPressure) || 0
+  );
+  const lessForeshadowingLoad = preferences.lessForeshadowing
+    ? baseWithProductionExtent * planningPressure * 0.022
+    : 0;
+  const sharedDeckPlayerPressure = preferences.classicSharedDeck
+    ? getSharedDeckPlayerPressure(Number(lengthMetrics.inputs?.playerCount) || 4)
+    : 0;
+  const sharedDeckLoad = preferences.classicSharedDeck
+    ? baseWithProductionExtent * planningPressure *
+      (0.016 + sharedDeckPlayerPressure * 0.012)
+    : 0;
+  const programmingVariantLoad = lessForeshadowingLoad + sharedDeckLoad;
+  const frictionLoad = actFastLoad + programmingVariantLoad;
+
+  let productionRaw =
+    playerLoad + productionExpectedPlayExtentLoad + frictionLoad;
+  const rawBeforeLighterGame = productionRaw;
+  if (preferences.lighterGame) {
+    productionRaw *= 0.89;
+  }
+
+  const preForecastBase =
+    playerLoad + productionActionLoad + actFastLoad;
+  const preForecastLessForeshadowingLoad = preferences.lessForeshadowing
+    ? preForecastBase * planningPressure * 0.022
+    : 0;
+  const preForecastSharedDeckLoad = preferences.classicSharedDeck
+    ? preForecastBase * planningPressure *
+      (0.016 + sharedDeckPlayerPressure * 0.012)
+    : 0;
+  let preForecastRaw =
+    preForecastBase +
+    preForecastLessForeshadowingLoad +
+    preForecastSharedDeckLoad;
+  if (preferences.lighterGame) {
+    preForecastRaw *= 0.89;
+  }
+
+  const byId = new Map(
+    (lengthMetrics.variantLengthContributions ?? []).map((entry) => [entry.id, entry])
+  );
+  if (byId.has("lessForeshadowing")) {
+    byId.set("lessForeshadowing", {
+      ...byId.get("lessForeshadowing"),
+      delta: Number(lessForeshadowingLoad.toFixed(2)),
+      evidence: { planningPressure }
+    });
+  }
+  if (byId.has("classicSharedDeck")) {
+    byId.set("classicSharedDeck", {
+      ...byId.get("classicSharedDeck"),
+      delta: Number(sharedDeckLoad.toFixed(2)),
+      evidence: {
+        planningPressure,
+        playerPressure: Number(sharedDeckPlayerPressure.toFixed(3))
+      }
+    });
+  }
+  if (byId.has("lighterGame")) {
+    byId.set("lighterGame", {
+      ...byId.get("lighterGame"),
+      delta: Number((productionRaw - rawBeforeLighterGame).toFixed(2)),
+      multiplier: 0.89,
+      evidence: { provisional: true }
+    });
+  }
+
+  ownerObservation.productionOwner = false;
+  ownerObservation.productionRole = "route-play-extent-plus-pending-wall-clock";
+  if (ownerObservation.legacyProductionTermsPendingRetirement) {
+    ownerObservation.legacyProductionTermsPendingRetirement = {
+      ...ownerObservation.legacyProductionTermsPendingRetirement,
+      distanceLoad: 0,
+      congestionLoad: 0,
+      legacyDistanceLoadDiagnostic: Number(legacyDistanceLoad.toFixed(2)),
+      legacyCongestionLoadDiagnostic: Number(legacyCongestionLoad.toFixed(2))
+    };
+  }
+  ownerObservation.note =
+    "v49ds makes calibrated expected-play registers the sole production route/play extent owner. Raw route distance and standalone congestion are diagnostic/construction-only. Player/upgrade/timer/variant wall-clock ownership remains pending; Beginner remains [0,4.0).";
+  play.productionOwner = true;
+  play.productionRole = "full-route-play-extent";
+
+  lengthMetrics.raw = Number(productionRaw.toFixed(2));
+  lengthMetrics.compactnessRaw = Number(productionRaw.toFixed(2));
+  lengthMetrics.contributions = {
+    ...contributions,
+    legacyActionLoad: Number(legacyActionLoad.toFixed(2)),
+    legacyForecastEquivalentActions: Number(legacyEquivalentActions.toFixed(2)),
+    legacyForecastUncertaintyLoad: Number(legacyForecastUncertaintyLoad.toFixed(2)),
+    legacyDistanceLoad: Number(legacyDistanceLoad.toFixed(2)),
+    legacyCongestionLoad: Number(legacyCongestionLoad.toFixed(2)),
+    actionLoad: Number(productionActionLoad.toFixed(2)),
+    forecastEquivalentActions: Number(productionEquivalentActions.toFixed(2)),
+    forecastUncertaintyLoad: Number(productionForecastUncertaintyLoad.toFixed(2)),
+    productionExpectedPlayExtentLoad: Number(productionExpectedPlayExtentLoad.toFixed(2)),
+    productionExpectedPlayRawPointsPerRegister:
+      LENGTH_EXPECTED_PLAY_RAW_POINTS_PER_REGISTER,
+    productionExpectedPlayRegisters: Number(expectedPlayRegisters.toFixed(2)),
+    productionExpectedPlayProgrammingTurns: Number((expectedPlayRegisters / 5).toFixed(2)),
+    preUncertaintyRaw: Number(preForecastRaw.toFixed(2)),
+    distanceLoad: 0,
+    congestionLoad: 0,
+    lessForeshadowingLoad: Number(lessForeshadowingLoad.toFixed(2)),
+    sharedDeckLoad: Number(sharedDeckLoad.toFixed(2)),
+    programmingVariantLoad: Number(programmingVariantLoad.toFixed(2)),
+    routeLoad: Number(productionExpectedPlayExtentLoad.toFixed(2)),
+    frictionLoad: Number(frictionLoad.toFixed(2))
+  };
+  lengthMetrics.variantLengthContributions = Array.from(byId.values());
+  const productionExtentOwner = {
+    active: true,
+    model: LENGTH_OWNER_OBSERVATION_MODEL_ID,
+    semanticRole: "expected-play route/play extent",
+    nominalRegisters: Number(nominalRegisters.toFixed(2)),
+    legacyForecastExtraRegisters: Number(legacyEquivalentActions.toFixed(2)),
+    reNativeExpectedExtraRegisters: Number(productionEquivalentActions.toFixed(2)),
+    expectedPlayRegisters: Number(expectedPlayRegisters.toFixed(2)),
+    expectedPlayProgrammingTurns: Number((expectedPlayRegisters / 5).toFixed(2)),
+    rawPointsPerExpectedPlayRegister:
+      LENGTH_EXPECTED_PLAY_RAW_POINTS_PER_REGISTER,
+    legacyDistanceLoadDiagnostic: Number(legacyDistanceLoad.toFixed(2)),
+    legacyCongestionLoadDiagnostic: Number(legacyCongestionLoad.toFixed(2)),
+    note: "v49ds promotes expected-play registers to the full production route/play extent. Distance and standalone congestion no longer vote independently. Player/table, upgrade, Act Fast and variant phase-time ownership remain pending."
+  };
+  lengthMetrics.productionExtentOwner = productionExtentOwner;
+  // Compatibility alias for any diagnostics written during the v49dr recovery
+  // slice; new code should prefer productionExtentOwner.
+  lengthMetrics.productionRecoveryOwner = productionExtentOwner;
+  lengthMetrics.method =
+    "re-native-expected-play-extent-plus-pending-wall-clock-residuals-v49ds";
+  return lengthMetrics;
+}
+
 function bandDistance(value, band, thresholds) {
   if (band === "any") {
     return 0;
@@ -17989,8 +18832,21 @@ function bandDistance(value, band, thresholds) {
   return 0;
 }
 
+function nonOverlappingDifficultyBandDistance(value, band, thresholds) {
+  if (band === "any") return 0;
+  const [low, high] = thresholds[band];
+  if (value < low) return low - value;
+  if (value >= high) {
+    // Production difficulty bands are genuinely non-overlapping. At the exact
+    // upper cut, preserve a positive (but negligible) mismatch so the candidate
+    // is not mislabeled as an exact match to both adjacent semantic bands.
+    return Math.max(value - high, 1e-9);
+  }
+  return 0;
+}
+
 function getTargetAxisAcceptanceGate({
-  difficultyRaw,
+  difficultyValue,
   difficultyFit,
   difficultyDirection,
   lengthFit,
@@ -18006,15 +18862,15 @@ function getTargetAxisAcceptanceGate({
     ? TARGET_STRONG_EASY_DIFFICULTY_FIT
     : TARGET_STRONG_DIFFICULTY_FIT;
 
-  // Intermediate -> Robots. Must. Die. crosses a player-visible category cliff
-  // even though the raw distance from Intermediate's upper edge is only 25 at
-  // the R.M.D. floor. Treat that category jump as strong/non-compensatory.
+  // Intermediate -> Robots. Must. Die. crosses a player-visible category cliff.
+  // The RE-turn band gap is converted back through the 60 fit-point/RE bridge,
+  // but category membership itself remains a strong/non-compensatory mismatch.
   const intermediateToBrutal = Boolean(
     !difficultyGuidanceOnly &&
     requestedDifficulty === "moderate" &&
     difficultyDirection === "high" &&
-    Number.isFinite(Number(difficultyRaw)) &&
-    Number(difficultyRaw) >= Number(difficultyThresholds?.brutal?.[0] ?? Infinity)
+    Number.isFinite(Number(difficultyValue)) &&
+    Number(difficultyValue) >= Number(difficultyThresholds?.brutal?.[0] ?? Infinity)
   );
   const grossDifficultyMismatch = Boolean(
     !difficultyGuidanceOnly &&
@@ -18792,6 +19648,9 @@ function classifyCandidate(sequence, preferences, context = {}) {
   const movingTargetStats = preferences.movingTargets
     ? summarizeMovingTargets(context.tileMap, context.checkpoints, preferences)
     : summarizeMovingTargets(null, [], preferences);
+  // Keep the historical raw scalar only as construction/preflight calibration
+  // evidence during the migration. It no longer owns player-facing difficulty
+  // acceptance after v49de.
   const variantDifficultyAccounting = computeVariantDifficultyAccounting(
     computeDifficultyRaw(sequence, checkpointPressure),
     {
@@ -18802,7 +19661,7 @@ function classifyCandidate(sequence, preferences, context = {}) {
     },
     sequence
   );
-  let difficultyRaw = variantDifficultyAccounting.final;
+  const difficultyRaw = variantDifficultyAccounting.final;
   const lengthMetrics = computeLengthMetrics(
     sequence,
     preferences.flagCount,
@@ -18811,6 +19670,48 @@ function classifyCandidate(sequence, preferences, context = {}) {
     { ...preferences, movingTargetStats },
     boardHarshness
   );
+  const reTurnDifficulty = context.skipProductionDifficulty
+    ? { active: false, reason: "guidance-only-classification" }
+    : getProductionRETurnDifficulty(
+      sequence,
+      {
+        ...preferences,
+        movingTargetStats,
+        competitiveStrategicDifficulty: competitiveBlockImpact?.strategicDifficulty ?? null
+      },
+      context,
+      lengthMetrics
+    );
+  const reTurnVariantDifficultyAccounting = reTurnDifficulty?.active
+    ? computeRETurnVariantDifficultyAccounting(
+      reTurnDifficulty.courseTurnDifficultyRE,
+      {
+        ...preferences,
+        competitiveStrategicDifficulty: competitiveBlockImpact?.strategicDifficulty ?? null,
+        movingTargetStats
+      },
+      sequence
+    )
+    : null;
+  const difficultyTurnRE = Number(reTurnVariantDifficultyAccounting?.final);
+
+  // v49ds promotes calibrated RE-native expected-play registers to own the
+  // complete production route/play extent. Distance and standalone congestion
+  // remain only in construction/diagnostic metrics. Downstream wall-clock phase
+  // factors (player resolution, upgrades, timers, variants) are still pending.
+  lengthMetrics.ownerObservationV49dl = computeLengthOwnerObservation(
+    sequence,
+    preferences,
+    lengthMetrics,
+    reTurnDifficulty
+  );
+  if (!context.skipProductionDifficulty) {
+    applyRENativeExpectedPlayExtentToLengthMetrics(
+      lengthMetrics,
+      lengthMetrics.ownerObservationV49dl,
+      preferences
+    );
+  }
   const lengthRaw = lengthMetrics.raw;
   const lengthFitRaw = shouldUseCompactLengthFit(preferences)
     ? lengthMetrics.compactnessRaw
@@ -18888,23 +19789,35 @@ function classifyCandidate(sequence, preferences, context = {}) {
     }
   }
 
-  const difficultyGuidanceFit = bandDistance(difficultyRaw, preferences.difficulty, difficultyThresholds);
+  if (!context.skipProductionDifficulty && !Number.isFinite(difficultyTurnRE)) {
+    hardFailures.push("re-turn-difficulty-unavailable");
+  }
+  const difficultyDistanceRE = context.skipProductionDifficulty
+    ? 0
+    : Number.isFinite(difficultyTurnRE)
+      ? nonOverlappingDifficultyBandDistance(difficultyTurnRE, preferences.difficulty, difficultyThresholds)
+      : Infinity;
+  const difficultyGuidanceFit = Number.isFinite(difficultyDistanceRE)
+    ? difficultyDistanceRE * RE_TURN_DIFFICULTY_FIT_POINTS_PER_RE
+    : Infinity;
   const lengthGuidanceFit = bandDistance(lengthFitRaw, preferences.length, lengthThresholds);
   const difficultyFit = preferences.targetGuidanceOnlyDifficulty ? 0 : difficultyGuidanceFit;
   const lengthFit = preferences.targetGuidanceOnlyLength ? 0 : lengthGuidanceFit;
-  if (difficultyFit > 0) {
+  if (difficultyFit > 0 && Number.isFinite(difficultyFit)) {
     softFailures.push("difficulty-mismatch");
   }
   if (lengthFit > 0) {
     softFailures.push("length-mismatch");
   }
-  const difficultyDirection = (preferences.difficulty === "any" || preferences.targetGuidanceOnlyDifficulty)
+  const difficultyDirection = (context.skipProductionDifficulty || preferences.difficulty === "any" || preferences.targetGuidanceOnlyDifficulty)
     ? "matched"
-    : difficultyRaw < difficultyThresholds[preferences.difficulty][0]
-      ? "low"
-      : difficultyRaw >= difficultyThresholds[preferences.difficulty][1]
-        ? "high"
-        : "matched";
+    : !Number.isFinite(difficultyTurnRE)
+      ? "unavailable"
+      : difficultyTurnRE < difficultyThresholds[preferences.difficulty][0]
+        ? "low"
+        : difficultyTurnRE >= difficultyThresholds[preferences.difficulty][1]
+          ? "high"
+          : "matched";
   const lengthDirection = (preferences.length === "any" || preferences.targetGuidanceOnlyLength)
     ? "matched"
     : lengthFitRaw < lengthThresholds[preferences.length][0]
@@ -19072,7 +19985,7 @@ function classifyCandidate(sequence, preferences, context = {}) {
   ), 0);
   const exactTargetMatch = difficultyFit === 0 && lengthFit === 0;
   const targetAcceptance = getTargetAxisAcceptanceGate({
-    difficultyRaw,
+    difficultyValue: difficultyTurnRE,
     difficultyFit,
     difficultyDirection,
     lengthFit,
@@ -19090,6 +20003,12 @@ function classifyCandidate(sequence, preferences, context = {}) {
     reachableStarts: reachableStarts.length,
     usableStarts,
     difficultyRaw,
+    difficultyTurnRE: Number.isFinite(difficultyTurnRE) ? Number(difficultyTurnRE.toFixed(4)) : null,
+    difficultyTurnBaseRE: reTurnDifficulty?.active
+      ? Number(reTurnDifficulty.courseTurnDifficultyRE.toFixed(4))
+      : null,
+    reTurnDifficulty,
+    reTurnVariantDifficultyAccounting,
     lengthRaw,
     lengthFitRaw,
     difficultyFit,
@@ -19103,7 +20022,8 @@ function classifyCandidate(sequence, preferences, context = {}) {
     competitiveBlockImpact,
     checkpointPressure,
     variantDifficultyAccounting,
-    programmingPressure: variantDifficultyAccounting.programmingPressure,
+    programmingPressure: reTurnVariantDifficultyAccounting?.programmingPressure
+      ?? variantDifficultyAccounting.programmingPressure,
     movingTargetStats,
     movingTargetVolatilityPenalty,
     openingLegAnticlimax,
@@ -19725,7 +20645,7 @@ function buildScenarioCopySummary(scenario) {
       : scenario.competitiveMode
         ? `Fairness (Competitive simulated selected field): stddev ${scenario.metrics?.fairnessStdDev ?? "n/a"}, score ${summary.fairnessScore ?? "n/a"}`
         : `Fairness: stddev ${scenario.metrics?.fairnessStdDev ?? "n/a"}, score ${summary.fairnessScore ?? "n/a"}`,
-    `Difficulty raw: ${scenario.metrics?.difficultyRaw ?? "n/a"}`,
+    `Difficulty: ${scenario.metrics?.difficultyTurnRE ?? "n/a"} RE/turn (${formatPresentedDifficultyLabel(scenario.metrics)}); legacy construction/raw diagnostic ${scenario.metrics?.difficultyRaw ?? "n/a"}`,
     `Length raw: ${scenario.metrics?.lengthRaw ?? "n/a"}`,
     `Course scores: difficulty ${summary.difficultyScore ?? "n/a"}, length ${summary.lengthScore ?? "n/a"}, actions ${summary.actionScore ?? "n/a"}, overall ${summary.overallScore ?? "n/a"}`,
     `Checkpoint pacing: ${checkpointPacingSummary}`
@@ -19917,13 +20837,17 @@ function buildScenarioCopySummary(scenario) {
       const finalAltCount = candidateDiagnostics.filter((entry) => entry.trafficSwitched).length;
       const switchedDiagnostics = candidateDiagnostics.filter((entry) => (
         entry.trafficSwitched &&
-        Number.isFinite(Number(entry.intrinsicCostSelectedVsBest)) &&
-        Number.isFinite(Number(entry.trafficAdvantageSelectedVsBest)) &&
-        Number.isFinite(Number(entry.strategicGainSelectedVsBest))
+        Number.isFinite(Number(entry.effectiveREGainSelectedVsBest))
       ));
-      const switchedIntrinsicCosts = switchedDiagnostics.map((entry) => Number(entry.intrinsicCostSelectedVsBest));
-      const switchedTrafficAdvantages = switchedDiagnostics.map((entry) => Number(entry.trafficAdvantageSelectedVsBest));
-      const switchedStrategicGains = switchedDiagnostics.map((entry) => Number(entry.strategicGainSelectedVsBest));
+      const switchedIntrinsicCosts = switchedDiagnostics
+        .map((entry) => Number(entry.intrinsicCostSelectedVsBest))
+        .filter(Number.isFinite);
+      const switchedTrafficAdvantages = switchedDiagnostics
+        .map((entry) => Number(entry.trafficAdvantageSelectedVsBest))
+        .filter(Number.isFinite);
+      const switchedEffectiveREGains = switchedDiagnostics
+        .map((entry) => Number(entry.effectiveREGainSelectedVsBest))
+        .filter(Number.isFinite);
       const candidateMedian = candidateCounts.length
         ? Number(medianValue(candidateCounts).toFixed(2))
         : 0;
@@ -19956,13 +20880,13 @@ function buildScenarioCopySummary(scenario) {
           ? Number(Math.max(...values).toFixed(2))
           : 0;
         lines.push(
-          `Traffic search-choice deltas: ${switchedDiagnostics.length} switched start(s), search-cost increase median/max ${medianOrZero(switchedIntrinsicCosts)}/${maxOrZero(switchedIntrinsicCosts)}, traffic-pressure reduction median/max ${medianOrZero(switchedTrafficAdvantages)}/${maxOrZero(switchedTrafficAdvantages)}, switch-objective gain median/max ${medianOrZero(switchedStrategicGains)}/${maxOrZero(switchedStrategicGains)} (search cost + confidence-weighted traffic pressure; must remain ≥${NORMAL_TRAFFIC_ALTERNATE_MIN_GAIN})`
+          `Traffic search-choice deltas: ${switchedDiagnostics.length} switched start(s), completed-effective-RE gain median/max ${medianOrZero(switchedEffectiveREGains)}/${maxOrZero(switchedEffectiveREGains)}RE (production switch owner; minimum useful gain ${(NORMAL_TRAFFIC_ALTERNATE_MIN_GAIN / 6.4).toFixed(4)}RE); legacy comparator search-cost increase median/max ${medianOrZero(switchedIntrinsicCosts)}/${maxOrZero(switchedIntrinsicCosts)}, traffic-pressure reduction median/max ${medianOrZero(switchedTrafficAdvantages)}/${maxOrZero(switchedTrafficAdvantages)}`
         );
       }
       if (candidateDiagnostics.length) {
         lines.push(
           `Traffic diversity by start: ${candidateDiagnostics.map((entry) => (
-            `#${entry.startIndex + 1} ${entry.candidateCount ?? 0}c whole ${entry.wholeMostDifferentSimilarity ?? "n/a"} later ${entry.laterMostDifferentSimilarity ?? "n/a"} selected ${Number.isInteger(entry.selectedRouteIndex) ? entry.selectedRouteIndex + 1 : "?"}${entry.trafficSwitched ? "*" : ""} spread ${entry.scoreSpread ?? 0}${Number.isFinite(Number(entry.intrinsicCostSelectedVsBest)) && Number.isFinite(Number(entry.trafficAdvantageSelectedVsBest)) && Number.isFinite(Number(entry.strategicGainSelectedVsBest)) ? ` Δsearch ${entry.intrinsicCostSelectedVsBest} Δpressure ${entry.trafficAdvantageSelectedVsBest} switchGain ${entry.strategicGainSelectedVsBest}` : ""}`
+            `#${entry.startIndex + 1} ${entry.candidateCount ?? 0}c whole ${entry.wholeMostDifferentSimilarity ?? "n/a"} later ${entry.laterMostDifferentSimilarity ?? "n/a"} selected ${Number.isInteger(entry.selectedRouteIndex) ? entry.selectedRouteIndex + 1 : "?"}${entry.trafficSwitched ? "*" : ""} spread ${entry.scoreSpread ?? 0}${Number.isFinite(Number(entry.effectiveREGainSelectedVsBest)) ? ` ΔRE ${entry.effectiveREGainSelectedVsBest}` : ""}${Number.isFinite(Number(entry.intrinsicCostSelectedVsBest)) && Number.isFinite(Number(entry.trafficAdvantageSelectedVsBest)) ? ` [legacy Δsearch ${entry.intrinsicCostSelectedVsBest} Δpressure ${entry.trafficAdvantageSelectedVsBest}]` : ""}`
           )).join(" | ")}`
         );
       }
@@ -20056,11 +20980,12 @@ function buildScenarioBenchmarkSummary(scenario) {
     "Normal balance:",
     "Balance stddev:",
     "Fairness ",
-    "Difficulty raw:",
-    "RE-turn difficulty v49dc",
-    "RE-turn tier migration v49dc",
-    "RE-turn difficulty candidate pool v49dc",
-    "RE-turn difficulty starts v49dc",
+    "Difficulty:",
+    "Legacy difficulty raw:",
+    "RE-turn difficulty v49de",
+    "RE-turn tier ownership v49de",
+    "RE-turn difficulty candidate pool v49de",
+    "RE-turn difficulty starts v49de",
     "Length raw:",
     "Course scores:",
     "Estimate→realize:",
@@ -20205,11 +21130,11 @@ function getScenarioDevReplayCache(scenario) {
   if (!cache) {
     cache = {
       ledgerByRoute: new WeakMap(),
-      intrinsicLedgerByRoute: new WeakMap(),
       cheapShadowByRoute: new WeakMap(),
       damageFoundationByRoute: new WeakMap(),
       reDifficultyShadow: undefined,
-      reDifficultyCandidatePoolShadow: undefined
+      reDifficultyCandidatePoolShadow: undefined,
+      lengthOwnerCandidatePoolShadow: undefined
     };
     devReplayCacheByScenario.set(scenario, cache);
   }
@@ -20399,6 +21324,21 @@ function buildScenarioReport(scenario, selectedLegIndices = null) {
       }
     }
     addDevTiming(devTiming, "reDifficultyPoolMs", poolStartedAt);
+  }
+
+  let lengthOwnerCandidatePoolShadow = null;
+  if (isDevViewEnabled()) {
+    if (replayCache && replayCache.lengthOwnerCandidatePoolShadow !== undefined) {
+      lengthOwnerCandidatePoolShadow =
+        replayCache.lengthOwnerCandidatePoolShadow;
+    } else {
+      lengthOwnerCandidatePoolShadow =
+        buildLengthOwnerCandidatePoolShadow(scenario);
+      if (replayCache) {
+        replayCache.lengthOwnerCandidatePoolShadow =
+          lengthOwnerCandidatePoolShadow;
+      }
+    }
   }
 
   function formatOutlierReasons(reasons) {
@@ -20600,24 +21540,34 @@ function buildScenarioReport(scenario, selectedLegIndices = null) {
       : contextualCache?.estimatedPrimaryRouting
         ? `Start disposition: structural ${scenario.activeStarts?.length ?? 0}, estimated ${contextualCache.estimatedMilestoneRoutes ?? 0}, realized ${contextualCache.survivingStarts ?? (scenario.validatedStartIndices ?? []).length}, physical-impossible ${contextualCache.estimatedPhysicalFailureStarts ?? 0}, routing-unresolved ${Math.max(0, (contextualCache.estimatedMilestoneRoutes ?? 0) - (contextualCache.survivingStarts ?? (scenario.validatedStartIndices ?? []).length))}${scenario.startDisposition ? `; normal-pruned [${(scenario.startDisposition.normalPrunedIndices ?? []).map((index) => index + 1).join(", ") || "none"}], price-pruned [${(scenario.startDisposition.pricePrunedIndices ?? scenario.startDisposition.legacyPricePrunedIndices ?? []).map((index) => index + 1).join(", ") || "none"}], selector-unavailable [${(scenario.startDisposition.selectorUnavailableIndices ?? []).map((index) => index + 1).join(", ") || "none"}], other [${(scenario.startDisposition.otherBlockedIndices ?? []).map((index) => index + 1).join(", ") || "none"}]` : ""}`
         : `Start disposition: physical ${scenario.activeStarts?.length ?? 0}, validated ${(scenario.validatedStartIndices ?? []).length}, blocked ${(scenario.blockedStartIndices ?? []).length} [${(scenario.blockedStartIndices ?? []).map((index) => index + 1).join(", ") || "none"}]${scenario.startDisposition ? `; outside-pool [${(scenario.startDisposition.outsidePoolIndices ?? []).map((index) => index + 1).join(", ") || "none"}], route-failed [${(scenario.startDisposition.routeFailedIndices ?? []).map((index) => index + 1).join(", ") || "none"}], normal-pruned [${(scenario.startDisposition.normalPrunedIndices ?? []).map((index) => index + 1).join(", ") || "none"}], price-pruned [${(scenario.startDisposition.pricePrunedIndices ?? scenario.startDisposition.legacyPricePrunedIndices ?? []).map((index) => index + 1).join(", ") || "none"}], selector-unavailable [${(scenario.startDisposition.selectorUnavailableIndices ?? []).map((index) => index + 1).join(", ") || "none"}], other [${(scenario.startDisposition.otherBlockedIndices ?? []).map((index) => index + 1).join(", ") || "none"}]` : ""}`,
-    `Difficulty raw: ${scenario.metrics.difficultyRaw}`,
-    scenario.metrics.variantDifficultyAccounting
-      ? `Variant difficulty accounting v38: route/base ${scenario.metrics.variantDifficultyAccounting.base} -> final ${scenario.metrics.variantDifficultyAccounting.final} (residual delta ${scenario.metrics.variantDifficultyAccounting.delta}); residuals ${(scenario.metrics.variantDifficultyAccounting.contributions ?? []).map((entry) => `${entry.id} ${entry.delta >= 0 ? "+" : ""}${entry.delta} [${entry.kind}]`).join(", ") || "none"}; mechanically represented ${(scenario.metrics.variantDifficultyAccounting.mechanicalRules ?? []).map((entry) => `${entry.id} (${entry.note})`).join(", ") || "none"}`
-      : "Variant difficulty accounting v38: n/a",
+    `Difficulty: ${scenario.metrics.difficultyTurnRE ?? "n/a"} RE/turn = ${formatPresentedDifficultyLabel(scenario.metrics)} (PRODUCTION owner)`,
+    `Legacy difficulty raw: ${scenario.metrics.difficultyRaw ?? "n/a"} = ${formatLegacyDifficultyLabel(scenario.metrics.difficultyRaw)}; retained only for construction/preflight calibration diagnostics`,
+    scenario.metrics.reTurnVariantDifficultyAccounting
+      ? `RE-turn variant accounting v49de: base ${scenario.metrics.reTurnVariantDifficultyAccounting.base} -> final ${scenario.metrics.reTurnVariantDifficultyAccounting.final} RE/turn (delta ${scenario.metrics.reTurnVariantDifficultyAccounting.delta}); residuals ${(scenario.metrics.reTurnVariantDifficultyAccounting.contributions ?? []).map((entry) => `${entry.id} ${entry.delta >= 0 ? "+" : ""}${entry.delta}RE/t [${entry.kind}]${Number.isFinite(entry.legacyFitPoints) ? ` from ${entry.legacyFitPoints} legacy fit pt` : ""}`).join(", ") || "none"}; mechanically represented ${(scenario.metrics.reTurnVariantDifficultyAccounting.mechanicalRules ?? []).map((entry) => `${entry.id} (${entry.note})`).join(", ") || "none"}; bridge ${scenario.metrics.reTurnVariantDifficultyAccounting.fitPointsPerRE ?? RE_TURN_DIFFICULTY_FIT_POINTS_PER_RE} fit pt/RE-turn`
+      : "RE-turn variant accounting v49de: n/a",
     reDifficultyShadow?.active
-      ? `RE-turn difficulty v49dc OBSERVATIONAL: completed effective RE minus programmed-register tempo minus lost-register tempo, normalized by programming turns (not register count); occupancy-weighted mean ${reDifficultyShadow.expectedMeanTurnBurdenRE}RE/turn, +turn-p${Math.round((reDifficultyShadow.tailQuantile ?? 0.75) * 100)} peak(${reDifficultyShadow.routePeakWeight}) -> ${reDifficultyShadow.expectedPeakAdjustedTurnBurdenRE}, +likely-start p${Math.round((reDifficultyShadow.tailQuantile ?? 0.75) * 100)} tail ${reDifficultyShadow.likelyStartTailTurnBurdenRE}(${reDifficultyShadow.courseTailWeight}) -> composite ${reDifficultyShadow.courseTurnDifficultyRE}; occupancy ${reDifficultyShadow.occupancyMass}/${reDifficultyShadow.playerCount} across ${reDifficultyShadow.startCount} start(s), route-mixture entries ${reDifficultyShadow.routeMixtureEntryCount} (${reDifficultyShadow.averageRouteFamiliesPerStart}/start); legacy ${reDifficultyShadow.legacyDifficultyRaw} = ${reDifficultyShadow.legacyDifficultyLabel}; current forecast uncertainty ${reDifficultyShadow.currentForecastEquivalentActions} equivalent register(s); behavior unchanged`
-      : `RE-turn difficulty v49dc OBSERVATIONAL: ${reDifficultyShadow?.reason ?? "n/a"}`,
-    `RE-turn tier migration v49dc: production thresholds remain UNCALIBRATED; requested legacy tiers are NOT calibration truth; Dev calibration uses only Any-difficulty candidate samples; future Beginner < Intermediate < Advanced < Brutal bands are non-overlapping, Advanced bounded above, Brutal exclusive top; legacy difficultyRaw still owns production acceptance`,
+      ? `RE-turn difficulty v49de PRODUCTION: completed effective RE minus programmed-register tempo minus lost-register tempo, normalized by programming turns; occupancy-weighted mean ${reDifficultyShadow.expectedMeanTurnBurdenRE}RE/turn, +turn-p${Math.round((reDifficultyShadow.tailQuantile ?? 0.75) * 100)} peak(${reDifficultyShadow.routePeakWeight}) -> ${reDifficultyShadow.expectedPeakAdjustedTurnBurdenRE}, +likely-start p${Math.round((reDifficultyShadow.tailQuantile ?? 0.75) * 100)} tail ${reDifficultyShadow.likelyStartTailTurnBurdenRE}(${reDifficultyShadow.courseTailWeight}) -> base ${reDifficultyShadow.courseTurnDifficultyRE}, variant-final ${reDifficultyShadow.productionFinalTurnRE}; occupancy ${reDifficultyShadow.occupancyMass}/${reDifficultyShadow.playerCount} across ${reDifficultyShadow.startCount} start(s), route-mixture entries ${reDifficultyShadow.routeMixtureEntryCount} (${reDifficultyShadow.averageRouteFamiliesPerStart}/start); production replay ${Number.isFinite(reDifficultyShadow.computeMs) ? `${reDifficultyShadow.computeMs}ms` : "n/a"}; current forecast uncertainty remains separate at ${reDifficultyShadow.currentForecastEquivalentActions} equivalent register(s)`
+      : `RE-turn difficulty v49de PRODUCTION: ${reDifficultyShadow?.reason ?? "n/a"}`,
+    `RE-turn tier ownership v49dp: Beginner [0,4.0), Intermediate [4.0,4.8), Advanced [4.8,5.8), Robots. Must. Die. [5.8,+inf) RE/turn; Beginner ceiling tightened from 4.3 after browser/visual calibration; non-overlapping, Advanced bounded, R.M.D. exclusive top; fit bridge ${RE_TURN_DIFFICULTY_FIT_POINTS_PER_RE} points per RE/turn; legacy requested-tier labels were not calibration truth`,
     reDifficultyCandidatePoolShadow?.active
-      ? `RE-turn difficulty candidate pool v49dc OBSERVATIONAL: ${reDifficultyCandidatePoolShadow.candidateCount} acceptable candidate(s), composite range ${reDifficultyCandidatePoolShadow.minComposite}..${reDifficultyCandidatePoolShadow.maxComposite}, selected ${reDifficultyCandidatePoolShadow.selectedComposite ?? "n/a"}; ${(reDifficultyCandidatePoolShadow.entries ?? []).map((entry) => `c${entry.candidate}${entry.selected ? "*" : ""} fit${entry.fitScore} legacy${entry.legacyDifficultyRaw}/${entry.legacyDifficultyLabel} turn${entry.shadow.courseTurnDifficultyRE} mean${entry.shadow.expectedMeanTurnBurdenRE} peak${entry.shadow.expectedPeakAdjustedTurnBurdenRE} tail${entry.shadow.likelyStartTailTurnBurdenRE} len${entry.lengthRaw} unc${entry.currentForecastEquivalentActions} starts${entry.usableStarts}`).join(" | ")}; generation selection unchanged, no fresh pathfinding`
-      : `RE-turn difficulty candidate pool v49dc OBSERVATIONAL: ${reDifficultyCandidatePoolShadow?.reason ?? "n/a"}`,
+      ? `RE-turn difficulty candidate pool v49de PRODUCTION: ${reDifficultyCandidatePoolShadow.candidateCount} acceptable candidate(s), final range ${reDifficultyCandidatePoolShadow.minComposite}..${reDifficultyCandidatePoolShadow.maxComposite}, selected ${reDifficultyCandidatePoolShadow.selectedComposite ?? "n/a"}; ${(reDifficultyCandidatePoolShadow.entries ?? []).map((entry) => `c${entry.candidate}${entry.selected ? "*" : ""} fit${entry.fitScore} turn${entry.difficultyTurnRE}/${entry.difficultyLabel} base${entry.shadow.courseTurnDifficultyRE} legacy${entry.legacyDifficultyRaw}/${entry.legacyDifficultyLabel} len${entry.lengthRaw} unc${entry.currentForecastEquivalentActions} starts${entry.usableStarts}`).join(" | ")}; metrics reused from production classification, no fresh route replay`
+      : `RE-turn difficulty candidate pool v49de PRODUCTION: ${reDifficultyCandidatePoolShadow?.reason ?? "n/a"}`,
     scenario.metrics.programmingPressure
       ? `Programming pressure v38: combined ${scenario.metrics.programmingPressure.planningPressure}, timed ${scenario.metrics.programmingPressure.timedPressure}; hazard ${scenario.metrics.programmingPressure.hazardPressure} (${scenario.metrics.programmingPressure.hazardPerRegister}/reg), traffic ${scenario.metrics.programmingPressure.trafficPressure} (${scenario.metrics.programmingPressure.trafficPerRegister}/reg), control ${scenario.metrics.programmingPressure.controlPressure} (${scenario.metrics.programmingPressure.controlPerRegister}/reg), cards ${scenario.metrics.programmingPressure.cardPressure}; avg gears ${scenario.metrics.programmingPressure.averageGearTurns ?? 0}, conveyor turns ${scenario.metrics.programmingPressure.averageConveyorTurns ?? 0}, forced spaces ${scenario.metrics.programmingPressure.averageForcedSpaces ?? 0}`
       : "Programming pressure v38: n/a",
     `Length raw: ${scenario.metrics.lengthRaw}`,
     `Length inputs: flags ${scenario.metrics.lengthMetrics.inputs.flagCount}, players ${scenario.metrics.lengthMetrics.inputs.playerCount}, actionScore ${scenario.metrics.lengthMetrics.inputs.totalActionLoad}, distanceScore ${scenario.metrics.lengthMetrics.inputs.totalRouteDistance}, congestion ${scenario.metrics.lengthMetrics.inputs.totalCongestion}, flagArea ${scenario.metrics.lengthMetrics.inputs.flagAreaScore}, totalDifficulty ${scenario.metrics.lengthMetrics.inputs.totalDifficulty}`,
-    `Length contributions: flags ${scenario.metrics.lengthMetrics.contributions.checkpointLoad}, players ${scenario.metrics.lengthMetrics.contributions.playerLoad}, actions ${scenario.metrics.lengthMetrics.contributions.actionLoad}, uncertainty ${scenario.metrics.lengthMetrics.contributions.forecastUncertaintyLoad ?? 0}, distance ${scenario.metrics.lengthMetrics.contributions.distanceLoad}, congestion ${scenario.metrics.lengthMetrics.contributions.congestionLoad} (weight ${scenario.metrics.lengthMetrics.contributions.congestionWeight}; harshness ${scenario.metrics.lengthMetrics.contributions.boardHarshness}), flagArea ${scenario.metrics.lengthMetrics.contributions.flagAreaLoad}, difficulty ${scenario.metrics.lengthMetrics.contributions.difficultyLoad}, moving-target residual ${scenario.metrics.lengthMetrics.contributions.movingTargetLoad} (legacy estimate ${scenario.metrics.lengthMetrics.contributions.movingTargetLegacyEstimate ?? 0}), act-fast ${scenario.metrics.lengthMetrics.contributions.actFastLoad}, reshuffle ${scenario.metrics.lengthMetrics.contributions.lessForeshadowingLoad ?? 0}, shared-deck ${scenario.metrics.lengthMetrics.contributions.sharedDeckLoad ?? 0}`,
-    `Length uncertainty: pre-adjustment ${scenario.metrics.lengthMetrics.contributions.preUncertaintyRaw ?? scenario.metrics.lengthRaw}, forecast confidence mean/min/end ${scenario.metrics.lengthMetrics.inputs.forecastConfidenceMean ?? 1}/${scenario.metrics.lengthMetrics.inputs.forecastConfidenceMin ?? 1}/${scenario.metrics.lengthMetrics.inputs.forecastConfidenceEnd ?? 1}, low-confidence registers ${scenario.metrics.lengthMetrics.inputs.forecastUncertainRegisters ?? 0}/${scenario.metrics.lengthMetrics.inputs.forecastTotalRegisters ?? 0} avg below ${scenario.metrics.lengthMetrics.contributions.forecastSpeculativeThreshold ?? LENGTH_FORECAST_SPECULATIVE_CONFIDENCE}, equivalent extra actions ${scenario.metrics.lengthMetrics.contributions.forecastEquivalentActions ?? 0}, smooth uncertainty exponent ${scenario.metrics.lengthMetrics.forecastLengthProfile?.exponent ?? LENGTH_FORECAST_UNCERTAINTY_EXPONENT}, max per-register action uplift ${Math.round((scenario.metrics.lengthMetrics.contributions.forecastMaxActionUplift ?? LENGTH_FORECAST_MAX_ACTION_UPLIFT) * 100)}%`,
+    `Length contributions: flags ${scenario.metrics.lengthMetrics.contributions.checkpointLoad}, players ${scenario.metrics.lengthMetrics.contributions.playerLoad}, expected-play nominal ${scenario.metrics.lengthMetrics.contributions.actionLoad}, recovery ${scenario.metrics.lengthMetrics.contributions.forecastUncertaintyLoad ?? 0}, distance ${scenario.metrics.lengthMetrics.contributions.distanceLoad} [legacy ${scenario.metrics.lengthMetrics.contributions.legacyDistanceLoad ?? 0}], congestion ${scenario.metrics.lengthMetrics.contributions.congestionLoad} [legacy ${scenario.metrics.lengthMetrics.contributions.legacyCongestionLoad ?? 0}; old weight ${scenario.metrics.lengthMetrics.contributions.congestionWeight}; harshness ${scenario.metrics.lengthMetrics.contributions.boardHarshness}], flagArea ${scenario.metrics.lengthMetrics.contributions.flagAreaLoad}, difficulty ${scenario.metrics.lengthMetrics.contributions.difficultyLoad}, moving-target residual ${scenario.metrics.lengthMetrics.contributions.movingTargetLoad} (legacy estimate ${scenario.metrics.lengthMetrics.contributions.movingTargetLegacyEstimate ?? 0}), act-fast ${scenario.metrics.lengthMetrics.contributions.actFastLoad}, reshuffle ${scenario.metrics.lengthMetrics.contributions.lessForeshadowingLoad ?? 0}, shared-deck ${scenario.metrics.lengthMetrics.contributions.sharedDeckLoad ?? 0}`,
+    `Length extent v49ds PRODUCTION: nominal ${scenario.metrics.lengthMetrics.inputs.totalActionLoad} reg + RE-native recovery ${scenario.metrics.lengthMetrics.contributions.forecastEquivalentActions ?? 0} = ${scenario.metrics.lengthMetrics.contributions.productionExpectedPlayRegisters ?? "n/a"} expected-play reg / ${scenario.metrics.lengthMetrics.contributions.productionExpectedPlayProgrammingTurns ?? "n/a"} turns; transitional scale ${scenario.metrics.lengthMetrics.contributions.productionExpectedPlayRawPointsPerRegister ?? LENGTH_EXPECTED_PLAY_RAW_POINTS_PER_REGISTER} raw/reg; route distance and standalone congestion have NO independent production vote; legacy distance/congestion ${scenario.metrics.lengthMetrics.contributions.legacyDistanceLoad ?? 0}/${scenario.metrics.lengthMetrics.contributions.legacyCongestionLoad ?? 0} diagnostic only; legacy confidence forecast +${scenario.metrics.lengthMetrics.contributions.legacyForecastEquivalentActions ?? scenario.metrics.lengthMetrics.forecastLengthProfile?.uncertaintyEquivalentActions ?? 0} reg diagnostic only`,
+    scenario.metrics.lengthMetrics.ownerObservationV49dl?.active
+      ? `Length owner v49dl ROUTING OBSERVATION: nominal ${scenario.metrics.lengthMetrics.ownerObservationV49dl.nominalRegisters} register(s); legacy confidence forecast +${scenario.metrics.lengthMetrics.ownerObservationV49dl.intrinsicForecastExtraRegisters} => ${scenario.metrics.lengthMetrics.ownerObservationV49dl.baselineExpectedProgrammingTurns} turn(s) diagnostic comparison; RE-native routing confidence mean/end ${scenario.metrics.lengthMetrics.ownerObservationV49dl.reNativeRoutingUncertainty.averageConfidence}/${scenario.metrics.lengthMetrics.ownerObservationV49dl.reNativeRoutingUncertainty.endConfidence}, end effective horizon ${scenario.metrics.lengthMetrics.ownerObservationV49dl.reNativeRoutingUncertainty.endEffectiveHorizonRE} register-equivalent unit(s), chronological adverse ${scenario.metrics.lengthMetrics.ownerObservationV49dl.reNativeRoutingUncertainty.chronologicalAdverseRE}RE, damage pressure ${scenario.metrics.lengthMetrics.ownerObservationV49dl.reNativeRoutingUncertainty.chronologicalDamagePressureRE}RE; optional reroute effort ${scenario.metrics.lengthMetrics.ownerObservationV49dl.reNativeRoutingUncertainty.baseEffortScale} -> ${scenario.metrics.lengthMetrics.ownerObservationV49dl.reNativeRoutingUncertainty.damageModeratedEffortScale}, low-confidence restore ceiling ${scenario.metrics.lengthMetrics.ownerObservationV49dl.reNativeRoutingUncertainty.damageEffortCeiling}; NO independent hazard/board-chaos/interaction decay in candidate`
+      : `Length owner v49dl ROUTING OBSERVATION: ${scenario.metrics.lengthMetrics.ownerObservationV49dl?.reason ?? "n/a"}`,
+    scenario.metrics.lengthMetrics.ownerObservationV49dl?.active
+      ? `Play-time calibration v49dl / extent owner v49ds PRODUCTION: adverse RE ${scenario.metrics.lengthMetrics.ownerObservationV49dl.playTimeAmplification.totalAdverseRE} [intrinsic+lost ${scenario.metrics.lengthMetrics.ownerObservationV49dl.playTimeAmplification.chronologicalPlayTimeAdverseRE}, downstream-control ${scenario.metrics.lengthMetrics.ownerObservationV49dl.playTimeAmplification.downstreamTrafficControlAdverseRE}] over nominal ${scenario.metrics.lengthMetrics.ownerObservationV49dl.nominalRegisters} => ratio ${scenario.metrics.lengthMetrics.ownerObservationV49dl.playTimeAmplification.adverseRatio}, response ${scenario.metrics.lengthMetrics.ownerObservationV49dl.playTimeAmplification.responseShape}, horizon gate ${scenario.metrics.lengthMetrics.ownerObservationV49dl.playTimeAmplification.horizonActivation}, multiplier ${scenario.metrics.lengthMetrics.ownerObservationV49dl.playTimeAmplification.multiplier} => ${scenario.metrics.lengthMetrics.ownerObservationV49dl.playTimeAmplification.expectedPlayRegisters} expected reg / ${scenario.metrics.lengthMetrics.ownerObservationV49dl.playTimeAmplification.expectedPlayProgrammingTurns} turn(s); expected-play registers own full production route/play extent; distance/congestion independent votes OFF; final downstream wall-clock phase factors still pending; planningPressure NOT an owner`
+      : `Play-time calibration v49dl OBSERVATIONAL: n/a`,
+    lengthOwnerCandidatePoolShadow?.active
+      ? `Length owner candidate pool v49dl/v49ds: ${lengthOwnerCandidatePoolShadow.candidateCount} acceptable candidate(s); ${(lengthOwnerCandidatePoolShadow.entries ?? []).map((entry) => `c${entry.candidate}${entry.selected ? "*" : ""} req${entry.requestedLength} extentRaw${entry.currentLengthRaw}/${entry.currentLengthLabel} nom${entry.nominalRegisters} REconf${entry.reNativeForecastConfidenceMean}/${entry.reNativeForecastConfidenceEnd} adverse${entry.playTimeAdverseRE}RE ratio${entry.playTimeAdverseRatio} resp${entry.playTimeResponseShape} gate${entry.playTimeHorizonActivation} ×play${entry.playTimeMultiplier} => ${entry.expectedPlayProgrammingTurns}t/${entry.referenceFourPlayerLengthBand} ×player${entry.playerWallClockMultiplierIndex}`).join(" | ")}; no new pathfinding; expected-play registers are the production route/play extent owner; distance/congestion independent votes OFF; downstream wall-clock phase ownership remains pending`
+      : `Length owner candidate pool v49dl/v49ds: ${lengthOwnerCandidatePoolShadow?.reason ?? "n/a"}`,
     `Variant length accounting v38: ${(scenario.metrics.lengthMetrics.variantLengthContributions ?? []).map((entry) => `${entry.id} ${entry.delta >= 0 ? "+" : ""}${entry.delta} [${entry.kind}]`).join(", ") || "none"}; method ${scenario.metrics.lengthMetrics.method ?? "n/a"}`,
     `Moving target profile: active ${scenario.movingTargetStats?.activeCount ?? 0}, pathTiles ${scenario.movingTargetStats?.totalPathLength ?? 0}, uniqueCoverage ${scenario.movingTargetStats?.coverageTiles ?? 0}, turns ${scenario.movingTargetStats?.totalTurns ?? 0}, fastSegments ${scenario.movingTargetStats?.fastSegments ?? 0}, difficultyBonus ${scenario.movingTargetStats?.difficultyBonus ?? 0}, lengthBonus ${scenario.movingTargetStats?.lengthBonus ?? 0}`,
     `Moving target volatility penalty: ${scenario.metrics.movingTargetVolatilityPenalty ?? 0}`,
@@ -20734,8 +21684,8 @@ function buildScenarioReport(scenario, selectedLegIndices = null) {
       ? `Normal start balance v49bq: RE-native iterative, pruned ${(summary.normalStartBalance.pressurePruned ?? []).length ? (summary.normalStartBalance.pressurePruned ?? []).map((item) => `#${item.index + 1}(RE outlier; z ${item.diagnostics?.scoreZ ?? "n/a"}; ΔRE ${item.diagnostics?.scoreDelta ?? "n/a"}; regs ${item.actions ?? "n/a"}; pass ${item.pass ?? "n/a"})`).join(", ") : "none"}, retained ${summary.normalStartBalance.retainedCount ?? scenario.metrics?.usableStarts?.length ?? "n/a"}, effectiveRE ${summary.normalStartBalance.retainedEffectiveREMin ?? summary.normalStartBalance.retainedScoreMin ?? "n/a"}..${summary.normalStartBalance.retainedEffectiveREMax ?? summary.normalStartBalance.retainedScoreMax ?? "n/a"}, RE stddev ${summary.normalStartBalance.balanceStdDevBefore ?? "n/a"}->${summary.normalStartBalance.balanceStdDevAfter ?? "n/a"}/${summary.normalStartBalance.balanceStdDevLimit ?? NORMAL_EFFECTIVE_RE_FAIRNESS_STDDEV_LIMIT}, action pruning OFF, RE-balance pruning ON only above player floor, duration guardrail ${(summary.normalStartBalance.durationGuardrail?.min ?? "n/a")}..${(summary.normalStartBalance.durationGuardrail?.max ?? "n/a")} regs (range ${summary.normalStartBalance.durationGuardrail?.range ?? "n/a"}/${summary.normalStartBalance.durationGuardrail?.allowedRange ?? "n/a"}; ${summary.normalStartBalance.durationGuardrail?.violation ? "VIOLATION" : "pass"}), worst remaining RE z ${summary.normalStartBalance.worstRemainingScoreZ ?? "n/a"}, traffic recomputations ${summary.normalStartBalance.trafficRecomputations ?? 0}, remainingBad ${(summary.normalStartBalance.remainingBadStarts ?? []).length}, floor ${summary.normalStartBalance.retainedCount ?? "n/a"}/${summary.normalStartBalance.playerFloor ?? scenario.playerCount ?? "?"}${summary.normalStartBalance.floorReached ? " reached" : ""}, residual scorer penalty ${summary.normalStartBalance.residualSelectionPenalty ?? 0}, hard-fail ${summary.normalStartBalance.belowPlayerFloor ? "yes" : "no"}`
       : "Normal start balance: n/a",
     reDifficultyShadow?.active
-      ? `RE-turn difficulty starts v49dc: ${(reDifficultyShadow.perStart ?? []).map((entry) => `#${entry.index + 1} occ${Number(entry.occupancy).toFixed(3)} mix${entry.routeCount} eff${Number(entry.effectiveRE).toFixed(2)}RE regs${Number(entry.programmedRegisters).toFixed(2)} turns${Number(entry.programmingTurns).toFixed(2)} lost${Number(entry.lostRegisterTempoRE).toFixed(2)} burden${Number(entry.burdenRE).toFixed(2)} meanTurn${Number(entry.meanTurnBurdenRE).toFixed(3)} peakTurn${Number(entry.turnTailBurdenRE).toFixed(3)} composite${Number(entry.routeTurnDifficultyRE).toFixed(3)}`).join(" | ")}`
-      : `RE-turn difficulty starts v49dc: ${reDifficultyShadow?.reason ?? "n/a"}`,
+      ? `RE-turn difficulty starts v49de: ${(reDifficultyShadow.perStart ?? []).map((entry) => `#${entry.index + 1} occ${Number(entry.occupancy).toFixed(3)} mix${entry.routeCount} eff${Number(entry.effectiveRE).toFixed(2)}RE regs${Number(entry.programmedRegisters).toFixed(2)} turns${Number(entry.programmingTurns).toFixed(2)} lost${Number(entry.lostRegisterTempoRE).toFixed(2)} burden${Number(entry.burdenRE).toFixed(2)} meanTurn${Number(entry.meanTurnBurdenRE).toFixed(3)} peakTurn${Number(entry.turnTailBurdenRE).toFixed(3)} composite${Number(entry.routeTurnDifficultyRE).toFixed(3)}`).join(" | ")}`
+      : `RE-turn difficulty starts v49de: ${reDifficultyShadow?.reason ?? "n/a"}`,
     scenario.movingTargetReentryMarkers?.length
       ? `Moving target re-entry: ${scenario.movingTargetReentryMarkers.map((marker) => `${marker.label}(${marker.x},${marker.y})`).join(", ")}`
       : "Moving target re-entry: none",
@@ -20750,8 +21700,11 @@ function buildScenarioReport(scenario, selectedLegIndices = null) {
     `Course action score: ${summary.actionScore}`,
     `Flag area score: ${summary.flagAreaScore}`,
     currentNormalRouteModel
-      ? "Traffic scoring: confidence-weighted full-course occupancy/laser/proximity model"
+      ? "Traffic scoring: RE-native confidence-weighted full-course occupancy/laser/proximity model"
       : `Average traffic penalty: ${summary.averageTrafficPenalty}`,
+    currentNormalRouteModel
+      ? "Traffic forecast confidence v49dm LIVE: elapsed register horizon + intrinsic adverse RE chronology (card plausibility, damage-card supply, clog/control, intrinsic mental); same-epoch traffic RE excluded to prevent circularity; raw hazard/interaction/board-chaos confidence decay OFF; damage pressure can restore low-confidence optional reroute effort only toward 0.50, never confidence itself."
+      : "Traffic forecast confidence v49dm LIVE: n/a",
     currentNormalRouteModel
       ? (() => {
         const audit = summarizeTrafficOwnershipAuditSafe();
@@ -20767,7 +21720,7 @@ function buildScenarioReport(scenario, selectedLegIndices = null) {
         ? `Start full-course continuation: mean ${summary.courseContinuationMean}, weighted into start scores`
         : "Start full-course continuation: n/a"),
     currentNormalRouteModel
-      ? `Traffic feedback: epochs ${contextualCache?.trafficEpochsExecuted ?? 0}, demand ${contextualCache?.trafficAlternateDemandStarts ?? 0} starts/${contextualCache?.trafficAlternateDemandLegs ?? 0} legs (${contextualCache?.trafficAlternateEffectiveDemandLegs ?? 0} effective/${contextualCache?.trafficAlternateExploratoryDemandLegs ?? 0} exploratory), probe-stops ${contextualCache?.trafficAlternateCachedProbeStops ?? 0}, escalations ${contextualCache?.trafficAlternateEscalations ?? 0}, bounded searches ${contextualCache?.trafficAlternateNewSearches ?? 0}, hotspot searches ${contextualCache?.trafficAlternateHotspotLocalSearches ?? 0}, exact checks ${contextualCache?.trafficAlternateExactChecks ?? 0}, low-gain rejects ${contextualCache?.trafficAlternateLowGainRejects ?? 0}, duplicate rejects ${contextualCache?.trafficAlternateDuplicateRejects ?? 0}, alternate effort mean/min ${contextualCache?.trafficAlternateAverageEffortScale ?? 1}/${contextualCache?.trafficAlternateMinimumEffortScale ?? 1}, candidates ${contextualCache?.trafficAlternateCandidatesAdded ?? 0}, final-selection switches ${summary.fullCourseTraffic?.routeSwitches ?? 0}, effective/raw avg ${summary.fullCourseTraffic?.averagePenalty ?? 0}/${summary.fullCourseTraffic?.averageRawPenalty ?? 0}, confidence mean/min ${summary.fullCourseTraffic?.averageForecastConfidence ?? 1}/${summary.fullCourseTraffic?.minimumForecastConfidence ?? 1}; search priority ${((contextualCache?.trafficAlternateSearchTrace ?? []).map((entry) => `s${entry.startIndex}:L${(entry.legIndex ?? 0) + 1}@p${entry.pivotIndex}/${entry.hotspotOwner ?? "?"}/T${entry.hotspotTurn ?? "?"}/${entry.hotspotPressureRE ?? 0}RE`).join(", ")) || "none"}; exact gains ${((contextualCache?.trafficAlternateGainTrace ?? []).map((entry) => `s${entry.startIndex}:L${(entry.legIndex ?? 0) + 1} ${entry.gain >= 0 ? "+" : ""}${entry.gain} vs ${entry.minimumUsefulGain}`).join(", ")) || "none"}`
+      ? `Traffic feedback: epochs ${contextualCache?.trafficEpochsExecuted ?? 0}, demand ${contextualCache?.trafficAlternateDemandStarts ?? 0} starts/${contextualCache?.trafficAlternateDemandLegs ?? 0} legs (${contextualCache?.trafficAlternateEffectiveDemandLegs ?? 0} effective/${contextualCache?.trafficAlternateExploratoryDemandLegs ?? 0} exploratory/${contextualCache?.trafficAlternatePressureDemandLegs ?? 0} damage-pressure), probe-stops ${contextualCache?.trafficAlternateCachedProbeStops ?? 0}, escalations ${contextualCache?.trafficAlternateEscalations ?? 0}, bounded searches ${contextualCache?.trafficAlternateNewSearches ?? 0}, hotspot searches ${contextualCache?.trafficAlternateHotspotLocalSearches ?? 0}, exact checks ${contextualCache?.trafficAlternateExactChecks ?? 0}, low-gain rejects ${contextualCache?.trafficAlternateLowGainRejects ?? 0}, duplicate rejects ${contextualCache?.trafficAlternateDuplicateRejects ?? 0}, alternate effort mean/min ${contextualCache?.trafficAlternateAverageEffortScale ?? 1}/${contextualCache?.trafficAlternateMinimumEffortScale ?? 1}, candidates ${contextualCache?.trafficAlternateCandidatesAdded ?? 0}, final-selection switches ${summary.fullCourseTraffic?.routeSwitches ?? 0}, effective/raw avg ${summary.fullCourseTraffic?.averagePenalty ?? 0}/${summary.fullCourseTraffic?.averageRawPenalty ?? 0}, confidence mean/min ${summary.fullCourseTraffic?.averageForecastConfidence ?? 1}/${summary.fullCourseTraffic?.minimumForecastConfidence ?? 1}; search priority ${((contextualCache?.trafficAlternateSearchTrace ?? []).map((entry) => `s${entry.startIndex}:L${(entry.legIndex ?? 0) + 1}@p${entry.pivotIndex}/${entry.hotspotOwner ?? "?"}/T${entry.hotspotTurn ?? "?"}/${entry.hotspotPressureRE ?? 0}RE`).join(", ")) || "none"}; exact gains ${((contextualCache?.trafficAlternateGainTrace ?? []).map((entry) => `s${entry.startIndex}:L${(entry.legIndex ?? 0) + 1} ${entry.gain >= 0 ? "+" : ""}${entry.gain} vs ${entry.minimumUsefulGain}`).join(", ")) || "none"}`
       : (summary.fullCourseTraffic
         ? `Full-course route pressure: passes ${summary.fullCourseTraffic.passes}, switches ${summary.fullCourseTraffic.routeSwitches}, avgPenalty ${summary.fullCourseTraffic.averagePenalty}`
         : "Full-course route pressure: n/a"),
@@ -20790,7 +21743,7 @@ function buildScenarioReport(scenario, selectedLegIndices = null) {
       })()
       : "Traffic route-mixture ownership v49dc LIVE: n/a",
     currentNormalRouteModel
-      ? "Traffic route-switch objective: intentional legacy pathfinder route.score + traffic.total (+4% raw-gap stability) for switching among already-discovered candidates; route-family occupancy attractiveness remains completed effective RE."
+      ? `Traffic route-switch objective v49dn LIVE: completed effective RE for switching among already-discovered candidates; minimum useful gain ${(NORMAL_TRAFFIC_ALTERNATE_MIN_GAIN / 6.4).toFixed(4)}RE (converted from the historical score threshold); legacy route.score + traffic.total and +4% raw-gap stability are comparator-only, not selection owners; route-family occupancy attractiveness remains completed effective RE.`
       : "Traffic route-switch objective: n/a",
     currentNormalRouteModel
       ? (() => {
@@ -21018,7 +21971,7 @@ function buildScenarioReport(scenario, selectedLegIndices = null) {
   };
   lines.push(
     "",
-    `Dev diagnostics timing v49dc: deep report ${formatDevMilliseconds(reportTotalMs)}; selected RE-turn shadow ${formatDevMilliseconds(devTiming.reDifficultyMs)}; candidate-pool RE-turn shadow ${formatDevMilliseconds(devTiming.reDifficultyPoolMs)}; total RE-turn route replay ${formatDevMilliseconds(devTiming.reDifficultyReplayMs)}; intrinsic decomposition replay ${formatDevMilliseconds(devTiming.reDifficultyDecompositionReplayMs)}; authoritative RE ledgers ${formatDevMilliseconds(devTiming.ledgerMs)}; cheap-card comparison ${formatDevMilliseconds(devTiming.cheapShadowMs)}; damage foundation ${formatDevMilliseconds(devTiming.damageFoundationMs)}.`
+    `Dev diagnostics timing v49de: deep report ${formatDevMilliseconds(reportTotalMs)}; RE-turn production metric reuse ${formatDevMilliseconds(devTiming.reDifficultyMs)}; candidate-pool metric reuse ${formatDevMilliseconds(devTiming.reDifficultyPoolMs)}; Dev-added RE-turn route replay ${formatDevMilliseconds(devTiming.reDifficultyReplayMs)}; authoritative RE ledgers ${formatDevMilliseconds(devTiming.ledgerMs)}; cheap-card comparison ${formatDevMilliseconds(devTiming.cheapShadowMs)}; damage foundation ${formatDevMilliseconds(devTiming.damageFoundationMs)}.`
   );
 
   return lines.map(roundCourseEvaluationNumbers).join("\n");
@@ -25085,6 +26038,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
           actFast,
           actFastMode,
           flagCount,
+          recoveryRule,
           classicSharedDeck,
           criticalSpam,
           criticalHaywire,
@@ -25109,7 +26063,9 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
           checkpoints: playableCheckpoints,
           tileMap: scenarioTileMap,
           goalTileMap,
-          skipCompetitiveBlockImpact: competitiveMode
+          rebootTokens,
+          skipCompetitiveBlockImpact: competitiveMode,
+          skipProductionDifficulty: true
         });
         const grossMismatch = getGrossCourseMismatch(provisionalMetrics, generationPreferences);
 
@@ -25323,6 +26279,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       actFast,
       actFastMode,
       flagCount,
+      recoveryRule,
       classicSharedDeck,
       movingTargets
     }, {
@@ -25334,6 +26291,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       activeStarts,
       tileMap: scenarioTileMap,
       goalTileMap,
+      rebootTokens,
       boardCleanupAuditTrail
     });
     await reportStage("Final classification complete — preparing course result", evaluationsUsed);
@@ -25579,6 +26537,8 @@ function buildScenarioPresentationSnapshot(scenario) {
   if (!metrics) return null;
   const lengthMetrics = metrics.lengthMetrics ?? {};
   return {
+    difficultyTurnRE: metrics.difficultyTurnRE ?? null,
+    difficultyTurnBaseRE: metrics.difficultyTurnBaseRE ?? null,
     difficultyRaw: metrics.difficultyRaw ?? null,
     lengthRaw: metrics.lengthRaw ?? null,
     lengthFitRaw: metrics.lengthFitRaw ?? null,
@@ -25668,6 +26628,8 @@ function getSavedGenerationDisposition(snapshot = {}) {
 
 function serializeScenario(scenario) {
   return {
+    savedScenarioApp: SAVED_SCENARIO_APP_ID,
+    savedScenarioSchema: SAVED_SCENARIO_SCHEMA_VERSION,
     preferences: scenario.preferences,
     effectiveTargetPreferences: scenario.effectiveTargetPreferences ?? null,
     actFast: scenario.actFast,
@@ -25768,8 +26730,29 @@ function saveScenarioSnapshot(scenario) {
 function loadScenarioSnapshot() {
   try {
     const raw = localStorage.getItem(SAVED_SCENARIO_KEY);
-    return raw ? JSON.parse(raw) : null;
+    if (!raw) {
+      return null;
+    }
+
+    const snapshot = JSON.parse(raw);
+    const compatible = (
+      snapshot?.savedScenarioApp === SAVED_SCENARIO_APP_ID &&
+      snapshot?.savedScenarioSchema === SAVED_SCENARIO_SCHEMA_VERSION
+    );
+    if (!compatible) {
+      localStorage.removeItem(SAVED_SCENARIO_KEY);
+      showToast("Saved course was from an incompatible version and was removed.");
+      return null;
+    }
+
+    return snapshot;
   } catch {
+    try {
+      localStorage.removeItem(SAVED_SCENARIO_KEY);
+    } catch {
+      // ignore storage failures
+    }
+    showToast("Saved course data was invalid and was removed.");
     return null;
   }
 }
@@ -26367,7 +27350,8 @@ async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}) {
     pieceMap,
     checkpoints: playableCheckpoints,
     tileMap,
-    goalTileMap
+    goalTileMap,
+    rebootTokens
   });
   const hydrationPresentationComplete = isHydratedPresentationAnalysisComplete(
     sequence,
@@ -27611,7 +28595,11 @@ function summarizeCalibrationScenario(assets, scenario) {
       softFailures: [...(metrics.softFailures ?? [])],
       softFitLimit: Number.isFinite(Number(metrics.softFitLimit)) ? Number(metrics.softFitLimit) : null,
       fitComponents: metrics.fitComponents ? { ...metrics.fitComponents } : null,
+      // Construction calibration still records the historical raw scalar until
+      // the later guidance-model retraining pass. Record the new semantic owner
+      // beside it so future calibration can transition without losing evidence.
       difficultyRaw: Number.isFinite(Number(metrics.difficultyRaw)) ? Number(metrics.difficultyRaw) : null,
+      difficultyTurnRE: Number.isFinite(Number(metrics.difficultyTurnRE)) ? Number(metrics.difficultyTurnRE) : null,
       lengthRaw: Number.isFinite(Number(metrics.lengthRaw)) ? Number(metrics.lengthRaw) : null,
       difficultyFit: Number.isFinite(Number(metrics.difficultyFit)) ? Number(metrics.difficultyFit) : null,
       lengthFit: Number.isFinite(Number(metrics.lengthFit)) ? Number(metrics.lengthFit) : null,
@@ -27945,7 +28933,8 @@ function analyzeCalibrationPlacements(assets, sourceScenario, placements, option
     pieceMap,
     checkpoints,
     tileMap,
-    goalTileMap
+    goalTileMap,
+    rebootTokens
   });
   const telemetry = getAnalysisTelemetrySnapshotSafe();
   const syntheticScenario = {
@@ -28554,4 +29543,4 @@ if (typeof document !== "undefined") {
   init().catch(console.error);
 
 }
-// VERSION END: v49dc-current-owner-reporting-cleanup
+// VERSION END: v49ds-re-native-expected-play-extent-production

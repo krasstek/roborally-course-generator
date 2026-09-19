@@ -1,4 +1,4 @@
-// VERSION START: v49bx-ablation-gated-board-cleanup
+// VERSION START: v49dg-re-turn-difficulty-semantics
 // Robo Rally Course Randomizer - player-facing course notes
 const notesCache = new WeakMap();
 
@@ -86,8 +86,12 @@ function getTargetMismatchFact(scenario, kind) {
   const guidanceOnly = isDifficulty
     ? Boolean(preferences.targetGuidanceOnlyDifficulty)
     : Boolean(preferences.targetGuidanceOnlyLength);
+  // Difficulty target mismatch follows the same completed-RE/turn value that
+  // owns production classification. Legacy difficultyRaw is intentionally not
+  // a player-facing semantic fallback; incompatible old saved snapshots are
+  // rejected at the saved-course schema boundary.
   const rawValue = Number(isDifficulty
-    ? metrics.difficultyRaw
+    ? metrics.difficultyTurnRE
     : (metrics.lengthFitRaw ?? metrics.lengthRaw));
   const fit = Number(isDifficulty ? metrics.difficultyFit : metrics.lengthFit) || 0;
   const fallbackDirection = isDifficulty
@@ -124,17 +128,10 @@ function getTargetMismatchFact(scenario, kind) {
   const classifierGross = isDifficulty
     ? Boolean(metrics.targetAcceptance?.grossDifficultyMismatch)
     : Boolean(metrics.targetAcceptance?.grossLengthMismatch);
-  // Legacy/saved presentations may predate targetAcceptance telemetry. Preserve
-  // the player-visible category semantics directly for the important cliff that
-  // motivated v49ag: Intermediate -> Robots. Must. Die. is never "somewhat".
-  const intermediateToBrutal = Boolean(
-    isDifficulty &&
-    requested === "moderate" &&
-    direction === "high" &&
-    Number.isFinite(rawValue) &&
-    rawValue >= 180
-  );
-  const strength = classifierGross || intermediateToBrutal || fit >= strongThreshold
+  // Production targetAcceptance already owns semantic cliff handling (including
+  // Intermediate -> Robots. Must. Die.). Course Notes consumes that result
+  // instead of duplicating a second legacy/raw difficulty classifier.
+  const strength = classifierGross || fit >= strongThreshold
     ? "a lot"
     : fit >= moderateThreshold
       ? "somewhat"
@@ -384,7 +381,7 @@ export function buildCourseNoteEvidence(scenario, fitNotes = []) {
 
   return {
     fitNotes: [...fitNotes],
-    difficultyRaw: scenario?.metrics?.difficultyRaw ?? 0,
+    difficultyTurnRE: scenario?.metrics?.difficultyTurnRE ?? null,
     difficultyFit: scenario?.metrics?.difficultyFit ?? 0,
     difficultyDirection: facts.targetMismatch.difficulty.direction,
     lengthFit: scenario?.metrics?.lengthFit ?? 0,
@@ -818,7 +815,7 @@ export function renderCourseNotes(concepts, evidence, options = {}) {
 export function buildCourseNotesHtml(scenario, fitNotes = [], options = {}) {
   if (!scenario) return "";
 
-  const cacheKey = "player-facing-shared-facts-v49p-restart";
+  const cacheKey = "player-facing-shared-facts-v49dg-re-turn-difficulty";
   let scenarioCache = notesCache.get(scenario);
   if (!scenarioCache) {
     scenarioCache = new Map();
@@ -840,4 +837,4 @@ export function clearCourseNotesCache(scenario = null) {
     notesCache.delete(scenario);
   }
 }
-// VERSION END: v49bx-ablation-gated-board-cleanup
+// VERSION END: v49dg-re-turn-difficulty-semantics
