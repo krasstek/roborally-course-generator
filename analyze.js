@@ -1,6 +1,6 @@
-// VERSION START: v49ep-permanent-shutdown-spam-burden
+// VERSION START: v49es-realized-variant-applicability-cleanup
 // Robo Rally Course Randomizer - route analysis and scoring runtime
-export const ANALYZE_BUILD_ID = "v49ep-permanent-shutdown-spam-burden";
+export const ANALYZE_BUILD_ID = "v49es-realized-variant-applicability-cleanup";
 const ASSET_VERSION = new URL(import.meta.url).searchParams.get("v") ?? "";
 const VERSION_SUFFIX = ASSET_VERSION ? `?v=${encodeURIComponent(ASSET_VERSION)}` : "";
 const versionedPath = (path) => `${path}${VERSION_SUFFIX}`;
@@ -795,8 +795,6 @@ function getContextualPhysicalOptionSignature(options = {}) {
     options.lighterGame ? 1 : 0,
     options.routeAwareBatteryScoring ? 1 : 0,
     options.flamingOil ? 1 : 0,
-    options.walledIn ? 1 : 0,
-    options.hardReboot ? 1 : 0,
     options.playerCount ?? "",
     rebootTokens,
     boardRects
@@ -3480,6 +3478,7 @@ function slideOnOil(tileMap, state, dir, options = {}) {
   let rebootPenalty = 0;
   let distance = 0;
   let forcedDistance = 0;
+  let walledInRelevant = false;
   const workingState = cloneState(state);
 
   while (isOil(tileMap.get(tileKey(workingState.x, workingState.y)))) {
@@ -3489,6 +3488,7 @@ function slideOnOil(tileMap, state, dir, options = {}) {
     rebootPenalty += step.rebootPenalty || 0;
     distance += step.distance;
     forcedDistance += step.forcedDistance;
+    walledInRelevant = walledInRelevant || Boolean(step.walledInRelevant);
 
     if (step.crashed || step.blocked || step.rebooted) {
       return {
@@ -3504,7 +3504,8 @@ function slideOnOil(tileMap, state, dir, options = {}) {
         forcedDistance,
         crashed: step.crashed,
         blocked: step.blocked,
-        rebooted: step.rebooted
+        rebooted: step.rebooted,
+        walledInRelevant
       };
     }
 
@@ -3527,7 +3528,8 @@ function slideOnOil(tileMap, state, dir, options = {}) {
     forcedDistance,
     crashed: false,
     blocked: false,
-    rebooted: false
+    rebooted: false,
+    walledInRelevant
   };
 }
 
@@ -3545,7 +3547,8 @@ function mergeStepOutcome(base, extra) {
     hazard: base.hazard + extra.hazard,
     rebootPenalty: (base.rebootPenalty || 0) + (extra.rebootPenalty || 0),
     distance: base.distance + extra.distance,
-    forcedDistance: base.forcedDistance + extra.forcedDistance
+    forcedDistance: base.forcedDistance + extra.forcedDistance,
+    walledInRelevant: Boolean(base.walledInRelevant || extra.walledInRelevant)
   };
 }
 
@@ -3789,7 +3792,8 @@ function moveOneStep(
       distance: moveCheck.crash ? 1 : 0,
       forcedDistance: (mode === "belt" || mode === "push" || mode === "repulsor") && moveCheck.crash ? 1 : 0,
       spentMove: true,
-      rampAscent: false
+      rampAscent: false,
+      walledInRelevant: Boolean(options.lessDeadlyGame && moveCheck.offBoard && !moveCheck.crash)
     };
   }
 
@@ -4021,6 +4025,7 @@ function resolveConveyorPhase(
   let rebootPenalty = 0;
   let distance = 0;
   let forcedDistance = 0;
+  let walledInRelevant = false;
   const currentOnly = currentOnlyOverride ?? Boolean(options.currentOnly);
   const maxSteps = currentOnly ? 1 : eligibleSpeed === 2 ? 2 : 1;
   const conveyorPhase = conveyorPhaseOverride ?? options.conveyorPhase ?? (
@@ -4057,6 +4062,7 @@ function resolveConveyorPhase(
     rebootPenalty += step.rebootPenalty || 0;
     distance += step.distance;
     forcedDistance += step.forcedDistance;
+    walledInRelevant = walledInRelevant || Boolean(step.walledInRelevant);
     stepsTaken += 1;
 
     if (step.crashed || step.blocked || step.rebooted) {
@@ -4072,7 +4078,8 @@ function resolveConveyorPhase(
         distance,
         forcedDistance,
         crashed: step.crashed,
-        rebooted: step.rebooted
+        rebooted: step.rebooted,
+        walledInRelevant
       };
     }
 
@@ -4090,7 +4097,8 @@ function resolveConveyorPhase(
     distance,
     forcedDistance,
     crashed: false,
-    rebooted: false
+    rebooted: false,
+    walledInRelevant
   };
   return stepsTaken > 0 && lastMoveDir && isOil(tileMap.get(tileKey(workingState.x, workingState.y)))
     ? mergeStepOutcome(conveyorOutcome, slideOnOil(tileMap, workingState, lastMoveDir, options))
@@ -4121,6 +4129,7 @@ function resolvePushPhase(tileMap, state, options = {}) {
   let rebootPenalty = 0;
   let distance = 0;
   let forcedDistance = 0;
+  let walledInRelevant = false;
 
   for (const push of pushes) {
     let step = moveOneStep(tileMap, workingState, push.dir, "push", options);
@@ -4132,6 +4141,7 @@ function resolvePushPhase(tileMap, state, options = {}) {
     rebootPenalty += step.rebootPenalty || 0;
     distance += step.distance;
     forcedDistance += step.forcedDistance;
+    walledInRelevant = walledInRelevant || Boolean(step.walledInRelevant);
 
     if (step.crashed || step.blocked || step.rebooted) {
       return {
@@ -4146,7 +4156,8 @@ function resolvePushPhase(tileMap, state, options = {}) {
         distance,
         forcedDistance,
         crashed: step.crashed,
-        rebooted: step.rebooted
+        rebooted: step.rebooted,
+        walledInRelevant
       };
     }
 
@@ -4164,7 +4175,8 @@ function resolvePushPhase(tileMap, state, options = {}) {
     distance,
     forcedDistance,
     crashed: false,
-    rebooted: false
+    rebooted: false,
+    walledInRelevant
   };
 }
 
@@ -4535,6 +4547,8 @@ export function simulateAction(tileMap, startState, action, options = {}) {
   let crashed = false;
   let blocked = false;
   let rebooted = false;
+  let repulsed = false;
+  let walledInRelevant = false;
   let rebootChoices = null;
   let rebootRecoverySource = null;
   let pendingReboot = null;
@@ -4632,6 +4646,7 @@ export function simulateAction(tileMap, startState, action, options = {}) {
       rebootPenalty += step.rebootPenalty || 0;
       distance += step.distance;
       forcedDistance += step.forcedDistance || 0;
+      walledInRelevant = walledInRelevant || Boolean(step.walledInRelevant);
 
       if (step.crashed || step.blocked || step.rebooted) {
         if (physicalMissProfile) {
@@ -4654,7 +4669,9 @@ export function simulateAction(tileMap, startState, action, options = {}) {
           forcedDistance,
           crashed: step.crashed,
           blocked: step.blocked,
-          rebooted: step.rebooted
+          rebooted: step.rebooted,
+          repulsed: Boolean(step.repulsed),
+          walledInRelevant
         };
       }
 
@@ -4662,6 +4679,7 @@ export function simulateAction(tileMap, startState, action, options = {}) {
       state.y = step.state.y;
       state.facing = step.state.facing;
       if (step.repulsed) {
+        repulsed = true;
         if (physicalMissProfile) {
           physicalMissProfile.physicalMissProgramBookkeepingMs +=
             analysisTelemetryNow() - manualBookkeepingStartedAt;
@@ -4684,6 +4702,7 @@ export function simulateAction(tileMap, startState, action, options = {}) {
       rebootPenalty += oilSlide.rebootPenalty || 0;
       distance += oilSlide.distance;
       forcedDistance += oilSlide.forcedDistance || 0;
+      walledInRelevant = walledInRelevant || Boolean(oilSlide.walledInRelevant);
       state.x = oilSlide.state.x;
       state.y = oilSlide.state.y;
       state.facing = oilSlide.state.facing;
@@ -4710,7 +4729,9 @@ export function simulateAction(tileMap, startState, action, options = {}) {
           rebootRecoverySource: oilSlide.rebootRecoverySource ?? null,
           pendingReboot: oilSlide.pendingReboot ?? undefined,
           traversed, conveyorSteps, hazard, rebootPenalty, distance, forcedDistance,
-          crashed: oilSlide.crashed, blocked: oilSlide.blocked, rebooted: oilSlide.rebooted
+          crashed: oilSlide.crashed, blocked: oilSlide.blocked, rebooted: oilSlide.rebooted,
+          repulsed,
+          walledInRelevant
         };
       }
     }
@@ -4737,6 +4758,7 @@ export function simulateAction(tileMap, startState, action, options = {}) {
   rebootPenalty += blue.rebootPenalty || 0;
   distance += blue.distance;
   forcedDistance += blue.forcedDistance;
+  walledInRelevant = walledInRelevant || Boolean(blue.walledInRelevant);
   crashed = blue.crashed;
   rebooted = blue.rebooted;
   rebootChoices = blue.rebootChoices ?? rebootChoices;
@@ -4759,6 +4781,7 @@ export function simulateAction(tileMap, startState, action, options = {}) {
     rebootPenalty += green.rebootPenalty || 0;
     distance += green.distance;
     forcedDistance += green.forcedDistance;
+  walledInRelevant = walledInRelevant || Boolean(green.walledInRelevant);
     crashed = green.crashed;
     rebooted = green.rebooted;
     rebootChoices = green.rebootChoices ?? rebootChoices;
@@ -4789,6 +4812,7 @@ export function simulateAction(tileMap, startState, action, options = {}) {
     rebootPenalty += current.rebootPenalty || 0;
     distance += current.distance;
     forcedDistance += current.forcedDistance;
+  walledInRelevant = walledInRelevant || Boolean(current.walledInRelevant);
     crashed = current.crashed;
     rebooted = current.rebooted;
     rebootChoices = current.rebootChoices ?? rebootChoices;
@@ -4808,6 +4832,7 @@ export function simulateAction(tileMap, startState, action, options = {}) {
     rebootPenalty += pushed.rebootPenalty || 0;
     distance += pushed.distance;
     forcedDistance += pushed.forcedDistance;
+  walledInRelevant = walledInRelevant || Boolean(pushed.walledInRelevant);
     crashed = pushed.crashed;
     rebooted = pushed.rebooted;
     rebootChoices = pushed.rebootChoices ?? rebootChoices;
@@ -4853,6 +4878,7 @@ export function simulateAction(tileMap, startState, action, options = {}) {
     rebootPenalty += crushed.rebootPenalty || 0;
     distance += crushed.distance;
     forcedDistance += crushed.forcedDistance;
+  walledInRelevant = walledInRelevant || Boolean(crushed.walledInRelevant);
     crashed = crushed.crashed;
     rebooted = crushed.rebooted;
     rebootChoices = crushed.rebootChoices ?? rebootChoices;
@@ -4886,7 +4912,9 @@ export function simulateAction(tileMap, startState, action, options = {}) {
     forcedDistance,
     crashed,
     blocked,
-    rebooted
+    rebooted,
+    repulsed,
+    walledInRelevant
   };
 }
 
@@ -4938,6 +4966,16 @@ const DAMAGE_ECONOMY_SHUTDOWN_REFERENCE_RE = REGISTER_COUNT;
 // multiply Haywire or SPAM-play clog/control RE, and it creates no mental event.
 // There is intentionally no hard cap; exact calibration is explicitly deferred.
 const PERMANENT_SHUTDOWN_SPAM_BURDEN_COEFFICIENT = 0.025;
+// Critical SPAM physically keeps played SPAM in the player's damage-bearing card
+// cycle. The estimator does not simulate literal Shutdown declarations/recovery,
+// so v49eq gives each modeled SPAM-play removal a small provisional escape hatch:
+// 20% is treated as effectively relieved and 80% returns to pending SPAM for the
+// next programming boundary. This is NOT literal rule text; it is explicit
+// calibration debt that prevents permanent one-way SPAM accumulation in a model
+// that omits some real recovery opportunities.
+const CRITICAL_SPAM_PLAY_RELIEF_FRACTION = 0.20;
+const CRITICAL_SPAM_PLAY_RETURN_TO_PENDING_FRACTION =
+  1 - CRITICAL_SPAM_PLAY_RELIEF_FRACTION;
 const DAMAGE_ECONOMY_EFFECTIVE_STATE_CACHE = new Map();
 const DAMAGE_ECONOMY_EFFECTIVE_STATE_CACHE_LIMIT = 512;
 const DAMAGE_ECONOMY_PROGRAM_CACHE = new Map();
@@ -5026,6 +5064,9 @@ function getDamageEconomyVariantProfile(options = {}) {
     criticalHaywireCountsAgainstHand: Boolean(options.criticalHaywire),
     spamFilter: Boolean(options.lessSpammyGame),
     criticalSpam: Boolean(options.criticalSpam),
+    criticalSpamPlayReliefFraction: CRITICAL_SPAM_PLAY_RELIEF_FRACTION,
+    criticalSpamPlayReturnToPendingFraction:
+      CRITICAL_SPAM_PLAY_RETURN_TO_PENDING_FRACTION,
     permanentShutdownPressureActive: Boolean(
       options.permanentShutdown && options.criticalSpam
     ),
@@ -5099,6 +5140,50 @@ function advanceDamageEconomyToTurn(state, turn, options = {}) {
   }
   state.spamHeld = Math.min(state.spamTotal, Math.max(0, state.spamHeld));
   return state;
+}
+
+function applyDamageEconomySpamPlayOutcome(
+  state,
+  nominalPlayedSpam,
+  profile = {}
+) {
+  const available = Math.max(0, Number(state?.spamTotal) || 0);
+  const movedOutOfCurrentBurden = Math.min(
+    available,
+    Math.max(0, Number(nominalPlayedSpam) || 0)
+  );
+  if (movedOutOfCurrentBurden <= 0) {
+    return {
+      movedOutOfCurrentBurden: 0,
+      relieved: 0,
+      returnedToPending: 0
+    };
+  }
+
+  state.spamTotal = Math.max(0, available - movedOutOfCurrentBurden);
+  if (!profile.criticalSpam) {
+    return {
+      movedOutOfCurrentBurden,
+      relieved: movedOutOfCurrentBurden,
+      returnedToPending: 0
+    };
+  }
+
+  const relieved =
+    movedOutOfCurrentBurden * CRITICAL_SPAM_PLAY_RELIEF_FRACTION;
+  const returnedToPending = Math.max(
+    0,
+    movedOutOfCurrentBurden - relieved
+  );
+  state.pendingSpam = Math.max(
+    0,
+    (Number(state.pendingSpam) || 0) + returnedToPending
+  );
+  return {
+    movedOutOfCurrentBurden,
+    relieved,
+    returnedToPending
+  };
 }
 
 function applyExpectedDamageToEconomyState(
@@ -6268,15 +6353,11 @@ function replayDamageEconomyShutdownEquivalentScore({
         )
       );
       spamInHandRemaining = Math.max(0, spamInHandRemaining - forcedSpamReliefInitiations);
-      if (!profile.criticalSpam) {
-        state.spamTotal = Math.max(
-          0,
-          state.spamTotal - Math.min(
-            state.spamTotal,
-            forcedSpamReliefInitiations * forcedSpamChainYield
-          )
-        );
-      }
+      applyDamageEconomySpamPlayOutcome(
+        state,
+        forcedSpamReliefInitiations * forcedSpamChainYield,
+        profile
+      );
     }
 
     const electiveReliefInitiationProbabilities = [];
@@ -6298,12 +6379,11 @@ function replayDamageEconomyShutdownEquivalentScore({
           )
         );
         spamInHandRemaining = Math.max(0, spamInHandRemaining - reliefInitiation);
-        if (!profile.criticalSpam) {
-          state.spamTotal = Math.max(
-            0,
-            state.spamTotal - Math.min(state.spamTotal, reliefInitiation * chainYield)
-          );
-        }
+        applyDamageEconomySpamPlayOutcome(
+          state,
+          reliefInitiation * chainYield,
+          profile
+        );
       }
       electiveReliefInitiationProbabilities.push(reliefInitiation);
 
@@ -6576,6 +6656,7 @@ export function summarizeDamageEconomyFoundationForRoute(
   let rebootDamageUnits = 0;
   let totalSpamAdded = 0;
   let totalSpamRemoved = 0;
+  let totalCriticalSpamReturnedToPending = 0;
   let totalSpamReliefInitiations = 0;
   let totalForcedSpamReliefInitiations = 0;
   let totalElectiveSpamReliefInitiations = 0;
@@ -6638,6 +6719,7 @@ export function summarizeDamageEconomyFoundationForRoute(
     );
     let forcedSpamChainYield = 0;
     let forcedSpamRemoved = 0;
+    let forcedCriticalSpamReturnedToPending = 0;
     if (forcedSpamReliefInitiations > 0.0005) {
       const forcedCirculatingSpam = Math.max(0, state.spamTotal - spamInHandRemaining);
       forcedSpamChainYield = Math.max(
@@ -6648,16 +6730,19 @@ export function summarizeDamageEconomyFoundationForRoute(
         )
       );
       spamInHandRemaining = Math.max(0, spamInHandRemaining - forcedSpamReliefInitiations);
-      if (!profile.criticalSpam) {
-        forcedSpamRemoved = Math.min(
-          state.spamTotal,
-          forcedSpamReliefInitiations * forcedSpamChainYield
-        );
-        state.spamTotal = Math.max(0, state.spamTotal - forcedSpamRemoved);
-      }
+      const forcedSpamOutcome = applyDamageEconomySpamPlayOutcome(
+        state,
+        forcedSpamReliefInitiations * forcedSpamChainYield,
+        profile
+      );
+      forcedSpamRemoved = forcedSpamOutcome.relieved;
+      forcedCriticalSpamReturnedToPending =
+        forcedSpamOutcome.returnedToPending;
     }
     let turnElectiveReliefInitiations = 0;
     let turnSpamRemoved = forcedSpamRemoved;
+    let turnCriticalSpamReturnedToPending =
+      forcedCriticalSpamReturnedToPending;
     let turnSpamChainExtraRemoved = Math.max(
       0,
       forcedSpamRemoved - forcedSpamReliefInitiations
@@ -6698,6 +6783,7 @@ export function summarizeDamageEconomyFoundationForRoute(
       let reliefInitiation = 0;
       let chainYield = 0;
       let totalRemovedThisRegister = 0;
+      let criticalSpamReturnedToPendingThisRegister = 0;
       if (spamInHandRemaining > 0.0005 && reliefOpportunity > 0.0005) {
         reliefInitiation = Math.min(1, reliefOpportunity, spamInHandRemaining);
         const currentCirculatingSpam = Math.max(0, state.spamTotal - spamInHandRemaining);
@@ -6709,13 +6795,16 @@ export function summarizeDamageEconomyFoundationForRoute(
           )
         );
         spamInHandRemaining = Math.max(0, spamInHandRemaining - reliefInitiation);
-        if (!profile.criticalSpam) {
-          totalRemovedThisRegister = Math.min(
-            state.spamTotal,
-            reliefInitiation * chainYield
-          );
-          state.spamTotal = Math.max(0, state.spamTotal - totalRemovedThisRegister);
-        }
+        const spamPlayOutcome = applyDamageEconomySpamPlayOutcome(
+          state,
+          reliefInitiation * chainYield,
+          profile
+        );
+        totalRemovedThisRegister = spamPlayOutcome.relieved;
+        criticalSpamReturnedToPendingThisRegister =
+          spamPlayOutcome.returnedToPending;
+        turnCriticalSpamReturnedToPending +=
+          criticalSpamReturnedToPendingThisRegister;
         turnElectiveReliefInitiations += reliefInitiation;
         turnSpamRemoved += totalRemovedThisRegister;
         turnSpamChainExtraRemoved += Math.max(
@@ -6849,6 +6938,9 @@ export function summarizeDamageEconomyFoundationForRoute(
         reliefForcedRotationPenalty: Number(reliefProfile?.forcedRotationPenalty || 0),
         reliefForcedMovementPenalty: Number(reliefProfile?.forcedMovementPenalty || 0),
         spamRemoved: Number(totalRemovedThisRegister.toFixed(4)),
+        criticalSpamReturnedToPending: Number(
+          criticalSpamReturnedToPendingThisRegister.toFixed(4)
+        ),
         rebootSpamDisposalCapacity: Number(rebootSpamDisposalCapacity.toFixed(4)),
         rebootSpamRemoved: Number(rebootSpamRemoved.toFixed(4)),
         rebootHaywireCleared: Number(rebootHaywireCleared.toFixed(4)),
@@ -6872,14 +6964,17 @@ export function summarizeDamageEconomyFoundationForRoute(
     totalForcedSpamReliefInitiations += forcedSpamReliefInitiations;
     totalElectiveSpamReliefInitiations += turnElectiveReliefInitiations;
     totalSpamRemoved += turnSpamRemoved + turnRebootSpamRemoved + turnRepairStationSpamRemoved;
+    totalCriticalSpamReturnedToPending += turnCriticalSpamReturnedToPending;
     totalSpamChainExtraRemoved += turnSpamChainExtraRemoved;
 
     // SPAM that was plausibly in hand and neither tactically played nor assigned
     // to skipped post-reboot registers remains held. SPAM Filter is different: it
     // moves all unprogrammed SPAM back to discard at
     // the end of programming, so held burden becomes zero while total burden is
-    // unchanged. Critical SPAM likewise moves a played SPAM out of hand but does
-    // not remove it from total burden; normal SPAM play removes it from both.
+    // unchanged. Critical SPAM likewise moves a played SPAM out of hand; v49eq
+    // treats 20% of that played burden as effective relief and returns 80% to
+    // pending SPAM for the next programming boundary. Normal SPAM play removes
+    // the modeled played burden outright.
     const spamHeldBeforeFilter = Math.min(state.spamTotal, spamInHandRemaining);
     state.spamHeld = profile.spamFilter ? 0 : spamHeldBeforeFilter;
 
@@ -6985,8 +7080,14 @@ export function summarizeDamageEconomyFoundationForRoute(
       reliefOpportunity: Number(turnReliefOpportunity.toFixed(3)),
       reliefInitiations: Number(turnSpamReliefInitiations.toFixed(3)),
       forcedSpamRemoved: Number(forcedSpamRemoved.toFixed(3)),
+      forcedCriticalSpamReturnedToPending: Number(
+        forcedCriticalSpamReturnedToPending.toFixed(3)
+      ),
       forcedSpamChainYield: Number(forcedSpamChainYield.toFixed(4)),
       spamRemoved: Number(turnSpamRemoved.toFixed(3)),
+      criticalSpamReturnedToPending: Number(
+        turnCriticalSpamReturnedToPending.toFixed(3)
+      ),
       spamChainExtraRemoved: Number(turnSpamChainExtraRemoved.toFixed(3)),
       rebootRegister: turnRebootRegister || null,
       rebootSpamDisposalCapacity: Number(turnRebootSpamDisposalCapacity.toFixed(3)),
@@ -7079,6 +7180,9 @@ export function summarizeDamageEconomyFoundationForRoute(
     rebootDamageUnits: Number(rebootDamageUnits.toFixed(3)),
     totalSpamAdded: Number(totalSpamAdded.toFixed(3)),
     totalSpamRemoved: Number(totalSpamRemoved.toFixed(3)),
+    totalCriticalSpamReturnedToPending: Number(
+      totalCriticalSpamReturnedToPending.toFixed(3)
+    ),
     totalSpamReliefInitiations: Number(totalSpamReliefInitiations.toFixed(3)),
     totalForcedSpamReliefInitiations: Number(totalForcedSpamReliefInitiations.toFixed(3)),
     totalElectiveSpamReliefInitiations: Number(totalElectiveSpamReliefInitiations.toFixed(3)),
@@ -7093,6 +7197,11 @@ export function summarizeDamageEconomyFoundationForRoute(
     totalRepairStationHaywireExpectedRemoved: Number(totalRepairStationHaywireExpectedRemoved.toFixed(3)),
     repairStationReliefMethod: "register5-checkpoint-one-damage-card-expected-split-no-spill-v49eo",
     spamReliefMethod: "five-card-floor-forced-plus-additive-register-relief-forward-safety-v2",
+    criticalSpamPlayReliefFraction: profile.criticalSpamPlayReliefFraction,
+    criticalSpamPlayReturnToPendingFraction:
+      profile.criticalSpamPlayReturnToPendingFraction,
+    criticalSpamApproximationMethod:
+      "played-spam-20pct-effective-relief-80pct-return-to-pending-v49eq-provisional",
     spamClogMethod: "distributed-spam-play-count-weight2-plus-haywire-joint-nonlinear",
     rebootReliefMethod: "selected-route-skipped-register-capacity-active-haywire-clear",
     permanentShutdownPressureActive: profile.permanentShutdownPressureActive,
@@ -7179,7 +7288,7 @@ export function summarizeDamageEconomyFoundationForRoute(
 //   meaningful nearby control episode. Mechanical severity remains owned by the
 //   control/clog curve and does NOT multiply mental load a second time;
 // - avoided static constraints are still not inferred from the final route.
-export const RE_LEDGER_MODEL_ID = "re-ledger-v5-turn-collapsed-floor-mechanics-v49eo";
+export const RE_LEDGER_MODEL_ID = "re-ledger-v7-scenario-rule-tracking-v49es";
 
 // v49as provisional mental-load curve. The rounded count is the authoritative
 // input because fractional probabilistic events are intentionally accumulated
@@ -7196,16 +7305,71 @@ export function getObservationalMentalRegisterEquivalents(eventCount) {
   return Number(((excess * excess) / 32).toFixed(4));
 }
 
-// v49eo variant/mechanic memory events. Complexity cost is NOT mental RE. A variant
-// may instead declare a once-per-game-turn remember-the-rule trigger in
-// variants.js. When its trigger is relevant, it contributes exactly one planning
-// event for that variant in that turn, regardless of how many matching features
-// appear. Deck/draw variants touched in v49ek deliberately declare no event.
+// v49es variant/mechanic memory events. Complexity cost is NOT mental RE. Most
+// variants use a once-per-game-turn remember-the-rule trigger: when relevant, one
+// planning event is charged regardless of repeated matching features. Moving
+// Targets is the deliberate exception: tracking the moving checkpoint position is
+// register-relative, so an active moving checkpoint contributes one event per
+// relevant programmed register. Critical SPAM/Haywire remain event-free because
+// their changed card state is physically apparent.
 //
 // Current board-laser trigger evidence is conservative: selected-route replay can
 // prove an accepted laser exposure. Counterfactual "I avoided this laser because
 // Cutting Floor made it dangerous" evidence is not yet retained by route replay,
 // so that avoidance side remains an explicit later mental-evidence refinement.
+const MOVING_TARGET_MENTAL_ACTIVE_CACHE = new WeakMap();
+
+function hasActiveMovingTargetCheckpoint(tileMap) {
+  if (!tileMap || typeof tileMap.values !== "function") return false;
+  if (MOVING_TARGET_MENTAL_ACTIVE_CACHE.has(tileMap)) {
+    return MOVING_TARGET_MENTAL_ACTIVE_CACHE.get(tileMap);
+  }
+  let active = false;
+  for (const tile of tileMap.values()) {
+    const features = tile?.features || [];
+    const hasCheckpoint = features.some((feature) => feature?.type === "checkpoint");
+    const hasBelt = features.some((feature) => feature?.type === "belt");
+    if (hasCheckpoint && hasBelt) {
+      active = true;
+      break;
+    }
+  }
+  MOVING_TARGET_MENTAL_ACTIVE_CACHE.set(tileMap, active);
+  return active;
+}
+
+function isHazardousFlagAddedFeature(feature, options = {}) {
+  const type = feature?.type;
+  if (!type || type === "checkpoint" || type === "wall" || type === "laser") {
+    return false;
+  }
+  if (options.movingTargets && type === "belt") return false;
+  return true;
+}
+
+function transitionTouchesHazardousFlagFeature(tileMap, transition, options = {}) {
+  if (!tileMap || !transition) return false;
+  const points = [
+    transition.from,
+    ...(Array.isArray(transition.traversed) ? transition.traversed : []),
+    transition.to
+  ];
+  const seen = new Set();
+  for (const point of points) {
+    if (!Number.isFinite(point?.x) || !Number.isFinite(point?.y)) continue;
+    const key = tileKey(point.x, point.y);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const tile = tileMap.get(key);
+    const features = tile?.features || [];
+    if (!features.some((feature) => feature?.type === "checkpoint")) continue;
+    if (features.some((feature) => isHazardousFlagAddedFeature(feature, options))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function getVariantMentalPlanningEventsForTransition(
   options = {},
   damageEvent = null,
@@ -7217,7 +7381,10 @@ function getVariantMentalPlanningEventsForTransition(
   const sourceTypes = new Set(damageEvent?.sourceTypes || []);
   const events = [];
   for (const rule of getActiveVariantMentalEventRules(options)) {
-    if (!rule?.variantId || seen.has(rule.variantId)) continue;
+    if (!rule?.variantId) continue;
+    const cadence = rule.cadence || "once-per-game-turn";
+    if (cadence === "once-per-game-turn" && seen.has(rule.variantId)) continue;
+
     let applicable = false;
     if (rule.trigger === "board-laser-relevant") {
       applicable = sourceTypes.has("board-laser-hit");
@@ -7225,16 +7392,27 @@ function getVariantMentalPlanningEventsForTransition(
       applicable = sourceTypes.has("flaming-oil-hit");
     } else if (rule.trigger === "repair-station-relevant") {
       applicable = Boolean(mechanicContext?.repairStationRelevant);
+    } else if (rule.trigger === "repulsor-overdrive-relevant") {
+      applicable = Boolean(mechanicContext?.repulsorOverdriveRelevant);
+    } else if (rule.trigger === "hazardous-flag-relevant") {
+      applicable = Boolean(mechanicContext?.hazardousFlagRelevant);
+    } else if (rule.trigger === "moving-target-tracking") {
+      applicable = Boolean(mechanicContext?.movingTargetTrackingRelevant);
+    } else if (rule.trigger === "walled-in-relevant") {
+      applicable = Boolean(mechanicContext?.walledInRelevant);
     }
     if (!applicable) continue;
-    seen.add(rule.variantId);
+
+    if (cadence === "once-per-game-turn") {
+      seen.add(rule.variantId);
+    }
     events.push({
       type: rule.eventType || `variant-rule:${rule.variantId}`,
       weight: 1,
       detail: {
         variantId: rule.variantId,
         trigger: rule.trigger,
-        cadence: "once-per-game-turn"
+        cadence
       }
     });
   }
@@ -7570,12 +7748,29 @@ function getRegisterEquivalentLedgerPlanningEventsForTransition(
     !transition?.crashed &&
     isDamageEconomyRepairStationTile(finalTile)
   );
+  const repulsorOverdriveRelevant = Boolean(
+    options.repulsorOverdrive && transition?.repulsed
+  );
+  const hazardousFlagRelevant = Boolean(
+    options.hazardousFlags &&
+    transitionTouchesHazardousFlagFeature(tileMap, transition, options)
+  );
+  const movingTargetTrackingRelevant = Boolean(
+    options.movingTargets && hasActiveMovingTargetCheckpoint(tileMap)
+  );
+  const walledInRelevant = Boolean(
+    options.lessDeadlyGame && transition?.walledInRelevant
+  );
   events.push(...getVariantMentalPlanningEventsForTransition(
     options,
     damageEvent,
     {
       ...(mechanicContext || {}),
-      repairStationRelevant
+      repairStationRelevant,
+      repulsorOverdriveRelevant,
+      hazardousFlagRelevant,
+      movingTargetTrackingRelevant,
+      walledInRelevant
     }
   ));
 
@@ -29779,4 +29974,4 @@ export function analyzeFlagLeg(tileMap, from, goal, options = {}) {
     }
   };
 }
-// VERSION END: v49ep-permanent-shutdown-spam-burden
+// VERSION END: v49es-realized-variant-applicability-cleanup

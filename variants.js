@@ -98,6 +98,10 @@ const VARIANT_DEFINITION_ROWS = [
     description: "Programming is timed.",
     cost: VARIANT_COMPLEXITY.actFast,
     complexityRationale: "A programming timer is one persistent rule players must follow every round.",
+    mentalEvent: {
+      cadence: "none",
+      rationale: "The timer changes the programming constraint directly; its pressure is owned by Act Fast RE/time mechanics rather than a separate remember-the-rule event."
+    },
     applyBundle: applyBooleanField("actFast")
   },
   {
@@ -123,6 +127,10 @@ const VARIANT_DEFINITION_ROWS = [
     description: "Activating batteries and chop shops also draws an upgrade card.",
     cost: VARIANT_COMPLEXITY.upgradeWorld,
     complexityRationale: "Battery/Chop Shop activations gain one persistent extra upgrade-draw rule.",
+    mentalEvent: {
+      cadence: "none",
+      rationale: "Upgrade World is the ordinary Energy/upgrade procedure with additional upside; it does not add a separate planning-memory event."
+    },
     incompatibleWith: ["lighterGame"],
     availability: {
       type: "featureTypesAnyAvailable",
@@ -155,6 +163,10 @@ const VARIANT_DEFINITION_ROWS = [
     description: "SPAM is discarded to player discard pile instead of damage discard pile after resolution. Shutdown removes it normally.",
     cost: VARIANT_COMPLEXITY.criticalSpam,
     complexityRationale: "SPAM persistence/discard destination changes through play as one recurring damage rule.",
+    mentalEvent: {
+      cadence: "none",
+      rationale: "Critical SPAM changes the physical destination/persistence of played SPAM; it does not add a separate remember-the-rule planning event."
+    },
     incompatibleWith: ["lessSpammyGame"],
     recommendations: [
       {
@@ -177,6 +189,10 @@ const VARIANT_DEFINITION_ROWS = [
     description: "Haywires placed on registers count against hand size when drawing cards at the start of programming.",
     cost: VARIANT_COMPLEXITY.criticalHaywire,
     complexityRationale: "Haywire changes the draw/hand-size rule throughout play.",
+    mentalEvent: {
+      cadence: "none",
+      rationale: "Critical Haywire changes the physically available programming hand; there is no separate remember-the-rule planning event."
+    },
     recommendations: [
       {
         targetId: "criticalSpam",
@@ -212,6 +228,12 @@ const VARIANT_DEFINITION_ROWS = [
     description: "Treats board edges as walls.",
     cost: VARIANT_COMPLEXITY.lessDeadlyGame,
     complexityRationale: "Board edges behave as walls throughout play, one persistent movement rule.",
+    mentalEvent: {
+      cadence: "once-per-game-turn",
+      trigger: "walled-in-relevant",
+      eventType: "variant-rule:walled-in",
+      rationale: "Count one memory event only in a turn where an otherwise off-board move is actually stopped by the Walled In rule."
+    },
     applyBundle: applyBooleanField("lessDeadlyGame")
   },
   {
@@ -225,6 +247,10 @@ const VARIANT_DEFINITION_ROWS = [
     description: "Rebooting deals 3 damage instead of 2.",
     cost: VARIANT_COMPLEXITY.moreDeadlyGame,
     complexityRationale: "Reboot damage changes throughout play, one persistent recovery rule.",
+    mentalEvent: {
+      cadence: "none",
+      rationale: "Rebooting ends the robot's turn; the extra damage is the mechanical consequence and does not add a separate planning-memory event."
+    },
     applyBundle: applyBooleanField("moreDeadlyGame")
   },
   {
@@ -280,6 +306,12 @@ const VARIANT_DEFINITION_ROWS = [
     description: "Repulsors push robots twice the full distance of the triggering Move card.",
     cost: VARIANT_COMPLEXITY.repulsorOverdrive,
     complexityRationale: "Repulsors gain one persistent altered-movement rule.",
+    mentalEvent: {
+      cadence: "once-per-game-turn",
+      trigger: "repulsor-overdrive-relevant",
+      eventType: "variant-rule:repulsor-overdrive",
+      rationale: "Remember once in a turn that a repulsor doubles the triggering Move-card bounce when the selected route actually triggers a repulsor."
+    },
     availability: {
       type: "featureTypeAvailable",
       featureType: "repulsor",
@@ -314,6 +346,9 @@ const VARIANT_DEFINITION_ROWS = [
     label: "Dynamic Archiving",
     category: VARIANT_CATEGORIES.robots,
     controlId: "variant-dynamic-archiving",
+    // Intentionally preselected as Allowed: Dynamic Archiving is familiar to many
+    // players of earlier Robo Rally editions, and the visible preselection also
+    // serves as a gentle cue that the optional-rule selectors are worth exploring.
     defaultState: "allowed",
     description: "Robots archive when they end a register on a checkpoint or battery space.",
     cost: VARIANT_COMPLEXITY.dynamicArchiving,
@@ -346,6 +381,12 @@ const VARIANT_DEFINITION_ROWS = [
     description: "Board elements under checkpoints stay active without moving the checkpoints.",
     cost: VARIANT_COMPLEXITY.hazardousFlags,
     complexityRationale: "One persistent rule keeps covered board elements active under checkpoints.",
+    mentalEvent: {
+      cadence: "once-per-game-turn",
+      trigger: "hazardous-flag-relevant",
+      eventType: "variant-rule:hazardous-flags",
+      rationale: "Remember once in a turn that a normally suppressed board element remains active under a checkpoint when the selected route actually interacts with such a checkpoint tile."
+    },
     applyBundle: applyBooleanField("hazardousFlags")
   },
   {
@@ -373,7 +414,13 @@ const VARIANT_DEFINITION_ROWS = [
     defaultState: "off",
     description: "During each register, checkpoints on conveyors move with the belts; return them to their marked re-entry spaces when they would leave the conveyor or stop moving.",
     cost: VARIANT_COMPLEXITY.movingTargets,
-    complexityRationale: "Moving checkpoints create unusually stateful turn-by-turn programming consequences, so this is the current clear complexity-2 rule.",
+    complexityRationale: "Moving checkpoints create unusually stateful register-by-register programming consequences, so this is the current clear complexity-2 rule.",
+    mentalEvent: {
+      cadence: "once-per-register",
+      trigger: "moving-target-tracking",
+      eventType: "variant-rule:moving-target-tracking",
+      rationale: "A moving checkpoint must be mentally advanced relative to every programmed register; unlike ordinary variant-memory rules, this contributes one tracking event per relevant register."
+    },
     applyBundle: applyBooleanField("movingTargets")
   },
   {
@@ -459,6 +506,10 @@ const VARIANT_DEFINITION_ROWS = [
     description: "Removes docking bays and starts every robot as a Virtual Bot from one shared entry point. Virtual Bots move normally but do not interact with robots or other Virtual Bots until they become physical robots at the end of a turn.",
     cost: VARIANT_COMPLEXITY.virtualBots,
     complexityRationale: "Virtual/non-interacting state persists into opening play, so this is an in-game rule rather than setup-only, but it is still one compact rule package.",
+    mentalEvent: {
+      cadence: "none",
+      rationale: "The model intentionally represents the player route-branching opportunity through strategic traffic pressure rather than charging a separate Virtual Bots memory event."
+    },
     exclusiveGroups: ["startingSpaceSetup", "dockLayout"],
     incompatibleWith: ["homeReboot"],
     recommendations: [
@@ -559,9 +610,9 @@ const VARIANT_DEFINITION_ROWS = [
     cost: VARIANT_COMPLEXITY.staggeredBoards,
     complexityRationale: "Board offset is embodied by the physical layout; there is no special rule to remember after setup.",
     stateLabels: {
-      off: { label: "Aligned", shortLabel: "Aligned" },
-      allowed: { label: "Random", shortLabel: "Random" },
-      forced: { label: "Staggered", shortLabel: "Offset" }
+      off: { label: "Require aligned boards", shortLabel: "Aligned" },
+      allowed: { label: "Allow board offsets", shortLabel: "Allow" },
+      forced: { label: "Allow board offsets", shortLabel: "Allow" }
     },
     applyBundle: (bundle) => {
       bundle.staggeredBoards = true;
@@ -590,7 +641,7 @@ export function getActiveVariantMentalEventRules(activeVariants = {}) {
   return VARIANT_DEFINITIONS
     .filter((variant) => (
       Boolean(activeVariants?.[variant.id]) &&
-      variant?.mentalEvent?.cadence === "once-per-game-turn" &&
+      ["once-per-game-turn", "once-per-register"].includes(variant?.mentalEvent?.cadence) &&
       variant?.mentalEvent?.trigger
     ))
     .map((variant) => ({
@@ -757,9 +808,11 @@ export function applyVariantAnalysisOptions(baseOptions = {}, variantBundle = {}
     lighterGame: Boolean(variantBundle.lighterGame),
     startupSpinUp: Boolean(variantBundle.startupSpinUp),
     virtualBots,
-    // Virtual Bots still create full strategic traffic from register 1. Only the
-    // *uncertainty* clock is held for the first turn; Analyze interprets this as
-    // five known-traffic registers before normal time/interaction decay begins.
+    // Virtual Bots intentionally create strategic traffic from register 1 even
+    // though the physical robots do not interact yet. This is a player-behavior
+    // proxy: the shared virtual entry gives players an opportunity to branch and
+    // consider competing routes. Only the uncertainty clock is held for the first
+    // turn (five known-traffic registers); no separate Virtual Bots mental event.
     trafficGraceRegisters: virtualBots ? 5 : 0,
     hazardousFlags: Boolean(variantBundle.hazardousFlags),
     repairStations: Boolean(variantBundle.repairStations),
