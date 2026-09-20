@@ -1,4 +1,4 @@
-// VERSION START: v49ed-owner-editorial-cleanup
+// VERSION START: v49ef-rehydration-alert-cleanup
 // Robo Rally Course Randomizer - player-facing course notes
 const notesCache = new WeakMap();
 
@@ -679,7 +679,7 @@ export function buildCourseNoteConcepts(evidence) {
           "damage-pressure",
           score,
           "Damage Pressure",
-          "The expected routes carry a meaningful amount of damage and control-clog pressure. Leaving some recovery margin can be more valuable than squeezing every register out of the shortest line."
+          "The expected routes put meaningful pressure on damage management and reliable control. Leaving some recovery margin can be more valuable than squeezing every register out of the shortest line."
         ));
       } else {
         concepts.push(concept(
@@ -716,7 +716,7 @@ export function renderCourseNotes(concepts, evidence, options = {}) {
 export function buildCourseNotesHtml(scenario, fitNotes = [], options = {}) {
   if (!scenario) return "";
 
-  const cacheKey = "player-facing-shared-facts-v49ed-owner-editorial-cleanup";
+  const cacheKey = "player-facing-shared-facts-v49ef-rehydration-alert-cleanup";
   let scenarioCache = notesCache.get(scenario);
   if (!scenarioCache) {
     scenarioCache = new Map();
@@ -738,4 +738,4 @@ export function clearCourseNotesCache(scenario = null) {
     notesCache.delete(scenario);
   }
 }
-// VERSION END: v49ed-owner-editorial-cleanup
+// VERSION END: v49ef-rehydration-alert-cleanup

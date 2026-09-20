@@ -1,6 +1,6 @@
-// VERSION START: v49ee-turn-floor-course-notes-toggle
+// VERSION START: v49ep-permanent-shutdown-spam-burden
 // Robo Rally Course Randomizer - production runtime
-const MAIN_BUILD_ID = "v49ee-turn-floor-course-notes-toggle";
+const MAIN_BUILD_ID = "v49ep-permanent-shutdown-spam-burden";
 // Mobile browsers may auto-detect number-like rule text and restyle it as a
 // tappable link even though the app emitted ordinary text. Keep rules/course
 // annotations visually plain; this is presentation-only and does not disable
@@ -2353,8 +2353,14 @@ function isValueInBand(value, band) {
   return Array.isArray(band) && value >= band[0] && value < band[1];
 }
 
+function presentationNumber(value) {
+  if (value === null || value === undefined || value === "") return NaN;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : NaN;
+}
+
 function formatActualDifficultyLabel(difficultyTurnRE) {
-  const value = Number(difficultyTurnRE);
+  const value = presentationNumber(difficultyTurnRE);
   if (!Number.isFinite(value)) return "Unknown";
   const thresholds = getDifficultyThresholds();
   if (isValueInBand(value, thresholds.brutal)) {
@@ -2367,7 +2373,7 @@ function formatActualDifficultyLabel(difficultyTurnRE) {
 }
 
 function formatLegacyDifficultyLabel(difficultyRaw) {
-  const value = Number(difficultyRaw);
+  const value = presentationNumber(difficultyRaw);
   if (!Number.isFinite(value)) return "Unknown";
   const thresholds = getLegacyDifficultyThresholds();
   if (isValueInBand(value, thresholds.brutal)) {
@@ -2381,7 +2387,7 @@ function formatLegacyDifficultyLabel(difficultyRaw) {
 }
 
 function formatPresentedDifficultyLabel(metrics = null) {
-  const turnDifficulty = Number(metrics?.difficultyTurnRE);
+  const turnDifficulty = presentationNumber(metrics?.difficultyTurnRE);
   if (Number.isFinite(turnDifficulty)) return formatActualDifficultyLabel(turnDifficulty);
   // Saved presentation snapshots from before the RE-turn production migration
   // can still be shown while compatibility cleanup is pending. In that narrow
@@ -2390,7 +2396,7 @@ function formatPresentedDifficultyLabel(metrics = null) {
 }
 
 function formatLegacyLengthLabel(lengthRaw) {
-  const value = Number(lengthRaw);
+  const value = presentationNumber(lengthRaw);
   if (!Number.isFinite(value)) return "Unknown";
   const thresholds = getLengthThresholds();
   const matches = ["short", "moderate", "long", "epic"]
@@ -2401,7 +2407,7 @@ function formatLegacyLengthLabel(lengthRaw) {
 }
 
 function formatActualLengthLabel(lengthWallClockTurnIndex) {
-  const value = Number(lengthWallClockTurnIndex);
+  const value = presentationNumber(lengthWallClockTurnIndex);
   if (!Number.isFinite(value)) return "Unknown";
   const thresholds = getProductionLengthThresholds();
   const match = ["short", "moderate", "long", "epic"]
@@ -2411,9 +2417,9 @@ function formatActualLengthLabel(lengthWallClockTurnIndex) {
 }
 
 function getProductionLengthTurnIndex(metrics = null) {
-  const direct = Number(metrics?.lengthWallClockTurnIndex);
+  const direct = presentationNumber(metrics?.lengthWallClockTurnIndex);
   if (Number.isFinite(direct)) return direct;
-  const nested = Number(
+  const nested = presentationNumber(
     metrics?.lengthMetrics?.productionWallClockOwner?.effectiveWallClockTurnIndex
   );
   return Number.isFinite(nested) ? nested : NaN;
@@ -3608,22 +3614,27 @@ function updateSetupSummary(scenario) {
     ? " Competitive starting positions are somewhat uneven."
     : "";
 
+  const reloadRequestedTargetLabel = getReloadRequestedTargetLabel(scenario.preferences);
+  // A saved closest-match flag is historical once current reanalysis accepts the
+  // unchanged course. Do not let that old flag fall through into today's ordinary
+  // "Closest match found" banner, especially for unconstrained Any / Any saves.
+  const presentationGenerationBestMatch = Boolean(
+    scenario.generationBestMatch && !scenario.hydrationAcceptanceImproved
+  );
+
   if (scenario.hydrationPresentationFallback) {
     // Keep the explicit last-saved-analysis notice above. A new generation would
     // create a different course, so do not replace it with ordinary reroll advice.
   } else if (scenario.hydrationAcceptanceDrift) {
-    fitNoteEl.textContent =
-      `This saved course was accepted when generated, but current reanalysis now places it outside the requested ` +
-      `${formatDifficultyLabel(scenario.preferences.difficulty)} / ${formatLengthLabel(scenario.preferences.length)} ordinary acceptance range. ` +
-      `The course itself is unchanged. Generating again creates a new course.`;
+    fitNoteEl.textContent = reloadRequestedTargetLabel
+      ? `This saved course was accepted when generated, but current reanalysis no longer accepts it for the requested ${reloadRequestedTargetLabel} settings. The course itself is unchanged. Generating again creates a new course.`
+      : `This saved course was accepted when generated, but current reanalysis now finds an issue that would make it a closest-match result under the current analysis model. The course itself is unchanged. Generating again creates a new course.`;
     fitNoteEl.classList.remove("hidden");
-  } else if (scenario.hydrationAcceptanceImproved) {
+  } else if (scenario.hydrationAcceptanceImproved && reloadRequestedTargetLabel) {
     fitNoteEl.textContent =
-      `This course was originally saved as a closest-match fallback. Current reanalysis now places it inside the requested ` +
-      `${formatDifficultyLabel(scenario.preferences.difficulty)} / ${formatLengthLabel(scenario.preferences.length)} acceptance range. ` +
-      `The course itself is unchanged.`;
+      `This course was originally saved as a closest-match fallback. Current reanalysis now accepts it for the requested ${reloadRequestedTargetLabel} settings. The course itself is unchanged.`;
     fitNoteEl.classList.remove("hidden");
-  } else if (scenario.generationBestMatch && (extraDocksRequestMismatch || noteParts.length || epicVeryLong || competitiveSoftMismatch || hasSelectionWarning)) {
+  } else if (presentationGenerationBestMatch && (extraDocksRequestMismatch || noteParts.length || epicVeryLong || competitiveSoftMismatch || hasSelectionWarning)) {
     const extraDocksMismatchText = extraDocksRequestMismatch
       ? " Extra Docks was required, but this course uses one docking bay."
       : "";
@@ -3638,7 +3649,7 @@ function updateSetupSummary(scenario) {
     fitNoteEl.textContent =
       `Closest match found.${extraDocksMismatchText}${mismatchText}${competitiveMismatchSentence}${selectionWarningSentence}${epicLengthSentence}${checkpointPlacementSentence}${boardUseSentence}${regenerateText}`;
     fitNoteEl.classList.remove("hidden");
-  } else if (scenario.generationBestMatch && (checkpointPlacementAdvisory?.active || weakBoardCount > 0)) {
+  } else if (presentationGenerationBestMatch && (checkpointPlacementAdvisory?.active || weakBoardCount > 0)) {
     const regenerateText = checkpointPlacementAdvisory?.active
       ? " Regenerating may find a closer match."
       : "";
@@ -4561,7 +4572,7 @@ function updateRulesNote(scenario) {
   }
 
   if (scenario.flamingOil) {
-    notes.push("Flaming Oil: the first time each register that a robot enters, exits, or starts in an oil slick, it takes 1 damage.");
+    notes.push("Flaming Oil: when a robot enters any oil slick during a register, it takes 1 damage. If it ends that register on oil, it takes 1 additional damage. Multiple oil spaces entered during the same register still deal only 1 entry damage.");
   }
 
   if (scenario.repulsorOverdrive) {
@@ -4570,13 +4581,13 @@ function updateRulesNote(scenario) {
 
   if (scenario.setToKill) {
     notes.push(appendRuleReference(
-      "Set to Kill: robots' main lasers deal 1 extra damage.",
+      "Set to Kill: robots' main lasers deal double damage.",
       { source: "previous-editions", relation: "altered" }
     ));
   }
 
   if (scenario.setToStun) {
-    notes.push("Set to Stun: SPAM drawn because of a robot's main laser is immediately discarded to the damage discard pile without effect.");
+    notes.push("Set to Stun: put SPAM drawn from damage caused by robots' main lasers in the damage discard pile.");
   }
 
   if (scenario.virtualBots) {
@@ -4622,7 +4633,7 @@ function updateRulesNote(scenario) {
 
   if (scenario.classicSharedDeck) {
     notes.push(appendRuleReference(
-      "Shared Deck: shuffle all players' programming decks together into one shared deck. SPAM cards go to hand instead of into a player's deck.",
+      "Shared Deck: use one shared programming deck. Damage SPAM goes directly into the affected player's hand.",
       { source: "previous-editions", relation: "altered" }
     ));
   }
@@ -4638,7 +4649,7 @@ function updateRulesNote(scenario) {
 
   if (scenario.lessForeshadowing) {
     notes.push(appendRuleReference(
-      "Less Foreshadowing: reshuffle each programming deck every turn.",
+      "Less Foreshadowing: at the end of each round, shuffle your programming deck, discard pile, and non-damage cards in hand together to form a new programming deck.",
       { page: 32 }
     ));
   }
@@ -4792,6 +4803,9 @@ function cycleVariantControlState(variantId) {
 }
 
 function sampleVariantComplexityBudget(preferences = {}) {
+  // Production resolves Difficulty=Any to a concrete target before candidate
+  // construction/variant sampling, so this budget follows that resolved target.
+  // The moderate fallback exists only for defensive/direct callers.
   const difficulty = getTuningDifficulty(preferences.difficulty);
   const budgets = {
     easy: [0, 0, 0, 0, 1, 1, 1, 2],
@@ -4900,6 +4914,8 @@ function chooseVariantBundle(preferences = {}, options = {}) {
     variantIsAvailable(entry.id, normalizedPreferences, pieceMap)
   ));
 
+  // Forced / Must / must-like selections are explicit user decisions. They are
+  // activated outside the OPTIONAL complexity budget and never consume/reduce it.
   const forcedEntries = collectionAvailableEntries.filter((entry) => getVariantPreferenceState(normalizedPreferences, entry.id) === "forced");
   forcedEntries.forEach((entry) => {
     if (getCourseConflictingVariantIds(entry.id).some((conflictId) => active[conflictId])) {
@@ -8650,7 +8666,7 @@ function getMovingCheckpointTrace(tileMap, point, cache = null, options = {}) {
     }
 
     for (const feature of tile?.features || []) {
-      if (feature.type === "checkpoint" || feature.type === "wall" || feature.type === "belt" || feature.type === "battery") {
+      if (feature.type === "checkpoint" || feature.type === "wall" || feature.type === "belt" || feature.type === "battery" || feature.type === "homingMissile") {
         continue;
       }
       hazardLoad += getTilePenaltyForFeature(feature, {
@@ -9157,7 +9173,7 @@ function getFlagCandidateTilePenalty(candidate, tileMap, difficulty, preferences
   let penalty = 0;
 
   for (const feature of features) {
-    if (feature.type === "checkpoint" || feature.type === "battery" || feature.type === "wall") {
+    if (feature.type === "checkpoint" || feature.type === "battery" || feature.type === "wall" || feature.type === "homingMissile") {
       continue;
     }
 
@@ -9225,7 +9241,7 @@ function getFlagCandidateAreaPenalty(candidate, tileMap, difficulty, preferences
       }
 
       for (const feature of tile.features || []) {
-        if (feature.type === "checkpoint" || feature.type === "battery" || feature.type === "wall") {
+        if (feature.type === "checkpoint" || feature.type === "battery" || feature.type === "wall" || feature.type === "homingMissile") {
           continue;
         }
 
@@ -16740,6 +16756,18 @@ function pointOnPlacement(point, placement, pieceMap) {
   );
 }
 
+function getSelectedFullCourseRoutes(usableStarts = []) {
+  const seen = new Set();
+  const routes = [];
+  (usableStarts || []).forEach((startAnalysis) => {
+    const route = startAnalysis?.fullCourseRoute ?? null;
+    if (!route || seen.has(route)) return;
+    seen.add(route);
+    routes.push(route);
+  });
+  return routes;
+}
+
 function collectUsedBoardIndices(sequence, boardPlacements, pieceMap, usableStarts, checkpoints) {
   const used = new Set();
 
@@ -16751,31 +16779,19 @@ function collectUsedBoardIndices(sequence, boardPlacements, pieceMap, usableStar
     });
   });
 
-  usableStarts.forEach((startAnalysis) => {
-    const route = startAnalysis.selectedRoute;
-    if (!route) {
-      return;
-    }
-
-    route.path.forEach((point) => {
+  // v49eg: physical board cleanup is about the course the player is actually
+  // being offered, not every alternate leg witness retained internally by route
+  // search. A board touched only by an unselected distinctRoute is still an
+  // orphan candidate. The whole-course A/B reanalysis below decides whether
+  // removing it materially changes the generated course.
+  getSelectedFullCourseRoutes(usableStarts).forEach((route) => {
+    (route.path || []).forEach((point) => {
       boardPlacements.forEach((placement, index) => {
         if (pointOnPlacement(point, placement, pieceMap)) {
           used.add(index);
         }
       });
     });
-  });
-
-  sequence.legs.slice(1).forEach((leg) => {
-    for (const route of leg.analysis.distinctRoutes || []) {
-      route.path.forEach((point) => {
-        boardPlacements.forEach((placement, index) => {
-          if (pointOnPlacement(point, placement, pieceMap)) {
-            used.add(index);
-          }
-        });
-      });
-    }
   });
 
   return used;
@@ -16995,20 +17011,23 @@ function pruneUnusedBoardPlacements(
       ))
       .map((index) => boardPlacements[index])
   );
-  const fixedRouteField = collectTrackedRouteObjects(sequence, usableStarts);
+  for (const placement of options.protectedBoardPlacements || []) {
+    if (placement) protectedPlacements.add(placement);
+  }
+  const fixedRouteField = getSelectedFullCourseRoutes(usableStarts);
   const dockPlacements = options.dockPlacements || [];
   const decisions = [];
 
-  // v49bx:
-  // Do NOT keep a board merely because it is near a route. The cleanup gate asks
-  // whether the board contributes to the CURRENT presented route field through
-  // mechanisms already owned by the traffic/control model. If not, remove ONE
-  // board and let the ordinary cleanup loop rebuild the map, reroute the course,
-  // recompute traffic, and re-run fairness before any further board can vanish.
-  //
-  // This is deliberately not a second full simulator. Hypothetical conveyor /
-  // current chains created by a future reroute belong to the subsequent full
-  // course re-analysis, not to this pre-removal gate.
+  // v49eg:
+  // An orphan candidate has no checkpoint and no SELECTED full-course route on
+  // it. Internal alternate leg witnesses no longer count as visible board use.
+  // The existing fixed-route ablation is still the cheap first gate: if removing
+  // the board changes current-route displacement/control or robot-laser LOS, keep
+  // it immediately. If that gate is clear, the caller removes ONE board
+  // tentatively and runs the complete course pipeline again. Only a reduced
+  // course with no material selected-route/start/difficulty/length/fairness/
+  // traffic/economy change confirms the silent removal. Any material change or
+  // failed reduced analysis restores and protects the board.
   for (let boardIndex = 0; boardIndex < boardPlacements.length; boardIndex += 1) {
     const candidate = boardPlacements[boardIndex];
     if (
@@ -17065,23 +17084,25 @@ function pruneUnusedBoardPlacements(
     const decision = {
       boardIndex,
       pieceId: candidate.pieceId,
-      action: safeToRemove ? "remove" : "retain",
+      action: safeToRemove ? "test-remove" : "retain",
       reason: safeToRemove
-        ? "ablation-clear"
+        ? "fixed-route-ablation-clear-pending-whole-course"
         : "modeled-current-route-effect",
+      candidateType: "orphan-no-selected-route-no-checkpoint",
       ablation
     };
     decisions.push(decision);
 
     if (safeToRemove) {
-      // Intentionally remove at most one board per cleanup pass. The caller's
-      // existing `continue` path then performs a completely fresh route / traffic /
-      // fairness analysis on the reduced physical course before another removal.
+      // Intentionally test at most one board per cleanup pass. The caller runs a
+      // complete reduced-course analysis and then either confirms this removal or
+      // restores/protects the board before another orphan candidate is tested.
       return {
         boardPlacements: nextBoardPlacements,
         overlayPlacements: nextOverlayPlacements,
         pruned: true,
         removedBoard: decision,
+        removedBoardPlacement: candidate,
         ablationDecisions: decisions
       };
     }
@@ -18371,6 +18392,7 @@ function computeRETurnVariantDifficultyAccounting(rawTurnRE, preferences = {}, s
   let adjusted = Number(rawTurnRE) || 0;
   const contributions = [];
   const mechanicalRules = [];
+  const deferredRules = [];
   const addLegacyFitPoints = (id, legacyDelta, kind = "residual", evidence = null) => {
     const legacyValue = Number(legacyDelta) || 0;
     const value = legacyValue / RE_TURN_DIFFICULTY_FIT_POINTS_PER_RE;
@@ -18395,50 +18417,57 @@ function computeRETurnVariantDifficultyAccounting(rawTurnRE, preferences = {}, s
     });
   };
   const mechanical = (id, note) => mechanicalRules.push({ id, note });
+  const deferred = (id, note) => deferredRules.push({ id, note });
 
-  if (preferences.lessSpammyGame) mechanical("lessSpammyGame", "hazard/traffic/reboot model");
-  if (preferences.criticalSpam) mechanical("criticalSpam", "hazard/traffic/reboot model");
-  if (preferences.criticalHaywire) mechanical("criticalHaywire", "hazard/traffic/reboot model");
-  if (preferences.permanentShutdown && preferences.criticalSpam) mechanical("permanentShutdown", "damage-deck/reboot model");
-  if (preferences.cuttingFloor) mechanical("cuttingFloor", "laser damage model");
-  if (preferences.flamingOil) mechanical("flamingOil", "oil hazard model");
-  if (preferences.setToKill) mechanical("setToKill", "robot-laser traffic model");
-  if (preferences.setToStun) mechanical("setToStun", "robot-laser traffic model");
-  if (preferences.repairStations) mechanical("repairStations", "checkpoint repair route value");
+  if (preferences.lessSpammyGame) mechanical("lessSpammyGame", "damage-economy SPAM filtering");
+  if (preferences.criticalSpam) mechanical("criticalSpam", "damage-economy SPAM persistence");
+  if (preferences.criticalHaywire) mechanical("criticalHaywire", "damage-economy hand-size effect");
+  if (preferences.permanentShutdown && preferences.criticalSpam) mechanical(
+    "permanentShutdown",
+    "damage economy: persistent SPAM progressively amplifies authoritative SPAM-supply RE; no mental event"
+  );
+  if (preferences.cuttingFloor) mechanical("cuttingFloor", "board-laser damage model + variant-memory event");
+  if (preferences.flamingOil) mechanical(
+    "flamingOil",
+    "damage economy: +1 on first oil entry in a register +1 on end-on-oil; once-per-turn rule-memory event"
+  );
+  if (preferences.setToKill) mechanical(
+    "setToKill",
+    "robot-laser damage economy: two damage-card draws per successful main-laser hit"
+  );
+  if (preferences.setToStun) mechanical(
+    "setToStun",
+    "robot-laser damage economy: robot-laser SPAM suppressed; Haywire probability unchanged per damage card"
+  );
+  if (preferences.repairStations) mechanical(
+    "repairStations",
+    "damage economy: register-5 checkpoint removes one expected Damage-card split with no spill; once-per-turn rule-memory event"
+  );
 
-  // The multiplier is dimensionless, so preserving the historical 4% resource
-  // residual is a direct unit-safe migration.
+  // v49em: Energy Crisis is mechanically represented by removing the Energy /
+  // upgrade economy and its upgrade-phase wall-clock transactions. Do not add a
+  // second generic difficulty discount merely because the rule simplifies play.
   if (preferences.lighterGame) {
-    scale("lighterGame", 0.96, "residual-resource", { provisional: true });
+    mechanical(
+      "lighterGame",
+      "Energy/upgrade economy removed; upgrade-phase wall-clock transactions zero"
+    );
   }
 
   if (preferences.lessForeshadowing) {
-    addLegacyFitPoints(
+    mechanical(
       "lessForeshadowing",
-      programmingPressure.planningPressure * 4.4,
-      "residual-programming",
-      { planningPressure: programmingPressure.planningPressure }
+      "card model: fresh full programming deck each turn; previous-turn depletion off; base scarcity alpha 1.0"
     );
   }
   if (preferences.classicSharedDeck) {
-    const sharedDeckPressure = getSharedDeckPlayerPressure(preferences.playerCount);
-    addLegacyFitPoints(
+    mechanical(
       "classicSharedDeck",
-      programmingPressure.planningPressure * (4.3 + sharedDeckPressure * 1.7),
-      "residual-programming",
-      {
-        planningPressure: programmingPressure.planningPressure,
-        playerPressure: Number(sharedDeckPressure.toFixed(3))
-      }
+      "card model: player-count scarcity-alpha uplift + immediate damage-to-hand approximation; no enlarged single-player deck"
     );
   }
   if (preferences.factoryRejects) {
-    addLegacyFitPoints(
-      "factoryRejects",
-      programmingPressure.planningPressure * 3.2,
-      "residual-programming",
-      { planningPressure: programmingPressure.planningPressure }
-    );
+    mechanical("factoryRejects", "card model: actual programming hand size 7");
   }
   if (preferences.actFastMode) {
     const timerWeight = getActFastPressureWeight(preferences.actFastMode);
@@ -18479,11 +18508,9 @@ function computeRETurnVariantDifficultyAccounting(rawTurnRE, preferences = {}, s
     );
   }
   if (preferences.payToWin || preferences.subsidizedStarts) {
-    addLegacyFitPoints(
+    mechanical(
       preferences.subsidizedStarts ? "subsidizedStarts" : "payToWin",
-      1.4,
-      "residual-setup",
-      { provisional: true }
+      "selector-aware starting-Energy balance/pricing; setup evaluation adds no generic RE-turn difficulty"
     );
   }
 
@@ -18493,9 +18520,10 @@ function computeRETurnVariantDifficultyAccounting(rawTurnRE, preferences = {}, s
     delta: Number((adjusted - (Number(rawTurnRE) || 0)).toFixed(4)),
     contributions,
     mechanicalRules,
+    deferredRules,
     programmingPressure,
     fitPointsPerRE: RE_TURN_DIFFICULTY_FIT_POINTS_PER_RE,
-    method: "completed-re-turn-plus-migrated-residual-variants-v49de"
+    method: "completed-re-turn-plus-mechanistic-variants-v49eo"
   };
 }
 
@@ -18869,11 +18897,14 @@ function computeVariantDifficultyAccounting(raw, preferences = {}, sequence = nu
   if (preferences.lessSpammyGame) mechanical("lessSpammyGame", "hazard/traffic/reboot model");
   if (preferences.criticalSpam) mechanical("criticalSpam", "hazard/traffic/reboot model");
   if (preferences.criticalHaywire) mechanical("criticalHaywire", "hazard/traffic/reboot model");
-  if (preferences.permanentShutdown && preferences.criticalSpam) mechanical("permanentShutdown", "damage-deck/reboot model");
+  if (preferences.permanentShutdown && preferences.criticalSpam) mechanical(
+    "permanentShutdown",
+    "damage economy: persistent-SPAM supply-RE pressure curve"
+  );
   if (preferences.cuttingFloor) mechanical("cuttingFloor", "laser damage model");
   if (preferences.flamingOil) mechanical("flamingOil", "oil hazard model");
-  if (preferences.setToKill) mechanical("setToKill", "robot-laser traffic model");
-  if (preferences.setToStun) mechanical("setToStun", "robot-laser traffic model");
+  if (preferences.setToKill) mechanical("setToKill", "robot-laser damage economy: double damage per hit");
+  if (preferences.setToStun) mechanical("setToStun", "robot-laser damage economy: SPAM suppressed, Haywire unchanged");
   if (preferences.repairStations) mechanical("repairStations", "checkpoint repair route value");
 
   // Energy Crisis removes a broad strategic resource system that the flattened
@@ -18884,32 +18915,19 @@ function computeVariantDifficultyAccounting(raw, preferences = {}, sequence = nu
   }
 
   if (preferences.lessForeshadowing) {
-    add(
+    mechanical(
       "lessForeshadowing",
-      programmingPressure.planningPressure * 4.4,
-      "residual-programming",
-      { planningPressure: programmingPressure.planningPressure }
+      "card model: fresh full programming deck each turn; previous-turn depletion off; base scarcity alpha 1.0"
     );
   }
   if (preferences.classicSharedDeck) {
-    const sharedDeckPressure = getSharedDeckPlayerPressure(preferences.playerCount);
-    add(
+    mechanical(
       "classicSharedDeck",
-      programmingPressure.planningPressure * (4.3 + sharedDeckPressure * 1.7),
-      "residual-programming",
-      {
-        planningPressure: programmingPressure.planningPressure,
-        playerPressure: Number(sharedDeckPressure.toFixed(3))
-      }
+      "card model: normal single-player hypergeometry retained; player-count uncertainty increases scarcity alpha; damage SPAM enters hand at next programming boundary"
     );
   }
   if (preferences.factoryRejects) {
-    add(
-      "factoryRejects",
-      programmingPressure.planningPressure * 3.2,
-      "residual-programming",
-      { planningPressure: programmingPressure.planningPressure }
-    );
+    mechanical("factoryRejects", "card model: actual programming hand size 7");
   }
   if (preferences.actFastMode) {
     const timerWeight = getActFastPressureWeight(preferences.actFastMode);
@@ -18960,12 +18978,8 @@ function computeVariantDifficultyAccounting(raw, preferences = {}, sequence = nu
     contributions,
     mechanicalRules,
     programmingPressure,
-    method: "mechanical-plus-residual-variant-accounting-v38"
+    method: "mechanical-plus-residual-variant-accounting-v49ek"
   };
-}
-
-function getSharedDeckPlayerPressure(playerCount = 4) {
-  return clamp(((playerCount || 4) - 2) / 4, 0, 1);
 }
 
 function applyVariantDifficultyModifiers(raw, preferences = {}, sequence = null) {
@@ -19120,52 +19134,39 @@ function computeLengthMetrics(sequence, flagCount, playerCount, boardCount, pref
   const preUncertaintyRaw = playerLoad + preUncertaintyRouteLoad + baseFrictionLoad;
   const baseRaw = playerLoad + routeLoad + baseFrictionLoad;
 
-  // Shared/reshuffled programming can lengthen a game when a course actually
-  // punishes imperfect programs. Tie that residual to the same route evidence
-  // used for difficulty instead of applying a course-wide multiplier.
-  const lessForeshadowingLoad = preferences.lessForeshadowing
-    ? baseRaw * programmingPressure.planningPressure * 0.022
-    : 0;
-  const preUncertaintyLessForeshadowingLoad = preferences.lessForeshadowing
-    ? preUncertaintyRaw * programmingPressure.planningPressure * 0.022
-    : 0;
-  const sharedDeckPlayerPressure = preferences.classicSharedDeck
-    ? getSharedDeckPlayerPressure(safePlayerCount)
-    : 0;
-  const sharedDeckLoad = preferences.classicSharedDeck
-    ? baseRaw * programmingPressure.planningPressure * (0.016 + sharedDeckPlayerPressure * 0.012)
-    : 0;
-  const preUncertaintySharedDeckLoad = preferences.classicSharedDeck
-    ? preUncertaintyRaw * programmingPressure.planningPressure * (0.016 + sharedDeckPlayerPressure * 0.012)
-    : 0;
-  const programmingVariantLoad = lessForeshadowingLoad + sharedDeckLoad;
-  const frictionLoad = baseFrictionLoad + programmingVariantLoad;
+  // v49ek: Less Foreshadowing, Shared Deck and Factory Rejects now act through
+  // the card/damage RE model itself. They have no separate elapsed-time term.
+  const lessForeshadowingLoad = 0;
+  const sharedDeckLoad = 0;
+  const programmingVariantLoad = 0;
+  const frictionLoad = baseFrictionLoad;
 
   let compactnessRaw = Number((playerLoad + routeLoad + frictionLoad).toFixed(2));
   let raw = Number((playerLoad + routeLoad + frictionLoad).toFixed(2));
-  let preUncertaintyFinalRaw = Number((
-    preUncertaintyRaw +
-    preUncertaintyLessForeshadowingLoad +
-    preUncertaintySharedDeckLoad
-  ).toFixed(2));
+  let preUncertaintyFinalRaw = Number(preUncertaintyRaw.toFixed(2));
   const variantLengthContributions = [];
-  if (lessForeshadowingLoad) {
+  if (preferences.lessForeshadowing) {
     variantLengthContributions.push({
       id: "lessForeshadowing",
-      kind: "residual-programming",
-      delta: Number(lessForeshadowingLoad.toFixed(2)),
-      evidence: { planningPressure: programmingPressure.planningPressure }
+      kind: "mechanically-represented-card-re",
+      delta: 0,
+      evidence: { standaloneLengthEffect: false }
     });
   }
-  if (sharedDeckLoad) {
+  if (preferences.classicSharedDeck) {
     variantLengthContributions.push({
       id: "classicSharedDeck",
-      kind: "residual-programming",
-      delta: Number(sharedDeckLoad.toFixed(2)),
-      evidence: {
-        planningPressure: programmingPressure.planningPressure,
-        playerPressure: Number(sharedDeckPlayerPressure.toFixed(3))
-      }
+      kind: "mechanically-represented-card-re",
+      delta: 0,
+      evidence: { standaloneLengthEffect: false }
+    });
+  }
+  if (preferences.factoryRejects) {
+    variantLengthContributions.push({
+      id: "factoryRejects",
+      kind: "mechanically-represented-card-re",
+      delta: 0,
+      evidence: { standaloneLengthEffect: false }
     });
   }
   if (actFastLoad) {
@@ -19349,21 +19350,12 @@ function applyRENativeExpectedPlayExtentToLengthMetrics(
     0,
     Number(lengthMetrics.programmingPressure?.planningPressure) || 0
   );
-  const baseWithProductionWallClock = productionWallClockExtentLoad;
-  const lessForeshadowingLoad = preferences.lessForeshadowing
-    ? baseWithProductionWallClock * planningPressure * 0.022
-    : 0;
-  const sharedDeckPlayerPressure = preferences.classicSharedDeck
-    ? getSharedDeckPlayerPressure(Number(lengthMetrics.inputs?.playerCount) || 4)
-    : 0;
-  const sharedDeckLoad = preferences.classicSharedDeck
-    ? baseWithProductionWallClock * planningPressure *
-      (0.016 + sharedDeckPlayerPressure * 0.012)
-    : 0;
-  const programmingVariantLoad = lessForeshadowingLoad + sharedDeckLoad;
-  const frictionLoad = programmingVariantLoad;
+  const lessForeshadowingLoad = 0;
+  const sharedDeckLoad = 0;
+  const programmingVariantLoad = 0;
+  const frictionLoad = 0;
 
-  const productionRaw = productionWallClockExtentLoad + frictionLoad;
+  const productionRaw = productionWallClockExtentLoad;
 
   // Compactness/gross-mismatch comparison before recovery uses nominal route
   // extent plus the nominal economy transaction load. Direct Act Fast timing
@@ -19380,17 +19372,7 @@ function applyRENativeExpectedPlayExtentToLengthMetrics(
   const preForecastBase =
     preRecoveryWallClockRegisterIndex *
     LENGTH_EXPECTED_PLAY_RAW_POINTS_PER_REGISTER;
-  const preForecastLessForeshadowingLoad = preferences.lessForeshadowing
-    ? preForecastBase * planningPressure * 0.022
-    : 0;
-  const preForecastSharedDeckLoad = preferences.classicSharedDeck
-    ? preForecastBase * planningPressure *
-      (0.016 + sharedDeckPlayerPressure * 0.012)
-    : 0;
-  const preForecastRaw =
-    preForecastBase +
-    preForecastLessForeshadowingLoad +
-    preForecastSharedDeckLoad;
+  const preForecastRaw = preForecastBase;
 
   const byId = new Map(
     (lengthMetrics.variantLengthContributions ?? []).map((entry) => [entry.id, entry])
@@ -19398,18 +19380,25 @@ function applyRENativeExpectedPlayExtentToLengthMetrics(
   if (byId.has("lessForeshadowing")) {
     byId.set("lessForeshadowing", {
       ...byId.get("lessForeshadowing"),
-      delta: Number(lessForeshadowingLoad.toFixed(2)),
-      evidence: { planningPressure }
+      kind: "mechanically-represented-card-re",
+      delta: 0,
+      evidence: { standaloneLengthEffect: false }
     });
   }
   if (byId.has("classicSharedDeck")) {
     byId.set("classicSharedDeck", {
       ...byId.get("classicSharedDeck"),
-      delta: Number(sharedDeckLoad.toFixed(2)),
-      evidence: {
-        planningPressure,
-        playerPressure: Number(sharedDeckPlayerPressure.toFixed(3))
-      }
+      kind: "mechanically-represented-card-re",
+      delta: 0,
+      evidence: { standaloneLengthEffect: false }
+    });
+  }
+  if (byId.has("factoryRejects")) {
+    byId.set("factoryRejects", {
+      ...byId.get("factoryRejects"),
+      kind: "mechanically-represented-card-re",
+      delta: 0,
+      evidence: { standaloneLengthEffect: false }
     });
   }
   if (preferences.actFastMode) {
@@ -19467,7 +19456,7 @@ function applyRENativeExpectedPlayExtentToLengthMetrics(
     };
   }
   ownerObservation.note =
-    "v49dv keeps expected-play registers as route/play extent, applies player-count and Act Fast direct programming-time scaling, and adds card-aware upgrade draw/install transaction time. Final Short/Medium/Long/Epic classification and requested-length fit now use the resulting wall-clock turn index directly. Distance, standalone congestion, fixed player load, legacy Act Fast raw deltas and residual raw-score variant length terms are diagnostic/construction-only. Other variant phase-time mechanisms remain pending.";
+    "v49dv keeps expected-play registers as route/play extent, applies player-count and Act Fast direct programming-time scaling, and adds card-aware upgrade draw/install transaction time. Final Short/Medium/Long/Epic classification and requested-length fit now use the resulting wall-clock turn index directly. Distance, standalone congestion, fixed player load, legacy Act Fast raw deltas and residual raw-score variant length terms are diagnostic/construction-only. Programming-deck variants now have no standalone length term; other variant phase-time mechanisms remain pending.";
   play.productionOwner = true;
   play.productionRole = "full-route-play-extent-with-act-fast-pressure";
   if (wallClock) {
@@ -19885,15 +19874,25 @@ function getBoardFootprintUseProfile(
 ) {
   if (boardPlacements.length <= 1) return { penalty: 0, weakBoardCount: 0, boards: [] };
 
-  const routeGroups = [];
-  const openingRoutes = usableStarts
-    .map((entry) => entry.selectedRoute)
-    .filter(Boolean);
-  if (openingRoutes.length) routeGroups.push(openingRoutes);
-  sequence?.legs?.slice(1).forEach((leg) => {
-    const routes = (leg.analysis?.distinctRoutes || []).filter(Boolean);
-    if (routes.length) routeGroups.push(routes);
-  });
+  // v49eg: footprint describes the selected full-course route field the player
+  // can inspect. Internal alternate leg witnesses do not make an otherwise
+  // orphan board count as visibly used table space. Preserve the older per-leg
+  // averaging shape by expanding each selected full-course route back into its
+  // selected leg routes when those are available.
+  const selectedFullCourseRoutes = getSelectedFullCourseRoutes(usableStarts);
+  const selectedLegCount = selectedFullCourseRoutes.reduce(
+    (maximum, route) => Math.max(maximum, route?.legRoutes?.length ?? 0),
+    0
+  );
+  const routeGroups = selectedLegCount > 0
+    ? Array.from({ length: selectedLegCount }, (_, legIndex) => (
+      selectedFullCourseRoutes
+        .map((route) => route?.legRoutes?.[legIndex])
+        .filter(Boolean)
+    )).filter((group) => group.length)
+    : selectedFullCourseRoutes.length
+      ? [selectedFullCourseRoutes]
+      : [];
   const routes = routeGroups.flat();
 
   function routeRegisterCountOnBoard(route, placement) {
@@ -20034,7 +20033,7 @@ function getBoardFootprintUseProfile(
   });
   const penalty = boards.reduce((sum, board) => sum + board.penalty, 0);
   return {
-    model: "board-footprint-use-v49bv",
+    model: "board-footprint-selected-full-course-v49eg",
     semanticRole: "table-space-and-layout-footprint",
     penalty: Number(penalty.toFixed(2)),
     weakBoardCount: boards.filter((board) => board.weakUse).length,
@@ -20056,7 +20055,7 @@ function getBoardGameplayRelevanceProfile(
 ) {
   if (!boardPlacements.length) {
     return {
-      model: "board-gameplay-relevance-v49bw",
+      model: "board-gameplay-relevance-v49eg",
       observationalOnly: true,
       demonstratedCount: 0,
       pendingAblationCount: 0,
@@ -20073,7 +20072,7 @@ function getBoardGameplayRelevanceProfile(
   const footprintByIndex = new Map(
     (footprintProfile?.boards ?? []).map((board) => [board.boardIndex, board])
   );
-  const fixedRouteField = collectTrackedRouteObjects(sequence, usableStarts);
+  const fixedRouteField = getSelectedFullCourseRoutes(usableStarts);
   const protectedSandwichBoards = options.sandwichedDock
     ? getProtectedSandwichBoardIndices(
       boardPlacements,
@@ -20081,6 +20080,17 @@ function getBoardGameplayRelevanceProfile(
       pieceMap
     )
     : new Set();
+  const wholeCourseMaterialRetainedPieceIds = new Set(
+    (options.boardCleanupAuditTrail || [])
+      .flatMap((entry) => entry?.decisions || [])
+      .filter((decision) => (
+        decision?.action === "restore" &&
+        (decision?.reason === "whole-course-material-difference" ||
+          decision?.reason === "whole-course-reanalysis-failed")
+      ))
+      .map((decision) => decision.pieceId)
+      .filter(Boolean)
+  );
 
   const boards = boardPlacements.map((placement, boardIndex) => {
     const piece = pieceMap[placement.pieceId];
@@ -20093,6 +20103,9 @@ function getBoardGameplayRelevanceProfile(
     const directRouteUse = (Number(footprint?.uniqueRouteTiles) || 0) > 0;
     const hasCheckpoint = checkpointIndices.length > 0;
     const structuralProtected = protectedSandwichBoards.has(boardIndex);
+    const wholeCourseMaterialRetained = wholeCourseMaterialRetainedPieceIds.has(
+      placement.pieceId
+    );
 
     let minimumTrackedRouteDistance = null;
     if (piece && routeTiles.length) {
@@ -20145,6 +20158,9 @@ function getBoardGameplayRelevanceProfile(
     if (directRouteUse) demonstratedReasons.push("direct-route");
     if (hasCheckpoint) demonstratedReasons.push("checkpoint");
     if (structuralProtected) demonstratedReasons.push("structural-variant");
+    if (wholeCourseMaterialRetained) {
+      demonstratedReasons.push("whole-course-ablation-material");
+    }
 
     const currentLegacyRetentionReasons = [];
     if (
@@ -20160,6 +20176,9 @@ function getBoardGameplayRelevanceProfile(
     }
     if (structuralProtected) {
       currentLegacyRetentionReasons.push("explicit-protection");
+    }
+    if (wholeCourseMaterialRetained) {
+      currentLegacyRetentionReasons.push("whole-course-material-effect");
     }
 
     const relevanceDemonstrated = demonstratedReasons.length > 0;
@@ -20258,10 +20277,10 @@ function getBoardGameplayRelevanceProfile(
   });
 
   return {
-    model: "board-gameplay-relevance-v49bw",
+    model: "board-gameplay-relevance-v49eg",
     observationalOnly: false,
     cleanupBehaviorChanged: true,
-    cleanupModel: "ablation-gated-one-board-per-pass-v49bx",
+    cleanupModel: "selected-route-orphan+fixed-route-gate+whole-course-ablation-v49eg",
     demonstratedCount: boards.filter((board) => board.relevanceDemonstrated).length,
     indirectEffectCount: boards.filter(
       (board) => board.indirectEffectDemonstrated
@@ -20712,7 +20731,8 @@ function classifyCandidate(sequence, preferences, context = {}) {
     boardFootprintUse,
     {
       ...preferences,
-      sandwichedDock: Boolean(preferences.sandwichedDock)
+      sandwichedDock: Boolean(preferences.sandwichedDock),
+      boardCleanupAuditTrail: context.boardCleanupAuditTrail ?? []
     }
   );
   // Compatibility alias: older presentation/calibration consumers still read
@@ -21004,10 +21024,15 @@ function getCourseConstructionFingerprint(
   return hashScenarioFingerprintPayload(payload);
 }
 
-function getScenarioSelectedRouteFingerprint(scenario) {
-  const starts = scenario?.sequence?.firstLeg?.starts ?? [];
+function getSequenceSelectedRouteFingerprint(sequence, includedIndices = null) {
+  const starts = sequence?.firstLeg?.starts ?? [];
+  const included = includedIndices instanceof Set ? includedIndices : null;
   const payload = starts
-    .filter((entry) => Number.isInteger(entry?.index) && entry?.fullCourseRoute)
+    .filter((entry) => (
+      Number.isInteger(entry?.index) &&
+      entry?.fullCourseRoute &&
+      (!included || included.has(entry.index))
+    ))
     .sort((left, right) => left.index - right.index)
     .map((entry) => {
       const route = entry.fullCourseRoute;
@@ -21020,6 +21045,133 @@ function getScenarioSelectedRouteFingerprint(scenario) {
     .join("||");
 
   return hashScenarioFingerprintPayload(payload);
+}
+
+function getScenarioSelectedRouteFingerprint(scenario) {
+  return getSequenceSelectedRouteFingerprint(scenario?.sequence);
+}
+
+function summarizeWholeCourseBoardAblationState(sequence, metrics) {
+  const finiteMetric = (value) => (
+    value !== null &&
+    value !== undefined &&
+    value !== "" &&
+    Number.isFinite(Number(value))
+      ? Number(value)
+      : null
+  );
+  const summary = sequence?.firstLeg?.summary ?? {};
+  const normalBalance = summary.normalStartBalance ?? null;
+  const competitive = metrics?.competitiveBlockImpact ?? null;
+  const priced = summary.payToWin ?? null;
+  const usableStartIndices = (metrics?.usableStarts ?? [])
+    .map((entry) => entry?.index)
+    .filter(Number.isInteger)
+    .sort((left, right) => left - right);
+  const pricingSignature = (sequence?.firstLeg?.starts ?? [])
+    .filter((entry) => Number.isInteger(entry?.index))
+    .sort((left, right) => left.index - right.index)
+    .map((entry) => [
+      entry.index,
+      entry.energyCost ?? null,
+      entry.lateEnergyCost ?? null,
+      Boolean(entry.payToWinUnavailable),
+      Boolean(entry.earlyUnavailable),
+      Boolean(entry.lateUnavailable)
+    ].join(":"))
+    .join("|");
+  const filteredHardFailures = [...(metrics?.hardFailures ?? [])]
+    .filter((failure) => failure !== "unused-board")
+    .sort();
+  const filteredSoftFailures = [...(metrics?.softFailures ?? [])]
+    .filter((failure) => failure !== "unused-board")
+    .sort();
+
+  return {
+    routeFingerprint: getSequenceSelectedRouteFingerprint(
+      sequence,
+      new Set(usableStartIndices)
+    ),
+    usableStartIndices,
+    pricingSignature: priced?.active ? pricingSignature : "",
+    hardFailures: filteredHardFailures,
+    softFailures: filteredSoftFailures,
+    difficultyTurnRE: finiteMetric(metrics?.difficultyTurnRE),
+    lengthWallClockTurnIndex: finiteMetric(metrics?.lengthWallClockTurnIndex),
+    fairnessRangeRE: competitive?.active
+      ? finiteMetric(competitive.selectedRangeRE)
+      : finiteMetric(normalBalance?.retainedEffectiveRERange),
+    trafficAveragePenalty: finiteMetric(summary?.fullCourseTraffic?.averagePenalty),
+    competitiveSelectedIndices: competitive?.active
+      ? [...(competitive.selectedIndices ?? [])].sort((left, right) => left - right)
+      : [],
+    meaningfulEnergyAdjustmentCount: priced?.active
+      ? Number(priced.meaningfulEnergyAdjustmentCount) || 0
+      : 0
+  };
+}
+
+function compareWholeCourseBoardAblationStates(before, after) {
+  const reasons = [];
+  const sameArray = (left = [], right = []) => (
+    left.length === right.length && left.every((value, index) => value === right[index])
+  );
+  const hasFiniteMetric = (value) => (
+    value !== null &&
+    value !== undefined &&
+    value !== "" &&
+    Number.isFinite(Number(value))
+  );
+  const numericDelta = (left, right) => (
+    hasFiniteMetric(left) && hasFiniteMetric(right)
+      ? Math.abs(Number(left) - Number(right))
+      : left === right
+        ? 0
+        : Infinity
+  );
+
+  if (before?.routeFingerprint !== after?.routeFingerprint) {
+    reasons.push("selected-route-field-changed");
+  }
+  if (!sameArray(before?.usableStartIndices, after?.usableStartIndices)) {
+    reasons.push("usable-start-field-changed");
+  }
+  if (!sameArray(before?.hardFailures, after?.hardFailures)) {
+    reasons.push("hard-failure-state-changed");
+  }
+  if (!sameArray(before?.softFailures, after?.softFailures)) {
+    reasons.push("soft-failure-state-changed");
+  }
+  if (!sameArray(before?.competitiveSelectedIndices, after?.competitiveSelectedIndices)) {
+    reasons.push("competitive-choice-set-changed");
+  }
+  if ((before?.pricingSignature ?? "") !== (after?.pricingSignature ?? "")) {
+    reasons.push("starting-energy-setup-changed");
+  }
+  if ((before?.meaningfulEnergyAdjustmentCount ?? 0) !== (after?.meaningfulEnergyAdjustmentCount ?? 0)) {
+    reasons.push("starting-energy-adjustment-count-changed");
+  }
+
+  const difficultyDelta = numericDelta(before?.difficultyTurnRE, after?.difficultyTurnRE);
+  const lengthDelta = numericDelta(before?.lengthWallClockTurnIndex, after?.lengthWallClockTurnIndex);
+  const fairnessDelta = numericDelta(before?.fairnessRangeRE, after?.fairnessRangeRE);
+  const trafficDelta = numericDelta(before?.trafficAveragePenalty, after?.trafficAveragePenalty);
+
+  if (difficultyDelta > 0.05) reasons.push("difficulty-changed");
+  if (lengthDelta > 0.10) reasons.push("length-changed");
+  if (fairnessDelta > 0.10) reasons.push("fairness-changed");
+  if (trafficDelta > 0.50) reasons.push("traffic-changed");
+
+  return {
+    materialDifference: reasons.length > 0,
+    reasons,
+    deltas: {
+      difficultyTurnRE: Number.isFinite(difficultyDelta) ? Number(difficultyDelta.toFixed(4)) : null,
+      lengthWallClockTurnIndex: Number.isFinite(lengthDelta) ? Number(lengthDelta.toFixed(4)) : null,
+      fairnessRangeRE: Number.isFinite(fairnessDelta) ? Number(fairnessDelta.toFixed(4)) : null,
+      trafficAveragePenalty: Number.isFinite(trafficDelta) ? Number(trafficDelta.toFixed(4)) : null
+    }
+  };
 }
 
 function buildScenarioCopySummary(scenario) {
@@ -21083,15 +21235,15 @@ function buildScenarioCopySummary(scenario) {
   ];
 
   if (scenario.hydrationAcceptanceDrift) {
-    lines.push("Reload classification: originally accepted; current reanalysis is outside the requested ordinary target-acceptance envelope.");
+    lines.push("Reload classification: originally accepted; current reanalysis is not ordinarily acceptable under the current analysis model.");
   } else if (scenario.hydrationAcceptanceImproved) {
-    lines.push("Reload classification: originally closest-match fallback; current reanalysis is now inside the requested ordinary target-acceptance envelope.");
+    lines.push("Reload classification: originally closest-match fallback; current reanalysis is ordinarily acceptable under the current analysis model.");
   }
 
   if (scenario.hydrationPresentationFallback) {
-    lines.push("Reload presentation: saved accepted difficulty/length and Course Notes are shown because route reconstruction was incomplete.");
+    lines.push(`Reload presentation: saved difficulty/length and Course Notes are shown because current reanalysis did not rebuild the full production presentation (${scenario.hydrationPresentationStatusReason ?? "unspecified"}).`);
   } else if (scenario.hydrationPresentationUnavailable) {
-    lines.push("Reload presentation: route reconstruction was incomplete and this older snapshot has no saved presentation fallback.");
+    lines.push(`Reload presentation: current reanalysis did not rebuild the full production presentation (${scenario.hydrationPresentationStatusReason ?? "unspecified"}) and this older snapshot has no saved presentation fallback.`);
   }
 
   if (Number.isInteger(scenario.devTestSeed)) {
@@ -21720,7 +21872,7 @@ function buildScenarioCopySummary(scenario) {
     if (summary.programmingScarcity) {
       const scarcity = summary.programmingScarcity;
       lines.push(
-        `Programming supply: selected ${scarcity.selectedRoutes ?? 0} routes, Again used on ${scarcity.routesUsingAgain ?? 0} route(s)/${scarcity.totalAgainTurns ?? 0} turn(s), consecutive required-Again turns ${scarcity.consecutiveTurnAgainReuse ?? 0}, literal program violations ${scarcity.literalProgramViolations ?? 0}, rolling two-turn violations ${scarcity.rollingWindowViolations ?? 0}; exact 9-card hypergeometric availability penalty mean/max ${scarcity.meanCardAvailabilityPenalty ?? 0}/${scarcity.maxCardAvailabilityPenalty ?? 0}; card RE compressed α=${scarcity.cardScarcityAdaptabilityFactor ?? 1}: mean/max ${scarcity.meanCardAvailabilityPenaltyRE ?? 0}/${scarcity.maxCardAvailabilityPenaltyRE ?? 0}RE vs uncompressed ${scarcity.meanCardAvailabilityPenaltyUncompressedRE ?? 0}/${scarcity.maxCardAvailabilityPenaltyUncompressedRE ?? 0}RE; fresh-deck reference P(1 of 4-copy) ${scarcity.baselineFourCopyProbability ?? "?"}, P(singleton) ${scarcity.singleCopyProbability ?? "?"}, P(3 distinct singletons) ${scarcity.threeDistinctSingleCopyProbability ?? "?"}, P(repeated 4-copy action incl Again) ${scarcity.repeatedFourCopyWithAgainProbability ?? "?"}`
+        `Programming supply: selected ${scarcity.selectedRoutes ?? 0} routes, Again used on ${scarcity.routesUsingAgain ?? 0} route(s)/${scarcity.totalAgainTurns ?? 0} turn(s), consecutive required-Again turns ${scarcity.consecutiveTurnAgainReuse ?? 0}, literal program violations ${scarcity.literalProgramViolations ?? 0}, rolling two-turn violations ${scarcity.rollingWindowViolations ?? 0}; exact ${scarcity.handSize ?? 9}-card hypergeometric availability penalty mean/max ${scarcity.meanCardAvailabilityPenalty ?? 0}/${scarcity.maxCardAvailabilityPenalty ?? 0}; card-scarcity scaling α=${scarcity.cardScarcityAdaptabilityFactor ?? 1}: mean/max ${scarcity.meanCardAvailabilityPenaltyRE ?? 0}/${scarcity.maxCardAvailabilityPenaltyRE ?? 0}RE vs raw-unscaled ${scarcity.meanCardAvailabilityPenaltyUncompressedRE ?? 0}/${scarcity.maxCardAvailabilityPenaltyUncompressedRE ?? 0}RE; normal 9-card fresh-deck reference P(1 of 4-copy) ${scarcity.baselineFourCopyProbability ?? "?"}, active P(singleton) ${scarcity.singleCopyProbability ?? "?"}, P(3 distinct singletons) ${scarcity.threeDistinctSingleCopyProbability ?? "?"}, P(repeated 4-copy action incl Again) ${scarcity.repeatedFourCopyWithAgainProbability ?? "?"}`
       );
       if (scarcity.discoveredCandidateCardPressure) {
         const audit = scarcity.discoveredCandidateCardPressure;
@@ -22129,14 +22281,14 @@ function buildDamageFoundationReportLines(scenario, options = {}) {
     0
   ) / Math.max(1, starts.length)).toFixed(3));
   const lines = [
-    `Damage economy v9: ROUTING ACTIVE; damage input avg ${mean("totalDamageUnits")} = deterministic ${mean("deterministicDamageUnits")} + robot-laser expected ${mean("robotLaserExpectedDamageUnits")}; persistent SPAM total/held final avg ${mean("finalSpamTotal")}/${mean("finalSpamHeld")}; transient Haywire max expected clog avg ${mean("maxExpectedHaywireClogs")}; AUTHORITATIVE raw economy RE avg total ${mean("totalDamageEconomyRegisterEquivalents")} [supply ${mean("totalSpamSupplyRegisterEquivalents")}, control-clog ${mean("totalClogRegisterEquivalents")}], max-turn ${Number((entries.reduce((t,e)=>t+(Number(e.foundation?.maxTurnDamageEconomyRegisterEquivalents)||0),0)/Math.max(1,entries.length)).toFixed(3))}; SPAM plays avg forced/elective ${mean("totalForcedSpamReliefInitiations")}/${mean("totalElectiveSpamReliefInitiations")}, removed avg ${mean("totalSpamRemoved")} (reboot ${mean("totalRebootSpamRemoved")}, capacity ${mean("totalRebootSpamDisposalCapacity")}); Shutdown tolerance reference ${entries[0]?.foundation?.shutdownReferenceRegisterEquivalents ?? 5} RE is COUNTERFACTUAL ONLY, not programmed, not a cap; diagnostic threshold replay avg ${mean("shutdownEquivalentDamageScoreRegisterEquivalents")} RE = ${mean("shutdownEquivalentRegisterEquivalents")} threshold-chunk RE + ${mean("shutdownResidualRegisterEquivalents")} residual, ${sum("shutdownEquivalentEpisodeCount")} threshold crossing(s), high/elevated tolerance pressure ${entries.filter((entry)=>entry.foundation?.shutdownThreatLevel === "high").length}/${entries.filter((entry)=>entry.foundation?.shutdownThreatLevel === "elevated").length}; selected-route intrinsic damage adjustment avg ${selectedRouteMean("intrinsicDamageRoutingAdjustmentScore")} score from ${selectedRouteMean("intrinsicDamageEconomyRegisterEquivalents")} raw damage-economy RE; traffic robot-laser marginal raw-damage increment avg ${selectedTrafficMean("fullCourseTrafficDamageEconomyRobotLaserIncrementRegisterEquivalents")} RE while residual ranged threat ${selectedTrafficMean("fullCourseTrafficResidualRangedThreatScore")} score remains separate; exact candidate re-ranking active; Shutdown reference is search-worthiness context only; cheap primary search graph/budgets unchanged; tolerance replay ${telemetry.shutdownScoringReplayCount ?? 0} route(s)/${telemetry.shutdownScoringReplayTurns ?? 0} turn(s); relief coefficients unchanged from v49x; state cache ${telemetry.effectiveStateCacheHits ?? 0}/${telemetry.effectiveStateLookups ?? 0}, program cache ${telemetry.programCacheHits ?? 0}/${telemetry.programLookups ?? 0}, draw cache ${telemetry.spamDrawCacheHits ?? 0}/${telemetry.spamDrawLookups ?? 0}, route replay cache ${telemetry.routeSummaryCacheHits ?? 0}/${telemetry.routeSummaryLookups ?? 0}; implemented hooks ${implementedHooks.length ? implementedHooks.join(",") : "none"}, deferred ${deferredHooks.length ? deferredHooks.join(",") : "none"}`
+    `Damage economy v9: ROUTING ACTIVE; damage input avg ${mean("totalDamageUnits")} = deterministic ${mean("deterministicDamageUnits")} + robot-laser expected ${mean("robotLaserExpectedDamageUnits")}; persistent SPAM total/held final avg ${mean("finalSpamTotal")}/${mean("finalSpamHeld")}; transient Haywire max expected clog avg ${mean("maxExpectedHaywireClogs")}; AUTHORITATIVE raw economy RE avg total ${mean("totalDamageEconomyRegisterEquivalents")} [supply ${mean("totalSpamSupplyRegisterEquivalents")} = base ${mean("totalRawSpamSupplyRegisterEquivalents")} + Permanent-Shutdown pressure ${mean("totalPermanentShutdownPressureRegisterEquivalents")}, control-clog ${mean("totalClogRegisterEquivalents")}], max-turn ${Number((entries.reduce((t,e)=>t+(Number(e.foundation?.maxTurnDamageEconomyRegisterEquivalents)||0),0)/Math.max(1,entries.length)).toFixed(3))}; SPAM plays avg forced/elective ${mean("totalForcedSpamReliefInitiations")}/${mean("totalElectiveSpamReliefInitiations")}, removed avg ${mean("totalSpamRemoved")} (reboot ${mean("totalRebootSpamRemoved")}, capacity ${mean("totalRebootSpamDisposalCapacity")}, repair ${mean("totalRepairStationSpamRemoved")}); repair-station uses ${sum("repairStationReliefCount")} / Haywire expected removed ${mean("totalRepairStationHaywireExpectedRemoved")} avg; flaming-oil deterministic damage avg ${mean("flamingOilDamageUnits")}; Permanent Shutdown pressure ${entries[0]?.foundation?.permanentShutdownPressureActive ? `LIVE, max supply multiplier avg ${mean("maxPermanentShutdownSupplyMultiplier")}x, provisional curve calibration queued` : "OFF"}; Shutdown tolerance reference ${entries[0]?.foundation?.shutdownReferenceRegisterEquivalents ?? 5} RE is COUNTERFACTUAL ONLY, not programmed, not a cap; diagnostic threshold replay avg ${mean("shutdownEquivalentDamageScoreRegisterEquivalents")} RE = ${mean("shutdownEquivalentRegisterEquivalents")} threshold-chunk RE + ${mean("shutdownResidualRegisterEquivalents")} residual, ${sum("shutdownEquivalentEpisodeCount")} threshold crossing(s), high/elevated tolerance pressure ${entries.filter((entry)=>entry.foundation?.shutdownThreatLevel === "high").length}/${entries.filter((entry)=>entry.foundation?.shutdownThreatLevel === "elevated").length}; selected-route intrinsic damage adjustment avg ${selectedRouteMean("intrinsicDamageRoutingAdjustmentScore")} score from ${selectedRouteMean("intrinsicDamageEconomyRegisterEquivalents")} raw damage-economy RE; traffic robot-laser marginal raw-damage increment avg ${selectedTrafficMean("fullCourseTrafficDamageEconomyRobotLaserIncrementRegisterEquivalents")} RE; legacy residual ranged-threat score ${selectedTrafficMean("fullCourseTrafficLegacyResidualRangedThreatScoreDiagnostic")} is diagnostic-only and contributes 0 RE; exact candidate re-ranking active; Shutdown reference is search-worthiness context only; cheap primary search graph/budgets unchanged; tolerance replay ${telemetry.shutdownScoringReplayCount ?? 0} route(s)/${telemetry.shutdownScoringReplayTurns ?? 0} turn(s); relief coefficients unchanged from v49x; state cache ${telemetry.effectiveStateCacheHits ?? 0}/${telemetry.effectiveStateLookups ?? 0}, program cache ${telemetry.programCacheHits ?? 0}/${telemetry.programLookups ?? 0}, draw cache ${telemetry.spamDrawCacheHits ?? 0}/${telemetry.spamDrawLookups ?? 0}, route replay cache ${telemetry.routeSummaryCacheHits ?? 0}/${telemetry.routeSummaryLookups ?? 0}; implemented hooks ${implementedHooks.length ? implementedHooks.join(",") : "none"}, deferred ${deferredHooks.length ? deferredHooks.join(",") : "none"}`
   ];
 
   if (includePerStart) {
     entries.forEach((entry) => {
       const d = entry.foundation;
       lines.push(
-        `Damage economy start #${entry.startIndex + 1}: input ${d.totalDamageUnits} = deterministic ${d.deterministicDamageUnits} [board laser ${d.boardLaserDamageUnits}, flamer ${d.flamethrowerDamageUnits}, ledge ${d.ledgeDamageUnits}, reboot ${d.rebootDamageUnits}] + robot laser expected ${d.robotLaserExpectedDamageUnits}; SPAM added/removed ${d.totalSpamAdded}/${d.totalSpamRemoved} [reboot ${d.totalRebootSpamRemoved}, reboot capacity ${d.totalRebootSpamDisposalCapacity}], final total/held/circulating ${d.finalSpamTotal}/${d.finalSpamHeld}/${d.finalSpamCirculating}; AUTHORITATIVE raw RE supply/clog/total ${d.totalSpamSupplyRegisterEquivalents}/${d.totalClogRegisterEquivalents}/${d.totalDamageEconomyRegisterEquivalents}; Shutdown tolerance ${d.shutdownThreatLevel}, reference ${d.shutdownReferenceRegisterEquivalents} RE, diagnostic threshold replay ${d.shutdownEquivalentDamageScoreRegisterEquivalents} RE (${d.shutdownEquivalentEpisodeCount} crossing(s) + residual ${d.shutdownResidualRegisterEquivalents}); selected route intrinsic adjustment ${starts.find((start)=>start.index===entry.startIndex)?.fullCourseRoute?.intrinsicDamageRoutingAdjustmentScore ?? 0} score from raw damage, robot-laser marginal traffic increment ${starts.find((start)=>start.index===entry.startIndex)?.fullCourseTrafficDamageEconomyRobotLaserIncrementRegisterEquivalents ?? 0} RE; variants implemented ${d.implementedVariantHooks?.join(",") || "none"}, deferred ${d.deferredVariantHooks?.join(",") || "none"}`
+        `Damage economy start #${entry.startIndex + 1}: input ${d.totalDamageUnits} = deterministic ${d.deterministicDamageUnits} [board laser ${d.boardLaserDamageUnits}, flamer ${d.flamethrowerDamageUnits}, flaming oil ${d.flamingOilDamageUnits ?? 0}, ledge ${d.ledgeDamageUnits}, reboot ${d.rebootDamageUnits}] + robot laser expected ${d.robotLaserExpectedDamageUnits}; SPAM added/removed ${d.totalSpamAdded}/${d.totalSpamRemoved} [reboot ${d.totalRebootSpamRemoved}, reboot capacity ${d.totalRebootSpamDisposalCapacity}, repair ${d.totalRepairStationSpamRemoved ?? 0}], repair stations ${d.repairStationReliefCount ?? 0} use(s) / Haywire expected removed ${d.totalRepairStationHaywireExpectedRemoved ?? 0}; final total/held/circulating ${d.finalSpamTotal}/${d.finalSpamHeld}/${d.finalSpamCirculating}; AUTHORITATIVE raw RE supply/clog/total ${d.totalSpamSupplyRegisterEquivalents}/${d.totalClogRegisterEquivalents}/${d.totalDamageEconomyRegisterEquivalents} [supply base ${d.totalRawSpamSupplyRegisterEquivalents ?? d.totalSpamSupplyRegisterEquivalents}, Permanent-Shutdown +${d.totalPermanentShutdownPressureRegisterEquivalents ?? 0}, max ×${d.maxPermanentShutdownSupplyMultiplier ?? 1}]; Shutdown tolerance ${d.shutdownThreatLevel}, reference ${d.shutdownReferenceRegisterEquivalents} RE, diagnostic threshold replay ${d.shutdownEquivalentDamageScoreRegisterEquivalents} RE (${d.shutdownEquivalentEpisodeCount} crossing(s) + residual ${d.shutdownResidualRegisterEquivalents}); selected route intrinsic adjustment ${starts.find((start)=>start.index===entry.startIndex)?.fullCourseRoute?.intrinsicDamageRoutingAdjustmentScore ?? 0} score from raw damage, robot-laser marginal traffic increment ${starts.find((start)=>start.index===entry.startIndex)?.fullCourseTrafficDamageEconomyRobotLaserIncrementRegisterEquivalents ?? 0} RE; variants implemented ${d.implementedVariantHooks?.join(",") || "none"}, deferred ${d.deferredVariantHooks?.join(",") || "none"}`
       );
     });
   }
@@ -22149,20 +22301,21 @@ function buildDamageFoundationReportLines(scenario, options = {}) {
           turn.expectedHaywireClogs > 0 ||
           turn.pendingSpamAddedThisTurn > 0 ||
           turn.reliefInitiations > 0 ||
-          turn.rebootRegister
+          turn.rebootRegister ||
+          turn.repairStationReliefCount > 0
         ))
         .forEach((turn) => {
           lines.push(
-            `Damage economy turn start #${entry.startIndex + 1} T${turn.turn}: SPAM total ${turn.spamTotalAtProgramming}, held ${turn.spamHeldAtProgramming}, circulating ${turn.spamCirculatingAtProgramming} -> effective held/circ ${turn.effectiveHeldSpam}/${turn.effectiveCirculatingSpam}; hand ${turn.baseHandSize}, fresh draw ${turn.expectedFreshDrawSlots}, expected newly drawn/in-hand SPAM ${turn.expectedSpamDrawn}/${turn.expectedSpamInHand}; program P clean/damaged ${turn.cleanProgramProbability}/${turn.damagedProgramProbability}; Haywire clog ${turn.expectedHaywireClogs}; SPAM plays forced/elective ${turn.forcedSpamReliefInitiations}/${turn.electiveSpamReliefInitiations} @2 clog each, play-count P0..P5 ${turn.spamPlayCountDistribution.join("/")} -> expected SPAM clog ${turn.spamPlayClogLoad}, combined control-clog ${turn.expectedTotalControlClogLoad} -> clog RE ${turn.clogRegisterEquivalents}; supply RE ${turn.spamSupplyRegisterEquivalents}; total RE ${turn.damageEconomyRegisterEquivalents}; Shutdown-tolerance segment ${turn.shutdownThreatSegmentRegisterEquivalents} RE${turn.shutdownEquivalentEpisodeAfterTurn ? " -> threshold crossing" : ""}; damage this turn ${turn.totalDamageUnits} = deterministic ${turn.deterministicDamageUnits} + robot-laser expected ${turn.robotLaserExpectedDamageUnits}; relief opportunity/initiation/removal ${turn.reliefOpportunity}/${turn.reliefInitiations}/${turn.spamRemoved} [forced removed ${turn.forcedSpamRemoved}]; reboot ${turn.rebootRegister ? `R${turn.rebootRegister}, SPAM dump ${turn.rebootSpamRemoved}/${turn.rebootSpamDisposalCapacity}, active-H clear ${turn.rebootHaywireCleared}` : "none"}; held end ${turn.spamHeldAtTurnEnd}; pending next S/H ${turn.pendingSpamAtTurnEnd}/${turn.pendingHaywireExpectedForNextTurn} [register H risks ${turn.pendingHaywireRegisterRisks.join("/")}]`
+            `Damage economy turn start #${entry.startIndex + 1} T${turn.turn}: SPAM total ${turn.spamTotalAtProgramming}, held ${turn.spamHeldAtProgramming}, circulating ${turn.spamCirculatingAtProgramming} -> effective held/circ ${turn.effectiveHeldSpam}/${turn.effectiveCirculatingSpam}; hand ${turn.baseHandSize}, fresh draw ${turn.expectedFreshDrawSlots}, expected newly drawn/in-hand SPAM ${turn.expectedSpamDrawn}/${turn.expectedSpamInHand}; program P clean/damaged ${turn.cleanProgramProbability}/${turn.damagedProgramProbability}; Haywire clog ${turn.expectedHaywireClogs}; SPAM plays forced/elective ${turn.forcedSpamReliefInitiations}/${turn.electiveSpamReliefInitiations} @2 clog each, play-count P0..P5 ${turn.spamPlayCountDistribution.join("/")} -> expected SPAM clog ${turn.spamPlayClogLoad}, combined control-clog ${turn.expectedTotalControlClogLoad} -> clog RE ${turn.clogRegisterEquivalents}; supply RE ${turn.spamSupplyRegisterEquivalents} [base ${turn.rawSpamSupplyRegisterEquivalents ?? turn.spamSupplyRegisterEquivalents}, Permanent-Shutdown +${turn.permanentShutdownPressureRegisterEquivalents ?? 0} @burden${turn.permanentShutdownSpamBurden ?? 0} ×${turn.permanentShutdownSupplyMultiplier ?? 1}]; total RE ${turn.damageEconomyRegisterEquivalents}; Shutdown-tolerance segment ${turn.shutdownThreatSegmentRegisterEquivalents} RE${turn.shutdownEquivalentEpisodeAfterTurn ? " -> threshold crossing" : ""}; damage this turn ${turn.totalDamageUnits} = deterministic ${turn.deterministicDamageUnits} + robot-laser expected ${turn.robotLaserExpectedDamageUnits}; relief opportunity/initiation/removal ${turn.reliefOpportunity}/${turn.reliefInitiations}/${turn.spamRemoved} [forced removed ${turn.forcedSpamRemoved}]; reboot ${turn.rebootRegister ? `R${turn.rebootRegister}, SPAM dump ${turn.rebootSpamRemoved}/${turn.rebootSpamDisposalCapacity}, active-H clear ${turn.rebootHaywireCleared}` : "none"}; repair ${turn.repairStationReliefCount ? `${turn.repairStationReliefCount}x, SPAM -${turn.repairStationSpamRemoved}, H-exp -${turn.repairStationHaywireExpectedRemoved}` : "none"}; held end ${turn.spamHeldAtTurnEnd}; pending next S/H ${turn.pendingSpamAtTurnEnd}/${turn.pendingHaywireExpectedForNextTurn} [register H risks ${turn.pendingHaywireRegisterRisks.join("/")}]`
           );
         });
       (entry.foundation?.events ?? [])
         .filter((event) => (
-          event.damageUnits > 0 || event.reliefInitiation > 0 || event.rebooted
+          event.damageUnits > 0 || event.reliefInitiation > 0 || event.rebooted || event.repairStationEligible
         ))
         .forEach((event) => {
           lines.push(
-            `Damage economy event start #${entry.startIndex + 1} T${event.turn}R${event.register} a${event.absoluteAction}: tactical relief ${event.reliefInitiation} (opp ${event.reliefOpportunity}, chain ${event.spamChainYield}x, removed ${event.spamRemoved}; wall +${event.reliefWallBonus}${event.reliefWallDistance ? `@${event.reliefWallDistance}` : ""}, forward hazard -${event.reliefForwardHazardPenalty}, conveyor +${event.reliefConveyorMovementBonus}, rotation -${event.reliefForcedRotationPenalty}, forced move -${event.reliefForcedMovementPenalty});${event.rebooted ? ` REBOOT clears active-H ${event.rebootHaywireCleared}, SPAM dump ${event.rebootSpamRemoved}/${event.rebootSpamDisposalCapacity};` : ""} damage ${event.damageUnits} = deterministic ${event.deterministicDamageUnits} + robot-laser expected ${event.robotLaserExpectedDamageUnits} [${event.sourceTypes?.join("+") || "none"}], robot-hit p by N/E/S/W ${event.robotLaserHitProbabilities?.join("/") || "0/0/0/0"}, H-event p ${event.haywireEventProbability} -> +SPAM ${event.spamAdded}, pending H-register risk +${event.haywireRegisterRiskAdded} -> ${event.pendingHaywireRegisterRiskAfter}`
+            `Damage economy event start #${entry.startIndex + 1} T${event.turn}R${event.register} a${event.absoluteAction}: tactical relief ${event.reliefInitiation} (opp ${event.reliefOpportunity}, chain ${event.spamChainYield}x, removed ${event.spamRemoved}; wall +${event.reliefWallBonus}${event.reliefWallDistance ? `@${event.reliefWallDistance}` : ""}, forward hazard -${event.reliefForwardHazardPenalty}, conveyor +${event.reliefConveyorMovementBonus}, rotation -${event.reliefForcedRotationPenalty}, forced move -${event.reliefForcedMovementPenalty});${event.rebooted ? ` REBOOT clears active-H ${event.rebootHaywireCleared}, SPAM dump ${event.rebootSpamRemoved}/${event.rebootSpamDisposalCapacity};` : ""} damage ${event.damageUnits} = deterministic ${event.deterministicDamageUnits} + robot-laser expected ${event.robotLaserExpectedDamageUnits} [${event.sourceTypes?.join("+") || "none"}], robot-hit p by N/E/S/W ${event.robotLaserHitProbabilities?.join("/") || "0/0/0/0"}, H-event p ${event.haywireEventProbability} -> +SPAM ${event.spamAdded}, pending H-register risk +${event.haywireRegisterRiskAdded} -> ${event.pendingHaywireRegisterRiskAfter}${event.repairStationEligible ? `; REPAIR SPAM -${event.repairStationSpamRemoved}, H-exp -${event.repairStationHaywireExpectedRemoved}` : ""}`
           );
         });
     });
@@ -22329,7 +22482,7 @@ function buildScenarioReport(scenario, selectedLegIndices = null) {
     `Board spread: ${normalizeBoardSpread(scenario.preferences.boardSpread)}`,
     `Sets: ${[...getSelectedExpansionIds(scenario.preferences)].map((id) => formatExpansionName(id)).join(", ") || "none"}`,
     `Allowed variants: ${describeAllowedVariants(scenario.preferences)}`,
-    `Variant complexity: ${scenario.variantComplexityUsed ?? 0}/${scenario.variantComplexityBudget ?? 0}`,
+    `Optional variant complexity: ${scenario.variantComplexityUsed ?? 0}/${scenario.variantComplexityBudget ?? 0} (forced/must-like selections excluded)`,
     `Variant impact: ${getVariantImpactSummary(scenario) || "none"}`,
     `Act Fast used: ${scenario.actFast ? scenario.actFastMode ?? "yes" : "no"}`,
     `Competitive Mode used: ${scenario.competitiveMode ? "yes" : "no"}`,
@@ -22455,8 +22608,8 @@ function buildScenarioReport(scenario, selectedLegIndices = null) {
     `Difficulty: ${scenario.metrics.difficultyTurnRE ?? "n/a"} RE/turn = ${formatPresentedDifficultyLabel(scenario.metrics)} (PRODUCTION owner)`,
     `Legacy difficulty raw: ${scenario.metrics.difficultyRaw ?? "n/a"} = ${formatLegacyDifficultyLabel(scenario.metrics.difficultyRaw)}; retained only for construction/preflight calibration diagnostics`,
     scenario.metrics.reTurnVariantDifficultyAccounting
-      ? `RE-turn variant accounting v49de: base ${scenario.metrics.reTurnVariantDifficultyAccounting.base} -> final ${scenario.metrics.reTurnVariantDifficultyAccounting.final} RE/turn (delta ${scenario.metrics.reTurnVariantDifficultyAccounting.delta}); residuals ${(scenario.metrics.reTurnVariantDifficultyAccounting.contributions ?? []).map((entry) => `${entry.id} ${entry.delta >= 0 ? "+" : ""}${entry.delta}RE/t [${entry.kind}]${Number.isFinite(entry.legacyFitPoints) ? ` from ${entry.legacyFitPoints} legacy fit pt` : ""}`).join(", ") || "none"}; mechanically represented ${(scenario.metrics.reTurnVariantDifficultyAccounting.mechanicalRules ?? []).map((entry) => `${entry.id} (${entry.note})`).join(", ") || "none"}; bridge ${scenario.metrics.reTurnVariantDifficultyAccounting.fitPointsPerRE ?? RE_TURN_DIFFICULTY_FIT_POINTS_PER_RE} fit pt/RE-turn`
-      : "RE-turn variant accounting v49de: n/a",
+      ? `RE-turn variant accounting v49eo: base ${scenario.metrics.reTurnVariantDifficultyAccounting.base} -> final ${scenario.metrics.reTurnVariantDifficultyAccounting.final} RE/turn (delta ${scenario.metrics.reTurnVariantDifficultyAccounting.delta}); residuals ${(scenario.metrics.reTurnVariantDifficultyAccounting.contributions ?? []).map((entry) => `${entry.id} ${entry.delta >= 0 ? "+" : ""}${entry.delta}RE/t [${entry.kind}]${Number.isFinite(entry.legacyFitPoints) ? ` from ${entry.legacyFitPoints} legacy fit pt` : ""}`).join(", ") || "none"}; mechanically represented ${(scenario.metrics.reTurnVariantDifficultyAccounting.mechanicalRules ?? []).map((entry) => `${entry.id} (${entry.note})`).join(", ") || "none"}; deferred/incomplete ${(scenario.metrics.reTurnVariantDifficultyAccounting.deferredRules ?? []).map((entry) => `${entry.id} (${entry.note})`).join(", ") || "none"}; bridge ${scenario.metrics.reTurnVariantDifficultyAccounting.fitPointsPerRE ?? RE_TURN_DIFFICULTY_FIT_POINTS_PER_RE} fit pt/RE-turn`
+      : "RE-turn variant accounting v49eo: n/a",
     reDifficultyShadow?.active
       ? `RE-turn difficulty v49de PRODUCTION: completed effective RE minus programmed-register tempo minus lost-register tempo, normalized by programming turns; occupancy-weighted mean ${reDifficultyShadow.expectedMeanTurnBurdenRE}RE/turn, +turn-p${Math.round((reDifficultyShadow.tailQuantile ?? 0.75) * 100)} peak(${reDifficultyShadow.routePeakWeight}) -> ${reDifficultyShadow.expectedPeakAdjustedTurnBurdenRE}, +likely-start p${Math.round((reDifficultyShadow.tailQuantile ?? 0.75) * 100)} tail ${reDifficultyShadow.likelyStartTailTurnBurdenRE}(${reDifficultyShadow.courseTailWeight}) -> base ${reDifficultyShadow.courseTurnDifficultyRE}, variant-final ${reDifficultyShadow.productionFinalTurnRE}; occupancy ${reDifficultyShadow.occupancyMass}/${reDifficultyShadow.playerCount} across ${reDifficultyShadow.startCount} start(s), route-mixture entries ${reDifficultyShadow.routeMixtureEntryCount} (${reDifficultyShadow.averageRouteFamiliesPerStart}/start); production replay ${Number.isFinite(reDifficultyShadow.computeMs) ? `${reDifficultyShadow.computeMs}ms` : "n/a"}; current forecast uncertainty remains separate at ${reDifficultyShadow.currentForecastEquivalentActions} equivalent register(s)`
       : `RE-turn difficulty v49de PRODUCTION: ${reDifficultyShadow?.reason ?? "n/a"}`,
@@ -22469,7 +22622,7 @@ function buildScenarioReport(scenario, selectedLegIndices = null) {
       : "Programming pressure v38: n/a",
     `Length raw: ${scenario.metrics.lengthRaw}`,
     `Length inputs: flags ${scenario.metrics.lengthMetrics.inputs.flagCount}, players ${scenario.metrics.lengthMetrics.inputs.playerCount}, actionScore ${scenario.metrics.lengthMetrics.inputs.totalActionLoad}, distanceScore ${scenario.metrics.lengthMetrics.inputs.totalRouteDistance}, congestion ${scenario.metrics.lengthMetrics.inputs.totalCongestion}, flagArea ${scenario.metrics.lengthMetrics.inputs.flagAreaScore}, totalDifficulty ${scenario.metrics.lengthMetrics.inputs.totalDifficulty}`,
-    `Length contributions: flags ${scenario.metrics.lengthMetrics.contributions.checkpointLoad}, players ${scenario.metrics.lengthMetrics.contributions.playerLoad} [legacy additive ${scenario.metrics.lengthMetrics.contributions.legacyPlayerLoad ?? 0}], expected-play nominal ${scenario.metrics.lengthMetrics.contributions.actionLoad}, recovery ${scenario.metrics.lengthMetrics.contributions.forecastUncertaintyLoad ?? 0}, wall-clock extent ${scenario.metrics.lengthMetrics.contributions.productionWallClockExtentLoad ?? "n/a"}, distance ${scenario.metrics.lengthMetrics.contributions.distanceLoad} [legacy ${scenario.metrics.lengthMetrics.contributions.legacyDistanceLoad ?? 0}], congestion ${scenario.metrics.lengthMetrics.contributions.congestionLoad} [legacy ${scenario.metrics.lengthMetrics.contributions.legacyCongestionLoad ?? 0}; old weight ${scenario.metrics.lengthMetrics.contributions.congestionWeight}; harshness ${scenario.metrics.lengthMetrics.contributions.boardHarshness}], flagArea ${scenario.metrics.lengthMetrics.contributions.flagAreaLoad}, difficulty ${scenario.metrics.lengthMetrics.contributions.difficultyLoad}, moving-target residual ${scenario.metrics.lengthMetrics.contributions.movingTargetLoad} (legacy estimate ${scenario.metrics.lengthMetrics.contributions.movingTargetLegacyEstimate ?? 0}), act-fast direct raw ${scenario.metrics.lengthMetrics.contributions.actFastLoad} [legacy ${scenario.metrics.lengthMetrics.contributions.legacyActFastLoad ?? 0}], reshuffle ${scenario.metrics.lengthMetrics.contributions.lessForeshadowingLoad ?? 0}, shared-deck ${scenario.metrics.lengthMetrics.contributions.sharedDeckLoad ?? 0}`,
+    `Length contributions: flags ${scenario.metrics.lengthMetrics.contributions.checkpointLoad}, players ${scenario.metrics.lengthMetrics.contributions.playerLoad} [legacy additive ${scenario.metrics.lengthMetrics.contributions.legacyPlayerLoad ?? 0}], expected-play nominal ${scenario.metrics.lengthMetrics.contributions.actionLoad}, recovery ${scenario.metrics.lengthMetrics.contributions.forecastUncertaintyLoad ?? 0}, wall-clock extent ${scenario.metrics.lengthMetrics.contributions.productionWallClockExtentLoad ?? "n/a"}, distance ${scenario.metrics.lengthMetrics.contributions.distanceLoad} [legacy ${scenario.metrics.lengthMetrics.contributions.legacyDistanceLoad ?? 0}], congestion ${scenario.metrics.lengthMetrics.contributions.congestionLoad} [legacy ${scenario.metrics.lengthMetrics.contributions.legacyCongestionLoad ?? 0}; old weight ${scenario.metrics.lengthMetrics.contributions.congestionWeight}; harshness ${scenario.metrics.lengthMetrics.contributions.boardHarshness}], flagArea ${scenario.metrics.lengthMetrics.contributions.flagAreaLoad}, difficulty ${scenario.metrics.lengthMetrics.contributions.difficultyLoad}, moving-target residual ${scenario.metrics.lengthMetrics.contributions.movingTargetLoad} (legacy estimate ${scenario.metrics.lengthMetrics.contributions.movingTargetLegacyEstimate ?? 0}), act-fast direct raw ${scenario.metrics.lengthMetrics.contributions.actFastLoad} [legacy ${scenario.metrics.lengthMetrics.contributions.legacyActFastLoad ?? 0}], deck-variant standalone length LF ${scenario.metrics.lengthMetrics.contributions.lessForeshadowingLoad ?? 0}, Shared ${scenario.metrics.lengthMetrics.contributions.sharedDeckLoad ?? 0} (both mechanically represented in card RE)`,
     `Length extent v49ds PRODUCTION COMPONENT: nominal ${scenario.metrics.lengthMetrics.inputs.totalActionLoad} reg + RE-native recovery ${scenario.metrics.lengthMetrics.contributions.forecastEquivalentActions ?? 0} = ${scenario.metrics.lengthMetrics.contributions.productionExpectedPlayRegisters ?? "n/a"} expected-play reg / ${scenario.metrics.lengthMetrics.contributions.productionExpectedPlayProgrammingTurns ?? "n/a"} turns; route distance and standalone congestion have NO independent production vote; legacy distance/congestion ${scenario.metrics.lengthMetrics.contributions.legacyDistanceLoad ?? 0}/${scenario.metrics.lengthMetrics.contributions.legacyCongestionLoad ?? 0} diagnostic only; legacy confidence forecast +${scenario.metrics.lengthMetrics.contributions.legacyForecastEquivalentActions ?? scenario.metrics.lengthMetrics.forecastLengthProfile?.uncertaintyEquivalentActions ?? 0} reg diagnostic only`,
     `Wall-clock length v49dv PRODUCTION: programming ${scenario.metrics.lengthMetrics.contributions.productionProgrammingWallClockRegisterIndex ?? "n/a"} wall-reg + upgrade-economy ${scenario.metrics.lengthMetrics.contributions.productionEconomyWallClockRegisterIndex ?? 0} wall-reg = ${scenario.metrics.lengthMetrics.contributions.productionWallClockRegisterIndex ?? "n/a"} total (${Number.isFinite(Number(scenario.metrics.lengthMetrics.contributions.productionWallClockRegisterIndex)) ? Number((Number(scenario.metrics.lengthMetrics.contributions.productionWallClockRegisterIndex) / 5).toFixed(2)) : "n/a"} turn-index); expected-play ${scenario.metrics.lengthMetrics.contributions.productionExpectedPlayRegisters ?? "n/a"} reg × player ${scenario.metrics.lengthMetrics.contributions.productionPlayerWallClockMultiplier ?? 1} × Act Fast direct-programming ${scenario.metrics.lengthMetrics.contributions.productionActFastDirectTimingMultiplier ?? 1}; economy activity ${scenario.metrics.lengthMetrics.productionWallClockOwner?.economyActivity?.drawEventsPerPlayer ?? 0} paid draw(s) + ${scenario.metrics.lengthMetrics.productionWallClockOwner?.economyActivity?.installEventsPerPlayer ?? 0} install/play event(s) per player, ${scenario.metrics.lengthMetrics.contributions.productionEconomyExpectedActivityRegisterEquivalents ?? 0} pre-player wall-reg; Act Fast RE pressure ×${scenario.metrics.lengthMetrics.contributions.productionActFastREPressureMultiplier ?? 1} feeds recovery upstream; Energy Crisis blanket ×0.89 OFF; transitional scale ${scenario.metrics.lengthMetrics.contributions.productionExpectedPlayRawPointsPerRegister ?? LENGTH_EXPECTED_PLAY_RAW_POINTS_PER_REGISTER} raw/index; other variant phase time pending`,
     `Length bands v49dv PRODUCTION: wall-clock turn-index ${scenario.metrics.lengthWallClockTurnIndex ?? "n/a"}; Short [${MIN_WALL_CLOCK_TURN_INDEX},6.25), Medium [6.25,9.5), Long [9.5,13), Epic [13,20] with >20 still Epic but above target ceiling; requested-length fit ${scenario.metrics.lengthFit ?? "n/a"} uses ${WALL_CLOCK_LENGTH_FIT_POINTS_PER_TURN} fit pt/turn; transitional raw ${scenario.metrics.lengthRaw ?? "n/a"} is compatibility/construction diagnostic, not semantic owner`,
@@ -22511,30 +22664,35 @@ function buildScenarioReport(scenario, selectedLegIndices = null) {
       ? (() => {
         const footprint = scenario.metrics.boardFootprintUse
           ?? scenario.metrics.meaningfulBoardUse;
-        return `Board footprint v49ce: penalty ${footprint.penalty}, limited ${footprint.weakBoardCount ?? 0}; ${footprint.boards.map((board) => `#${board.boardIndex + 1} regs ${board.representativeRegisters}, tiles ${board.uniqueRouteTiles ?? 0}, depth ${board.maxDepth}/${board.targetDepth}, transit ${board.hasEfficientTransit ? "yes" : "no"}, checkpoint ${board.finalCheckpointOnBoard ? "final" : "no-final"}, footprintScore ${board.contributionScore}, penalty ${board.penalty}`).join("; ")}`;
+        return `Board footprint v49eg: penalty ${footprint.penalty}, limited ${footprint.weakBoardCount ?? 0}; ${footprint.boards.map((board) => `#${board.boardIndex + 1} regs ${board.representativeRegisters}, tiles ${board.uniqueRouteTiles ?? 0}, depth ${board.maxDepth}/${board.targetDepth}, transit ${board.hasEfficientTransit ? "yes" : "no"}, checkpoint ${board.finalCheckpointOnBoard ? "final" : "no-final"}, footprintScore ${board.contributionScore}, penalty ${board.penalty}`).join("; ")}`;
       })()
-      : "Board footprint v49ce: n/a",
+      : "Board footprint v49eg: n/a",
     scenario.metrics.boardGameplayRelevance
-      ? `Board gameplay relevance v49ce: demonstrated ${scenario.metrics.boardGameplayRelevance.demonstratedCount ?? 0}, indirect-effect ${scenario.metrics.boardGameplayRelevance.indirectEffectCount ?? 0}, ablation-clear ${scenario.metrics.boardGameplayRelevance.ablationClearCount ?? 0}, pending-ablation ${scenario.metrics.boardGameplayRelevance.pendingAblationCount ?? 0}, removal-candidate ${scenario.metrics.boardGameplayRelevance.removalCandidateCount ?? 0}; ${scenario.metrics.boardGameplayRelevance.boards.map((board) => {
+      ? `Board gameplay relevance v49eg: demonstrated ${scenario.metrics.boardGameplayRelevance.demonstratedCount ?? 0}, indirect-effect ${scenario.metrics.boardGameplayRelevance.indirectEffectCount ?? 0}, ablation-clear ${scenario.metrics.boardGameplayRelevance.ablationClearCount ?? 0}, pending-ablation ${scenario.metrics.boardGameplayRelevance.pendingAblationCount ?? 0}, removal-candidate ${scenario.metrics.boardGameplayRelevance.removalCandidateCount ?? 0}; ${scenario.metrics.boardGameplayRelevance.boards.map((board) => {
         const ab = board.ablation;
         const ablationText = ab
           ? `, ablation effect ${ab.modeledEffectDetected ? "yes" : "no"} [routes ${ab.routeCount}, removedTiles ${ab.removedTileCount}, routeMissing ${ab.routePositionMissingCount}, displacementChanged ${ab.displacementChangedRegisterCount}, maxControlΔ ${ab.maxDisplacementControlSeverityAbsDelta}, nearbyΔ ${ab.weightedNearbyControlAbsDelta}, robotLaserΔ ${ab.weightedRobotLaserAbsDelta}]`
           : "";
         return `#${board.boardIndex + 1} ${board.relevanceStatus}/${board.cleanupRecommendation}; direct ${board.directRouteUse ? "yes" : "no"}, checkpoints ${board.checkpointIndices?.length ? board.checkpointIndices.join(",") : "none"}, structural ${board.structuralProtected ? "yes" : "no"}, minRouteDist ${board.minimumTrackedRouteDistance ?? "-"}, legacyBasis ${board.currentLegacyRetentionReasons?.join("+") || "none"}, demonstratedBy ${board.demonstratedReasons?.join("+") || "none"}${ablationText}`;
       }).join("; ")}`
-      : "Board gameplay relevance v49ce: n/a",
+      : "Board gameplay relevance v49eg: n/a",
     scenario.metrics.boardCleanupAuditTrail?.length
-      ? `Board cleanup v49ce (ablation-gated, one board/pass): ${scenario.metrics.boardCleanupAuditTrail.map((entry) => (
+      ? `Board cleanup v49eg (orphan fixed-route gate + whole-course A/B): ${scenario.metrics.boardCleanupAuditTrail.map((entry) => (
         `pass ${entry.pass}: ` +
         entry.decisions.map((decision) => {
           const ab = decision.ablation;
-          return `#${decision.boardIndex + 1}/${decision.pieceId ?? "?"} ${decision.action}/${decision.reason}` +
+          const comparison = decision.comparison;
+          const comparisonText = comparison
+            ? ` [wholeCourse ${comparison.materialDifference ? "MATERIAL" : "clear"}; reasons ${comparison.reasons?.join("+") || "none"}; Δdifficulty ${comparison.deltas?.difficultyTurnRE ?? "n/a"}, Δlength ${comparison.deltas?.lengthWallClockTurnIndex ?? "n/a"}, Δfairness ${comparison.deltas?.fairnessRangeRE ?? "n/a"}, Δtraffic ${comparison.deltas?.trafficAveragePenalty ?? "n/a"}]`
+            : "";
+          return `#${Number.isInteger(decision.boardIndex) ? decision.boardIndex + 1 : "?"}/${decision.pieceId ?? "?"} ${decision.action}/${decision.reason}` +
             (ab
               ? ` [routes ${ab.routeCount}, removedTiles ${ab.removedTileCount}, routeMissing ${ab.routePositionMissingCount}, displacementChanged ${ab.displacementChangedRegisterCount}, nearbyΔ ${ab.weightedNearbyControlAbsDelta}, robotLaserΔ ${ab.weightedRobotLaserAbsDelta}]`
-              : "");
+              : "") +
+            comparisonText;
         }).join(", ")
       )).join(" | ")}`
-      : "Board cleanup v49ce: no ablation-gated board removal/test recorded",
+      : "Board cleanup v49eg: no orphan-board ablation test recorded",
     scenario.metrics.routeDrama
       ? `Route drama: ${scenario.metrics.routeDrama.level}, score ${scenario.metrics.routeDrama.score}, penalty ${scenario.metrics.routeDrama.penalty}, sharedTiles ${scenario.metrics.routeDrama.sharedTiles}, crossings ${scenario.metrics.routeDrama.crossings}, reverseEdges ${scenario.metrics.routeDrama.reverseEdges}`
       : "Route drama: n/a",    scenario.metrics.competitiveBlockImpact
@@ -22625,10 +22783,15 @@ function buildScenarioReport(scenario, selectedLegIndices = null) {
         const audit = summarizeTrafficOwnershipAuditSafe();
         const own = summary.fullCourseTraffic?.ownershipAuditV49bk ?? null;
         return audit && own
-          ? `Traffic ownership v49ce: avg effective ${summary.fullCourseTraffic?.averagePenalty ?? 0} score (mechanical traffic only); robot-laser damage ${own.averageRobotLaserDamageScore ?? 0} score = ${own.averageRobotLaserDamageRE ?? 0} RE via damage economy; residual ranged threat ${own.averageResidualRangedThreatPenalty ?? 0}; nearby turn-episode control AUTHORITATIVE ${own.averageNearbyPenalty ?? 0} score = ${own.averageAuthoritativeNearbyControlRE ?? 0} RE; traffic-awareness mental AUTHORITATIVE downstream ${own.averageTrafficAwarenessMentalRE ?? 0} RE from event mass ${own.averageTrafficAwarenessEventMass ?? 0} (laser ${own.averageTrafficAwarenessRobotLaserEventMass ?? 0} + non-laser ${own.averageTrafficAwarenessNonLaserEventMass ?? 0}); non-laser episode probability mass ${own.averageNearbyTurnEpisodeEventMassCandidate ?? 0}, episode control load ${own.averageNearbyTurnEpisodeControlLoadCandidate ?? 0}; competition ${own.averageCompetitionPenalty ?? 0} (active ${audit.competitionActive ? "yes" : "no"}).`
+          ? `Traffic ownership v49ce: avg effective ${summary.fullCourseTraffic?.averagePenalty ?? 0} score (mechanical traffic only); robot-laser damage ${own.averageRobotLaserDamageScore ?? 0} score = ${own.averageRobotLaserDamageRE ?? 0} RE via damage economy; legacy residual ranged threat ${own.averageLegacyResidualRangedThreatDiagnosticPenalty ?? 0} diagnostic-only / production 0; nearby turn-episode control AUTHORITATIVE ${own.averageNearbyPenalty ?? 0} score = ${own.averageAuthoritativeNearbyControlRE ?? 0} RE; simultaneous-reboot pile-up ${own.averageSimultaneousRebootPileupEventMass ?? 0} event mass / ${own.averageSimultaneousRebootPileupMaximumTurnProbability ?? 0} max-turn probability -> +${own.averageSimultaneousRebootPileupClogRE ?? 0}RE actual-clog consequence; traffic-awareness mental AUTHORITATIVE downstream ${own.averageTrafficAwarenessMentalRE ?? 0} RE from event mass ${own.averageTrafficAwarenessEventMass ?? 0} (laser ${own.averageTrafficAwarenessRobotLaserEventMass ?? 0} + non-laser ${own.averageTrafficAwarenessNonLaserEventMass ?? 0} + reboot-pileup ${own.averageTrafficAwarenessRebootPileupEventMass ?? 0}); non-laser episode probability mass ${own.averageNearbyTurnEpisodeEventMassCandidate ?? 0}, episode control load ${own.averageNearbyTurnEpisodeControlLoadCandidate ?? 0}; competition ${own.averageCompetitionPenalty ?? 0} (active ${audit.competitionActive ? "yes" : "no"}).`
           : "Traffic ownership v49ce: audit metadata unavailable.";
       })()
       : "Traffic ownership v49ce: n/a",
+    currentNormalRouteModel
+      ? "Board mechanics v49ej LIVE: Homing Missile entrance self-hazard/flag danger OFF; cheap search gets explicit heuristic missile-opportunity guidance only, while completed-route value uses 2x a neutral damage-economy one-damage RE reference plus one target-choice planning event; robot-laser physical traffic is damage-economy RE and awareness is mental RE, with legacy residual ranged score diagnostic-only; simultaneous same-turn/same-reboot-space pile-up adds +1 actual clog inside the existing damage-economy clog curve (therefore stacking with Haywire/SPAM and other clog sources), with occupancy/RE-native traffic confidence and no fabricated displacement."
+      : "Board mechanics v49ej: n/a",
+    `Robot-laser variants v49eo LIVE: Set to Kill ${scenario.setToKill ? "ON (2 damage cards per main-laser hit)" : "off"}; Set to Stun ${scenario.setToStun ? "ON (robot-laser SPAM goes to the damage discard pile / does not enter persistent SPAM state; Haywire unchanged per damage card)" : "off"}; LOS/hit probability and robot-laser awareness mental are unchanged; neither rule adds a variant-memory event.`,
+    `Floor damage/repair v49eo LIVE: flamethrowers deal 1 on each active entry/pass-through +1 on end-of-register; Flaming Oil ${scenario.flamingOil ? "ON (+1 on entering any oil in a register +1 on ending that register on oil; no per-oil-tile stacking)" : "off"}; Repair Stations ${scenario.repairStations ? "ON (register-5 ordinary checkpoint removes 23/40 expected SPAM +17/40 expected Haywire, no spill)" : "off"}; flamethrower / Flaming Oil / Repair Station planning each collapse to at most one mental event per game turn when relevant.`,
     currentNormalRouteModel
       ? ""
       : (summary.courseContinuationWeighted
@@ -22733,11 +22896,11 @@ function buildScenarioReport(scenario, selectedLegIndices = null) {
         ? `Contextual leg cache: exactEntries ${summary.contextualLegCache.entries ?? 0}, templateEntries ${summary.contextualLegCache.templateEntries ?? 0}, exactHits ${summary.contextualLegCache.exactHits ?? 0}, templateHits ${summary.contextualLegCache.templateHits ?? 0}, misses ${summary.contextualLegCache.misses ?? 0}, templateFallbacks ${summary.contextualLegCache.templateFallbacks ?? 0}, cappedContexts ${summary.contextualLegCache.zeroRouteCapFailures ?? 0} across ${summary.contextualLegCache.zeroRouteFailureStarts ?? 0} starts, survivors ${summary.contextualLegCache.survivingStarts ?? "n/a"}/${summary.contextualLegCache.requiredSurvivingStarts ?? "n/a"}`
         : "Contextual leg cache: n/a"),
     summary.programmingScarcity
-      ? `Programming supply: selected ${summary.programmingScarcity.selectedRoutes ?? 0} routes, Again used on ${summary.programmingScarcity.routesUsingAgain ?? 0} route(s)/${summary.programmingScarcity.totalAgainTurns ?? 0} turn(s), consecutive required-Again turns ${summary.programmingScarcity.consecutiveTurnAgainReuse ?? 0}, literal program violations ${summary.programmingScarcity.literalProgramViolations ?? 0}, rolling two-turn violations ${summary.programmingScarcity.rollingWindowViolations ?? 0}; exact 9-card hypergeometric availability penalty mean/max ${summary.programmingScarcity.meanCardAvailabilityPenalty ?? 0}/${summary.programmingScarcity.maxCardAvailabilityPenalty ?? 0}; card RE compressed α=${summary.programmingScarcity.cardScarcityAdaptabilityFactor ?? 1}: mean/max ${summary.programmingScarcity.meanCardAvailabilityPenaltyRE ?? 0}/${summary.programmingScarcity.maxCardAvailabilityPenaltyRE ?? 0}RE vs uncompressed ${summary.programmingScarcity.meanCardAvailabilityPenaltyUncompressedRE ?? 0}/${summary.programmingScarcity.maxCardAvailabilityPenaltyUncompressedRE ?? 0}RE; fresh-deck reference P(1 of 4-copy) ${summary.programmingScarcity.baselineFourCopyProbability ?? "?"}, P(singleton) ${summary.programmingScarcity.singleCopyProbability ?? "?"}, P(3 distinct singletons) ${summary.programmingScarcity.threeDistinctSingleCopyProbability ?? "?"}, P(repeated 4-copy action incl Again) ${summary.programmingScarcity.repeatedFourCopyWithAgainProbability ?? "?"}`
+      ? `Programming supply: selected ${summary.programmingScarcity.selectedRoutes ?? 0} routes, Again used on ${summary.programmingScarcity.routesUsingAgain ?? 0} route(s)/${summary.programmingScarcity.totalAgainTurns ?? 0} turn(s), consecutive required-Again turns ${summary.programmingScarcity.consecutiveTurnAgainReuse ?? 0}, literal program violations ${summary.programmingScarcity.literalProgramViolations ?? 0}, rolling two-turn violations ${summary.programmingScarcity.rollingWindowViolations ?? 0}; exact ${summary.programmingScarcity.handSize ?? 9}-card hypergeometric availability penalty mean/max ${summary.programmingScarcity.meanCardAvailabilityPenalty ?? 0}/${summary.programmingScarcity.maxCardAvailabilityPenalty ?? 0}; card-scarcity scaling α=${summary.programmingScarcity.cardScarcityAdaptabilityFactor ?? 1}: mean/max ${summary.programmingScarcity.meanCardAvailabilityPenaltyRE ?? 0}/${summary.programmingScarcity.maxCardAvailabilityPenaltyRE ?? 0}RE vs raw-unscaled ${summary.programmingScarcity.meanCardAvailabilityPenaltyUncompressedRE ?? 0}/${summary.programmingScarcity.maxCardAvailabilityPenaltyUncompressedRE ?? 0}RE; normal 9-card fresh-deck reference P(1 of 4-copy) ${summary.programmingScarcity.baselineFourCopyProbability ?? "?"}, active P(singleton) ${summary.programmingScarcity.singleCopyProbability ?? "?"}, P(3 distinct singletons) ${summary.programmingScarcity.threeDistinctSingleCopyProbability ?? "?"}, P(repeated 4-copy action incl Again) ${summary.programmingScarcity.repeatedFourCopyWithAgainProbability ?? "?"}`
       : "Programming supply: n/a",
     summary.programmingScarcity
-      ? `Card scarcity adaptability v49ce PROVISIONAL: α=${summary.programmingScarcity.cardScarcityAdaptabilityFactor ?? 1}; exact hypergeometric probabilities unchanged; raw scarcity normalization P4/P-1 unchanged; only extra card RE compressed; omitted-information rationale = player sees actual hand and can adapt program, while rolling two-turn depletion is a simplified representative state; half-baseline raw +1RE -> compressed +${summary.programmingScarcity.halfBaselineCompressedScarcityRE ?? "?"}RE`
-      : "Card scarcity adaptability v49ce PROVISIONAL: n/a",
+      ? `Card scarcity ownership v49ek LIVE/PROVISIONAL: hand ${summary.programmingScarcity.handSize ?? 9}; previous-turn depletion ${summary.programmingScarcity.rollingPreviousTurnDepletion ? "ON" : "OFF"}; reset-each-turn ${summary.programmingScarcity.resetProgrammingDeckEachTurn ? "ON" : "OFF"}; α base ${summary.programmingScarcity.cardScarcityBaseAdaptabilityFactor ?? "?"} + Shared Deck player-count increment ${summary.programmingScarcity.sharedDeckAdaptabilityIncrement ?? 0} = ${summary.programmingScarcity.cardScarcityAdaptabilityFactor ?? 1}; enlarged shared deck OFF; cross-robot hand state OFF; exact single-player hypergeometry retained; normal 9-card P4/P-1 normalization retained; half-baseline raw +1RE -> scaled +${summary.programmingScarcity.halfBaselineScaledScarcityRE ?? "?"}RE`
+      : "Card scarcity ownership v49ek LIVE/PROVISIONAL: n/a",
     summary.programmingScarcity?.discoveredCandidateCardPressure
       ? (() => {
         const audit = summary.programmingScarcity.discoveredCandidateCardPressure;
@@ -23678,7 +23841,7 @@ function formatRegisterEquivalentLedgerLines(scenario, route, startIndex = null,
   if (!reLedger) return [];
 
   const lines = [
-    `RE ledger v3: registers ${reLedger.programmedRegisterRE} + lost-register tempo ${reLedger.lostRegisterTempoRE}; card ${reLedger.cleanCardPlausibilityRE} + damage-card supply ${reLedger.damageCardSupplyRE}; clog ${reLedger.clogRE}; Energy ${reLedger.energyRE}; mental ${reLedger.mentalRegisterEquivalents}; known subtotal ${reLedger.knownMechanismSubtotalRE} -> +mental ${reLedger.observationalSubtotalWithMentalRE} RE. Mental curve is PROVISIONAL; intrinsic factual planning-event RE is POST-BUILD ROUTE SCORING in v49ce (not pathfinder state) (rounded turn events: <=7 => 0 RE, 11 => 0.5, 15 => 2, 19 => 4.5). Traffic-awareness mental is downstream: robot-laser hit probability plus one collapsed fractional non-laser control-awareness event per turn; mechanical damage/control consequence is priced separately. Avoided static constraints remain uncaptured.`
+    `RE ledger v3: registers ${reLedger.programmedRegisterRE} + lost-register tempo ${reLedger.lostRegisterTempoRE}; card ${reLedger.cleanCardPlausibilityRE} + damage-card supply ${reLedger.damageCardSupplyRE}; clog ${reLedger.clogRE}; Energy ${reLedger.energyRE}; mental ${reLedger.mentalRegisterEquivalents}; known subtotal ${reLedger.knownMechanismSubtotalRE} -> +mental ${reLedger.observationalSubtotalWithMentalRE} RE; Homing Missile activations ${reLedger.homingMissileActivationCount ?? 0}, neutral one-damage reference ${reLedger.homingMissileOneDamageReferenceRE ?? 0}RE, strategic credit ${reLedger.homingMissileStrategicCreditRE ?? 0}RE applied separately to route value (not intrinsic difficulty), cheap-search guidance ${reLedger.homingMissileCheapSearchGuidanceScore ?? 0} score only. Mental curve is PROVISIONAL; intrinsic factual planning-event RE is POST-BUILD ROUTE SCORING in v49ce (not pathfinder state) (rounded turn events: <=7 => 0 RE, 11 => 0.5, 15 => 2, 19 => 4.5). Traffic-awareness mental is downstream: robot-laser hit probability plus one collapsed fractional non-laser control-awareness event per turn plus simultaneous-reboot awareness; mechanical damage/control consequence is priced separately. Avoided static constraints remain uncaptured.`
   ].filter(Boolean);
   (reLedger.turns || []).forEach((turn) => {
     const eventTypes = (turn.planningEvents || []).map((event) => (
@@ -23764,7 +23927,7 @@ function formatRouteDetail(scenario, entry) {
     );
     if (damageEconomy) {
       lines.push(
-        `Damage economy (${damageEconomy.method}, routing-active raw ledger): input ${damageEconomy.totalDamageUnits} = deterministic ${damageEconomy.deterministicDamageUnits} + robot-laser expected ${damageEconomy.robotLaserExpectedDamageUnits}; SPAM final total/held/circulating ${damageEconomy.finalSpamTotal}/${damageEconomy.finalSpamHeld}/${damageEconomy.finalSpamCirculating}; active/pending Haywire expected clog ${damageEconomy.finalActiveHaywireExpectedClogs}/${damageEconomy.finalPendingHaywireExpectedClogs}; AUTHORITATIVE raw damage-economy RE supply/clog/total ${damageEconomy.totalSpamSupplyRegisterEquivalents}/${damageEconomy.totalClogRegisterEquivalents}/${damageEconomy.totalDamageEconomyRegisterEquivalents}; max turn ${damageEconomy.maxTurnDamageEconomyRegisterEquivalents}; Shutdown tolerance diagnostic ${damageEconomy.shutdownEquivalentDamageScoreRegisterEquivalents} RE against ${damageEconomy.shutdownReferenceRegisterEquivalents} RE reference (NOT route cost)`
+        `Damage economy (${damageEconomy.method}, routing-active raw ledger): input ${damageEconomy.totalDamageUnits} = deterministic ${damageEconomy.deterministicDamageUnits} + robot-laser expected ${damageEconomy.robotLaserExpectedDamageUnits}; SPAM final total/held/circulating ${damageEconomy.finalSpamTotal}/${damageEconomy.finalSpamHeld}/${damageEconomy.finalSpamCirculating}; active/pending Haywire expected clog ${damageEconomy.finalActiveHaywireExpectedClogs}/${damageEconomy.finalPendingHaywireExpectedClogs}; AUTHORITATIVE raw damage-economy RE supply/clog/total ${damageEconomy.totalSpamSupplyRegisterEquivalents}/${damageEconomy.totalClogRegisterEquivalents}/${damageEconomy.totalDamageEconomyRegisterEquivalents} [supply base ${damageEconomy.totalRawSpamSupplyRegisterEquivalents ?? damageEconomy.totalSpamSupplyRegisterEquivalents}, Permanent-Shutdown +${damageEconomy.totalPermanentShutdownPressureRegisterEquivalents ?? 0}, max ×${damageEconomy.maxPermanentShutdownSupplyMultiplier ?? 1}]; max turn ${damageEconomy.maxTurnDamageEconomyRegisterEquivalents}; Shutdown tolerance diagnostic ${damageEconomy.shutdownEquivalentDamageScoreRegisterEquivalents} RE against ${damageEconomy.shutdownReferenceRegisterEquivalents} RE reference (NOT route cost)`
       );
       if (route.damageRoutingModel) {
         lines.push(
@@ -23791,7 +23954,7 @@ function formatRouteDetail(scenario, entry) {
         ))
         .forEach((turn) => {
           lines.push(
-            `  Damage T${turn.turn} programming: SPAM total/held/circ ${turn.spamTotalAtProgramming}/${turn.spamHeldAtProgramming}/${turn.spamCirculatingAtProgramming} -> effective held/circ ${turn.effectiveHeldSpam}/${turn.effectiveCirculatingSpam}; hand ${turn.baseHandSize}, fresh draw ${turn.expectedFreshDrawSlots}; expected SPAM drawn/in-hand ${turn.expectedSpamDrawn}/${turn.expectedSpamInHand}; program P clean/damaged ${turn.cleanProgramProbability}/${turn.damagedProgramProbability}; H clog ${turn.expectedHaywireClogs}; SPAM forced/elective ${turn.forcedSpamReliefInitiations}/${turn.electiveSpamReliefInitiations}, P0..P5 ${turn.spamPlayCountDistribution.join("/")} -> expected SPAM clog ${turn.spamPlayClogLoad}, combined ${turn.expectedTotalControlClogLoad}; RE supply/clog/total ${turn.spamSupplyRegisterEquivalents}/${turn.clogRegisterEquivalents}/${turn.damageEconomyRegisterEquivalents}; Shutdown-tolerance segment ${turn.shutdownThreatSegmentRegisterEquivalents}${turn.shutdownEquivalentEpisodeAfterTurn ? " -> threshold crossing" : ""}`
+            `  Damage T${turn.turn} programming: SPAM total/held/circ ${turn.spamTotalAtProgramming}/${turn.spamHeldAtProgramming}/${turn.spamCirculatingAtProgramming} -> effective held/circ ${turn.effectiveHeldSpam}/${turn.effectiveCirculatingSpam}; hand ${turn.baseHandSize}, fresh draw ${turn.expectedFreshDrawSlots}; expected SPAM drawn/in-hand ${turn.expectedSpamDrawn}/${turn.expectedSpamInHand}; program P clean/damaged ${turn.cleanProgramProbability}/${turn.damagedProgramProbability}; H clog ${turn.expectedHaywireClogs}; SPAM forced/elective ${turn.forcedSpamReliefInitiations}/${turn.electiveSpamReliefInitiations}, P0..P5 ${turn.spamPlayCountDistribution.join("/")} -> expected SPAM clog ${turn.spamPlayClogLoad}, combined ${turn.expectedTotalControlClogLoad}; RE supply/clog/total ${turn.spamSupplyRegisterEquivalents}/${turn.clogRegisterEquivalents}/${turn.damageEconomyRegisterEquivalents} [supply base ${turn.rawSpamSupplyRegisterEquivalents ?? turn.spamSupplyRegisterEquivalents}, Permanent-Shutdown +${turn.permanentShutdownPressureRegisterEquivalents ?? 0} @burden${turn.permanentShutdownSpamBurden ?? 0} ×${turn.permanentShutdownSupplyMultiplier ?? 1}]; Shutdown-tolerance segment ${turn.shutdownThreatSegmentRegisterEquivalents}${turn.shutdownEquivalentEpisodeAfterTurn ? " -> threshold crossing" : ""}`
           );
           if (
             turn.reliefInitiations > 0 ||
@@ -23799,7 +23962,7 @@ function formatRouteDetail(scenario, entry) {
             turn.pendingHaywireExpectedForNextTurn > 0
           ) {
             lines.push(
-              `    Relief/damage: tactical opportunity ${turn.reliefOpportunity}, SPAM initiation/removal ${turn.reliefInitiations}/${turn.spamRemoved}; damage ${turn.totalDamageUnits} = deterministic ${turn.deterministicDamageUnits} + robot-laser expected ${turn.robotLaserExpectedDamageUnits}; reboot ${turn.rebootRegister ? `R${turn.rebootRegister}, SPAM dump ${turn.rebootSpamRemoved}/${turn.rebootSpamDisposalCapacity}, active-H clear ${turn.rebootHaywireCleared}` : "none"}; held end ${turn.spamHeldAtTurnEnd}; pending next SPAM/Haywire ${turn.pendingSpamAtTurnEnd}/${turn.pendingHaywireExpectedForNextTurn}; H register risks ${turn.pendingHaywireRegisterRisks.join("/")}`
+              `    Relief/damage: tactical opportunity ${turn.reliefOpportunity}, SPAM initiation/removal ${turn.reliefInitiations}/${turn.spamRemoved}; damage ${turn.totalDamageUnits} = deterministic ${turn.deterministicDamageUnits} + robot-laser expected ${turn.robotLaserExpectedDamageUnits}; reboot ${turn.rebootRegister ? `R${turn.rebootRegister}, SPAM dump ${turn.rebootSpamRemoved}/${turn.rebootSpamDisposalCapacity}, active-H clear ${turn.rebootHaywireCleared}` : "none"}; repair ${turn.repairStationReliefCount ? `${turn.repairStationReliefCount}x, SPAM -${turn.repairStationSpamRemoved}, H-exp -${turn.repairStationHaywireExpectedRemoved}` : "none"}; held end ${turn.spamHeldAtTurnEnd}; pending next SPAM/Haywire ${turn.pendingSpamAtTurnEnd}/${turn.pendingHaywireExpectedForNextTurn}; H register risks ${turn.pendingHaywireRegisterRisks.join("/")}`
             );
           }
         });
@@ -24284,7 +24447,7 @@ function renderStructuredRouteInspection(detailEl, scenario, entry) {
       ["Intrinsic completed route", components.intrinsicRE ?? "n/a"],
       ["Robot-laser damage", components.robotLaserDamageRE ?? 0],
       ["Nearby control / displacement", components.nearbyControlRE ?? 0],
-      ["Residual ranged threat", components.residualRangedThreatRE ?? 0],
+      ["Legacy ranged threat (production OFF)", components.residualRangedThreatRE ?? 0],
       ["Competition", components.competitionRE ?? 0],
       ["Traffic-awareness mental", components.trafficMentalRE ?? 0],
       ["Effective RE", Number.isFinite(effectiveRE) ? effectiveRE.toFixed(3) : "n/a"]
@@ -26267,8 +26430,36 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     let sequenceFailureDiagnostics = null;
     let coursePreflight = null;
     const boardCleanupAuditTrail = [];
+    const wholeCourseAblationProtectedBoards = new Set();
+    let pendingWholeCourseBoardAblation = null;
+    // v49eg may need two full analysis passes for an orphan board that is tested
+    // and then restored because the reduced course changed materially. Allow
+    // enough passes for that conservative A/B behavior without making ordinary
+    // generation loop indefinitely.
+    const boardCleanupPassLimit = Math.max(6, scenarioBoardPlacements.length * 3 + 3);
+    const classifyCurrentCleanupCourse = () => classifyCandidate(sequence, {
+      ...generationPreferences,
+      ...effectiveVariantBundle,
+      actFast,
+      actFastMode,
+      flagCount,
+      recoveryRule,
+      classicSharedDeck,
+      movingTargets
+    }, {
+      boardPlacements: scenarioBoardPlacements,
+      overlayPlacements: scenarioOverlayPlacements,
+      dockPlacements: scenarioDockPlacements,
+      pieceMap,
+      checkpoints: playableCheckpoints,
+      activeStarts,
+      tileMap: scenarioTileMap,
+      goalTileMap,
+      rebootTokens,
+      boardCleanupAuditTrail
+    });
 
-    for (let pass = 0; pass < 4; pass += 1) {
+    for (let pass = 0; pass < boardCleanupPassLimit; pass += 1) {
       scenarioPlacements = [
         ...scenarioBoardPlacements,
         ...scenarioDockPlacements,
@@ -26357,7 +26548,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         });
       }
       await reportStage(
-        `Evaluating starting spaces — pass ${pass + 1} / 4; ${activeStarts.length} start${activeStarts.length === 1 ? "" : "s"} with contextual leg routes`,
+        `Evaluating starting spaces — pass ${pass + 1} / ${boardCleanupPassLimit}; ${activeStarts.length} start${activeStarts.length === 1 ? "" : "s"} with contextual leg routes`,
         evaluationsUsed
       );
       try {
@@ -26383,9 +26574,11 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
           contextualEarlyExit: true
         }, effectiveVariantBundle);
         const estimatedCardTransitionMemoRuleSignature = [
-          "literal-hg-v48x",
+          "literal-hg-v49ek",
+          `hand:${variantAnalysisOptions.factoryRejects ? 7 : 9}`,
           `lessForeshadowing:${variantAnalysisOptions.lessForeshadowing ? 1 : 0}`,
-          `classicSharedDeck:${effectiveVariantBundle.classicSharedDeck ? 1 : 0}`
+          `classicSharedDeck:${variantAnalysisOptions.classicSharedDeck ? 1 : 0}`,
+          `players:${Math.max(1, Number(variantAnalysisOptions.playerCount ?? generationPreferences.playerCount ?? preferences.playerCount) || 4)}`
         ].join("|");
         const baseAnalysisOptions = {
           ...variantAnalysisOptions,
@@ -26995,12 +27188,75 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         }
       }
 
+      if (pendingWholeCourseBoardAblation) {
+        await reportStage(
+          `Comparing orphan-board reanalysis — pass ${pass + 1} / ${boardCleanupPassLimit}`,
+          evaluationsUsed
+        );
+        const reducedMetrics = classifyCurrentCleanupCourse();
+        const reducedSnapshot = summarizeWholeCourseBoardAblationState(
+          sequence,
+          reducedMetrics
+        );
+        const wholeCourseComparison = compareWholeCourseBoardAblationStates(
+          pendingWholeCourseBoardAblation.baselineSnapshot,
+          reducedSnapshot
+        );
+
+        boardCleanupAuditTrail.push({
+          pass: pass + 1,
+          wholeCourseAblation: true,
+          decisions: [{
+            boardIndex: pendingWholeCourseBoardAblation.removedBoard.boardIndex,
+            pieceId: pendingWholeCourseBoardAblation.removedBoard.pieceId,
+            action: wholeCourseComparison.materialDifference
+              ? "restore"
+              : "remove-confirmed",
+            reason: wholeCourseComparison.materialDifference
+              ? "whole-course-material-difference"
+              : "whole-course-no-material-difference",
+            comparison: wholeCourseComparison
+          }]
+        });
+
+        if (wholeCourseComparison.materialDifference) {
+          // The board passed the cheap fixed-route gate but the authoritative
+          // reduced-course rerun changed something meaningful. Restore the exact
+          // pre-test construction, protect this board for the rest of this
+          // candidate, and rerun once more so the retained sequence belongs to the
+          // restored physical course.
+          scenarioBoardPlacements = pendingWholeCourseBoardAblation.originalBoardPlacements;
+          scenarioOverlayPlacements = pendingWholeCourseBoardAblation.originalOverlayPlacements;
+          sequence = pendingWholeCourseBoardAblation.baselineSequence;
+          scenarioTileMap = pendingWholeCourseBoardAblation.baselineTileMap;
+          goalTileMap = pendingWholeCourseBoardAblation.baselineGoalTileMap;
+          rebootTokens = pendingWholeCourseBoardAblation.baselineRebootTokens;
+          scenarioBoardRects = pendingWholeCourseBoardAblation.baselineBoardRects;
+          activeStarts = pendingWholeCourseBoardAblation.baselineActiveStarts;
+          effectiveVariantBundle = pendingWholeCourseBoardAblation.baselineEffectiveVariantBundle;
+          wholeCourseAblationProtectedBoards.add(
+            pendingWholeCourseBoardAblation.removedBoardPlacement
+          );
+          pendingWholeCourseBoardAblation = null;
+          await reportStage(
+            `Restoring orphan-board candidate — reduced course changed materially`,
+            evaluationsUsed
+          );
+          continue;
+        }
+
+        // No material gameplay/presentation state changed under a complete
+        // reroute/reanalysis. The tentative removal is now authoritative and
+        // intentionally silent for players. Dev audit retains the A/B evidence.
+        pendingWholeCourseBoardAblation = null;
+      }
+
       // v36 Competitive now follows the ordinary physical cleanup loop too. Its
       // simulated strategic blocks are analysis-only, so removable docks/boards/
       // overlays are judged against the full validated physical start field, not
       // against the P starts used for Competitive fairness. If cleanup changes the
       // course, routing and the sequential block simulation are both rerun.
-      await reportStage(`Checking route fairness and removable pieces — pass ${pass + 1} / 4`, evaluationsUsed);
+      await reportStage(`Checking route fairness and removable pieces — pass ${pass + 1} / ${boardCleanupPassLimit}`, evaluationsUsed);
       const usableStarts = competitiveMode
         ? computeCourseReachableStarts(sequence.firstLeg)
         : computeUsableStarts(sequence.firstLeg, {
@@ -27010,7 +27266,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
           subsidizedStarts: effectiveVariantBundle.subsidizedStarts
         });
       let pruningChanged = false;
-      await reportStage(`Checking removable docks — pass ${pass + 1} / 4`, evaluationsUsed);
+      await reportStage(`Checking removable docks — pass ${pass + 1} / ${boardCleanupPassLimit}`, evaluationsUsed);
       const prunedDocks = pruneUnusedDockPlacements(
         scenarioDockPlacements,
         pieceMap,
@@ -27019,11 +27275,14 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         checkpoints
       );
       if (prunedDocks.pruned) {
+        // Keep orphan-board A/B tests isolated from unrelated physical cleanup.
+        // Re-run the course after dock pruning before considering a board.
         scenarioDockPlacements = prunedDocks.dockPlacements;
-        pruningChanged = true;
+        await reportStage(`Dock cleanup changed the course — reanalyzing`, evaluationsUsed);
+        continue;
       }
 
-      await reportStage(`Checking removable boards — pass ${pass + 1} / 4`, evaluationsUsed);
+      await reportStage(`Checking removable boards — pass ${pass + 1} / ${boardCleanupPassLimit}`, evaluationsUsed);
       const protectedSandwichBoards = sandwichedDock
         ? getProtectedSandwichBoardIndices(
           scenarioBoardPlacements,
@@ -27042,6 +27301,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
           ...generationPreferences,
           ...effectiveVariantBundle,
           protectedBoardIndices: protectedSandwichBoards,
+          protectedBoardPlacements: wholeCourseAblationProtectedBoards,
           dockPlacements: scenarioDockPlacements
         }
       );
@@ -27055,12 +27315,49 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         });
       }
       if (prunedBoards.pruned) {
-        scenarioBoardPlacements = prunedBoards.boardPlacements;
-        scenarioOverlayPlacements = prunedBoards.overlayPlacements;
-        pruningChanged = true;
+        if (pass + 1 >= boardCleanupPassLimit) {
+          boardCleanupAuditTrail.push({
+            pass: pass + 1,
+            wholeCourseAblation: true,
+            decisions: [{
+              boardIndex: prunedBoards.removedBoard?.boardIndex ?? null,
+              pieceId: prunedBoards.removedBoard?.pieceId ?? null,
+              action: "retain",
+              reason: "whole-course-ablation-pass-limit"
+            }]
+          });
+          wholeCourseAblationProtectedBoards.add(prunedBoards.removedBoardPlacement);
+        } else {
+          const baselineMetrics = classifyCurrentCleanupCourse();
+          pendingWholeCourseBoardAblation = {
+            baselineSnapshot: summarizeWholeCourseBoardAblationState(
+              sequence,
+              baselineMetrics
+            ),
+            originalBoardPlacements: [...scenarioBoardPlacements],
+            originalOverlayPlacements: [...scenarioOverlayPlacements],
+            baselineSequence: sequence,
+            baselineTileMap: scenarioTileMap,
+            baselineGoalTileMap: goalTileMap,
+            baselineRebootTokens: rebootTokens,
+            baselineBoardRects: scenarioBoardRects,
+            baselineActiveStarts: activeStarts,
+            baselineEffectiveVariantBundle: effectiveVariantBundle,
+            testStartedPass: pass + 1,
+            removedBoard: prunedBoards.removedBoard,
+            removedBoardPlacement: prunedBoards.removedBoardPlacement
+          };
+          scenarioBoardPlacements = prunedBoards.boardPlacements;
+          scenarioOverlayPlacements = prunedBoards.overlayPlacements;
+          await reportStage(
+            `Testing orphan-board removal with a full course reanalysis`,
+            evaluationsUsed
+          );
+          continue;
+        }
       }
 
-      await reportStage(`Checking removable overlays — pass ${pass + 1} / 4`, evaluationsUsed);
+      await reportStage(`Checking removable overlays — pass ${pass + 1} / ${boardCleanupPassLimit}`, evaluationsUsed);
       const prunedOverlays = pruneIrrelevantOverlayPlacements(
         scenarioOverlayPlacements,
         pieceMap,
@@ -27074,7 +27371,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         pruningChanged = true;
       }
 
-      await reportStage(`Cleanup pass ${pass + 1} / 4 complete`, evaluationsUsed);
+      await reportStage(`Cleanup pass ${pass + 1} / ${boardCleanupPassLimit} complete`, evaluationsUsed);
       if (pruningChanged) {
         continue;
       }
@@ -27092,6 +27389,46 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
       }
 
       break;
+    }
+    if (!sequence && pendingWholeCourseBoardAblation) {
+      // A reduced orphan-board test that cannot complete authoritative analysis
+      // is itself a material difference. Do not reject an otherwise valid
+      // original course because the experimental reduced construction failed;
+      // restore the already-analyzed baseline and keep the board.
+      const failedTest = pendingWholeCourseBoardAblation;
+      boardCleanupAuditTrail.push({
+        pass: (failedTest.testStartedPass ?? 0) + 1,
+        wholeCourseAblation: true,
+        decisions: [{
+          boardIndex: failedTest.removedBoard?.boardIndex ?? null,
+          pieceId: failedTest.removedBoard?.pieceId ?? null,
+          action: "restore",
+          reason: "whole-course-reanalysis-failed",
+          comparison: {
+            materialDifference: true,
+            reasons: [
+              `reduced-course-${sequenceFailureCategory || "analysis"}-failed`
+            ],
+            deltas: {
+              difficultyTurnRE: null,
+              lengthWallClockTurnIndex: null,
+              fairnessRangeRE: null,
+              trafficAveragePenalty: null
+            }
+          }
+        }]
+      });
+      scenarioBoardPlacements = failedTest.originalBoardPlacements;
+      scenarioOverlayPlacements = failedTest.originalOverlayPlacements;
+      sequence = failedTest.baselineSequence;
+      scenarioTileMap = failedTest.baselineTileMap;
+      goalTileMap = failedTest.baselineGoalTileMap;
+      rebootTokens = failedTest.baselineRebootTokens;
+      scenarioBoardRects = failedTest.baselineBoardRects;
+      activeStarts = failedTest.baselineActiveStarts;
+      effectiveVariantBundle = failedTest.baselineEffectiveVariantBundle;
+      wholeCourseAblationProtectedBoards.add(failedTest.removedBoardPlacement);
+      pendingWholeCourseBoardAblation = null;
     }
     if (!sequence) {
       recordRejectionEvent(
@@ -27501,19 +27838,42 @@ function buildScenarioPresentationSnapshot(scenario) {
   };
 }
 
-function isHydratedPresentationAnalysisComplete(sequence, metrics, playerCount, checkpointCount) {
-  if (!sequence?.firstLeg || !metrics) return false;
-  const requiredPlayers = Math.max(1, Number(playerCount) || 1);
-  if ((Number(metrics.reachableStarts) || 0) < requiredPlayers) return false;
-  if ((metrics.usableStarts?.length ?? 0) < requiredPlayers) return false;
+function getHydratedPresentationAnalysisStatus(sequence, metrics, checkpointCount) {
+  // Reload presentation completeness is about whether the current analysis ran
+  // far enough to rebuild the player-facing difficulty/length presentation. It
+  // is NOT an acceptance test. A completed reanalysis may legitimately find a
+  // route/start/fairness problem; treating those findings as "analysis
+  // incomplete" made saved-course alerts conflate a result with a failed run.
+  if (!sequence?.firstLeg) return { complete: false, reason: "missing-first-leg-analysis" };
+  if (!metrics) return { complete: false, reason: "missing-classification" };
+
   const legs = Array.isArray(sequence.legs) ? sequence.legs : [];
-  if (legs.length < Math.max(1, Number(checkpointCount) || 1)) return false;
-  const structuralFailure = (metrics.hardFailures ?? []).some((failure) => (
-    failure === "usable-starts" ||
-    failure === "reachable-starts" ||
-    String(failure).startsWith("leg-")
-  ));
-  return !structuralFailure;
+  const expectedLegs = Math.max(1, Number(checkpointCount) || 1);
+  if (legs.length < expectedLegs) {
+    return { complete: false, reason: `missing-leg-analysis-${legs.length}-of-${expectedLegs}` };
+  }
+  if (!Array.isArray(metrics.usableStarts)) {
+    return { complete: false, reason: "missing-usable-start-summary" };
+  }
+  if (!Number.isFinite(presentationNumber(metrics.difficultyTurnRE))) {
+    return { complete: false, reason: "missing-production-difficulty" };
+  }
+  if (!Number.isFinite(getProductionLengthTurnIndex(metrics))) {
+    return { complete: false, reason: "missing-production-length" };
+  }
+
+  return { complete: true, reason: "complete" };
+}
+
+function getReloadRequestedTargetLabel(preferences = {}) {
+  const difficultyRequested = preferences.difficulty && preferences.difficulty !== "any";
+  const lengthRequested = preferences.length && preferences.length !== "any";
+  if (difficultyRequested && lengthRequested) {
+    return `${formatDifficultyLabel(preferences.difficulty)} / ${formatLengthLabel(preferences.length)}`;
+  }
+  if (difficultyRequested) return `${formatDifficultyLabel(preferences.difficulty)} difficulty`;
+  if (lengthRequested) return `${formatLengthLabel(preferences.length)} length`;
+  return null;
 }
 
 function getSavedGenerationDisposition(snapshot = {}) {
@@ -27873,6 +28233,7 @@ function buildSavedScenarioPresentationShell(assets, snapshot, status = "pending
     savedCourseNotesHtml: snapshot.courseNotesHtml ?? null,
     hydrationPresentationFallback,
     hydrationPresentationUnavailable,
+    hydrationPresentationStatusReason: status === "pending" ? "reanalysis-pending" : "saved-presentation-shell",
     hydrationReanalysisPending: status === "pending",
     hydrationReanalysisStopped: status === "stopped",
     hydrationReanalysisFailed: status === "failed",
@@ -28251,7 +28612,7 @@ async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}) {
       sequence.firstLeg.summary.payToWin = snapshot.payToWinPricing;
     }
   }
-  const metrics = classifyCandidate(sequence, {
+  let metrics = classifyCandidate(sequence, {
     ...snapshot.preferences,
     actFast,
     actFastMode,
@@ -28282,12 +28643,31 @@ async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}) {
     goalTileMap,
     rebootTokens
   });
-  const hydrationPresentationComplete = isHydratedPresentationAnalysisComplete(
+  // Generation applies forced Extra Docks as a final course-level requirement
+  // after generic classification. Reapply that same requirement on reload so an
+  // unchanged one-dock fallback cannot silently become "accepted" merely because
+  // classifyCandidate() does not itself own the setup-rule request.
+  const hydrationStartZoneCount = noDocks
+    ? snapshotNoDockEdges.length
+    : dockPlacements.length;
+  const hydrationExtraDocksRequestMismatch = Boolean(
+    isVariantForced(snapshot.preferences, "extraDocks") &&
+    hydrationStartZoneCount <= 1
+  );
+  if (hydrationExtraDocksRequestMismatch) {
+    metrics = {
+      ...metrics,
+      acceptable: false,
+      hardFailures: [...new Set([...(metrics.hardFailures ?? []), "extra-docks"])]
+    };
+  }
+
+  const hydrationPresentationStatus = getHydratedPresentationAnalysisStatus(
     sequence,
     metrics,
-    snapshot.preferences.playerCount,
     playableCheckpoints.length
   );
+  const hydrationPresentationComplete = hydrationPresentationStatus.complete;
   const savedPresentationMetrics = snapshot.presentationMetrics ?? null;
   const hydrationPresentationFallback = Boolean(
     !hydrationPresentationComplete && savedPresentationMetrics
@@ -28416,6 +28796,7 @@ async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}) {
     savedCourseNotesHtml: snapshot.courseNotesHtml ?? null,
     hydrationPresentationFallback,
     hydrationPresentationUnavailable,
+    hydrationPresentationStatusReason: hydrationPresentationStatus.reason,
     hydrationReanalysisPending: false,
     hydrationReanalysisStopped: false,
     hydrationReanalysisFailed: false,
@@ -29555,7 +29936,12 @@ function summarizeCalibrationScenario(assets, scenario) {
             pieceId: decision.pieceId,
             action: decision.action,
             reason: decision.reason,
-            ablation: decision.ablation ? { ...decision.ablation } : null
+            ablation: decision.ablation ? { ...decision.ablation } : null,
+            comparison: decision.comparison ? {
+              ...decision.comparison,
+              reasons: [...(decision.comparison.reasons ?? [])],
+              deltas: decision.comparison.deltas ? { ...decision.comparison.deltas } : null
+            } : null
           }))
         })),
       boardGameplayRelevance:
@@ -30453,6 +30839,7 @@ if (typeof document !== "undefined") {
       if (!restoredScenario && savedShell) {
         restoredScenario = {
           ...savedShell,
+          hydrationPresentationStatusReason: hydrationStopped ? "reanalysis-stopped" : "reanalysis-failed",
           hydrationReanalysisPending: false,
           hydrationReanalysisStopped: hydrationStopped,
           hydrationReanalysisFailed: hydrationFailed || !hydrationStopped
@@ -30476,4 +30863,4 @@ if (typeof document !== "undefined") {
   init().catch(console.error);
 
 }
-// VERSION END: v49ec-competitive-range-cleanup
+// VERSION END: v49ep-permanent-shutdown-spam-burden

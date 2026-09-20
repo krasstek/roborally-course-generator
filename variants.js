@@ -4,9 +4,30 @@ export const VARIANT_STATES = {
   forced: { label: "Always on", shortLabel: "Must" }
 };
 
+// Variant complexity is ONLY the OPTIONAL generation budget used to avoid
+// generated courses becoming long lists of special rules. It is not difficulty,
+// RE, or mental-event count. User-forced / Must / must-like selections are
+// deliberate user choices and NEVER consume this optional budget.
+//
+// Scale semantics (v49em):
+//   0 = essentially self-executing setup/simplification: no meaningful extra
+//       scenario procedure or rule-state burden needs to be carried through play;
+//   1 = one additional rule/procedure/strategic setup evaluation, whether it is
+//       resolved before play or persists during play;
+//   2 = unusually stateful / programming-complex rule that materially increases
+//       the amount of special-rule state players must track.
+//
+// Complexity is deliberately broader than per-turn mental RE. For example,
+// Pay to Win has setup price evaluation (complexity 1) but no programming-turn
+// memory event; Home Reboot is effectively ordinary reboot play with a friendlier
+// destination (complexity 0).
+//
+// Mental burden is modeled separately by per-variant metadata below. A complexity
+// cost does not imply a mental event, and a rule may have complexity 1 while its
+// physical setup/card state makes a separate remember-the-rule event unnecessary.
 const VARIANT_COMPLEXITY = {
   actFast: 1,
-  lighterGame: 1,
+  lighterGame: 0,
   upgradeWorld: 1,
   lessSpammyGame: 1,
   criticalSpam: 1,
@@ -19,21 +40,22 @@ const VARIANT_COMPLEXITY = {
   repulsorOverdrive: 1,
   setToKill: 1,
   setToStun: 1,
-  classicSharedDeck: 2,
+  classicSharedDeck: 1,
   dynamicArchiving: 1,
-  hazardousFlags: 2,
+  homeReboot: 0,
+  hazardousFlags: 1,
   movingTargets: 2,
   lessForeshadowing: 1,
-  extraDocks: 1,
+  extraDocks: 0,
   factoryRejects: 1,
-  startupSpinUp: 1,
+  startupSpinUp: 0,
   competitiveMode: 1,
   payToWin: 1,
   subsidizedStarts: 1,
-  staggeredBoards: 1,
-  virtualBots: 2,
-  noDocks: 1,
-  sandwichedDock: 1,
+  staggeredBoards: 0,
+  virtualBots: 1,
+  noDocks: 0,
+  sandwichedDock: 0,
   repairStations: 1
 };
 
@@ -75,6 +97,7 @@ const VARIANT_DEFINITION_ROWS = [
     defaultState: "off",
     description: "Programming is timed.",
     cost: VARIANT_COMPLEXITY.actFast,
+    complexityRationale: "A programming timer is one persistent rule players must follow every round.",
     applyBundle: applyBooleanField("actFast")
   },
   {
@@ -85,8 +108,9 @@ const VARIANT_DEFINITION_ROWS = [
     category: VARIANT_CATEGORIES.programming,
     controlId: "variant-lighter-game",
     defaultState: "off",
-    description: "Removes upgrade cards; Battery and Chop Shop spaces provide no Energy or upgrade effects.",
+    description: "Remove upgrade cards from the game. Battery and Chop Shop spaces provide no Energy or upgrade effects.",
     cost: VARIANT_COMPLEXITY.lighterGame,
+    complexityRationale: "Simplifies the game by removing the upgrade phase/resource system; the changed spaces are self-executing rather than extra rule-state to manage.",
     incompatibleWith: ["upgradeWorld", "payToWin", "subsidizedStarts"],
     applyBundle: applyBooleanField("lighterGame")
   },
@@ -98,6 +122,7 @@ const VARIANT_DEFINITION_ROWS = [
     defaultState: "off",
     description: "Activating batteries and chop shops also draws an upgrade card.",
     cost: VARIANT_COMPLEXITY.upgradeWorld,
+    complexityRationale: "Battery/Chop Shop activations gain one persistent extra upgrade-draw rule.",
     incompatibleWith: ["lighterGame"],
     availability: {
       type: "featureTypesAnyAvailable",
@@ -116,6 +141,8 @@ const VARIANT_DEFINITION_ROWS = [
     defaultState: "off",
     description: "Discard all SPAM cards from hand to your discard pile at the end of programming phase.",
     cost: VARIANT_COMPLEXITY.lessSpammyGame,
+    complexityRationale: "End-of-programming SPAM filtering is one recurring in-game procedure.",
+    // Shared Deck has no personal discard pile for this rule to use.
     incompatibleWith: ["criticalSpam", "classicSharedDeck"],
     applyBundle: applyBooleanField("lessSpammyGame")
   },
@@ -127,6 +154,7 @@ const VARIANT_DEFINITION_ROWS = [
     defaultState: "off",
     description: "SPAM is discarded to player discard pile instead of damage discard pile after resolution. Shutdown removes it normally.",
     cost: VARIANT_COMPLEXITY.criticalSpam,
+    complexityRationale: "SPAM persistence/discard destination changes through play as one recurring damage rule.",
     incompatibleWith: ["lessSpammyGame"],
     recommendations: [
       {
@@ -148,6 +176,7 @@ const VARIANT_DEFINITION_ROWS = [
     defaultState: "off",
     description: "Haywires placed on registers count against hand size when drawing cards at the start of programming.",
     cost: VARIANT_COMPLEXITY.criticalHaywire,
+    complexityRationale: "Haywire changes the draw/hand-size rule throughout play.",
     recommendations: [
       {
         targetId: "criticalSpam",
@@ -164,6 +193,11 @@ const VARIANT_DEFINITION_ROWS = [
     defaultState: "off",
     description: "A player that has nothing but SPAM in hand after drawing cards has their robot destroyed and is out of the game.",
     cost: VARIANT_COMPLEXITY.permanentShutdown,
+    complexityRationale: "Adds one persistent elimination condition tied to heavy SPAM accumulation.",
+    mentalEvent: {
+      cadence: "none",
+      rationale: "Permanent Shutdown changes the strategic value of accumulating SPAM; it does not add a separate remember-the-rule event during ordinary programming."
+    },
     requiresAnyOf: ["criticalSpam"],
     applyBundle: applyBooleanField("permanentShutdown")
   },
@@ -177,6 +211,7 @@ const VARIANT_DEFINITION_ROWS = [
     defaultState: "off",
     description: "Treats board edges as walls.",
     cost: VARIANT_COMPLEXITY.lessDeadlyGame,
+    complexityRationale: "Board edges behave as walls throughout play, one persistent movement rule.",
     applyBundle: applyBooleanField("lessDeadlyGame")
   },
   {
@@ -189,6 +224,7 @@ const VARIANT_DEFINITION_ROWS = [
     defaultState: "off",
     description: "Rebooting deals 3 damage instead of 2.",
     cost: VARIANT_COMPLEXITY.moreDeadlyGame,
+    complexityRationale: "Reboot damage changes throughout play, one persistent recovery rule.",
     applyBundle: applyBooleanField("moreDeadlyGame")
   },
   {
@@ -199,6 +235,13 @@ const VARIANT_DEFINITION_ROWS = [
     defaultState: "off",
     description: "All board lasers deal double damage.",
     cost: VARIANT_COMPLEXITY.cuttingFloor,
+    complexityRationale: "One persistent in-game rule changes an existing board element; players must remember that board lasers are more dangerous.",
+    mentalEvent: {
+      cadence: "once-per-game-turn",
+      trigger: "board-laser-relevant",
+      eventType: "variant-rule:cutting-floor",
+      rationale: "Remember once in a turn that board lasers deal double damage when board-laser danger is relevant; repeated lasers in the same turn do not create repeated memory events."
+    },
     availability: {
       type: "featureTypeAvailable",
       featureType: "laser",
@@ -212,8 +255,15 @@ const VARIANT_DEFINITION_ROWS = [
     category: VARIANT_CATEGORIES.factoryFloor,
     controlId: "variant-flaming-oil",
     defaultState: "off",
-    description: "The first oil contact each register deals 1 damage.",
+    description: "Oil slicks deal 1 damage when a robot enters any oil during a register, and 1 additional damage if it ends that register on oil.",
     cost: VARIANT_COMPLEXITY.flamingOil,
+    complexityRationale: "Oil gains one persistent damage rule that matters whenever oil is encountered.",
+    mentalEvent: {
+      cadence: "once-per-game-turn",
+      trigger: "flaming-oil-relevant",
+      eventType: "variant-rule:flaming-oil",
+      rationale: "Remember once in a turn that oil is damaging when Flaming Oil is actually relevant; multiple oil spaces or both entry/end damage in that turn do not create repeated memory events."
+    },
     availability: {
       type: "featureTypeAvailable",
       featureType: "oil",
@@ -229,6 +279,7 @@ const VARIANT_DEFINITION_ROWS = [
     defaultState: "off",
     description: "Repulsors push robots twice the full distance of the triggering Move card.",
     cost: VARIANT_COMPLEXITY.repulsorOverdrive,
+    complexityRationale: "Repulsors gain one persistent altered-movement rule.",
     availability: {
       type: "featureTypeAvailable",
       featureType: "repulsor",
@@ -242,8 +293,9 @@ const VARIANT_DEFINITION_ROWS = [
     category: VARIANT_CATEGORIES.robots,
     controlId: "variant-set-to-kill",
     defaultState: "off",
-    description: "Robots' main lasers deal 1 extra damage.",
+    description: "Robots' main lasers deal double damage.",
     cost: VARIANT_COMPLEXITY.setToKill,
+    complexityRationale: "Robot main lasers gain one persistent damage-resolution rule; no separate programming-turn mental event.",
     applyBundle: applyBooleanField("setToKill")
   },
   {
@@ -252,8 +304,9 @@ const VARIANT_DEFINITION_ROWS = [
     category: VARIANT_CATEGORIES.robots,
     controlId: "variant-set-to-stun",
     defaultState: "off",
-    description: "SPAM from robots' main lasers is immediately discarded to the damage discard pile without effect.",
+    description: "Put SPAM drawn from damage caused by robots' main lasers in the damage discard pile.",
     cost: VARIANT_COMPLEXITY.setToStun,
+    complexityRationale: "Robot main-laser damage gains one persistent SPAM-resolution rule; no separate programming-turn mental event.",
     applyBundle: applyBooleanField("setToStun")
   },
   {
@@ -264,6 +317,7 @@ const VARIANT_DEFINITION_ROWS = [
     defaultState: "allowed",
     description: "Robots archive when they end a register on a checkpoint or battery space.",
     cost: VARIANT_COMPLEXITY.dynamicArchiving,
+    complexityRationale: "Archive location changes dynamically during play, one persistent recovery rule.",
     exclusiveGroups: ["recoveryRule"],
     applyBundle: (bundle) => {
       bundle.recoveryRule = "dynamic_archiving";
@@ -275,8 +329,9 @@ const VARIANT_DEFINITION_ROWS = [
     category: VARIANT_CATEGORIES.robots,
     controlId: "variant-home-reboot",
     defaultState: "off",
-    description: "Robots reboot at the token on their home dock.",
-    cost: 0,
+    description: "Robots reboot at the reboot token on their home dock.",
+    cost: VARIANT_COMPLEXITY.homeReboot,
+    complexityRationale: "Uses the ordinary reboot procedure with a fixed home-dock destination; it adds essentially no extra scenario-management burden.",
     exclusiveGroups: ["recoveryRule"],
     applyBundle: (bundle) => {
       bundle.recoveryRule = "home_reboot";
@@ -290,6 +345,7 @@ const VARIANT_DEFINITION_ROWS = [
     defaultState: "off",
     description: "Board elements under checkpoints stay active without moving the checkpoints.",
     cost: VARIANT_COMPLEXITY.hazardousFlags,
+    complexityRationale: "One persistent rule keeps covered board elements active under checkpoints.",
     applyBundle: applyBooleanField("hazardousFlags")
   },
   {
@@ -298,8 +354,15 @@ const VARIANT_DEFINITION_ROWS = [
     category: VARIANT_CATEGORIES.factoryFloor,
     controlId: "variant-repair-stations",
     defaultState: "off",
-    description: "Ordinary checkpoints act as repair stations at the end of the fifth register. The Virtual Bots entry is not a repair station.",
+    description: "At the end of register 5, a robot on an ordinary checkpoint removes 1 Damage card. The Virtual Bots entry is not a repair station.",
     cost: VARIANT_COMPLEXITY.repairStations,
+    complexityRationale: "Ordinary checkpoints gain one persistent end-of-turn repair rule.",
+    mentalEvent: {
+      cadence: "once-per-game-turn",
+      trigger: "repair-station-relevant",
+      eventType: "variant-rule:repair-station",
+      rationale: "Remember once in a turn that an ordinary checkpoint can repair at register 5 when the selected route actually ends register 5 there."
+    },
     applyBundle: applyBooleanField("repairStations")
   },
   {
@@ -308,8 +371,9 @@ const VARIANT_DEFINITION_ROWS = [
     category: VARIANT_CATEGORIES.factoryFloor,
     controlId: "variant-moving-targets",
     defaultState: "off",
-    description: "Checkpoints on conveyors are treated as moving targets for generation heuristics.",
+    description: "During each register, checkpoints on conveyors move with the belts; return them to their marked re-entry spaces when they would leave the conveyor or stop moving.",
     cost: VARIANT_COMPLEXITY.movingTargets,
+    complexityRationale: "Moving checkpoints create unusually stateful turn-by-turn programming consequences, so this is the current clear complexity-2 rule.",
     applyBundle: applyBooleanField("movingTargets")
   },
   {
@@ -318,8 +382,9 @@ const VARIANT_DEFINITION_ROWS = [
     category: VARIANT_CATEGORIES.setup,
     controlId: "variant-extra-docks",
     defaultState: "off",
-    description: "Uses more than one physical docking bay. This is a distinct starting-layout option and cannot be combined with No Docks or Sandwiched Dock.",
+    description: "Use more than one physical docking bay.",
     cost: VARIANT_COMPLEXITY.extraDocks,
+    complexityRationale: "Setup-only dock-layout choice; once robots start, no additional rule remains in play.",
     exclusiveGroups: ["dockLayout"],
     availability: {
       type: "physicalDockGroupsAtLeast",
@@ -339,8 +404,9 @@ const VARIANT_DEFINITION_ROWS = [
     category: VARIANT_CATEGORIES.setup,
     controlId: "variant-no-docks",
     defaultState: "off",
-    description: "Uses one full exposed outer board edge as the starting zone instead of a docking bay. This cannot be combined with Extra Docks or Sandwiched Dock.",
+    description: "Use one full exposed outer board edge as the starting zone instead of a docking bay.",
     cost: VARIANT_COMPLEXITY.noDocks,
+    complexityRationale: "Setup-only starting-zone choice; once robots start, no additional rule remains in play.",
     exclusiveGroups: ["dockLayout"],
     incompatibleWith: ["homeReboot"],
     applyBundle: applyBooleanField("noDocks")
@@ -351,8 +417,9 @@ const VARIANT_DEFINITION_ROWS = [
     category: VARIANT_CATEGORIES.setup,
     controlId: "variant-sandwiched-dock",
     defaultState: "off",
-    description: "Places a physical docking bay between factory boards, with factory boards adjoining both long sides. This cannot be combined with Extra Docks or No Docks.",
+    description: "Place a physical docking bay between factory boards, with factory boards adjoining both long sides.",
     cost: VARIANT_COMPLEXITY.sandwichedDock,
+    complexityRationale: "Setup-only dock placement; once robots start, no additional rule remains in play.",
     exclusiveGroups: ["dockLayout"],
     applyBundle: applyBooleanField("sandwichedDock")
   },
@@ -362,8 +429,14 @@ const VARIANT_DEFINITION_ROWS = [
     category: VARIANT_CATEGORIES.programming,
     controlId: "variant-factory-rejects",
     defaultState: "off",
-    description: "Hand size is 7 instead of 9 (Altered from previous Robo Rally editions).",
+    description: "Hand size is 7 instead of 9.",
+    sourceRelation: { source: "previous-editions", relation: "altered" },
     cost: VARIANT_COMPLEXITY.factoryRejects,
+    complexityRationale: "One simple programming-phase procedure changes the draw count; it adds rule-list clutter but no separate during-programming reminder.",
+    mentalEvent: {
+      cadence: "none",
+      rationale: "The smaller hand is already physically present when choosing cards, so there is no separate remember-the-rule planning event."
+    },
     applyBundle: applyBooleanField("factoryRejects")
   },
   {
@@ -374,6 +447,7 @@ const VARIANT_DEFINITION_ROWS = [
     defaultState: "off",
     description: "During setup, robots can start with any facing.",
     cost: VARIANT_COMPLEXITY.startupSpinUp,
+    complexityRationale: "Setup-only facing choice; it creates no persistent rule after play begins.",
     applyBundle: applyBooleanField("startupSpinUp")
   },
   {
@@ -384,6 +458,7 @@ const VARIANT_DEFINITION_ROWS = [
     defaultState: "off",
     description: "Removes docking bays and starts every robot as a Virtual Bot from one shared entry point. Virtual Bots move normally but do not interact with robots or other Virtual Bots until they become physical robots at the end of a turn.",
     cost: VARIANT_COMPLEXITY.virtualBots,
+    complexityRationale: "Virtual/non-interacting state persists into opening play, so this is an in-game rule rather than setup-only, but it is still one compact rule package.",
     exclusiveGroups: ["startingSpaceSetup", "dockLayout"],
     incompatibleWith: ["homeReboot"],
     recommendations: [
@@ -404,9 +479,13 @@ const VARIANT_DEFINITION_ROWS = [
     category: VARIANT_CATEGORIES.programming,
     controlId: "variant-less-foreshadowing",
     defaultState: "off",
-    description: "Decks reshuffle every turn, reducing card-draw consistency.",
+    description: "At the end of each round, shuffle your programming deck, discard pile, and non-damage cards in hand together to form a new programming deck.",
     cost: VARIANT_COMPLEXITY.lessForeshadowing,
-    incompatibleWith: ["classicSharedDeck"],
+    complexityRationale: "The deck-reset procedure recurs every round, so it is one persistent special rule even though it adds no separate programming-time mental event.",
+    mentalEvent: {
+      cadence: "none",
+      rationale: "The reset determines the cards physically available before programming; it is not an extra fact the player must remember while choosing the program."
+    },
     applyBundle: applyBooleanField("lessForeshadowing")
   },
   {
@@ -415,9 +494,15 @@ const VARIANT_DEFINITION_ROWS = [
     category: VARIANT_CATEGORIES.programming,
     controlId: "variant-classic-shared-deck",
     defaultState: "off",
-    description: "Players share one combined programming deck and spam cards go to hand.",
+    description: "Use one shared programming deck. Damage SPAM gained by a player goes directly into that player's next hand.",
     cost: VARIANT_COMPLEXITY.classicSharedDeck,
-    incompatibleWith: ["lessSpammyGame", "lessForeshadowing"],
+    complexityRationale: "The shared draw/damage procedure is one persistent special rule; it changes card state but requires no separate programming-time reminder.",
+    mentalEvent: {
+      cadence: "none",
+      rationale: "The shared draw environment changes card availability itself; it does not add a separate remember-the-rule event while selecting a program."
+    },
+    // SPAM Filter depends on a personal discard pile, which Shared Deck removes.
+    incompatibleWith: ["lessSpammyGame"],
     applyBundle: applyBooleanField("classicSharedDeck")
   },
   {
@@ -426,8 +511,9 @@ const VARIANT_DEFINITION_ROWS = [
     category: VARIANT_CATEGORIES.setup,
     controlId: "variant-competitive-mode",
     defaultState: "off",
-    description: "Before the game, players block starting spaces with energy cubes, then choose strategically from the remaining starts. Generation evaluates roughly twice as many starting choices as players and can take longer.",
+    description: "Before the game, players take turns blocking starting spaces, then choose strategically from the remaining starts.",
     cost: VARIANT_COMPLEXITY.competitiveMode,
+    complexityRationale: "Blocking and strategic start selection add one substantial setup procedure even though the rule is finished before normal play begins.",
     exclusiveGroups: ["startingSpaceSetup"],
     recommendations: [
       {
@@ -443,8 +529,9 @@ const VARIANT_DEFINITION_ROWS = [
     category: VARIANT_CATEGORIES.setup,
     controlId: "variant-pay-to-win",
     defaultState: "off",
-    description: "Better starting spaces cost starting energy instead of being automatically pruned as outliers.",
+    description: "Some starting spaces cost starting Energy; pay the shown cost when choosing a start.",
     cost: VARIANT_COMPLEXITY.payToWin,
+    complexityRationale: "Starting-space price evaluation adds one setup decision layer even though no special rule remains after starting spaces are chosen.",
     exclusiveGroups: ["startingSpaceSetup"],
     incompatibleWith: ["lighterGame"],
     applyBundle: applyBooleanField("payToWin")
@@ -455,8 +542,9 @@ const VARIANT_DEFINITION_ROWS = [
     category: VARIANT_CATEGORIES.setup,
     controlId: "variant-subsidized-starts",
     defaultState: "off",
-    description: "Weaker starting spaces grant extra starting energy instead of being automatically pruned as outliers. Starting energy cannot exceed 10.",
+    description: "Some starting spaces grant extra starting Energy; add the shown subsidy when choosing a start.",
     cost: VARIANT_COMPLEXITY.subsidizedStarts,
+    complexityRationale: "Starting-space subsidy evaluation adds one setup decision layer even though no special rule remains after starting spaces are chosen.",
     exclusiveGroups: ["startingSpaceSetup"],
     incompatibleWith: ["lighterGame"],
     applyBundle: applyBooleanField("subsidizedStarts")
@@ -469,6 +557,7 @@ const VARIANT_DEFINITION_ROWS = [
     defaultState: "off",
     description: "Allows the main boards to be offset instead of forming a straight aligned block.",
     cost: VARIANT_COMPLEXITY.staggeredBoards,
+    complexityRationale: "Board offset is embodied by the physical layout; there is no special rule to remember after setup.",
     stateLabels: {
       off: { label: "Aligned", shortLabel: "Aligned" },
       allowed: { label: "Random", shortLabel: "Random" },
@@ -491,6 +580,24 @@ export const VARIANT_CONTROL_IDS = Object.fromEntries(
 
 export function getVariantDefinition(variantId) {
   return VARIANT_DEFINITIONS.find((variant) => variant.id === variantId) ?? null;
+}
+
+export function getVariantMentalEventRule(variantId) {
+  return getVariantDefinition(variantId)?.mentalEvent ?? null;
+}
+
+export function getActiveVariantMentalEventRules(activeVariants = {}) {
+  return VARIANT_DEFINITIONS
+    .filter((variant) => (
+      Boolean(activeVariants?.[variant.id]) &&
+      variant?.mentalEvent?.cadence === "once-per-game-turn" &&
+      variant?.mentalEvent?.trigger
+    ))
+    .map((variant) => ({
+      variantId: variant.id,
+      label: variant.label,
+      ...variant.mentalEvent
+    }));
 }
 
 export function getVariantRequirementIds(variantId) {

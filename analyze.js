@@ -1,6 +1,6 @@
-// VERSION START: v49dw-route-search-re-ownership
+// VERSION START: v49ep-permanent-shutdown-spam-burden
 // Robo Rally Course Randomizer - route analysis and scoring runtime
-export const ANALYZE_BUILD_ID = "v49dw-route-search-re-ownership";
+export const ANALYZE_BUILD_ID = "v49ep-permanent-shutdown-spam-burden";
 const ASSET_VERSION = new URL(import.meta.url).searchParams.get("v") ?? "";
 const VERSION_SUFFIX = ASSET_VERSION ? `?v=${encodeURIComponent(ASSET_VERSION)}` : "";
 const versionedPath = (path) => `${path}${VERSION_SUFFIX}`;
@@ -10,8 +10,12 @@ const {
   getDamageDeckPressureMultipliers,
   getEffectiveLaserDamage,
   getFlagAreaFeatureScore,
+  getHomingMissileSearchGuidanceScore,
   getTilePenaltyForFeature
 } = await import(versionedPath("./feature-weights.js"));
+const { getActiveVariantMentalEventRules } = await import(
+  versionedPath("./variants.js")
+);
 
 // This module is a route-evaluation model for board setup, not a full RoboRally
 // simulator. It resolves movement-shaping effects that materially change route
@@ -31,6 +35,10 @@ const {
 // - Hazards are intrinsic route costs. Traffic remains a later relational layer:
 //   it never alters intrinsic legality, but confidence-weighted traffic may request
 //   additional leg witnesses after the first exact route set is complete.
+// - v49ej ownership invariant: completed evaluation should use RE/mechanistic
+//   owners wherever a credible estimate exists. Legacy score-space/feature weights
+//   may guide cheap discovery, construction, compatibility or diagnostics, but
+//   should be pruned from authoritative evaluation as matching RE owners land.
 // - Dynamic Archiving carries the current archive marker as per-robot exact route
 //   state. It affects pit/edge/autokill consequence, exact dominance, repairs and
 //   leg handoff; cheap physical discovery deliberately uses a leg-local recovery
@@ -136,6 +144,88 @@ const AGAIN_CARD_COUNT = 1;
 // surcharges, and never add an independent Repeat/Again RE surcharge: repeat
 // availability is already the exact union of legal natural/Again realizations.
 const PROGRAM_CARD_SCARCITY_ADAPTABILITY_FACTOR = 0.70;
+
+// v49ek programming-variant ownership. Probability mechanics and the mapping
+// from probability -> practical card RE are deliberately separate.
+//
+// Normal play retains the provisional alpha=0.70 abstraction discount.
+// Less Foreshadowing resets the programming deck at every turn boundary, so the
+// previous-turn depletion state is not carried and the ordinary omitted-state
+// discount is removed (base alpha=1.0). Shared Deck deliberately does NOT model
+// a fictitious enlarged per-player deck or cross-robot hands; instead its omitted
+// shared-state uncertainty raises alpha with player count. This increment is
+// intentionally uncapped so Less Foreshadowing + Shared Deck can exceed 1.0.
+// Factory Rejects changes only the actual hand size used by hypergeometry.
+const SHARED_DECK_ALPHA_INCREMENT_PER_ADDITIONAL_PLAYER = 0.05;
+
+function getProgramCardModelProfile(options = {}) {
+  const playerCount = Math.max(1, Math.floor(Number(options.playerCount) || 4));
+  const resetEachTurn = Boolean(options.lessForeshadowing);
+  const sharedDeck = Boolean(options.classicSharedDeck);
+  const sharedDeckAlphaIncrement = sharedDeck
+    ? Math.max(0, playerCount - 1) * SHARED_DECK_ALPHA_INCREMENT_PER_ADDITIONAL_PLAYER
+    : 0;
+  const baseAlpha = resetEachTurn ? 1 : PROGRAM_CARD_SCARCITY_ADAPTABILITY_FACTOR;
+  return {
+    handSize: options.factoryRejects ? 7 : PROGRAM_EXACT_HAND_SIZE,
+    resetEachTurn,
+    previousTurnDepletionActive: !resetEachTurn,
+    sharedDeck,
+    playerCount,
+    baseAlpha,
+    sharedDeckAlphaIncrement: Number(sharedDeckAlphaIncrement.toFixed(4)),
+    adaptabilityFactor: Number((baseAlpha + sharedDeckAlphaIncrement).toFixed(4)),
+    sharedDeckEnlargedDeckModeled: false,
+    sharedDeckCrossRobotHandsModeled: false
+  };
+}
+
+function getProgramCardModelSignature(options = {}) {
+  const profile = getProgramCardModelProfile(options);
+  return [
+    `h${profile.handSize}`,
+    `reset${profile.resetEachTurn ? 1 : 0}`,
+    `shared${profile.sharedDeck ? 1 : 0}`,
+    `p${profile.playerCount}`,
+    `a${profile.adaptabilityFactor.toFixed(4)}`
+  ].join(":");
+}
+
+export function getProgramCardVariantModelSummary(options = {}) {
+  const profile = getProgramCardModelProfile(options);
+  return {
+    model: "program-card-variant-ownership-v49ek",
+    normalAdaptabilityFactor: PROGRAM_CARD_SCARCITY_ADAPTABILITY_FACTOR,
+    sharedDeckAlphaIncrementPerAdditionalPlayer:
+      SHARED_DECK_ALPHA_INCREMENT_PER_ADDITIONAL_PLAYER,
+    handSize: profile.handSize,
+    resetEachTurn: profile.resetEachTurn,
+    previousTurnDepletionActive: profile.previousTurnDepletionActive,
+    sharedDeck: profile.sharedDeck,
+    playerCount: profile.playerCount,
+    baseAlpha: profile.baseAlpha,
+    sharedDeckAlphaIncrement: profile.sharedDeckAlphaIncrement,
+    adaptabilityFactor: profile.adaptabilityFactor,
+    sharedDeckEnlargedDeckModeled: false,
+    sharedDeckCrossRobotHandsModeled: false,
+    factoryRejects: Boolean(options.factoryRejects),
+    lessForeshadowing: Boolean(options.lessForeshadowing),
+    classicSharedDeck: Boolean(options.classicSharedDeck)
+  };
+}
+
+function getProgramCardEffectivePreviousCounts(previousCounts = [], options = {}) {
+  if (!getProgramCardModelProfile(options).previousTurnDepletionActive) {
+    return Array(PROGRAM_CHEAP_RESOURCE_IDS.length).fill(0);
+  }
+  return previousCounts;
+}
+
+function getProgramCardEffectivePreviousCode(previousCode = 0, options = {}) {
+  return getProgramCardModelProfile(options).previousTurnDepletionActive
+    ? Math.max(0, Math.floor(Number(previousCode) || 0))
+    : 0;
+}
 
 // v13/v48w card-model design invariant:
 // The route analyzer is not a deck-order simulator. For planning credibility it
@@ -2813,6 +2903,12 @@ function getTilePenalty(
     if (feature.type === "gear") {
       continue;
     }
+    // v49ei: Homing Missile is an offensive opportunity for the entering robot.
+    // Its own-player cost is planning/target-choice burden, modeled in completed
+    // route mental RE below; do not also price the tile as a self-hazard.
+    if (feature.type === "homingMissile") {
+      continue;
+    }
 
     // Randomizers affect the card played only when the robot STARTS a register
     // on the space. Traversing or merely ending the current movement on one
@@ -2842,6 +2938,9 @@ function getTilePenalty(
       flamingOil: options.flamingOil,
       repulsorOverdrive: options.repulsorOverdrive,
       upgradeWorld: options.upgradeWorld,
+      factoryRejects: Boolean(options.factoryRejects),
+      classicSharedDeck: Boolean(options.classicSharedDeck),
+      lessForeshadowing: Boolean(options.lessForeshadowing),
       lessSpammyGame: options.lessSpammyGame,
       criticalSpam: options.criticalSpam,
       criticalHaywire: options.criticalHaywire,
@@ -3752,11 +3851,6 @@ function moveOneStep(
       ? getTilePenalty(portalDestinationTile, options) +
         getActiveFlamethrowerEntryPenalty(portalDestinationTile, options) +
         getTimedTraversalFragilityPenalty(portalDestinationTile, options)
-      : 0) +
-    (hasHomingMissile(nextTile)
-      ? (tileMap.get(tileKey(state.x, state.y))?.x !== nextTile?.x || tileMap.get(tileKey(state.x, state.y))?.y !== nextTile?.y
-        ? getTilePenaltyForFeature({ type: "homingMissile" }, { onEntrance: true, playerCount: options.playerCount })
-        : 0)
       : 0);
   if (finishProgrammedStepPhase) finishProgrammedStepPhase("physicalMissProgramHazardMs");
 
@@ -4819,6 +4913,9 @@ export function simulateAction(tileMap, startState, action, options = {}) {
 // registers. Passive SPAM affects deck/hand supply, while SPAM contributes
 // control-clog only when the model actually spends it through forced or elective
 // relief. Haywire and SPAM-play clog then share one nonlinear control-loss curve.
+// Permanent Shutdown, when paired with Critical SPAM, does not synthesize literal
+// elimination probability. Instead it scales ONLY SPAM supply RE upward with
+// persistent SPAM burden; the provisional curve is intentionally calibration debt.
 // The 5-RE Shutdown value is now a scoring abstraction, not a forecasted literal
 // Shutdown decision. A separate auxiliary replay accumulates damage-economy RE in
 // segments; whenever a segment reaches the five-register Shutdown region and more
@@ -4829,6 +4926,18 @@ export const DAMAGE_ECONOMY_MODEL_ID = "damage-economy-v9-pressure-restored-iter
 const DAMAGE_ECONOMY_SPAM_SHARE = 23 / 40;
 const DAMAGE_ECONOMY_HAYWIRE_SHARE = 17 / 40;
 const DAMAGE_ECONOMY_SHUTDOWN_REFERENCE_RE = REGISTER_COUNT;
+// Permanent Shutdown makes persistent SPAM strategically worse because a heavily
+// polluted hand can become game-ending. v49ep deliberately starts with a simple
+// calibration curve rather than pretending to model literal elimination odds:
+//
+//   multiplier = 1 + c * S * (S + 1), c = 0.025
+//
+// where S is the fractional persistent SPAM burden at the programming boundary.
+// Anchors: S=1 -> 1.05x, 3 -> 1.30x, 5 -> 1.75x, 8 -> 2.80x.
+// This multiplier applies ONLY to SPAM supply/card-scarcity RE. It does not
+// multiply Haywire or SPAM-play clog/control RE, and it creates no mental event.
+// There is intentionally no hard cap; exact calibration is explicitly deferred.
+const PERMANENT_SHUTDOWN_SPAM_BURDEN_COEFFICIENT = 0.025;
 const DAMAGE_ECONOMY_EFFECTIVE_STATE_CACHE = new Map();
 const DAMAGE_ECONOMY_EFFECTIVE_STATE_CACHE_LIMIT = 512;
 const DAMAGE_ECONOMY_PROGRAM_CACHE = new Map();
@@ -4858,6 +4967,16 @@ function roundDamageEconomyPressure(value) {
   return Math.max(0, Math.round(Number(value) || 0));
 }
 
+function getPermanentShutdownSpamSupplyMultiplier(spamBurden, options = {}) {
+  if (!(options.permanentShutdown && options.criticalSpam)) return 1;
+  const burden = Math.max(0, Number(spamBurden) || 0);
+  return 1 + (
+    PERMANENT_SHUTDOWN_SPAM_BURDEN_COEFFICIENT *
+    burden *
+    (burden + 1)
+  );
+}
+
 function getDamageEconomyVariantProfile(options = {}) {
   // Centralized variant seam. Hooks marked implemented below are implemented only
   // inside this observational damage ledger unless they were already authoritative
@@ -4870,6 +4989,8 @@ function getDamageEconomyVariantProfile(options = {}) {
     options.criticalHaywire ? "criticalHaywire" : null,
     options.permanentShutdown ? "permanentShutdown" : null,
     options.factoryRejects ? "factoryRejects" : null,
+    options.lessForeshadowing ? "lessForeshadowing" : null,
+    options.classicSharedDeck ? "classicSharedDeck" : null,
     options.repairStations ? "repairStations" : null,
     options.cuttingFloor ? "cuttingFloor" : null,
     options.flamingOil ? "flamingOil" : null,
@@ -4879,10 +5000,17 @@ function getDamageEconomyVariantProfile(options = {}) {
   const implementedHooks = [
     options.moreDeadlyGame ? "moreDeadlyGame" : null,
     options.cuttingFloor ? "cuttingFloor" : null,
+    options.flamingOil ? "flamingOil" : null,
+    options.repairStations ? "repairStations" : null,
     options.factoryRejects ? "factoryRejects" : null,
+    options.lessForeshadowing ? "lessForeshadowing" : null,
+    options.classicSharedDeck ? "classicSharedDeck" : null,
     options.criticalHaywire ? "criticalHaywire" : null,
     options.lessSpammyGame ? "lessSpammyGame" : null,
-    options.criticalSpam ? "criticalSpam" : null
+    options.criticalSpam ? "criticalSpam" : null,
+    (options.permanentShutdown && options.criticalSpam) ? "permanentShutdown" : null,
+    options.setToKill ? "setToKill" : null,
+    options.setToStun ? "setToStun" : null
   ].filter(Boolean);
   const deferredHooks = activeHooks.filter((id) => !implementedHooks.includes(id));
   return {
@@ -4891,10 +5019,25 @@ function getDamageEconomyVariantProfile(options = {}) {
     deferredHooks,
     spamShare: DAMAGE_ECONOMY_SPAM_SHARE,
     haywireShare: DAMAGE_ECONOMY_HAYWIRE_SHARE,
-    handSize: options.factoryRejects ? 7 : PROGRAM_EXACT_HAND_SIZE,
+    handSize: getProgramCardModelProfile(options).handSize,
+    cardScarcityAdaptabilityFactor: getProgramCardModelProfile(options).adaptabilityFactor,
+    resetProgrammingDeckEachTurn: Boolean(options.lessForeshadowing),
+    sharedDeckDamageToHand: Boolean(options.classicSharedDeck),
     criticalHaywireCountsAgainstHand: Boolean(options.criticalHaywire),
     spamFilter: Boolean(options.lessSpammyGame),
-    criticalSpam: Boolean(options.criticalSpam)
+    criticalSpam: Boolean(options.criticalSpam),
+    permanentShutdownPressureActive: Boolean(
+      options.permanentShutdown && options.criticalSpam
+    ),
+    permanentShutdownSpamBurdenCoefficient:
+      PERMANENT_SHUTDOWN_SPAM_BURDEN_COEFFICIENT,
+    // Robot-laser optional rules change damage consequences, never LOS / occupancy.
+    // Set to Kill means two damage-card draws per successful robot-laser hit.
+    // Set to Stun still resolves those damage cards normally for Haywire, but SPAM
+    // drawn from robot-laser damage goes to the damage discard pile. In this
+    // expected-state model that means it never enters persistent SPAM state.
+    robotLaserDamagePerHit: options.setToKill ? 2 : 1,
+    robotLaserSpamSuppressed: Boolean(options.setToStun)
   };
 }
 
@@ -4931,14 +5074,22 @@ function createDamageEconomyState() {
   };
 }
 
-function advanceDamageEconomyToTurn(state, turn) {
+function advanceDamageEconomyToTurn(state, turn, options = {}) {
   const targetTurn = Math.max(1, Math.floor(Number(turn) || 1));
   while (state.activeTurn < targetTurn) {
     // Damage received in Turn N cannot affect its already-chosen program. At the
     // next programming boundary SPAM joins the persistent circulating burden and
     // Haywire becomes the one-turn clog distribution derived from the capped
     // damage-register risks. A further empty boundary expires Haywire naturally.
-    state.spamTotal += state.pendingSpam;
+    const pendingSpam = Math.max(0, Number(state.pendingSpam) || 0);
+    state.spamTotal += pendingSpam;
+    if (options.classicSharedDeck && pendingSpam > 0) {
+      // Shared Deck: damage SPAM enters the affected player's hand directly at
+      // the next programming boundary instead of first becoming anonymous
+      // circulating/discard-pile burden. This is the deliberate single-player
+      // approximation; cross-robot hands/deck order remain unmodeled.
+      state.spamHeld = Math.min(state.spamTotal, state.spamHeld + pendingSpam);
+    }
     state.pendingSpam = 0;
     state.activeHaywireDistribution = getDamageEconomyPoissonBinomialDistribution(
       state.pendingHaywireRegisterRisks
@@ -4954,7 +5105,8 @@ function applyExpectedDamageToEconomyState(
   state,
   damageUnits,
   register,
-  haywireEventProbabilityOverride = null
+  haywireEventProbabilityOverride = null,
+  spamDamageUnitsOverride = null
 ) {
   const units = Math.max(0, Number(damageUnits) || 0);
   if (units <= 0) {
@@ -4964,8 +5116,19 @@ function applyExpectedDamageToEconomyState(
     REGISTER_COUNT,
     Math.floor(Number(register) || 1)
   ));
-  const spamAdded = units * DAMAGE_ECONOMY_SPAM_SHARE;
-  const eventHaywireRisk = Number.isFinite(Number(haywireEventProbabilityOverride))
+  const spamDamageUnits = (
+    spamDamageUnitsOverride !== null &&
+    spamDamageUnitsOverride !== undefined &&
+    Number.isFinite(Number(spamDamageUnitsOverride))
+  )
+    ? Math.max(0, Number(spamDamageUnitsOverride))
+    : units;
+  const spamAdded = spamDamageUnits * DAMAGE_ECONOMY_SPAM_SHARE;
+  const hasHaywireOverride =
+    haywireEventProbabilityOverride !== null &&
+    haywireEventProbabilityOverride !== undefined &&
+    Number.isFinite(Number(haywireEventProbabilityOverride));
+  const eventHaywireRisk = hasHaywireOverride
     ? clamp(Number(haywireEventProbabilityOverride), 0, 1)
     : getDamageEconomyHaywireEventProbability(units);
   const index = safeRegister - 1;
@@ -4982,15 +5145,22 @@ function applyExpectedDamageToEconomyState(
 
 function getDamageEconomyRegisterHaywireEventProbability(
   deterministicDamageUnits,
-  robotLaserHitProbabilities = []
+  robotLaserHitProbabilities = [],
+  robotLaserDamagePerHit = 1
 ) {
   const deterministicRisk = getDamageEconomyHaywireEventProbability(
     Math.max(0, Number(deterministicDamageUnits) || 0)
   );
+  const damageCardsPerHit = Math.max(1, Math.round(Number(robotLaserDamagePerHit) || 1));
+  const haywireGivenHit = clamp(
+    1 - ((1 - DAMAGE_ECONOMY_HAYWIRE_SHARE) ** damageCardsPerHit),
+    0,
+    1
+  );
   let noRobotHaywireProbability = 1;
   for (const hitProbabilityRaw of robotLaserHitProbabilities || []) {
     const hitProbability = clamp(Number(hitProbabilityRaw) || 0, 0, 1);
-    noRobotHaywireProbability *= 1 - DAMAGE_ECONOMY_HAYWIRE_SHARE * hitProbability;
+    noRobotHaywireProbability *= 1 - haywireGivenHit * hitProbability;
   }
   const robotLaserRisk = clamp(1 - noRobotHaywireProbability, 0, 1);
   return combineDamageEconomyProbability(deterministicRisk, robotLaserRisk);
@@ -5144,11 +5314,12 @@ function getDamageEconomyProgrammingSummary(
     ? state.activeHaywireDistribution
     : [1, 0, 0, 0, 0, 0];
   const expectedHaywireClogs = getDamageEconomyExpectedCount(haywireDistribution);
-  const baseDeckSize = getExactProgramDeckCounts(previousCode)
+  const effectivePreviousCode = getProgramCardEffectivePreviousCode(previousCode, options);
+  const baseDeckSize = getExactProgramDeckCounts(effectivePreviousCode)
     .reduce((sum, count) => sum + count, 0);
 
   const cleanProgramProbability = getDamageEconomyProgramAvailabilityProbabilityInteger(
-    previousCode,
+    effectivePreviousCode,
     actions,
     0,
     0,
@@ -5177,7 +5348,7 @@ function getDamageEconomyProgrammingSummary(
     expectedFreshDrawSlots += haywireProbability * drawSlots;
     damagedProgramProbability += haywireProbability *
       getDamageEconomyProgramAvailabilityProbabilityInteger(
-        previousCode,
+        effectivePreviousCode,
         actions,
         effectiveSpam.circulatingSpam,
         effectiveSpam.heldSpam,
@@ -5209,21 +5380,41 @@ function getDamageEconomyProgrammingSummary(
   });
 
   const cleanPenaltyScore = getDamageEconomyAvailabilityPenaltyFromProbability(
-    cleanProgramProbability
+    cleanProgramProbability,
+    options
   );
   const damagedPenaltyScore = getDamageEconomyAvailabilityPenaltyFromProbability(
-    damagedProgramProbability
+    damagedProgramProbability,
+    options
   );
   const spamSupplyScore = (
     Number.isFinite(cleanPenaltyScore) && Number.isFinite(damagedPenaltyScore)
   )
     ? Math.max(0, damagedPenaltyScore - cleanPenaltyScore)
     : 0;
-  const spamSupplyRegisterEquivalents = spamSupplyScore / REGISTER_TEMPO_COST;
+  const rawSpamSupplyRegisterEquivalents = spamSupplyScore / REGISTER_TEMPO_COST;
+  const permanentShutdownSpamBurden = Math.max(
+    0,
+    Number(state?.spamTotal) || 0
+  );
+  const permanentShutdownSupplyMultiplier =
+    getPermanentShutdownSpamSupplyMultiplier(
+      permanentShutdownSpamBurden,
+      options
+    );
+  const spamSupplyRegisterEquivalents =
+    rawSpamSupplyRegisterEquivalents * permanentShutdownSupplyMultiplier;
+  const permanentShutdownPressureRegisterEquivalents = Math.max(
+    0,
+    spamSupplyRegisterEquivalents - rawSpamSupplyRegisterEquivalents
+  );
 
   return {
     baseHandSize: profile.handSize,
     baseDeckSize,
+    cardScarcityAdaptabilityFactor: profile.cardScarcityAdaptabilityFactor,
+    resetProgrammingDeckEachTurn: profile.resetProgrammingDeckEachTurn,
+    sharedDeckDamageToHand: profile.sharedDeckDamageToHand,
     effectiveHeldSpam: effectiveSpam.heldSpam,
     effectiveCirculatingSpam: effectiveSpam.circulatingSpam,
     effectiveTotalSpam: effectiveSpam.effectiveTotalSpam,
@@ -5238,6 +5429,10 @@ function getDamageEconomyProgrammingSummary(
     ),
     cleanProgramProbability,
     damagedProgramProbability,
+    rawSpamSupplyRegisterEquivalents,
+    permanentShutdownSpamBurden,
+    permanentShutdownSupplyMultiplier,
+    permanentShutdownPressureRegisterEquivalents,
     spamSupplyRegisterEquivalents
   };
 }
@@ -5360,6 +5555,7 @@ function getDamageEconomyCombinedClogSummary(
     ? electiveSpamPlayDistribution
     : [1];
   const spamPlayCountDistribution = Array(REGISTER_COUNT + 1).fill(0);
+  const controlClogLoadProbability = new Map();
   let expectedSpamPlayInitiations = 0;
   let expectedControlClogLoad = 0;
   let clogRegisterEquivalents = 0;
@@ -5381,6 +5577,11 @@ function getDamageEconomyCombinedClogSummary(
         const spamClogLoad = spamPlayCount * DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT;
         const controlClogLoad = haywireCount + spamClogLoad;
         spamPlayCountDistribution[spamPlayCount] += probability;
+        const loadKey = Number(controlClogLoad.toFixed(6));
+        controlClogLoadProbability.set(
+          loadKey,
+          (controlClogLoadProbability.get(loadKey) || 0) + probability
+        );
         expectedSpamPlayInitiations += probability * spamPlayCount;
         expectedControlClogLoad += probability * controlClogLoad;
         clogRegisterEquivalents += probability *
@@ -5404,12 +5605,23 @@ function getDamageEconomyCombinedClogSummary(
     clogRegisterEquivalents /= probabilityMass;
     probabilityFourPlusClogs /= probabilityMass;
     probabilityFivePlusClogs /= probabilityMass;
+    for (const [load, probability] of controlClogLoadProbability) {
+      controlClogLoadProbability.set(load, probability / probabilityMass);
+    }
   }
+
+  const controlClogLoadDistribution = [...controlClogLoadProbability.entries()]
+    .sort((left, right) => left[0] - right[0])
+    .map(([load, probability]) => ({
+      load: Number(load),
+      probability: Number(probability)
+    }));
 
   return {
     spamClogLoad: expectedSpamPlayInitiations * DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT,
     expectedSpamPlayInitiations,
     spamPlayCountDistribution,
+    controlClogLoadDistribution,
     expectedControlClogLoad,
     clogRegisterEquivalents,
     probabilityFourPlusClogs: clamp(probabilityFourPlusClogs, 0, 1),
@@ -5530,8 +5742,11 @@ function getDamageEconomyBaseProgramSuccessfulWays(previousCode, actionIds, hand
   return successfulWays;
 }
 
-function getDamageEconomyAvailabilityPenaltyFromProbability(probability) {
-  return getProgramAvailabilityPenaltyFromProbability(probability);
+function getDamageEconomyAvailabilityPenaltyFromProbability(probability, options = {}) {
+  return getProgramAvailabilityPenaltyFromProbability(
+    probability,
+    getProgramCardModelProfile(options).adaptabilityFactor
+  );
 }
 
 function getDamageEconomyExpectedSpamChainYieldInteger(baseDeckSize, spamCount) {
@@ -5749,6 +5964,62 @@ function getDamageEconomyActiveFlamethrowerCount(tile, registerOptions = {}) {
   )).length;
 }
 
+function isDamageEconomyRepairStationTile(tile) {
+  const checkpoint = (tile?.features || []).find((feature) => feature.type === "checkpoint");
+  return Boolean(checkpoint && Number(checkpoint.id ?? 1) !== 0);
+}
+
+function applyDamageEconomyRepairStationRelief(state) {
+  const spamReliefTarget = DAMAGE_ECONOMY_SPAM_SHARE;
+  const haywireReliefTarget = DAMAGE_ECONOMY_HAYWIRE_SHARE;
+
+  // Repair Stations remove one expected Damage-card equivalent, split using the
+  // existing damage-deck mix. The two shares deliberately do NOT spill into one
+  // another: if the modeled state has less of one type, unused relief is lost.
+  // Prefer same-turn pending SPAM first because register-5 repair happens after
+  // that damage but before the next programming boundary; then reduce older
+  // persistent SPAM burden if capacity remains.
+  const pendingSpamRemoved = Math.min(
+    Math.max(0, Number(state?.pendingSpam) || 0),
+    spamReliefTarget
+  );
+  state.pendingSpam = Math.max(0, (Number(state?.pendingSpam) || 0) - pendingSpamRemoved);
+  const remainingSpamRelief = Math.max(0, spamReliefTarget - pendingSpamRemoved);
+  const persistentSpamRemoved = Math.min(
+    Math.max(0, Number(state?.spamTotal) || 0),
+    remainingSpamRelief
+  );
+  state.spamTotal = Math.max(0, (Number(state?.spamTotal) || 0) - persistentSpamRemoved);
+  state.spamHeld = Math.min(
+    Math.max(0, Number(state?.spamHeld) || 0),
+    Math.max(0, Number(state?.spamTotal) || 0)
+  );
+
+  // Pending Haywire is represented as per-register probability mass for the next
+  // programming turn. Remove up to the Haywire share by proportionally scaling
+  // that mass; this preserves which registers created the risk while keeping the
+  // expected relief exactly bounded by 17/40 of one Damage card.
+  const risks = Array.isArray(state?.pendingHaywireRegisterRisks)
+    ? state.pendingHaywireRegisterRisks.map((value) => clamp(Number(value) || 0, 0, 1))
+    : Array(REGISTER_COUNT).fill(0);
+  const haywireRiskBefore = risks.reduce((sum, value) => sum + value, 0);
+  const haywireRiskRemoved = Math.min(haywireRiskBefore, haywireReliefTarget);
+  const targetRiskAfter = Math.max(0, haywireRiskBefore - haywireRiskRemoved);
+  const scale = haywireRiskBefore > 0.000001
+    ? targetRiskAfter / haywireRiskBefore
+    : 0;
+  state.pendingHaywireRegisterRisks = risks.map((value) => clamp(value * scale, 0, 1));
+
+  return {
+    spamRemoved: pendingSpamRemoved + persistentSpamRemoved,
+    pendingSpamRemoved,
+    persistentSpamRemoved,
+    haywireExpectedRemoved: haywireRiskRemoved,
+    spamReliefTarget,
+    haywireReliefTarget
+  };
+}
+
 function getDamageEconomyRealizedDamageForTransition(
   tileMap,
   transition,
@@ -5761,15 +6032,16 @@ function getDamageEconomyRealizedDamageForTransition(
   };
   let boardLaserDamageUnits = 0;
   let flamethrowerDamageUnits = 0;
+  let flamingOilDamageUnits = 0;
   let ledgeDamageUnits = 0;
   const rebootDamageUnits = transition?.rebooted
     ? (options.moreDeadlyGame ? 3 : 2)
     : 0;
 
-  // Flamethrowers are exceptional among the damaging beam-like elements: the
-  // real rule can punish entry/pass-through. `traversed` is chronological and
-  // includes repeated entries, so count each actual active entry rather than
-  // merely the set of squares touched.
+  // Flamethrowers deal 1 damage on every active entry/pass-through and a
+  // separate +1 if the robot ends the register on the flamethrower space. The
+  // final landing square is intentionally present in `traversed`, so an entry
+  // that also ends there can correctly become 1 + 1 damage below.
   for (const point of transition?.traversed || []) {
     if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
     const tile = tileMap.get(tileKey(point.x, point.y));
@@ -5777,6 +6049,18 @@ function getDamageEconomyRealizedDamageForTransition(
       tile,
       registerOptions
     );
+  }
+
+  // Flaming Oil is never register-specific. It mirrors the flamer's entry/end
+  // structure but collapses ALL oil traversed within the register to one entry
+  // hit: entering one or many oil spaces costs 1 total, plus another 1 if the
+  // robot survives and ends the register on oil.
+  if (options.flamingOil) {
+    const enteredAnyOil = (transition?.traversed || []).some((point) => {
+      if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return false;
+      return isOil(tileMap.get(tileKey(point.x, point.y)));
+    });
+    if (enteredAnyOil) flamingOilDamageUnits += 1;
   }
 
   // Ledge damage belongs to the crossed boundary, not to a tile feature. Ignore
@@ -5822,23 +6106,29 @@ function getDamageEconomyRealizedDamageForTransition(
       finalTile,
       registerOptions
     );
+    if (options.flamingOil && isOil(finalTile)) {
+      flamingOilDamageUnits += 1;
+    }
   }
 
   const totalDamageUnits = (
     boardLaserDamageUnits +
     flamethrowerDamageUnits +
+    flamingOilDamageUnits +
     ledgeDamageUnits +
     rebootDamageUnits
   );
   const sourceTypes = [];
   if (boardLaserDamageUnits > 0) sourceTypes.push("board-laser-hit");
   if (flamethrowerDamageUnits > 0) sourceTypes.push("flamethrower-hit");
+  if (flamingOilDamageUnits > 0) sourceTypes.push("flaming-oil-hit");
   if (ledgeDamageUnits > 0) sourceTypes.push("ledge-damage");
   if (rebootDamageUnits > 0) sourceTypes.push("reboot-damage");
 
   return {
     boardLaserDamageUnits,
     flamethrowerDamageUnits,
+    flamingOilDamageUnits,
     ledgeDamageUnits,
     rebootDamageUnits,
     totalDamageUnits,
@@ -5935,7 +6225,7 @@ function replayDamageEconomyShutdownEquivalentScore({
   const turnScoring = [];
 
   for (let turn = 1; turn <= maxRouteTurn; turn += 1) {
-    advanceDamageEconomyToTurn(state, turn);
+    advanceDamageEconomyToTurn(state, turn, options);
     const programTurn = selectedProgramTurns.get(turn) ?? {
       actionIds: [],
       programCardIds: [],
@@ -5946,9 +6236,12 @@ function replayDamageEconomyShutdownEquivalentScore({
     DAMAGE_ECONOMY_TELEMETRY.shutdownScoringReplayTurns += 1;
 
     const previousProgram = selectedProgramTurns.get(turn - 1) ?? null;
-    const previousProgramCode = previousProgram
-      ? getDamageEconomyProgramCodeFromLiteralCards(previousProgram.programCardIds)
-      : 0;
+    const previousProgramCode = getProgramCardEffectivePreviousCode(
+      previousProgram
+        ? getDamageEconomyProgramCodeFromLiteralCards(previousProgram.programCardIds)
+        : 0,
+      options
+    );
     const programming = getDamageEconomyProgrammingSummary(
       previousProgramCode,
       actionIds,
@@ -5988,7 +6281,7 @@ function replayDamageEconomyShutdownEquivalentScore({
 
     const electiveReliefInitiationProbabilities = [];
     for (const record of recordsByTurn.get(turn) || []) {
-      const { transition, realized, absoluteAction, register } = record;
+      const { transition, realized, absoluteAction, register, repairStationEligible } = record;
       const reliefOpportunity = Math.max(
         0,
         Number(reliefOpportunityByAbsoluteAction.get(absoluteAction)) || 0
@@ -6035,14 +6328,22 @@ function replayDamageEconomyShutdownEquivalentScore({
         robotLaserHitProbabilitiesByAbsoluteAction.get(absoluteAction) || [];
       const haywireEventProbability = getDamageEconomyRegisterHaywireEventProbability(
         realized.totalDamageUnits,
-        robotLaserHitProbabilities
+        robotLaserHitProbabilities,
+        profile.robotLaserDamagePerHit
       );
+      const spamDamageUnits = realized.totalDamageUnits +
+        (profile.robotLaserSpamSuppressed ? 0 : robotLaserExpectedDamage);
       applyExpectedDamageToEconomyState(
         state,
         realized.totalDamageUnits + robotLaserExpectedDamage,
         register,
-        haywireEventProbability
+        haywireEventProbability,
+        spamDamageUnits
       );
+      if (repairStationEligible) {
+        applyDamageEconomyRepairStationRelief(state);
+        spamInHandRemaining = Math.min(spamInHandRemaining, state.spamTotal);
+      }
     }
 
     const spamHeldBeforeFilter = Math.min(state.spamTotal, spamInHandRemaining);
@@ -6138,8 +6439,13 @@ export function summarizeDamageEconomyFoundationForRoute(
     profile.criticalHaywireCountsAgainstHand ? 1 : 0,
     profile.spamFilter ? 1 : 0,
     profile.criticalSpam ? 1 : 0,
+    options.permanentShutdown ? 1 : 0,
+    options.setToKill ? 1 : 0,
+    options.setToStun ? 1 : 0,
     options.moreDeadlyGame ? 1 : 0,
     options.cuttingFloor ? 1 : 0,
+    options.flamingOil ? 1 : 0,
+    options.repairStations ? 1 : 0,
     options.recoveryRule ?? "normal"
   ].join("|");
   DAMAGE_ECONOMY_TELEMETRY.routeSummaryLookups += 1;
@@ -6213,6 +6519,16 @@ export function summarizeDamageEconomyFoundationForRoute(
         options,
         absoluteAction
       );
+      const finalTile = transition?.to
+        ? tileMap.get(tileKey(transition.to.x, transition.to.y))
+        : null;
+      const repairStationEligible = Boolean(
+        options.repairStations &&
+        register === REGISTER_COUNT &&
+        !transition?.rebooted &&
+        !transition?.crashed &&
+        isDamageEconomyRepairStationTile(finalTile)
+      );
       transitionRecords.push({
         legIndex,
         legAction: legActionIndex + 1,
@@ -6221,7 +6537,8 @@ export function summarizeDamageEconomyFoundationForRoute(
         register,
         transition,
         realized,
-        reliefProfile
+        reliefProfile,
+        repairStationEligible
       });
       elapsedAbsoluteActions = transition?.rebooted
         ? getRebootEndedAbsoluteActions(absoluteAction)
@@ -6254,6 +6571,7 @@ export function summarizeDamageEconomyFoundationForRoute(
   let robotLaserExpectedDamageUnits = 0;
   let boardLaserDamageUnits = 0;
   let flamethrowerDamageUnits = 0;
+  let flamingOilDamageUnits = 0;
   let ledgeDamageUnits = 0;
   let rebootDamageUnits = 0;
   let totalSpamAdded = 0;
@@ -6266,6 +6584,12 @@ export function summarizeDamageEconomyFoundationForRoute(
   let totalRebootSpamDisposalCapacity = 0;
   let totalRebootHaywireCleared = 0;
   let rebootReliefCount = 0;
+  let repairStationReliefCount = 0;
+  let totalRepairStationSpamRemoved = 0;
+  let totalRepairStationHaywireExpectedRemoved = 0;
+  let totalRawSpamSupplyRegisterEquivalents = 0;
+  let totalPermanentShutdownPressureRegisterEquivalents = 0;
+  let maxPermanentShutdownSupplyMultiplier = 1;
   let totalSpamSupplyRegisterEquivalents = 0;
   let totalClogRegisterEquivalents = 0;
   let totalDamageEconomyRegisterEquivalents = 0;
@@ -6276,7 +6600,7 @@ export function summarizeDamageEconomyFoundationForRoute(
   let maxExpectedTotalClogs = 0;
 
   for (let turn = 1; turn <= maxRouteTurn; turn += 1) {
-    advanceDamageEconomyToTurn(state, turn);
+    advanceDamageEconomyToTurn(state, turn, options);
     const programTurn = selectedProgramTurns.get(turn) ?? {
       actionIds: [],
       programCardIds: [],
@@ -6286,9 +6610,12 @@ export function summarizeDamageEconomyFoundationForRoute(
     const programRegisters = actionIds.length;
     if (!programRegisters) continue;
     const previousProgram = selectedProgramTurns.get(turn - 1) ?? null;
-    const previousProgramCode = previousProgram
-      ? getDamageEconomyProgramCodeFromLiteralCards(previousProgram.programCardIds)
-      : 0;
+    const previousProgramCode = getProgramCardEffectivePreviousCode(
+      previousProgram
+        ? getDamageEconomyProgramCodeFromLiteralCards(previousProgram.programCardIds)
+        : 0,
+      options
+    );
     const programming = getDamageEconomyProgrammingSummary(
       previousProgramCode,
       actionIds,
@@ -6339,6 +6666,9 @@ export function summarizeDamageEconomyFoundationForRoute(
     let turnRebootSpamDisposalCapacity = 0;
     let turnRebootHaywireCleared = 0;
     let turnRebootRegister = 0;
+    let turnRepairStationSpamRemoved = 0;
+    let turnRepairStationHaywireExpectedRemoved = 0;
+    let turnRepairStationReliefCount = 0;
     let turnReliefOpportunity = 0;
     let turnBoardDamageUnits = 0;
     let turnRobotLaserExpectedDamageUnits = 0;
@@ -6348,7 +6678,14 @@ export function summarizeDamageEconomyFoundationForRoute(
     const electiveReliefInitiationProbabilities = [];
 
     for (const record of recordsByTurn.get(turn) || []) {
-      const { transition, realized, reliefProfile, absoluteAction, register } = record;
+      const {
+        transition,
+        realized,
+        reliefProfile,
+        absoluteAction,
+        register,
+        repairStationEligible
+      } = record;
       const reliefOpportunity = Math.max(
         0,
         Number(reliefOpportunityByAbsoluteAction.get(absoluteAction)) || 0
@@ -6441,13 +6778,17 @@ export function summarizeDamageEconomyFoundationForRoute(
         robotLaserHitProbabilitiesByAbsoluteAction.get(absoluteAction) || [];
       const haywireEventProbability = getDamageEconomyRegisterHaywireEventProbability(
         realized.totalDamageUnits,
-        robotLaserHitProbabilities
+        robotLaserHitProbabilities,
+        profile.robotLaserDamagePerHit
       );
+      const spamDamageUnits = realized.totalDamageUnits +
+        (profile.robotLaserSpamSuppressed ? 0 : robotLaserExpectedDamage);
       const added = applyExpectedDamageToEconomyState(
         state,
         combinedDamageUnits,
         register,
-        haywireEventProbability
+        haywireEventProbability,
+        spamDamageUnits
       );
       pendingSpamAddedThisTurn += added.spamAdded;
       pendingHaywireRiskAddedThisTurn += added.haywireRegisterRiskAdded;
@@ -6457,9 +6798,22 @@ export function summarizeDamageEconomyFoundationForRoute(
       turnRobotLaserExpectedDamageUnits += robotLaserExpectedDamage;
       boardLaserDamageUnits += realized.boardLaserDamageUnits;
       flamethrowerDamageUnits += realized.flamethrowerDamageUnits;
+      flamingOilDamageUnits += realized.flamingOilDamageUnits;
       ledgeDamageUnits += realized.ledgeDamageUnits;
       rebootDamageUnits += realized.rebootDamageUnits;
       totalSpamAdded += added.spamAdded;
+
+      let repairStationRelief = null;
+      if (repairStationEligible) {
+        repairStationRelief = applyDamageEconomyRepairStationRelief(state);
+        spamInHandRemaining = Math.min(spamInHandRemaining, state.spamTotal);
+        turnRepairStationSpamRemoved += repairStationRelief.spamRemoved;
+        turnRepairStationHaywireExpectedRemoved += repairStationRelief.haywireExpectedRemoved;
+        turnRepairStationReliefCount += 1;
+        totalRepairStationSpamRemoved += repairStationRelief.spamRemoved;
+        totalRepairStationHaywireExpectedRemoved += repairStationRelief.haywireExpectedRemoved;
+        repairStationReliefCount += 1;
+      }
 
       const eventSourceTypes = [...(realized.sourceTypes || [])];
       if (robotLaserExpectedDamage > 0.0005) eventSourceTypes.push("robot-laser-expected");
@@ -6471,7 +6825,14 @@ export function summarizeDamageEconomyFoundationForRoute(
         rebooted: Boolean(transition?.rebooted),
         sourceTypes: eventSourceTypes,
         deterministicDamageUnits: Number(realized.totalDamageUnits.toFixed(4)),
+        flamethrowerDamageUnits: Number(realized.flamethrowerDamageUnits.toFixed(4)),
+        flamingOilDamageUnits: Number(realized.flamingOilDamageUnits.toFixed(4)),
         robotLaserExpectedDamageUnits: Number(robotLaserExpectedDamage.toFixed(4)),
+        robotLaserDamagePerHit: profile.robotLaserDamagePerHit,
+        robotLaserSpamSuppressed: profile.robotLaserSpamSuppressed,
+        robotLaserSpamDamageUnits: Number((
+          profile.robotLaserSpamSuppressed ? 0 : robotLaserExpectedDamage
+        ).toFixed(4)),
         robotLaserHitProbabilities: robotLaserHitProbabilities.map(
           (value) => Number(value.toFixed(4))
         ),
@@ -6496,7 +6857,10 @@ export function summarizeDamageEconomyFoundationForRoute(
         pendingSpamAfter: Number(state.pendingSpam.toFixed(4)),
         pendingHaywireRegisterRiskBefore: Number(pendingHaywireBefore.toFixed(4)),
         haywireRegisterRiskAdded: Number(added.haywireRegisterRiskAdded.toFixed(4)),
-        pendingHaywireRegisterRiskAfter: Number(added.haywireRegisterRiskAfter.toFixed(4))
+        pendingHaywireRegisterRiskAfter: Number(added.haywireRegisterRiskAfter.toFixed(4)),
+        repairStationEligible: Boolean(repairStationEligible),
+        repairStationSpamRemoved: Number((repairStationRelief?.spamRemoved || 0).toFixed(4)),
+        repairStationHaywireExpectedRemoved: Number((repairStationRelief?.haywireExpectedRemoved || 0).toFixed(4))
       };
       events.push(event);
       registerEvents.push(event);
@@ -6507,7 +6871,7 @@ export function summarizeDamageEconomyFoundationForRoute(
     totalSpamReliefInitiations += turnSpamReliefInitiations;
     totalForcedSpamReliefInitiations += forcedSpamReliefInitiations;
     totalElectiveSpamReliefInitiations += turnElectiveReliefInitiations;
-    totalSpamRemoved += turnSpamRemoved + turnRebootSpamRemoved;
+    totalSpamRemoved += turnSpamRemoved + turnRebootSpamRemoved + turnRepairStationSpamRemoved;
     totalSpamChainExtraRemoved += turnSpamChainExtraRemoved;
 
     // SPAM that was plausibly in hand and neither tactically played nor assigned
@@ -6540,6 +6904,14 @@ export function summarizeDamageEconomyFoundationForRoute(
     const turnDamageEconomyRE =
       programming.spamSupplyRegisterEquivalents +
       combinedClog.clogRegisterEquivalents;
+    totalRawSpamSupplyRegisterEquivalents +=
+      programming.rawSpamSupplyRegisterEquivalents;
+    totalPermanentShutdownPressureRegisterEquivalents +=
+      programming.permanentShutdownPressureRegisterEquivalents;
+    maxPermanentShutdownSupplyMultiplier = Math.max(
+      maxPermanentShutdownSupplyMultiplier,
+      programming.permanentShutdownSupplyMultiplier
+    );
     totalSpamSupplyRegisterEquivalents += programming.spamSupplyRegisterEquivalents;
     totalClogRegisterEquivalents += combinedClog.clogRegisterEquivalents;
     totalDamageEconomyRegisterEquivalents += turnDamageEconomyRE;
@@ -6575,6 +6947,18 @@ export function summarizeDamageEconomyFoundationForRoute(
       expectedSpamInHand: Number(programming.expectedSpamInHand.toFixed(3)),
       cleanProgramProbability: Number(programming.cleanProgramProbability.toFixed(5)),
       damagedProgramProbability: Number(programming.damagedProgramProbability.toFixed(5)),
+      rawSpamSupplyRegisterEquivalents: Number(
+        programming.rawSpamSupplyRegisterEquivalents.toFixed(3)
+      ),
+      permanentShutdownSpamBurden: Number(
+        programming.permanentShutdownSpamBurden.toFixed(3)
+      ),
+      permanentShutdownSupplyMultiplier: Number(
+        programming.permanentShutdownSupplyMultiplier.toFixed(4)
+      ),
+      permanentShutdownPressureRegisterEquivalents: Number(
+        programming.permanentShutdownPressureRegisterEquivalents.toFixed(3)
+      ),
       spamSupplyRegisterEquivalents: Number(
         programming.spamSupplyRegisterEquivalents.toFixed(3)
       ),
@@ -6588,6 +6972,12 @@ export function summarizeDamageEconomyFoundationForRoute(
         (value) => Number(value.toFixed(4))
       ),
       expectedTotalControlClogLoad: Number(combinedClog.expectedControlClogLoad.toFixed(3)),
+      controlClogLoadDistribution: (combinedClog.controlClogLoadDistribution || []).map(
+        (entry) => ({
+          load: Number((Number(entry.load) || 0).toFixed(4)),
+          probability: Number((Number(entry.probability) || 0).toFixed(6))
+        })
+      ),
       clogRegisterEquivalents: Number(combinedClog.clogRegisterEquivalents.toFixed(3)),
       damageEconomyRegisterEquivalents: Number(turnDamageEconomyRE.toFixed(3)),
       probabilityFourPlusClogs: Number(combinedClog.probabilityFourPlusClogs.toFixed(4)),
@@ -6602,6 +6992,9 @@ export function summarizeDamageEconomyFoundationForRoute(
       rebootSpamDisposalCapacity: Number(turnRebootSpamDisposalCapacity.toFixed(3)),
       rebootSpamRemoved: Number(turnRebootSpamRemoved.toFixed(3)),
       rebootHaywireCleared: Number(turnRebootHaywireCleared.toFixed(3)),
+      repairStationReliefCount: turnRepairStationReliefCount,
+      repairStationSpamRemoved: Number(turnRepairStationSpamRemoved.toFixed(3)),
+      repairStationHaywireExpectedRemoved: Number(turnRepairStationHaywireExpectedRemoved.toFixed(3)),
       spamHeldBeforeFilter: Number(spamHeldBeforeFilter.toFixed(3)),
       spamHeldAtTurnEnd: Number(state.spamHeld.toFixed(3)),
       spamTotalBeforeNewDamage: Number(state.spamTotal.toFixed(3)),
@@ -6681,6 +7074,7 @@ export function summarizeDamageEconomyFoundationForRoute(
     robotLaserTrafficConfidenceMean: trafficRanged?.confidenceMean ?? null,
     boardLaserDamageUnits: Number(boardLaserDamageUnits.toFixed(3)),
     flamethrowerDamageUnits: Number(flamethrowerDamageUnits.toFixed(3)),
+    flamingOilDamageUnits: Number(flamingOilDamageUnits.toFixed(3)),
     ledgeDamageUnits: Number(ledgeDamageUnits.toFixed(3)),
     rebootDamageUnits: Number(rebootDamageUnits.toFixed(3)),
     totalSpamAdded: Number(totalSpamAdded.toFixed(3)),
@@ -6694,9 +7088,27 @@ export function summarizeDamageEconomyFoundationForRoute(
     totalRebootSpamDisposalCapacity: Number(totalRebootSpamDisposalCapacity.toFixed(3)),
     totalRebootHaywireCleared: Number(totalRebootHaywireCleared.toFixed(3)),
     rebootReliefCount,
+    repairStationReliefCount,
+    totalRepairStationSpamRemoved: Number(totalRepairStationSpamRemoved.toFixed(3)),
+    totalRepairStationHaywireExpectedRemoved: Number(totalRepairStationHaywireExpectedRemoved.toFixed(3)),
+    repairStationReliefMethod: "register5-checkpoint-one-damage-card-expected-split-no-spill-v49eo",
     spamReliefMethod: "five-card-floor-forced-plus-additive-register-relief-forward-safety-v2",
     spamClogMethod: "distributed-spam-play-count-weight2-plus-haywire-joint-nonlinear",
     rebootReliefMethod: "selected-route-skipped-register-capacity-active-haywire-clear",
+    permanentShutdownPressureActive: profile.permanentShutdownPressureActive,
+    permanentShutdownPressureMethod:
+      "provisional-persistent-spam-triangular-multiplier-v49ep",
+    permanentShutdownSpamBurdenCoefficient:
+      profile.permanentShutdownSpamBurdenCoefficient,
+    totalRawSpamSupplyRegisterEquivalents: Number(
+      totalRawSpamSupplyRegisterEquivalents.toFixed(3)
+    ),
+    totalPermanentShutdownPressureRegisterEquivalents: Number(
+      totalPermanentShutdownPressureRegisterEquivalents.toFixed(3)
+    ),
+    maxPermanentShutdownSupplyMultiplier: Number(
+      maxPermanentShutdownSupplyMultiplier.toFixed(4)
+    ),
     totalSpamSupplyRegisterEquivalents: Number(
       totalSpamSupplyRegisterEquivalents.toFixed(3)
     ),
@@ -6767,7 +7179,7 @@ export function summarizeDamageEconomyFoundationForRoute(
 //   meaningful nearby control episode. Mechanical severity remains owned by the
 //   control/clog curve and does NOT multiply mental load a second time;
 // - avoided static constraints are still not inferred from the final route.
-export const RE_LEDGER_MODEL_ID = "re-ledger-v3-traffic-awareness-mental-v49cc";
+export const RE_LEDGER_MODEL_ID = "re-ledger-v5-turn-collapsed-floor-mechanics-v49eo";
 
 // v49as provisional mental-load curve. The rounded count is the authoritative
 // input because fractional probabilistic events are intentionally accumulated
@@ -6782,6 +7194,51 @@ export function getObservationalMentalRegisterEquivalents(eventCount) {
   const roundedEvents = Math.max(0, Math.round(Number(eventCount) || 0));
   const excess = Math.max(0, roundedEvents - 7);
   return Number(((excess * excess) / 32).toFixed(4));
+}
+
+// v49eo variant/mechanic memory events. Complexity cost is NOT mental RE. A variant
+// may instead declare a once-per-game-turn remember-the-rule trigger in
+// variants.js. When its trigger is relevant, it contributes exactly one planning
+// event for that variant in that turn, regardless of how many matching features
+// appear. Deck/draw variants touched in v49ek deliberately declare no event.
+//
+// Current board-laser trigger evidence is conservative: selected-route replay can
+// prove an accepted laser exposure. Counterfactual "I avoided this laser because
+// Cutting Floor made it dangerous" evidence is not yet retained by route replay,
+// so that avoidance side remains an explicit later mental-evidence refinement.
+function getVariantMentalPlanningEventsForTransition(
+  options = {},
+  damageEvent = null,
+  mechanicContext = null
+) {
+  const seen = mechanicContext?.variantMentalEventIdsThisTurn instanceof Set
+    ? mechanicContext.variantMentalEventIdsThisTurn
+    : new Set();
+  const sourceTypes = new Set(damageEvent?.sourceTypes || []);
+  const events = [];
+  for (const rule of getActiveVariantMentalEventRules(options)) {
+    if (!rule?.variantId || seen.has(rule.variantId)) continue;
+    let applicable = false;
+    if (rule.trigger === "board-laser-relevant") {
+      applicable = sourceTypes.has("board-laser-hit");
+    } else if (rule.trigger === "flaming-oil-relevant") {
+      applicable = sourceTypes.has("flaming-oil-hit");
+    } else if (rule.trigger === "repair-station-relevant") {
+      applicable = Boolean(mechanicContext?.repairStationRelevant);
+    }
+    if (!applicable) continue;
+    seen.add(rule.variantId);
+    events.push({
+      type: rule.eventType || `variant-rule:${rule.variantId}`,
+      weight: 1,
+      detail: {
+        variantId: rule.variantId,
+        trigger: rule.trigger,
+        cadence: "once-per-game-turn"
+      }
+    });
+  }
+  return events;
 }
 
 // v49cc traffic-awareness mental ownership.
@@ -6809,6 +7266,7 @@ function summarizeTrafficAwarenessMentalIncrement(
       incrementRE: 0,
       robotLaserEventMass: 0,
       nonLaserEventMass: 0,
+      rebootPileupEventMass: 0,
       totalTrafficEventMass: 0,
       byTurn: []
     };
@@ -6826,10 +7284,17 @@ function summarizeTrafficAwarenessMentalIncrement(
       clamp(Number(entry?.eventProbability) || 0, 0, 1)
     ])
   );
+  const rebootPileupByTurn = new Map(
+    (traffic.simultaneousRebootPileupByTurn || []).map((entry) => [
+      Math.max(1, Math.floor(Number(entry?.turn) || 1)),
+      clamp(Number(entry?.eventProbability) || 0, 0, 1)
+    ])
+  );
 
   let incrementRE = 0;
   let robotLaserEventMass = 0;
   let nonLaserEventMass = 0;
+  let rebootPileupEventMass = 0;
   const byTurn = [];
 
   for (const turn of intrinsicLedger.turns || []) {
@@ -6844,7 +7309,12 @@ function summarizeTrafficAwarenessMentalIncrement(
     );
     const laserMass = Math.max(0, robotLaserByTurn.get(turnNumber) || 0);
     const nonLaserMass = clamp(nonLaserByTurn.get(turnNumber) || 0, 0, 1);
-    const trafficEventMass = laserMass + nonLaserMass;
+    const rebootPileupMass = clamp(
+      rebootPileupByTurn.get(turnNumber) || 0,
+      0,
+      1
+    );
+    const trafficEventMass = laserMass + nonLaserMass + rebootPileupMass;
 
     const intrinsicMentalRE = getObservationalMentalRegisterEquivalents(
       intrinsicEventMass
@@ -6857,11 +7327,13 @@ function summarizeTrafficAwarenessMentalIncrement(
     incrementRE += turnIncrementRE;
     robotLaserEventMass += laserMass;
     nonLaserEventMass += nonLaserMass;
+    rebootPileupEventMass += rebootPileupMass;
     byTurn.push({
       turn: turnNumber,
       intrinsicEventMass: Number(intrinsicEventMass.toFixed(4)),
       robotLaserEventMass: Number(laserMass.toFixed(4)),
       nonLaserEventMass: Number(nonLaserMass.toFixed(4)),
+      rebootPileupEventMass: Number(rebootPileupMass.toFixed(4)),
       trafficEventMass: Number(trafficEventMass.toFixed(4)),
       intrinsicMentalRE: Number(intrinsicMentalRE.toFixed(4)),
       fullMentalRE: Number(fullMentalRE.toFixed(4)),
@@ -6873,8 +7345,9 @@ function summarizeTrafficAwarenessMentalIncrement(
     incrementRE: Number(incrementRE.toFixed(4)),
     robotLaserEventMass: Number(robotLaserEventMass.toFixed(4)),
     nonLaserEventMass: Number(nonLaserEventMass.toFixed(4)),
+    rebootPileupEventMass: Number(rebootPileupEventMass.toFixed(4)),
     totalTrafficEventMass: Number((
-      robotLaserEventMass + nonLaserEventMass
+      robotLaserEventMass + nonLaserEventMass + rebootPileupEventMass
     ).toFixed(4)),
     byTurn
   };
@@ -6908,11 +7381,50 @@ function getRegisterEquivalentLedgerTouchedFeatureEvents(tileMap, transition) {
   return events;
 }
 
+function getHomingMissileEntryActivationsForTransition(
+  tileMap,
+  transition,
+  activatedSpacesThisTurn = null
+) {
+  if (!tileMap || !transition) return [];
+  const activated = activatedSpacesThisTurn instanceof Set
+    ? activatedSpacesThisTurn
+    : new Set();
+  const activations = [];
+  let prior = transition?.from &&
+    Number.isFinite(transition.from.x) && Number.isFinite(transition.from.y)
+    ? { x: transition.from.x, y: transition.from.y }
+    : null;
+  const points = [
+    ...(transition?.traversed || []),
+    transition?.to
+  ].filter((point) => point && Number.isFinite(point.x) && Number.isFinite(point.y));
+
+  for (const point of points) {
+    if (prior && prior.x === point.x && prior.y === point.y) {
+      prior = { x: point.x, y: point.y };
+      continue;
+    }
+    const tile = tileMap.get(tileKey(point.x, point.y));
+    if (hasHomingMissile(tile)) {
+      const spaceKey = tileKey(point.x, point.y);
+      if (!activated.has(spaceKey)) {
+        activated.add(spaceKey);
+        activations.push({ x: point.x, y: point.y, spaceKey });
+      }
+    }
+    prior = { x: point.x, y: point.y };
+  }
+  return activations;
+}
+
 function getRegisterEquivalentLedgerPlanningEventsForTransition(
   tileMap,
   transition,
   damageEvent,
-  checkpointHit = false
+  checkpointHit = false,
+  options = {},
+  mechanicContext = null
 ) {
   const events = [];
   const add = (type, weight = 1, detail = null) => {
@@ -6990,12 +7502,41 @@ function getRegisterEquivalentLedgerPlanningEventsForTransition(
     events.push(featureEvent);
   }
 
+  // v49ei: entering a Homing Missile space creates one target-choice/planning
+  // event per missile space per game turn. Re-entry into the same missile space
+  // later in that turn cannot fire it again and therefore adds neither mental
+  // burden nor strategic credit. The caller owns the per-turn activation set.
+  const homingActivations = getHomingMissileEntryActivationsForTransition(
+    tileMap,
+    transition,
+    mechanicContext?.homingMissileActivatedSpacesThisTurn
+  );
+  for (const activation of homingActivations) {
+    add(
+      "homing-missile-target-choice",
+      HOMING_MISSILE_TARGET_CHOICE_EVENT_WEIGHT,
+      { at: { x: activation.x, y: activation.y } }
+    );
+  }
+
   if (checkpointHit) add("checkpoint");
 
   const sourceTypes = new Set(damageEvent?.sourceTypes || []);
   if (sourceTypes.has("board-laser-hit")) add("accepted-hazard:board-laser");
-  if (sourceTypes.has("flamethrower-hit")) add("accepted-hazard:flamethrower");
   if (sourceTypes.has("ledge-damage")) add("accepted-hazard:ledge");
+
+  // Flamethrower planning is a true/false remember-the-mechanic event at the
+  // game-turn level. Entry and end-of-register damage remain mechanically
+  // separate, but one or many relevant flamer contacts in the same turn add only
+  // one mental event.
+  const turnMentalEventIds = mechanicContext?.variantMentalEventIdsThisTurn instanceof Set
+    ? mechanicContext.variantMentalEventIdsThisTurn
+    : new Set();
+  const flamethrowerMentalId = "__mechanic:flamethrower";
+  if (sourceTypes.has("flamethrower-hit") && !turnMentalEventIds.has(flamethrowerMentalId)) {
+    turnMentalEventIds.add(flamethrowerMentalId);
+    add("mechanic:flamethrower", 1, { cadence: "once-per-game-turn" });
+  }
 
   // Robot laser damage is already probabilistic. Its damage consequence is owned
   // by the damage model; here only the mental salience is represented, and only
@@ -7015,6 +7556,29 @@ function getRegisterEquivalentLedgerPlanningEventsForTransition(
     }
   }
 
+  const registerPosition = Math.max(
+    1,
+    Math.min(REGISTER_COUNT, Math.floor(Number(mechanicContext?.registerPosition) || 1))
+  );
+  const finalTile = transition?.to
+    ? tileMap.get(tileKey(transition.to.x, transition.to.y))
+    : null;
+  const repairStationRelevant = Boolean(
+    options.repairStations &&
+    registerPosition === REGISTER_COUNT &&
+    !transition?.rebooted &&
+    !transition?.crashed &&
+    isDamageEconomyRepairStationTile(finalTile)
+  );
+  events.push(...getVariantMentalPlanningEventsForTransition(
+    options,
+    damageEvent,
+    {
+      ...(mechanicContext || {}),
+      repairStationRelevant
+    }
+  ));
+
   return events;
 }
 
@@ -7030,7 +7594,8 @@ function getSearchIntrinsicMentalTransitionStep(
   absoluteAction,
   currentEventCount,
   checkpointHit = false,
-  options = {}
+  options = {},
+  mechanicContext = null
 ) {
   const safeAbsoluteAction = Math.max(1, Math.floor(Number(absoluteAction) || 1));
   const damageEvent = getDamageEconomyRealizedDamageForTransition(
@@ -7043,7 +7608,12 @@ function getSearchIntrinsicMentalTransitionStep(
     tileMap,
     transition,
     damageEvent,
-    checkpointHit
+    checkpointHit,
+    options,
+    {
+      ...(mechanicContext || {}),
+      registerPosition: getRegisterPosition(safeAbsoluteAction)
+    }
   ).filter((event) => !String(event?.type || '').startsWith('traffic-awareness:'));
   const eventWeight = events.reduce(
     (sum, event) => sum + Math.max(0, Number(event?.weight) || 0),
@@ -7088,28 +7658,63 @@ function replaySearchIntrinsicMentalForContext(
   let totalRE = 0;
   let totalScore = 0;
   let totalEvents = 0;
+  let homingMissileActivationCount = 0;
+  const homingMissileActivatedSpacesThisTurn = new Set(
+    Array.isArray(context?.searchHomingMissileActivatedSpacesCurrentTurn)
+      ? context.searchHomingMissileActivatedSpacesCurrentTurn
+      : []
+  );
+  const variantMentalEventIdsThisTurn = new Set(
+    Array.isArray(context?.searchVariantMentalEventIdsCurrentTurn)
+      ? context.searchVariantMentalEventIdsCurrentTurn
+      : []
+  );
+  let activeTurnNumber = elapsedAbsoluteActions > 0
+    ? Math.floor((elapsedAbsoluteActions - 1) / REGISTER_COUNT) + 1
+    : 1;
 
   transitions.forEach((transition, index) => {
     const absoluteAction = getRegisterEquivalentLedgerAbsoluteAction(
       transition,
       elapsedAbsoluteActions + 1
     );
+    const turnNumber = Math.floor((Math.max(1, absoluteAction) - 1) / REGISTER_COUNT) + 1;
+    if (turnNumber !== activeTurnNumber) {
+      homingMissileActivatedSpacesThisTurn.clear();
+      variantMentalEventIdsThisTurn.clear();
+      activeTurnNumber = turnNumber;
+    }
     const step = getSearchIntrinsicMentalTransitionStep(
       tileMap,
       transition,
       absoluteAction,
       eventCount,
       checkpointAtEnd && index === transitions.length - 1,
-      options
+      options,
+      {
+        homingMissileActivatedSpacesThisTurn,
+        variantMentalEventIdsThisTurn
+      }
     );
     eventCount = step.nextEventCount;
     totalRE += step.deltaRE;
     totalScore += step.score;
     totalEvents += step.eventWeight;
+    homingMissileActivationCount += (step.events || []).filter(
+      (event) => event?.type === "homing-missile-target-choice"
+    ).length;
+    if (step.closesTurn) {
+      homingMissileActivatedSpacesThisTurn.clear();
+    }
     elapsedAbsoluteActions = transition?.rebooted
       ? getRebootEndedAbsoluteActions(absoluteAction)
       : absoluteAction;
   });
+
+  const homingMissileStrategicCreditRE =
+    homingMissileActivationCount * HOMING_MISSILE_STRATEGIC_CREDIT_RE;
+  const homingMissileStrategicCreditScore =
+    homingMissileStrategicCreditRE * REGISTER_TEMPO_COST;
 
   return {
     searchIntrinsicMentalRegisterEquivalents: Number(totalRE.toFixed(4)),
@@ -7118,8 +7723,27 @@ function replaySearchIntrinsicMentalForContext(
     searchIntrinsicMentalEventCountStart: Number(eventCountStart.toFixed(4)),
     searchIntrinsicMentalEventCountEnd: Number(eventCount.toFixed(4)),
     searchIntrinsicMentalEventCountCurrentTurn: Number(eventCount.toFixed(4)),
+    searchHomingMissileActivatedSpacesCurrentTurn:
+      [...homingMissileActivatedSpacesThisTurn],
+    searchVariantMentalEventIdsCurrentTurn:
+      [...variantMentalEventIdsThisTurn],
+    homingMissileActivationCount,
+    homingMissileStrategicCreditRE: Number(homingMissileStrategicCreditRE.toFixed(4)),
+    homingMissileStrategicCreditScore: Number(homingMissileStrategicCreditScore.toFixed(2)),
+    homingMissileStrategicCreditModel:
+      "2x-neutral-damage-economy-one-damage-reference-per-turn-per-space-activation-v49ej",
+    homingMissileOneDamageReferenceRE: Number(
+      HOMING_MISSILE_ONE_DAMAGE_REFERENCE_RE.toFixed(4)
+    ),
+    homingMissileStrategicDamageEquivalents:
+      HOMING_MISSILE_STRATEGIC_DAMAGE_EQUIVALENTS,
     searchIntrinsicMentalModel: 'rounded-turn-events-quadratic-after-7-v49bc-postbuild'
   };
+}
+
+function getCompletedRoutePostbuildScoreAdjustment(routeLike = {}) {
+  return (Number(routeLike.searchIntrinsicMentalScore) || 0) -
+    (Number(routeLike.homingMissileStrategicCreditScore) || 0);
 }
 
 export function summarizeRegisterEquivalentLedger(
@@ -7229,6 +7853,11 @@ export function summarizeRegisterEquivalentLedger(
   let energyReserve = Number.isFinite(Number(route.routeEnergyShadowReserveStart))
     ? Number(route.routeEnergyShadowReserveStart)
     : getInitialRouteEnergyShadowReserve(options);
+  const homingMissileActivatedSpacesThisTurn = new Set();
+  const variantMentalEventIdsThisTurn = new Set();
+  let activeHomingMissileTurn = initialAbsoluteAction > 0
+    ? Math.floor((initialAbsoluteAction - 1) / REGISTER_COUNT) + 1
+    : 1;
 
   transitions.forEach((transition, index) => {
     const absoluteAction = getRegisterEquivalentLedgerAbsoluteAction(
@@ -7237,6 +7866,11 @@ export function summarizeRegisterEquivalentLedger(
     );
     const turnNumber = Math.floor((Math.max(1, absoluteAction) - 1) / REGISTER_COUNT) + 1;
     const register = getRegisterPosition(absoluteAction);
+    if (turnNumber !== activeHomingMissileTurn) {
+      homingMissileActivatedSpacesThisTurn.clear();
+      variantMentalEventIdsThisTurn.clear();
+      activeHomingMissileTurn = turnNumber;
+    }
     const turn = ensureTurn(turnNumber);
     turn.programmedRegisterRE += 1;
 
@@ -7269,7 +7903,13 @@ export function summarizeRegisterEquivalentLedger(
       tileMap,
       transition,
       damageEvent,
-      checkpointActions.has(absoluteAction)
+      checkpointActions.has(absoluteAction),
+      options,
+      {
+        homingMissileActivatedSpacesThisTurn,
+        variantMentalEventIdsThisTurn,
+        registerPosition: register
+      }
     );
     planningEvents.forEach((event) => turn.planningEvents.push({
       ...event,
@@ -7279,6 +7919,10 @@ export function summarizeRegisterEquivalentLedger(
 
     if (transition?.rebooted) {
       turn.lostRegisterTempoRE += Math.max(0, REGISTER_COUNT - register);
+    }
+    if (transition?.rebooted || register === REGISTER_COUNT) {
+      homingMissileActivatedSpacesThisTurn.clear();
+      variantMentalEventIdsThisTurn.clear();
     }
 
     elapsedAbsolute = transition?.rebooted
@@ -7377,6 +8021,15 @@ export function summarizeRegisterEquivalentLedger(
   const clogRE = sum("clogRE");
   const energyRE = sum("energyRE");
   const mentalRegisterEquivalents = sum("mentalRegisterEquivalents");
+  const homingMissileActivationCount = orderedTurns.reduce(
+    (total, turn) => total + (turn.planningEvents || []).filter(
+      (event) => event?.type === "homing-missile-target-choice"
+    ).length,
+    0
+  );
+  const homingMissileStrategicCreditRE = Number((
+    homingMissileActivationCount * HOMING_MISSILE_STRATEGIC_CREDIT_RE
+  ).toFixed(4));
   const knownMechanismSubtotalRE = Number((
     programmedRegisterRE +
     lostRegisterTempoRE +
@@ -7401,6 +8054,18 @@ export function summarizeRegisterEquivalentLedger(
     clogRE,
     energyRE,
     mentalRegisterEquivalents,
+    homingMissileActivationCount,
+    homingMissileStrategicCreditRE,
+    homingMissileStrategicCreditModel:
+      "2x-neutral-damage-economy-one-damage-reference-per-turn-per-space-activation-v49ej",
+    homingMissileOneDamageReferenceRE: Number(
+      HOMING_MISSILE_ONE_DAMAGE_REFERENCE_RE.toFixed(4)
+    ),
+    homingMissileStrategicDamageEquivalents:
+      HOMING_MISSILE_STRATEGIC_DAMAGE_EQUIVALENTS,
+    homingMissileCheapSearchGuidanceScore: Number(
+      getHomingMissileSearchGuidanceScore(options).toFixed(2)
+    ),
     knownMechanismSubtotalRE,
     observationalSubtotalWithMentalRE,
     mentalCurveApplied: true,
@@ -7464,7 +8129,7 @@ function summarizeEstimatedProgramDemandByTurn(
     );
 
     const rebooted = Boolean(transitions?.[index]?.rebooted);
-    if (rebooted) step = closeEstimatedProgramDemandForEndedTurn(step);
+    if (rebooted) step = closeEstimatedProgramDemandForEndedTurn(step, options);
     previousDemandCode = step.previousDemandCode;
     demandCode = step.demandCode;
     previousAgainUsed = step.previousAgainUsed;
@@ -7525,7 +8190,7 @@ function summarizeEstimatedProgramFrontierByTurn(
     ) + 1;
     const rebooted = Boolean(transitions?.[index]?.rebooted);
     frontier = rebooted
-      ? closeEstimatedCardForecastFrontierForEndedTurn(next.frontier)
+      ? closeEstimatedCardForecastFrontierForEndedTurn(next.frontier, options)
       : next.frontier;
     workingAbsoluteActions = rebooted
       ? getRebootEndedAbsoluteActions(executedAbsoluteAction)
@@ -7599,11 +8264,13 @@ function summarizeEstimatedProgramUnionFrontierByTurn(
       );
       const beforePenalty = getExactProgramAvailabilityPenalty(
         previousCode,
-        currentTurnActions
+        currentTurnActions,
+        options
       );
       const afterPenalty = getExactProgramAvailabilityPenalty(
         previousCode,
-        nextTurnActions
+        nextTurnActions,
+        options
       );
       if (!Number.isFinite(afterPenalty) || !Number.isFinite(beforePenalty)) continue;
       const unionDelta = Math.max(0, afterPenalty - beforePenalty);
@@ -7616,7 +8283,7 @@ function summarizeEstimatedProgramUnionFrontierByTurn(
 
       for (const cardOption of cardOptions) {
         const nextState = rebooted
-          ? closeCompactProgramCardStateForEndedTurn(cardOption.state)
+          ? closeCompactProgramCardStateForEndedTurn(cardOption.state, options)
           : cardOption.state;
         if (!nextState || nextState.feasible === false) continue;
         const penalty = Math.max(0, Number(entry.penalty) || 0) + unionDelta;
@@ -8279,6 +8946,17 @@ function getDamageEconomyTrafficRoutingBreakdown(
   );
   const nearbyTurnEpisodeControlScore =
     nearbyTurnEpisodeControlRE * REGISTER_TEMPO_COST;
+  const simultaneousRebootPileupClog =
+    summarizeSimultaneousRebootPileupClogIncrement(
+      summary,
+      legacyTraffic.simultaneousRebootPileupByTurn || []
+    );
+  const simultaneousRebootPileupClogRE = Math.max(
+    0,
+    Number(simultaneousRebootPileupClog.registerEquivalents) || 0
+  );
+  const simultaneousRebootPileupClogScore =
+    simultaneousRebootPileupClogRE * REGISTER_TEMPO_COST;
   const robotLaserExpectedDamageUnits = Math.max(
     0,
     Number(summary?.robotLaserExpectedDamageUnits) || 0
@@ -8322,23 +9000,28 @@ function getDamageEconomyTrafficRoutingBreakdown(
     (sum, entry) => sum + (Number(entry.eventMass) || 0),
     0
   );
-  // Production ranged traffic contains both expected physical laser consequence
-  // and broader line-of-fire threat. Replace only the physical-damage proxy; keep
-  // the residual threat exactly as a separate traffic consequence.
+  // v49ej: legacy ranged pressure mixed a physical laser proxy with heuristic
+  // orientation/persistence threat. Physical consequence is now fully owned by
+  // marginal damage-economy RE, while the need to notice/plan around a credible
+  // shot is already owned by robot-laser traffic-awareness mental RE. Therefore
+  // the residual legacy score gets NO authoritative RE vote. Keep it diagnostic
+  // only until later cleanup confirms nothing unique remains.
   const legacyRobotLaserDamageProxyScore = Math.min(
     legacyRangedScore,
     robotLaserExpectedDamageUnits * getStandardRobotLaserCost()
   );
-  const residualRangedThreatScore = Math.max(
+  const legacyResidualRangedThreatScoreDiagnostic = Math.max(
     0,
     legacyRangedScore - legacyRobotLaserDamageProxyScore
   );
-  const adjustedRangedScore = residualRangedThreatScore + robotLaserDamageScore;
-  const adjustedNearbyScore = nearbyTurnEpisodeControlScore;
+  const residualRangedThreatScore = 0;
+  const adjustedRangedScore = robotLaserDamageScore;
+  const adjustedNearbyScore =
+    nearbyTurnEpisodeControlScore + simultaneousRebootPileupClogScore;
   const adjustedTotal = Math.max(
     0,
     legacyTotal
-      - legacyRobotLaserDamageProxyScore
+      - legacyRangedScore
       + robotLaserDamageScore
       - legacyNearbyScore
       + adjustedNearbyScore
@@ -8347,23 +9030,42 @@ function getDamageEconomyTrafficRoutingBreakdown(
   // Keep per-leg traffic demand aligned with the authoritative nearby owner.
   // Robot-laser physical damage is nonlinear over the full route and is handled
   // separately by damage-economy pressure/hotspots, so only nearby is replaced
-  // here at leg granularity.
+  // here at leg granularity. Simultaneous reboot pile-up is already confidence-
+  // and opening-leg-weighted in its event probability; convert back to the
+  // unweighted per-leg score here so the common leg weighting is applied once.
+  const simultaneousRebootPileupScoreByLeg = new Map();
+  for (const entry of simultaneousRebootPileupClog.byTurn || []) {
+    const legIndex = Math.max(0, Math.floor(Number(entry?.legIndex) || 0));
+    const legWeight = Math.max(0.0001, Number(entry?.legWeight) || 1);
+    const unweightedScore = Math.max(0, Number(entry?.clogIncrementScore) || 0) /
+      legWeight;
+    simultaneousRebootPileupScoreByLeg.set(
+      legIndex,
+      (simultaneousRebootPileupScoreByLeg.get(legIndex) || 0) + unweightedScore
+    );
+  }
   const adjustedByLeg = Array.isArray(legacyTraffic.byLeg)
-    ? legacyTraffic.byLeg.map((leg) => {
+    ? legacyTraffic.byLeg.map((leg, legIndex) => {
+        const legacyLegRanged = Math.max(0, Number(leg?.ranged) || 0);
         const legacyLegNearby = Math.max(0, Number(leg?.nearby) || 0);
         const authoritativeLegNearby = Math.max(
           0,
           Number(leg?.nearbyTurnEpisodeControlScoreCandidate) || 0
+        ) + Math.max(
+          0,
+          Number(simultaneousRebootPileupScoreByLeg.get(legIndex)) || 0
         );
         const legacyLegTotal = Math.max(0, Number(leg?.total) || 0);
         return {
           ...leg,
+          legacyRanged: Number(legacyLegRanged.toFixed(3)),
+          ranged: 0,
           legacyNearby: Number(legacyLegNearby.toFixed(3)),
           nearby: Number(authoritativeLegNearby.toFixed(3)),
           total: Number(
             Math.max(
               0,
-              legacyLegTotal - legacyLegNearby + authoritativeLegNearby
+              legacyLegTotal - legacyLegRanged - legacyLegNearby + authoritativeLegNearby
             ).toFixed(3)
           ),
           nearbyTurnEpisodeControlAuthoritative: true
@@ -8404,7 +9106,10 @@ function getDamageEconomyTrafficRoutingBreakdown(
     legacyRobotLaserDamageProxyScore: Number(
       legacyRobotLaserDamageProxyScore.toFixed(3)
     ),
-    residualRangedThreatScore: Number(residualRangedThreatScore.toFixed(3)),
+    residualRangedThreatScore: 0,
+    legacyResidualRangedThreatScoreDiagnostic: Number(
+      legacyResidualRangedThreatScoreDiagnostic.toFixed(3)
+    ),
     legacyNearby: Number(legacyNearbyScore.toFixed(3)),
     nearby: Number(adjustedNearbyScore.toFixed(3)),
     nearbyTurnEpisodeControlRegisterEquivalentsAuthoritative: Number(
@@ -8414,6 +9119,23 @@ function getDamageEconomyTrafficRoutingBreakdown(
       adjustedNearbyScore.toFixed(3)
     ),
     nearbyTurnEpisodeControlAuthoritative: true,
+    simultaneousRebootPileupEventMass: Math.max(
+      0,
+      Number(legacyTraffic.simultaneousRebootPileupEventMass) || 0
+    ),
+    simultaneousRebootPileupMaximumTurnProbability: Math.max(
+      0,
+      Number(legacyTraffic.simultaneousRebootPileupMaximumTurnProbability) || 0
+    ),
+    simultaneousRebootPileupClogRegisterEquivalents: Number(
+      simultaneousRebootPileupClogRE.toFixed(4)
+    ),
+    simultaneousRebootPileupClogScore: Number(
+      simultaneousRebootPileupClogScore.toFixed(3)
+    ),
+    simultaneousRebootPileupByTurn: simultaneousRebootPileupClog.byTurn || [],
+    simultaneousRebootPileupModel:
+      "same-turn-same-space-plus1-actual-clog-stacked-v49ei",
     robotLaserAwarenessEventMass: Number(
       robotLaserAwarenessEventMass.toFixed(4)
     ),
@@ -8532,11 +9254,6 @@ function getDamageEconomyTrafficRangedRegisterInputs(
   }
   const focus = analyses.find((analysis) => analysis.index === focusIndex);
   if (!focus) return null;
-  // Set to Kill/Stun alter robot-laser consequences, not just occupancy. Their
-  // physical damage/stun translation belongs in the later optional-rule pass; do
-  // not silently feed the base one-damage assumption into this shadow.
-  if (options.setToKill || options.setToStun) return null;
-
   const playerCount = Math.max(1, Number(options.playerCount) || analyses.length);
   const occupancyOptions = {
     ...options,
@@ -8588,6 +9305,8 @@ function getDamageEconomyTrafficRangedRegisterInputs(
   }
 
   const damageUnit = getStandardRobotLaserCost();
+  const damageProfile = getDamageEconomyVariantProfile(options);
+  const robotLaserDamagePerHit = damageProfile.robotLaserDamagePerHit;
   const confidenceMaps = getRENativeProductionTrafficConfidenceMaps(
     tileMap,
     route,
@@ -8686,7 +9405,8 @@ function getDamageEconomyTrafficRangedRegisterInputs(
       const weightedEffectiveNearby = registerNearby * confidence * legWeight;
       const weightedEffectiveCompetition = registerCompetition * confidence * legWeight;
       const weightedEffectiveInteraction = registerRawInteraction * confidence * legWeight;
-      const registerExpectedDamageUnits = registerExpectedHits * confidence * legWeight;
+      const registerExpectedDamageUnits =
+        registerExpectedHits * confidence * legWeight * robotLaserDamagePerHit;
 
       rawRangedScore += weightedRawRanged;
       effectiveRangedScore += weightedEffectiveRanged;
@@ -8835,19 +9555,25 @@ function getProgramResourceStateCounts(state) {
 
 function getCheapProgramLiteralAvailabilityProbability(
   previousCounts = [],
-  currentCounts = []
+  currentCounts = [],
+  options = {}
 ) {
   PROGRAM_CHEAP_AVAILABILITY_TELEMETRY.requests += 1;
+  const profile = getProgramCardModelProfile(options);
+  const effectivePreviousCounts = getProgramCardEffectivePreviousCounts(
+    previousCounts,
+    options
+  );
   const safePrevious = PROGRAM_CHEAP_RESOURCE_IDS.map((resourceId, index) => (
     Math.max(0, Math.min(
       getProgramResourceFullCount(resourceId),
-      Math.floor(Number(previousCounts[index]) || 0)
+      Math.floor(Number(effectivePreviousCounts[index]) || 0)
     ))
   ));
   const safeCurrent = PROGRAM_CHEAP_RESOURCE_IDS.map((_, index) => (
     Math.max(0, Math.floor(Number(currentCounts[index]) || 0))
   ));
-  const cacheKey = `${safePrevious.join("")}|${safeCurrent.join("")}`;
+  const cacheKey = `${getProgramCardModelSignature(options)}|${safePrevious.join("")}|${safeCurrent.join("")}`;
   if (PROGRAM_CHEAP_AVAILABILITY_CACHE.has(cacheKey)) {
     PROGRAM_CHEAP_AVAILABILITY_TELEMETRY.hits += 1;
     return PROGRAM_CHEAP_AVAILABILITY_CACHE.get(cacheKey);
@@ -8887,7 +9613,7 @@ function getCheapProgramLiteralAvailabilityProbability(
     requiredCategories.push([available, required]);
   }
 
-  const handSize = Math.min(PROGRAM_EXACT_HAND_SIZE, deckSize);
+  const handSize = Math.min(profile.handSize, deckSize);
   if (requiredCards > handSize || handSize <= 0) {
     return storeCheapAvailability(0);
   }
@@ -8931,27 +9657,37 @@ function getCheapProgramLiteralAvailabilityProbability(
 
 function getCheapProgramLiteralAvailabilityPenalty(
   previousCounts = [],
-  currentCounts = []
+  currentCounts = [],
+  options = {}
 ) {
   const probability = getCheapProgramLiteralAvailabilityProbability(
     previousCounts,
-    currentCounts
+    currentCounts,
+    options
   );
   if (probability <= 0) return Infinity;
   return Number(
-    getProgramAvailabilityPenaltyFromProbability(probability).toFixed(3)
+    getProgramAvailabilityPenaltyFromProbability(
+      probability,
+      getProgramCardModelProfile(options).adaptabilityFactor
+    ).toFixed(3)
   );
 }
 
 function getCheapProgramRequirementUnionAvailabilityProbability(
   previousCounts = [],
-  requirementVectors = []
+  requirementVectors = [],
+  options = {}
 ) {
   PROGRAM_CHEAP_UNION_AVAILABILITY_TELEMETRY.requests += 1;
+  const effectivePreviousCounts = getProgramCardEffectivePreviousCounts(
+    previousCounts,
+    options
+  );
   const safePrevious = PROGRAM_CHEAP_RESOURCE_IDS.map((resourceId, index) => (
     Math.max(0, Math.min(
       getProgramResourceFullCount(resourceId),
-      Math.floor(Number(previousCounts[index]) || 0)
+      Math.floor(Number(effectivePreviousCounts[index]) || 0)
     ))
   ));
   const uniqueRequirements = [...new Map(
@@ -8979,7 +9715,7 @@ function getCheapProgramRequirementUnionAvailabilityProbability(
     .map((vector) => vector.join(","))
     .sort()
     .join(";");
-  const cacheKey = `${safePrevious.join(",")}|${requirementKey}`;
+  const cacheKey = `${getProgramCardModelSignature(options)}|${safePrevious.join(",")}|${requirementKey}`;
   if (PROGRAM_CHEAP_UNION_AVAILABILITY_CACHE.has(cacheKey)) {
     PROGRAM_CHEAP_UNION_AVAILABILITY_TELEMETRY.hits += 1;
     return PROGRAM_CHEAP_UNION_AVAILABILITY_CACHE.get(cacheKey);
@@ -9014,7 +9750,8 @@ function getCheapProgramRequirementUnionAvailabilityProbability(
     if (intersectionProbability === undefined) {
       intersectionProbability = getCheapProgramLiteralAvailabilityProbability(
         safePrevious,
-        intersection
+        intersection,
+        options
       );
       intersectionProbabilityCache.set(intersectionKey, intersectionProbability);
     }
@@ -9038,30 +9775,37 @@ function getCheapProgramRequirementUnionAvailabilityProbability(
 
 function getCheapProgramRequirementUnionAvailabilityPenalty(
   previousCounts = [],
-  requirementVectors = []
+  requirementVectors = [],
+  options = {}
 ) {
   const probability = getCheapProgramRequirementUnionAvailabilityProbability(
     previousCounts,
-    requirementVectors
+    requirementVectors,
+    options
   );
   if (probability <= 0) return Infinity;
   return Number(
-    getProgramAvailabilityPenaltyFromProbability(probability).toFixed(3)
+    getProgramAvailabilityPenaltyFromProbability(
+      probability,
+      getProgramCardModelProfile(options).adaptabilityFactor
+    ).toFixed(3)
   );
 }
 
 function getCheapProgramActionUnionAvailabilityPenalty(
   previousCounts = [],
-  actionIds = []
+  actionIds = [],
+  options = {}
 ) {
   const requirements = getExactProgramRequirementVectors(actionIds);
   return getCheapProgramRequirementUnionAvailabilityPenalty(
     previousCounts,
-    requirements
+    requirements,
+    options
   );
 }
 
-function getEstimatedCardFrontierUnionAvailabilityPenalty(frontier = []) {
+function getEstimatedCardFrontierUnionAvailabilityPenalty(frontier = [], options = {}) {
   PROGRAM_CHEAP_FRONTIER_UNION_PENALTY_TELEMETRY.requests += 1;
   const source = (frontier || []).filter(
     (entry) => entry?.state?.feasible !== false
@@ -9088,8 +9832,8 @@ function getEstimatedCardFrontierUnionAvailabilityPenalty(frontier = []) {
   }
   const groupEntries = [...currentCodesByPrevious.entries()]
     .sort((left, right) => left[0] - right[0]);
-  const cacheKey = groupEntries.map(([previousCode, currentCodes]) => (
-    `${previousCode}:${[...currentCodes].sort((left, right) => left - right).join(",")}`
+  const cacheKey = `${getProgramCardModelSignature(options)}|` + groupEntries.map(([previousCode, currentCodes]) => (
+    `${getProgramCardEffectivePreviousCode(previousCode, options)}:${[...currentCodes].sort((left, right) => left - right).join(",")}`
   )).join("|");
   if (PROGRAM_CHEAP_FRONTIER_UNION_PENALTY_CACHE.has(cacheKey)) {
     PROGRAM_CHEAP_FRONTIER_UNION_PENALTY_TELEMETRY.hits += 1;
@@ -9099,13 +9843,16 @@ function getEstimatedCardFrontierUnionAvailabilityPenalty(frontier = []) {
   PROGRAM_CHEAP_FRONTIER_UNION_PENALTY_TELEMETRY.misses += 1;
   let bestPenalty = Infinity;
   for (const [previousCode, currentCodes] of groupEntries) {
-    const previousCounts = getCompactProgramResourceCounts(previousCode);
+    const previousCounts = getCompactProgramResourceCounts(
+      getProgramCardEffectivePreviousCode(previousCode, options)
+    );
     const requirements = [...currentCodes].map(
       (currentCode) => getCompactProgramResourceCounts(currentCode)
     );
     const penalty = getCheapProgramRequirementUnionAvailabilityPenalty(
       previousCounts,
-      requirements
+      requirements,
+      options
     );
     bestPenalty = Math.min(bestPenalty, penalty);
   }
@@ -9127,14 +9874,11 @@ function getEstimatedCardFrontierUnionAvailabilityDelta(
   afterFrontier = [],
   options = {}
 ) {
-  const before = getEstimatedCardFrontierUnionAvailabilityPenalty(beforeFrontier);
-  const after = getEstimatedCardFrontierUnionAvailabilityPenalty(afterFrontier);
+  const before = getEstimatedCardFrontierUnionAvailabilityPenalty(beforeFrontier, options);
+  const after = getEstimatedCardFrontierUnionAvailabilityPenalty(afterFrontier, options);
   if (!Number.isFinite(after)) return Infinity;
   const baseline = Number.isFinite(before) ? before : 0;
-  const lessForeshadowingFactor = options.lessForeshadowing ? 0.72 : 1;
-  return Number((
-    Math.max(0, after - baseline) * lessForeshadowingFactor
-  ).toFixed(3));
+  return Number(Math.max(0, after - baseline).toFixed(3));
 }
 
 function getCheapProgramLiteralAvailabilityDelta(
@@ -9145,18 +9889,17 @@ function getCheapProgramLiteralAvailabilityDelta(
 ) {
   const before = getCheapProgramLiteralAvailabilityPenalty(
     previousCounts,
-    beforeCurrentCounts
+    beforeCurrentCounts,
+    options
   );
   const after = getCheapProgramLiteralAvailabilityPenalty(
     previousCounts,
-    afterCurrentCounts
+    afterCurrentCounts,
+    options
   );
   if (!Number.isFinite(after)) return Infinity;
   const baseline = Number.isFinite(before) ? before : 0;
-  const lessForeshadowingFactor = options.lessForeshadowing ? 0.72 : 1;
-  return Number((
-    Math.max(0, after - baseline) * lessForeshadowingFactor
-  ).toFixed(3));
+  return Number(Math.max(0, after - baseline).toFixed(3));
 }
 
 function getProgramResourceStateSignature(state) {
@@ -9275,12 +10018,14 @@ function getCompactProgramCardStateKey(cardState) {
   return getCompactProgramCardStateCode(cardState);
 }
 
-function getCompactProgramCardStateFromHistory(history, absoluteActions) {
+function getCompactProgramCardStateFromHistory(history, absoluteActions, options = {}) {
   const absolute = Math.max(0, Math.floor(Number(absoluteActions) || 0));
   const phase = absolute % REGISTER_COUNT;
   const window = getProgramHistoryWindow(history);
   const currentTurnActions = getProgramTurnActionsFromHistory(window, absolute, 0);
-  const previousTurnActions = getProgramTurnActionsFromHistory(window, absolute, 1);
+  const previousTurnActions = getProgramCardModelProfile(options).previousTurnDepletionActive
+    ? getProgramTurnActionsFromHistory(window, absolute, 1)
+    : [];
   const currentStates = getLiteralProgramResourceStates(currentTurnActions);
   const previousStates = previousTurnActions.length
     ? getLiteralProgramResourceStates(previousTurnActions)
@@ -9293,7 +10038,8 @@ function getCompactProgramCardStateFromHistory(history, absoluteActions) {
       if (!areRollingProgramResourceStatesCompatible(previousState, currentState)) continue;
       const cost = getCheapProgramLiteralAvailabilityPenalty(
         getProgramResourceStateCounts(previousState),
-        getProgramResourceStateCounts(currentState)
+        getProgramResourceStateCounts(currentState),
+        options
       );
       if (cost < bestCost) {
         bestCost = cost;
@@ -9326,7 +10072,10 @@ function getCompactProgramCardOptions(
   options = {}
 ) {
   const phase = Math.max(0, Math.floor(Number(absoluteActions) || 0)) % REGISTER_COUNT;
-  const previousCode = Math.max(0, Math.floor(Number(cardState?.previousCode) || 0));
+  const previousCode = getProgramCardEffectivePreviousCode(
+    cardState?.previousCode,
+    options
+  );
   const currentCode = Math.max(0, Math.floor(Number(cardState?.currentCode) || 0));
   const previousCounts = getCompactProgramResourceCounts(previousCode);
   const currentCounts = getCompactProgramResourceCounts(currentCode);
@@ -9392,7 +10141,9 @@ function getCompactProgramCardOptions(
         ...option,
         state: {
           feasible: true,
-          previousCode: option.currentCode,
+          previousCode: getProgramCardModelProfile(options).previousTurnDepletionActive
+            ? option.currentCode
+            : 0,
           currentCode: 0,
           previousActionId: null
         }
@@ -9412,7 +10163,7 @@ function getCompactProgramCardOptions(
 
 
 
-function closeCompactProgramCardStateForEndedTurn(cardState) {
+function closeCompactProgramCardStateForEndedTurn(cardState, options = {}) {
   if (!cardState || cardState.feasible === false) return cardState;
   const currentCode = Math.max(0, Math.floor(Number(cardState.currentCode) || 0));
   // R5 already closes the turn inside getCompactProgramCardOptions(). Mid-turn
@@ -9420,26 +10171,29 @@ function closeCompactProgramCardStateForEndedTurn(cardState) {
   // previousCode before the next routed action begins at next-turn R1. Unknown
   // unexecuted register cards are deliberately not invented: the analyzer keeps
   // its existing known-depletion abstraction rather than simulating a full hand.
+  const keepPreviousDepletion = getProgramCardModelProfile(options).previousTurnDepletionActive;
   if (currentCode <= 0) {
     return {
       feasible: true,
-      previousCode: Math.max(0, Math.floor(Number(cardState.previousCode) || 0)),
+      previousCode: keepPreviousDepletion
+        ? Math.max(0, Math.floor(Number(cardState.previousCode) || 0))
+        : 0,
       currentCode: 0,
       previousActionId: null
     };
   }
   return {
     feasible: true,
-    previousCode: currentCode,
+    previousCode: keepPreviousDepletion ? currentCode : 0,
     currentCode: 0,
     previousActionId: null
   };
 }
 
-function closeEstimatedCardForecastFrontierForEndedTurn(frontier = []) {
+function closeEstimatedCardForecastFrontierForEndedTurn(frontier = [], options = {}) {
   const bestByState = new Map();
   for (const entry of frontier || []) {
-    const state = closeCompactProgramCardStateForEndedTurn(entry?.state);
+    const state = closeCompactProgramCardStateForEndedTurn(entry?.state, options);
     if (!state || state.feasible === false) continue;
     const penalty = Math.max(0, Number(entry?.penalty) || 0);
     const key = getCompactProgramCardStateCode(state);
@@ -9492,7 +10246,7 @@ function advanceEstimatedCardForecastFrontier(
   }
 
   const beforeUnionPenalty =
-    getEstimatedCardFrontierUnionAvailabilityPenalty(current);
+    getEstimatedCardFrontierUnionAvailabilityPenalty(current, options);
   const rawUnionFrontier = [];
   const next = new Map();
   for (const entry of current) {
@@ -9534,15 +10288,12 @@ function advanceEstimatedCardForecastFrontier(
     .sort((left, right) => left.penalty - right.penalty)
     .slice(0, ESTIMATED_CARD_FORECAST_FRONTIER_LIMIT);
   const afterUnionPenalty =
-    getEstimatedCardFrontierUnionAvailabilityPenalty(rawUnionFrontier);
-  const lessForeshadowingFactor = options.lessForeshadowing ? 0.72 : 1;
+    getEstimatedCardFrontierUnionAvailabilityPenalty(rawUnionFrontier, options);
   const unionPenaltyDelta = Number.isFinite(afterUnionPenalty)
-    ? Number((
-      Math.max(
-        0,
-        afterUnionPenalty -
-          (Number.isFinite(beforeUnionPenalty) ? beforeUnionPenalty : 0)
-      ) * lessForeshadowingFactor
+    ? Number(Math.max(
+      0,
+      afterUnionPenalty -
+        (Number.isFinite(beforeUnionPenalty) ? beforeUnionPenalty : 0)
     ).toFixed(3))
     : Infinity;
   return {
@@ -9588,7 +10339,7 @@ function walkEstimatedCardForecast(
       break;
     }
     frontier = rebooted
-      ? closeEstimatedCardForecastFrontierForEndedTurn(next.frontier)
+      ? closeEstimatedCardForecastFrontierForEndedTurn(next.frontier, options)
       : next.frontier;
   }
 
@@ -9677,11 +10428,13 @@ function scoreCompactProgramCardSequenceUntilFailure(
       );
       const beforeAvailabilityPenalty = getExactProgramAvailabilityPenalty(
         previousCode,
-        currentTurnActions
+        currentTurnActions,
+        options
       );
       const afterAvailabilityPenalty = getExactProgramAvailabilityPenalty(
         previousCode,
-        nextTurnActions
+        nextTurnActions,
+        options
       );
       const availabilityPenaltyDelta = (
         Number.isFinite(afterAvailabilityPenalty) &&
@@ -9703,7 +10456,7 @@ function scoreCompactProgramCardSequenceUntilFailure(
         const penalty = entry.penalty + availabilityPenaltyDelta;
         const forceTurnEnd = forcedTurnEnds.has(actionIndex);
         const nextCardState = forceTurnEnd
-          ? closeCompactProgramCardStateForEndedTurn(cardOption.state)
+          ? closeCompactProgramCardStateForEndedTurn(cardOption.state, options)
           : cardOption.state;
         const key = getCompactProgramCardStateKey(nextCardState);
         const prior = next.get(key);
@@ -9992,19 +10745,21 @@ function getExactProgramRequirementVectors(actionIds = []) {
 
 function getExactProgramHandAvailabilityProbability(
   previousCode,
-  actionIds = []
+  actionIds = [],
+  options = {}
 ) {
   const actions = Array.isArray(actionIds) ? actionIds : [];
   if (!actions.length) return 1;
-  const safePreviousCode = Math.max(0, Math.floor(Number(previousCode) || 0));
-  const cacheKey = `${safePreviousCode}|${actions.join(".")}`;
+  const profile = getProgramCardModelProfile(options);
+  const safePreviousCode = getProgramCardEffectivePreviousCode(previousCode, options);
+  const cacheKey = `${getProgramCardModelSignature(options)}|${safePreviousCode}|${actions.join(".")}`;
   if (PROGRAM_EXACT_AVAILABILITY_CACHE.has(cacheKey)) {
     return PROGRAM_EXACT_AVAILABILITY_CACHE.get(cacheKey);
   }
 
   const deckCounts = getExactProgramDeckCounts(safePreviousCode);
   const deckSize = deckCounts.reduce((sum, count) => sum + count, 0);
-  const handSize = Math.min(PROGRAM_EXACT_HAND_SIZE, deckSize);
+  const handSize = Math.min(profile.handSize, deckSize);
   const requirements = getExactProgramRequirementVectors(actions).filter((vector) => (
     vector.every((count, index) => count <= deckCounts[index])
   ));
@@ -10052,14 +10807,18 @@ function getExactProgramHandAvailabilityProbability(
   return probability;
 }
 
-function getExactProgramAvailabilityPenalty(previousCode, actionIds = []) {
+function getExactProgramAvailabilityPenalty(previousCode, actionIds = [], options = {}) {
   const probability = getExactProgramHandAvailabilityProbability(
     previousCode,
-    actionIds
+    actionIds,
+    options
   );
   if (probability <= 0) return Infinity;
   return Number(
-    getProgramAvailabilityPenaltyFromProbability(probability).toFixed(3)
+    getProgramAvailabilityPenaltyFromProbability(
+      probability,
+      getProgramCardModelProfile(options).adaptabilityFactor
+    ).toFixed(3)
   );
 }
 
@@ -10077,7 +10836,8 @@ function getRollingProgramResourceContext(
   history,
   absoluteActionCount,
   candidateActionId = null,
-  actionAbsoluteActions = null
+  actionAbsoluteActions = null,
+  options = {}
 ) {
   const absoluteActions = Math.max(0, Math.floor(Number(absoluteActionCount) || 0));
   const window = getProgramHistoryWindow(history);
@@ -10091,7 +10851,7 @@ function getRollingProgramResourceContext(
       Math.floor((Math.max(1, Number(value) || 1) - 1) / REGISTER_COUNT) - currentTurn
     )).join(",")
     : "-";
-  const cacheKey = `r${phase}:t${timingSignature}:${window.join(".") || "-"}>${candidateActionId ?? "-"}`;
+  const cacheKey = `${getProgramCardModelSignature(options)}|r${phase}:t${timingSignature}:${window.join(".") || "-"}>${candidateActionId ?? "-"}`;
   if (ROLLING_PROGRAM_CONTEXT_CACHE.has(cacheKey)) {
     return ROLLING_PROGRAM_CONTEXT_CACHE.get(cacheKey);
   }
@@ -10103,12 +10863,14 @@ function getRollingProgramResourceContext(
     timedWindow
   );
   if (candidateActionId) currentTurnActions.push(candidateActionId);
-  const previousTurnActions = getProgramTurnActionsFromHistory(
-    window,
-    absoluteActions,
-    1,
-    timedWindow
-  );
+  const previousTurnActions = getProgramCardModelProfile(options).previousTurnDepletionActive
+    ? getProgramTurnActionsFromHistory(
+      window,
+      absoluteActions,
+      1,
+      timedWindow
+    )
+    : [];
 
   const currentStates = getLiteralProgramResourceStates(currentTurnActions);
   const previousStates = previousTurnActions.length
@@ -10124,7 +10886,8 @@ function getRollingProgramResourceContext(
       }
       const currentScarcityCost = getCheapProgramLiteralAvailabilityPenalty(
         getProgramResourceStateCounts(previousState),
-        getProgramResourceStateCounts(currentState)
+        getProgramResourceStateCounts(currentState),
+        options
       );
       minimumCurrentScarcityCost = Math.min(
         minimumCurrentScarcityCost,
@@ -10186,14 +10949,15 @@ function evaluateProgramActionFromContext(
     history,
     absoluteActionCount,
     null,
-    options.programHistoryAbsoluteActions
+    options.programHistoryAbsoluteActions,
+    options
   );
   const absoluteActions = Math.max(0, Math.floor(Number(absoluteActionCount) || 0));
   const phase = absoluteActions % REGISTER_COUNT;
   const previousActionId = phase > 0
     ? (resolvedBefore.currentTurnActions?.at(-1) ?? "-")
     : "-";
-  const transitionCacheKey = `${phase}|q${resolvedBefore.pairSignatureId}|p${previousActionId}>${actionId}`;
+  const transitionCacheKey = `${getProgramCardModelSignature(options)}|${phase}|q${resolvedBefore.pairSignatureId}|p${previousActionId}>${actionId}`;
   const cachedTransition = PROGRAM_ACTION_TRANSITION_CACHE.get(transitionCacheKey);
   if (cachedTransition) {
     const beforeCost = Number.isFinite(resolvedBefore.minimumCurrentScarcityCost)
@@ -10202,11 +10966,10 @@ function evaluateProgramActionFromContext(
     const afterCost = Number.isFinite(cachedTransition.minimumCurrentScarcityCost)
       ? cachedTransition.minimumCurrentScarcityCost
       : beforeCost;
-    const lessForeshadowingFactor = options.lessForeshadowing ? 0.72 : 1;
     return {
       feasible: cachedTransition.feasible,
       penalty: cachedTransition.feasible
-        ? Number((Math.max(0, afterCost - beforeCost) * lessForeshadowingFactor).toFixed(2))
+        ? Number(Math.max(0, afterCost - beforeCost).toFixed(2))
         : Infinity,
       before: resolvedBefore,
       after: cachedTransition
@@ -10217,7 +10980,8 @@ function evaluateProgramActionFromContext(
     history,
     absoluteActionCount,
     actionId,
-    options.programHistoryAbsoluteActions
+    options.programHistoryAbsoluteActions,
+    options
   );
   const cachedAfter = {
     feasible: after.feasible,
@@ -10246,8 +11010,7 @@ function evaluateProgramActionFromContext(
   const afterCost = Number.isFinite(after.minimumCurrentScarcityCost)
     ? after.minimumCurrentScarcityCost
     : beforeCost;
-  const lessForeshadowingFactor = options.lessForeshadowing ? 0.72 : 1;
-  const penalty = Math.max(0, afterCost - beforeCost) * lessForeshadowingFactor;
+  const penalty = Math.max(0, afterCost - beforeCost);
   return {
     feasible: true,
     penalty: Number(penalty.toFixed(2)),
@@ -10262,7 +11025,8 @@ function evaluateProgramAction(history, absoluteActionCount, actionId, options =
       history,
       absoluteActionCount,
       null,
-      options.programHistoryAbsoluteActions
+      options.programHistoryAbsoluteActions,
+      options
     ),
     history,
     absoluteActionCount,
@@ -10874,10 +11638,72 @@ export function summarizePowerUpOpportunityBenchmark(tileMap, startAnalyses = []
   };
 }
 
-function createQueueEntry(route, goal) {
+const HOMING_MISSILE_SEARCH_POSITIONS_CACHE = new WeakMap();
+
+function getHomingMissileSearchPositions(tileMap) {
+  if (!tileMap || typeof tileMap !== "object") return [];
+  const cached = HOMING_MISSILE_SEARCH_POSITIONS_CACHE.get(tileMap);
+  if (cached) return cached;
+  const positions = [];
+  for (const [key, tile] of tileMap.entries?.() || []) {
+    if (!hasHomingMissile(tile)) continue;
+    const [rawX, rawY] = String(key).split(",");
+    const x = Number(tile?.x ?? rawX);
+    const y = Number(tile?.y ?? rawY);
+    if (Number.isFinite(x) && Number.isFinite(y)) positions.push({ x, y });
+  }
+  HOMING_MISSILE_SEARCH_POSITIONS_CACHE.set(tileMap, positions);
+  return positions;
+}
+
+function getHomingMissileCheapSearchGuidanceBonus(
+  tileMap,
+  state,
+  goal,
+  options = {}
+) {
+  if (!state || !goal) return 0;
+  const missiles = getHomingMissileSearchPositions(tileMap);
+  if (!missiles.length) return 0;
+  const guidanceScore = Math.max(
+    0,
+    Number(getHomingMissileSearchGuidanceScore(options)) || 0
+  );
+  if (guidanceScore <= 0) return 0;
+
+  const directDistance = heuristic(state, goal);
+  let bestBonus = 0;
+  for (const missile of missiles) {
+    // If the search state is already on this missile, its opportunity has just
+    // been discovered; do not keep pulling the heap back toward the same tile.
+    if (state.x === missile.x && state.y === missile.y) continue;
+    const detourDistance = Math.max(
+      0,
+      heuristic(state, missile) + heuristic(missile, goal) - directDistance
+    );
+    // This is search-order guidance only, not route score. Half the ordinary
+    // Manhattan estimate slope keeps near-corridor missile opportunities visible
+    // without making remote missile tourism dominate the cheap search.
+    const detourGuidanceCost = detourDistance * 2.3;
+    bestBonus = Math.max(
+      bestBonus,
+      Math.max(0, guidanceScore - detourGuidanceCost)
+    );
+  }
+  return bestBonus;
+}
+
+function createQueueEntry(route, goal, tileMap = null, options = {}) {
+  const missileGuidanceBonus = getHomingMissileCheapSearchGuidanceBonus(
+    tileMap,
+    route.finalState,
+    goal,
+    options
+  );
   return {
     ...route,
-    estimate: route.baseCost + heuristic(route.finalState, goal) * 5
+    homingMissileSearchGuidanceBonus: Number(missileGuidanceBonus.toFixed(3)),
+    estimate: route.baseCost + heuristic(route.finalState, goal) * 5 - missileGuidanceBonus
   };
 }
 
@@ -11064,7 +11890,7 @@ function enumerateRoutes(tileMap, start, goal, options = {}) {
       baseCost: 0,
       actionHistory: [],
       actionAbsoluteHistory: []
-    }, goal));
+    }, goal, tileMap, options));
   }
 
   const completed = [];
@@ -11257,7 +12083,7 @@ function enumerateRoutes(tileMap, start, goal, options = {}) {
         }
 
         bestCostByState.set(nextStateKey, nextRoute.baseCost);
-        queue.push(createQueueEntry(nextRoute, goal));
+        queue.push(createQueueEntry(nextRoute, goal, tileMap, options));
       }
     }
   }
@@ -11334,7 +12160,8 @@ function getFullCourseSearchStateKey(
       null,
       Array.isArray(programHistoryAbsoluteActions)
         ? programHistoryAbsoluteActions
-        : null
+        : null,
+      options
     );
     const previousActionId = cardContext?.currentTurnActions?.at(-1) ?? "-";
     diagnosticCardKey = `@dc${cardContext?.pairSignatureId ?? 0}@p${previousActionId}`;
@@ -11368,10 +12195,25 @@ function estimateFullCourseRoute(route, flags, options = {}) {
   return route.baseCost + remainingDistance * 4.6;
 }
 
-function createFullCourseQueueEntry(route, flags, options = {}) {
+function createFullCourseQueueEntry(route, flags, options = {}, tileMap = null) {
+  const elapsedActions = Number.isFinite(Number(route?.absoluteActions))
+    ? Number(route.absoluteActions)
+    : route.actions;
+  const target = route.checkpointIndex < flags.length
+    ? getFullCourseTarget(flags, route.checkpointIndex, elapsedActions, options)
+    : null;
+  const missileGuidanceBonus = target
+    ? getHomingMissileCheapSearchGuidanceBonus(
+      tileMap,
+      route.finalState,
+      target,
+      options
+    )
+    : 0;
   return {
     ...route,
-    estimate: estimateFullCourseRoute(route, flags, options)
+    homingMissileSearchGuidanceBonus: Number(missileGuidanceBonus.toFixed(3)),
+    estimate: estimateFullCourseRoute(route, flags, options) - missileGuidanceBonus
   };
 }
 
@@ -11525,7 +12367,7 @@ function enumerateFullCourseRoutes(tileMap, start, flags, options = {}) {
       initialRoute.actions
     );
     acceptStateLabel(initialStateKey, 0, 1);
-    queue.push(createFullCourseQueueEntry(initialRoute, flags, options));
+    queue.push(createFullCourseQueueEntry(initialRoute, flags, options, tileMap));
   }
 
   const completed = [];
@@ -11733,7 +12575,7 @@ function enumerateFullCourseRoutes(tileMap, start, flags, options = {}) {
           ? maxStateLabels
           : 1;
         if (!acceptStateLabel(nextStateKey, nextRoute.baseCost, stateLabelLimit)) continue;
-        queue.push(createFullCourseQueueEntry(nextRoute, flags, options));
+        queue.push(createFullCourseQueueEntry(nextRoute, flags, options, tileMap));
       }
     }
   }
@@ -12032,8 +12874,6 @@ function getRoutePathKey(route) {
 
 function getThreatOptionKey(options = {}) {
   return [
-    options.setToKill ? 1 : 0,
-    options.setToStun ? 1 : 0,
     options.lessSpammyGame ? 1 : 0,
     options.criticalSpam ? 1 : 0,
     options.criticalHaywire ? 1 : 0,
@@ -12055,16 +12895,8 @@ function getRobotLaserThreatMultipliers(options = {}) {
   let frontal = 1;
   const damagePressure = getDamageDeckPressureMultipliers(options);
 
-  if (options.setToKill) {
-    lateral *= 1.18;
-    rear *= 1.35;
-    frontal *= 1.25;
-  }
-  if (options.setToStun) {
-    lateral *= 0.65;
-    rear *= 0.45;
-    frontal *= 0.55;
-  }
+  // Set to Kill / Set to Stun do not change whether a shot exists. Their
+  // consequences are owned by the chronological damage economy downstream.
 
   lateral *= damagePressure.robotTraffic;
   rear *= damagePressure.robotTraffic;
@@ -12523,6 +13355,9 @@ export function scoreFlagArea(tileMap, goal, options = {}) {
       if (!tile) continue;
 
       for (const feature of tile.features || []) {
+        // v49ei: a Homing Missile near a checkpoint is not board danger to the
+        // robot that can activate it. Strategic value is route-owned instead.
+        if (feature.type === "homingMissile") continue;
         const featureScore = getFlagAreaFeatureScore(feature, dist, {
           batteryActive: isBatteryActive(options),
           cuttingFloor: options.cuttingFloor,
@@ -12887,6 +13722,9 @@ export function analyzeCourse(tileMap, starts, goal, options = {}) {
       moreDeadlyGame: options.moreDeadlyGame,
       lighterGame: options.lighterGame,
       upgradeWorld: options.upgradeWorld,
+      factoryRejects: Boolean(options.factoryRejects),
+      classicSharedDeck: Boolean(options.classicSharedDeck),
+      lessForeshadowing: Boolean(options.lessForeshadowing),
       lessSpammyGame: options.lessSpammyGame,
       criticalSpam: options.criticalSpam,
       criticalHaywire: options.criticalHaywire,
@@ -13154,6 +13992,57 @@ function selectCorridorDiverseFullCourseRoutes(routes, flags, limit = 3) {
 
 const FULL_COURSE_OPENING_LEG_TRAFFIC_WEIGHT = 0.4;
 const FULL_COURSE_LATER_LEG_TRAFFIC_WEIGHT = 1;
+// v49ej board-mechanic ownership.
+// Homing Missile final value is RE-native. A neutral one-damage reference is
+// derived from the damage-economy model itself: inject one standard damage draw
+// into a clean state, advance to the next programming turn, then value (a) the
+// resulting SPAM supply pressure against ordinary common-card availability and
+// (b) the Haywire/control-clog distribution through the production clog curve.
+// This is deliberately a neutral reference because the future target is chosen
+// strategically but its exact deck/route state is unknown. The missile still
+// deals only 1 damage; target choice makes the opportunity worth ~2 damage-
+// equivalents. Target-choice mental burden remains a separate positive cost.
+const HOMING_MISSILE_STRATEGIC_DAMAGE_EQUIVALENTS = 2;
+
+function getNeutralOneDamageEconomyReferenceRE() {
+  const state = createDamageEconomyState();
+  applyExpectedDamageToEconomyState(
+    state,
+    1,
+    REGISTER_COUNT,
+    getDamageEconomyHaywireEventProbability(1)
+  );
+  advanceDamageEconomyToTurn(state, 2);
+
+  const commonActionIds = PROGRAM_CARD_IDS.filter(
+    (actionId) => (PROGRAM_CARD_COUNTS.get(actionId) || 0) >= 3
+  );
+  const supplySamples = commonActionIds.map((actionId) => (
+    getDamageEconomyProgrammingSummary(0, [actionId], state, {})
+      .spamSupplyRegisterEquivalents
+  ));
+  const spamSupplyRE = supplySamples.length ? average(supplySamples) : 0;
+
+  const haywireDistribution = Array.isArray(state.activeHaywireDistribution)
+    ? state.activeHaywireDistribution
+    : [1, 0, 0, 0, 0, 0];
+  const haywireClogRE = haywireDistribution.reduce(
+    (sum, probability, clogCount) => sum +
+      (Number(probability) || 0) *
+      getDamageEconomyClogRegisterEquivalents(clogCount),
+    0
+  );
+
+  return Math.max(0, spamSupplyRE + haywireClogRE);
+}
+
+const HOMING_MISSILE_ONE_DAMAGE_REFERENCE_RE =
+  getNeutralOneDamageEconomyReferenceRE();
+const HOMING_MISSILE_STRATEGIC_CREDIT_RE =
+  HOMING_MISSILE_STRATEGIC_DAMAGE_EQUIVALENTS *
+  HOMING_MISSILE_ONE_DAMAGE_REFERENCE_RE;
+const HOMING_MISSILE_TARGET_CHOICE_EVENT_WEIGHT = 1;
+
 
 function getRegisterTimeline(route) {
   if (!route?.transitions?.length) {
@@ -13189,12 +14078,226 @@ function getRegisterTimeline(route) {
       before,
       after,
       facing: after?.facing ?? before?.facing,
+      rebooted: Boolean(transition?.rebooted),
+      rebootRecoverySource: transition?.rebootRecoverySource ?? null,
       uncertainty: Math.min(2.8, 0.75 + index * 0.12 + boardComplexity)
     };
   });
 
   TRAFFIC_TIMELINE_CACHE.set(route, timeline);
   return timeline;
+}
+
+
+function isSameTurnSameSpaceRebootPair(pointA, pointB) {
+  if (!pointA?.rebooted || !pointB?.rebooted || !pointA?.after || !pointB?.after) {
+    return false;
+  }
+  const actionA = Math.max(1, Math.floor(Number(pointA.absoluteRegister) || 1));
+  const actionB = Math.max(1, Math.floor(Number(pointB.absoluteRegister) || 1));
+  const turnA = Math.floor((actionA - 1) / REGISTER_COUNT) + 1;
+  const turnB = Math.floor((actionB - 1) / REGISTER_COUNT) + 1;
+  return turnA === turnB &&
+    pointA.after.x === pointB.after.x &&
+    pointA.after.y === pointB.after.y;
+}
+
+function getRouteRebootPileupEvents(route) {
+  return getRegisterTimeline(route)
+    .filter((entry) => entry?.rebooted && entry?.after)
+    .map((entry) => {
+      const absoluteAction = Math.max(
+        1,
+        Math.floor(Number(entry.absoluteRegister) || 1)
+      );
+      return {
+        absoluteAction,
+        turn: Math.floor((absoluteAction - 1) / REGISTER_COUNT) + 1,
+        x: entry.after.x,
+        y: entry.after.y,
+        spaceKey: tileKey(entry.after.x, entry.after.y),
+        legIndex: getRouteLegIndexForAbsoluteAction(route, absoluteAction)
+      };
+    });
+}
+
+function summarizeSimultaneousRebootPileupForecast(
+  route,
+  selectedRouteEntries = [],
+  confidenceByAbsoluteAction = null
+) {
+  const ownEvents = getRouteRebootPileupEvents(route);
+  if (!ownEvents.length || !selectedRouteEntries?.length) {
+    return {
+      eventMass: 0,
+      maximumTurnProbability: 0,
+      byTurn: []
+    };
+  }
+
+  const preparedOthers = selectedRouteEntries
+    .map((entry) => ({
+      route: entry?.route ?? entry,
+      occupancyWeight: Number.isFinite(Number(entry?.occupancyWeight))
+        ? Math.max(0, Number(entry.occupancyWeight))
+        : 1,
+      groupKey: Number.isInteger(entry?.startIndex)
+        ? `start:${entry.startIndex}`
+        : (entry?.route ?? entry)
+    }))
+    .filter((entry) => entry.route && entry.occupancyWeight > 0);
+
+  const byTurnMap = new Map();
+  for (const own of ownEvents) {
+    const matchProbabilityByGroup = new Map();
+    for (const other of preparedOthers) {
+      const matches = getRouteRebootPileupEvents(other.route).some((event) => (
+        event.turn === own.turn &&
+        event.spaceKey === own.spaceKey
+      ));
+      if (!matches) continue;
+      const existing = Math.max(
+        0,
+        Number(matchProbabilityByGroup.get(other.groupKey)) || 0
+      );
+      matchProbabilityByGroup.set(
+        other.groupKey,
+        Math.min(1, existing + other.occupancyWeight)
+      );
+    }
+
+    let noneProbability = 1;
+    for (const probability of matchProbabilityByGroup.values()) {
+      noneProbability *= 1 - clamp(Number(probability) || 0, 0, 1);
+    }
+    const participantProbability = clamp(1 - noneProbability, 0, 1);
+    if (participantProbability <= 0.000001) continue;
+    const confidence = getRENativeTrafficConfidenceForAbsoluteAction(
+      confidenceByAbsoluteAction,
+      own.absoluteAction,
+      1
+    );
+    const legWeight = own.legIndex === 0
+      ? FULL_COURSE_OPENING_LEG_TRAFFIC_WEIGHT
+      : FULL_COURSE_LATER_LEG_TRAFFIC_WEIGHT;
+    const eventProbability = clamp(
+      participantProbability * confidence * legWeight,
+      0,
+      1
+    );
+    if (eventProbability <= 0.000001) continue;
+
+    const existing = byTurnMap.get(own.turn);
+    if (!existing) {
+      byTurnMap.set(own.turn, {
+        turn: own.turn,
+        absoluteAction: own.absoluteAction,
+        x: own.x,
+        y: own.y,
+        legIndex: own.legIndex,
+        participantProbability,
+        confidence,
+        legWeight,
+        eventProbability
+      });
+    } else {
+      // A reboot normally ends the turn, so multiple own reboot events in one
+      // turn should not occur. Combine defensively if an unusual trace has them.
+      existing.eventProbability = clamp(
+        1 - (1 - existing.eventProbability) * (1 - eventProbability),
+        0,
+        1
+      );
+      existing.participantProbability = Math.max(
+        existing.participantProbability,
+        participantProbability
+      );
+    }
+  }
+
+  const byTurn = [...byTurnMap.values()]
+    .sort((left, right) => left.turn - right.turn)
+    .map((entry) => ({
+      ...entry,
+      participantProbability: Number(entry.participantProbability.toFixed(4)),
+      confidence: Number(entry.confidence.toFixed(4)),
+      legWeight: Number(entry.legWeight.toFixed(4)),
+      eventProbability: Number(entry.eventProbability.toFixed(4))
+    }));
+  return {
+    eventMass: Number(byTurn.reduce(
+      (sum, entry) => sum + (Number(entry.eventProbability) || 0),
+      0
+    ).toFixed(4)),
+    maximumTurnProbability: byTurn.length
+      ? Number(Math.max(...byTurn.map((entry) => entry.eventProbability)).toFixed(4))
+      : 0,
+    byTurn
+  };
+}
+
+function getSimultaneousRebootClogIncrementREForTurn(
+  damageTurn,
+  eventProbability
+) {
+  const probability = clamp(Number(eventProbability) || 0, 0, 1);
+  if (probability <= 0) return 0;
+  const states = Array.isArray(damageTurn?.controlClogLoadDistribution)
+    ? damageTurn.controlClogLoadDistribution
+    : [];
+  if (states.length) {
+    const delta = states.reduce((sum, state) => {
+      const stateProbability = Math.max(0, Number(state?.probability) || 0);
+      const load = Math.max(0, Number(state?.load) || 0);
+      return sum + stateProbability * (
+        getDamageEconomyClogRegisterEquivalents(load + 1) -
+        getDamageEconomyClogRegisterEquivalents(load)
+      );
+    }, 0);
+    return Math.max(0, probability * delta);
+  }
+  const fallbackLoad = Math.max(
+    0,
+    Number(damageTurn?.expectedTotalControlClogLoad) || 0
+  );
+  return Math.max(0, probability * (
+    getDamageEconomyClogRegisterEquivalents(fallbackLoad + 1) -
+    getDamageEconomyClogRegisterEquivalents(fallbackLoad)
+  ));
+}
+
+function summarizeSimultaneousRebootPileupClogIncrement(
+  damageSummary,
+  pileupByTurn = []
+) {
+  const damageTurnByTurn = new Map(
+    (damageSummary?.turns || []).map((turn) => [
+      Math.max(1, Math.floor(Number(turn?.turn) || 1)),
+      turn
+    ])
+  );
+  const byTurn = (pileupByTurn || []).map((entry) => {
+    const turn = Math.max(1, Math.floor(Number(entry?.turn) || 1));
+    const incrementRE = getSimultaneousRebootClogIncrementREForTurn(
+      damageTurnByTurn.get(turn),
+      entry?.eventProbability
+    );
+    return {
+      ...entry,
+      turn,
+      clogIncrementRE: Number(incrementRE.toFixed(4)),
+      clogIncrementScore: Number((incrementRE * REGISTER_TEMPO_COST).toFixed(3))
+    };
+  });
+  const totalRE = byTurn.reduce(
+    (sum, entry) => sum + (Number(entry.clogIncrementRE) || 0),
+    0
+  );
+  return {
+    registerEquivalents: Number(totalRE.toFixed(4)),
+    score: Number((totalRE * REGISTER_TEMPO_COST).toFixed(3)),
+    byTurn
+  };
 }
 
 function getTemporalInteractionWeight(pointA, pointB) {
@@ -13885,8 +14988,8 @@ export function summarizeTrafficOwnershipAudit() {
     occupancyAndTemporalForecastActive: true,
     robotLaserPhysicalExposureActive: true,
     robotLaserPhysicalDamageOwner: "marginal-raw-damage-economy-re",
-    residualRangedThreatActive: true,
-    residualRangedThreatOwner: "legacy-traffic-proxy-pending-audit",
+    residualRangedThreatActive: false,
+    residualRangedThreatOwner: "diagnostic-only-v49ej-physical-damage-plus-awareness-mental-own-production",
     nearbyInteractionActive: true,
     nearbyInteractionOwner: "turn-episode-control-loss-re",
     competitionScale: getVirtualCompetitionScale(),
@@ -14081,37 +15184,44 @@ function getTrafficPairProfile(tileMap, route, otherRoute, options = {}) {
           );
         }
 
-        const distance = heuristic(pointA.after, pointB.after);
-        const orientation = classifyTrafficOrientation(pointA, pointB);
-        const interactionProbability = getNearbyInteractionProbability(
-          orientation,
-          distance
-        );
-        const consequence = (
-          getOrdinaryInterferenceCost() +
-          (displacementProfile[timelineIndex] ?? 0)
-        );
+        const simultaneousRebootPileupPair =
+          isSameTurnSameSpaceRebootPair(pointA, pointB);
+        if (!simultaneousRebootPileupPair) {
+          const distance = heuristic(pointA.after, pointB.after);
+          const orientation = classifyTrafficOrientation(pointA, pointB);
+          const interactionProbability = getNearbyInteractionProbability(
+            orientation,
+            distance
+          );
+          const consequence = (
+            getOrdinaryInterferenceCost() +
+            (displacementProfile[timelineIndex] ?? 0)
+          );
 
-        nearbyWeighted += (
-          interactionProbability *
-          consequence *
-          temporal *
-          physicalScale
-        );
+          nearbyWeighted += (
+            interactionProbability *
+            consequence *
+            temporal *
+            physicalScale
+          );
 
-        // v49bi parallel ownership candidate. Geometry/probability is retained,
-        // but legacy route-score consequence prices are deliberately excluded.
-        nearbyEventMassWeighted += (
-          interactionProbability *
-          temporal *
-          physicalScale
-        );
-        nearbyControlLoadWeighted += (
-          interactionProbability *
-          (controlSeverityProfile[timelineIndex] ?? 1) *
-          temporal *
-          physicalScale
-        );
+          // v49bi parallel ownership candidate. Geometry/probability is retained,
+          // but legacy route-score consequence prices are deliberately excluded.
+          // v49ei: an exact same-turn/same-space reboot pair is NOT an ordinary
+          // displacement episode; its +1-clog consequence is owned downstream by
+          // the simultaneous-reboot model instead.
+          nearbyEventMassWeighted += (
+            interactionProbability *
+            temporal *
+            physicalScale
+          );
+          nearbyControlLoadWeighted += (
+            interactionProbability *
+            (controlSeverityProfile[timelineIndex] ?? 1) *
+            temporal *
+            physicalScale
+          );
+        }
       }
 
       if (competitionScale > 0) {
@@ -15191,6 +16301,9 @@ function getExpectedTrafficBreakdown(
       nearbyTurnEpisodeControlRegisterEquivalentsCandidate: 0,
       nearbyTurnEpisodeControlScoreCandidate: 0,
       nearbyTurnEpisodeByTurn: [],
+      simultaneousRebootPileupEventMass: 0,
+      simultaneousRebootPileupMaximumTurnProbability: 0,
+      simultaneousRebootPileupByTurn: [],
       confidenceStart: 1, confidenceMean: 1, confidenceEnd: 1
     };
   }
@@ -15202,7 +16315,25 @@ function getExpectedTrafficBreakdown(
       selectedRouteEntries,
       options
     );
-    return { ...single, opening: single.total, later: 0 };
+    const confidenceMaps = getRENativeProductionTrafficConfidenceMaps(
+      tileMap,
+      route,
+      options
+    );
+    const rebootPileup = summarizeSimultaneousRebootPileupForecast(
+      route,
+      selectedRouteEntries,
+      confidenceMaps.confidenceByAbsoluteAction
+    );
+    return {
+      ...single,
+      simultaneousRebootPileupEventMass: rebootPileup.eventMass,
+      simultaneousRebootPileupMaximumTurnProbability:
+        rebootPileup.maximumTurnProbability,
+      simultaneousRebootPileupByTurn: rebootPileup.byTurn,
+      opening: single.total,
+      later: 0
+    };
   }
 
   const routeLegs = getTrafficLegs(route);
@@ -15218,6 +16349,9 @@ function getExpectedTrafficBreakdown(
       nearbyTurnEpisodeControlRegisterEquivalentsCandidate: 0,
       nearbyTurnEpisodeControlScoreCandidate: 0,
       nearbyTurnEpisodeByTurn: [],
+      simultaneousRebootPileupEventMass: 0,
+      simultaneousRebootPileupMaximumTurnProbability: 0,
+      simultaneousRebootPileupByTurn: [],
       confidenceStart: 1, confidenceMean: 1, confidenceEnd: 1
     };
   }
@@ -15289,6 +16423,16 @@ function getExpectedTrafficBreakdown(
   const nearbyTurnEpisodeCandidate = summarizeNearbyTrafficTurnEpisodes(
     nearbyTurnEpisodeRegisters
   );
+  const confidenceMaps = getRENativeProductionTrafficConfidenceMaps(
+    tileMap,
+    route,
+    options
+  );
+  const rebootPileup = summarizeSimultaneousRebootPileupForecast(
+    route,
+    selectedRouteEntries,
+    confidenceMaps.confidenceByAbsoluteAction
+  );
 
   return {
     ranged: Number(ranged.toFixed(2)),
@@ -15316,6 +16460,10 @@ function getExpectedTrafficBreakdown(
     nearbyTurnEpisodeControlScoreCandidate:
       nearbyTurnEpisodeCandidate.episodeControlScore,
     nearbyTurnEpisodeByTurn: nearbyTurnEpisodeCandidate.byTurn,
+    simultaneousRebootPileupEventMass: rebootPileup.eventMass,
+    simultaneousRebootPileupMaximumTurnProbability:
+      rebootPileup.maximumTurnProbability,
+    simultaneousRebootPileupByTurn: rebootPileup.byTurn,
     opening: Number(opening.toFixed(2)),
     later: Number(later.toFixed(2)),
     confidenceStart: legBreakdowns[0]?.confidenceStart ?? 1,
@@ -15605,6 +16753,10 @@ function getTrafficRouteMixtureEffectiveREQuality(
     ledger?.observationalSubtotalWithMentalRE
   );
   if (!Number.isFinite(intrinsicRE)) return Infinity;
+  const homingMissileStrategicCreditRE = Math.max(
+    0,
+    Number(ledger?.homingMissileStrategicCreditRE) || 0
+  );
 
   const robotLaserDamageRE = Math.max(
     0,
@@ -15614,10 +16766,7 @@ function getTrafficRouteMixtureEffectiveREQuality(
     0,
     Number(traffic?.nearby) || 0
   ) / REGISTER_TEMPO_COST;
-  const residualRangedThreatRE = Math.max(
-    0,
-    Number(traffic?.residualRangedThreatScore) || 0
-  ) / REGISTER_TEMPO_COST;
+  const residualRangedThreatRE = 0; // v49ej: legacy ranged score diagnostic-only
   const competitionRE = Math.max(
     0,
     Number(traffic?.competition) || 0
@@ -15633,13 +16782,16 @@ function getTrafficRouteMixtureEffectiveREQuality(
       trafficMental.robotLaserEventMass;
     traffic.trafficAwarenessNonLaserEventMass =
       trafficMental.nonLaserEventMass;
+    traffic.trafficAwarenessRebootPileupEventMass =
+      trafficMental.rebootPileupEventMass;
     traffic.trafficAwarenessEventMass =
       trafficMental.totalTrafficEventMass;
     traffic.trafficAwarenessMentalByTurn = trafficMental.byTurn;
   }
 
   return Number((
-    intrinsicRE +
+    intrinsicRE -
+    homingMissileStrategicCreditRE +
     robotLaserDamageRE +
     nearbyControlRE +
     residualRangedThreatRE +
@@ -16998,6 +18150,7 @@ function selectFullCourseRoutesForStarts(tileMap, startAnalyses, flags, options 
   const robotLaserDamageTrafficScoreValues = [];
   const robotLaserDamageTrafficREValues = [];
   const residualRangedThreatTrafficValues = [];
+  const legacyResidualRangedThreatDiagnosticValues = [];
   const nearbyTrafficValues = [];
   const legacyNearbyTrafficValues = [];
   const authoritativeNearbyControlREValues = [];
@@ -17014,6 +18167,10 @@ function selectFullCourseRoutesForStarts(tileMap, startAnalyses, flags, options 
   const trafficAwarenessEventMassValues = [];
   const trafficAwarenessRobotLaserEventMassValues = [];
   const trafficAwarenessNonLaserEventMassValues = [];
+  const trafficAwarenessRebootPileupEventMassValues = [];
+  const simultaneousRebootPileupEventMassValues = [];
+  const simultaneousRebootPileupMaxProbabilityValues = [];
+  const simultaneousRebootPileupClogREValues = [];
   const confidenceMeanValues = [];
   const confidenceEndValues = [];
   const trafficByLegAccumulator = [];
@@ -17083,6 +18240,8 @@ function selectFullCourseRoutesForStarts(tileMap, startAnalyses, flags, options 
         trafficMental.robotLaserEventMass;
       traffic.trafficAwarenessNonLaserEventMass =
         trafficMental.nonLaserEventMass;
+      traffic.trafficAwarenessRebootPileupEventMass =
+        trafficMental.rebootPileupEventMass;
       traffic.trafficAwarenessEventMass =
         trafficMental.totalTrafficEventMass;
       traffic.trafficAwarenessMentalByTurn = trafficMental.byTurn;
@@ -17095,15 +18254,16 @@ function selectFullCourseRoutesForStarts(tileMap, startAnalyses, flags, options 
       // compare the legacy final traffic-switch objective against the authoritative
       // completed effective-RE language without adding another replay pass.
       const intrinsicRE = Number(candidateLedger?.observationalSubtotalWithMentalRE);
+      const homingMissileStrategicCreditRE = Math.max(
+        0,
+        Number(candidateLedger?.homingMissileStrategicCreditRE) || 0
+      );
       const robotLaserDamageRE = Math.max(
         0,
         Number(traffic?.damageEconomyRobotLaserIncrementRegisterEquivalents) || 0
       );
       const nearbyControlRE = Math.max(0, Number(traffic?.nearby) || 0) / REGISTER_TEMPO_COST;
-      const residualRangedThreatRE = Math.max(
-        0,
-        Number(traffic?.residualRangedThreatScore) || 0
-      ) / REGISTER_TEMPO_COST;
+      const residualRangedThreatRE = 0; // v49ej diagnostic-only legacy ranged score
       const competitionRE = Math.max(
         0,
         Number(traffic?.competition) || 0
@@ -17111,7 +18271,8 @@ function selectFullCourseRoutesForStarts(tileMap, startAnalyses, flags, options 
       const trafficMentalRE = Math.max(0, Number(trafficMental.incrementRE) || 0);
       const effectiveRE = Number.isFinite(intrinsicRE)
         ? Number((
-          intrinsicRE +
+          intrinsicRE -
+          homingMissileStrategicCreditRE +
           robotLaserDamageRE +
           nearbyControlRE +
           residualRangedThreatRE +
@@ -17131,6 +18292,9 @@ function selectFullCourseRoutesForStarts(tileMap, startAnalyses, flags, options 
         strategicGain: null,
         combinedValue: strategicValue + rawGap * 0.04,
         intrinsicRE: Number.isFinite(intrinsicRE) ? Number(intrinsicRE.toFixed(6)) : Infinity,
+        homingMissileStrategicCreditRE: Number(
+          homingMissileStrategicCreditRE.toFixed(6)
+        ),
         robotLaserDamageRE: Number(robotLaserDamageRE.toFixed(6)),
         nearbyControlRE: Number(nearbyControlRE.toFixed(6)),
         residualRangedThreatRE: Number(residualRangedThreatRE.toFixed(6)),
@@ -17177,6 +18341,9 @@ function selectFullCourseRoutesForStarts(tileMap, startAnalyses, flags, options 
       breakdown.damageEconomyRobotLaserIncrementRegisterEquivalents ?? 0
     );
     residualRangedThreatTrafficValues.push(breakdown.residualRangedThreatScore ?? 0);
+    legacyResidualRangedThreatDiagnosticValues.push(
+      breakdown.legacyResidualRangedThreatScoreDiagnostic ?? 0
+    );
     nearbyTrafficValues.push(breakdown.nearby ?? 0);
     legacyNearbyTrafficValues.push(
       breakdown.legacyNearby ?? breakdown.nearby ?? 0
@@ -17218,6 +18385,18 @@ function selectFullCourseRoutesForStarts(tileMap, startAnalyses, flags, options 
     );
     trafficAwarenessNonLaserEventMassValues.push(
       breakdown.trafficAwarenessNonLaserEventMass ?? 0
+    );
+    trafficAwarenessRebootPileupEventMassValues.push(
+      breakdown.trafficAwarenessRebootPileupEventMass ?? 0
+    );
+    simultaneousRebootPileupEventMassValues.push(
+      breakdown.simultaneousRebootPileupEventMass ?? 0
+    );
+    simultaneousRebootPileupMaxProbabilityValues.push(
+      breakdown.simultaneousRebootPileupMaximumTurnProbability ?? 0
+    );
+    simultaneousRebootPileupClogREValues.push(
+      breakdown.simultaneousRebootPileupClogRegisterEquivalents ?? 0
     );
     confidenceMeanValues.push(breakdown.confidenceMean ?? 1);
     confidenceEndValues.push(breakdown.confidenceEnd ?? 1);
@@ -17349,8 +18528,9 @@ function selectFullCourseRoutesForStarts(tileMap, startAnalyses, flags, options 
         fullCourseTrafficLegacyPenalty: breakdown.legacyTotal ?? breakdown.total,
         fullCourseTrafficLegacyRobotLaserDamageProxyScore:
           breakdown.legacyRobotLaserDamageProxyScore ?? 0,
-        fullCourseTrafficResidualRangedThreatScore:
-          breakdown.residualRangedThreatScore ?? 0,
+        fullCourseTrafficResidualRangedThreatScore: 0,
+        fullCourseTrafficLegacyResidualRangedThreatScoreDiagnostic:
+          breakdown.legacyResidualRangedThreatScoreDiagnostic ?? 0,
         fullCourseTrafficDamageEconomyRobotLaserIncrementRegisterEquivalents:
           breakdown.damageEconomyRobotLaserIncrementRegisterEquivalents ?? 0,
         fullCourseTrafficDamageEconomyRobotLaserIncrementScore:
@@ -17370,6 +18550,14 @@ function selectFullCourseRoutesForStarts(tileMap, startAnalyses, flags, options 
         fullCourseTrafficNearby: breakdown.nearby,
         fullCourseTrafficNearbyTurnEpisodeByTurn:
           breakdown.nearbyTurnEpisodeByTurn ?? [],
+        fullCourseTrafficSimultaneousRebootPileupEventMass:
+          breakdown.simultaneousRebootPileupEventMass ?? 0,
+        fullCourseTrafficSimultaneousRebootPileupMaximumTurnProbability:
+          breakdown.simultaneousRebootPileupMaximumTurnProbability ?? 0,
+        fullCourseTrafficSimultaneousRebootPileupClogRegisterEquivalents:
+          breakdown.simultaneousRebootPileupClogRegisterEquivalents ?? 0,
+        fullCourseTrafficSimultaneousRebootPileupByTurn:
+          breakdown.simultaneousRebootPileupByTurn ?? [],
         fullCourseTrafficAwarenessMentalRegisterEquivalents:
           breakdown.trafficAwarenessMentalRegisterEquivalents ?? 0,
         fullCourseTrafficAwarenessEventMass:
@@ -17378,6 +18566,8 @@ function selectFullCourseRoutesForStarts(tileMap, startAnalyses, flags, options 
           breakdown.trafficAwarenessRobotLaserEventMass ?? 0,
         fullCourseTrafficAwarenessNonLaserEventMass:
           breakdown.trafficAwarenessNonLaserEventMass ?? 0,
+        fullCourseTrafficAwarenessRebootPileupEventMass:
+          breakdown.trafficAwarenessRebootPileupEventMass ?? 0,
         fullCourseTrafficAwarenessMentalByTurn:
           breakdown.trafficAwarenessMentalByTurn ?? [],
         fullCourseTrafficCompetition: breakdown.competition,
@@ -17408,6 +18598,9 @@ function selectFullCourseRoutesForStarts(tileMap, startAnalyses, flags, options 
     averageRobotLaserDamageTrafficScore: Number(average(robotLaserDamageTrafficScoreValues).toFixed(2)),
     averageRobotLaserDamageTrafficRegisterEquivalents: Number(average(robotLaserDamageTrafficREValues).toFixed(3)),
     averageResidualRangedThreatTrafficPenalty: Number(average(residualRangedThreatTrafficValues).toFixed(2)),
+    averageLegacyResidualRangedThreatDiagnosticPenalty: Number(
+      average(legacyResidualRangedThreatDiagnosticValues).toFixed(2)
+    ),
     averageNearbyTrafficPenalty: Number(average(nearbyTrafficValues).toFixed(2)),
     averageLegacyNearbyTrafficPenalty: Number(
       average(legacyNearbyTrafficValues).toFixed(2)
@@ -17447,6 +18640,18 @@ function selectFullCourseRoutesForStarts(tileMap, startAnalyses, flags, options 
     ),
     averageTrafficAwarenessNonLaserEventMass: Number(
       average(trafficAwarenessNonLaserEventMassValues).toFixed(4)
+    ),
+    averageTrafficAwarenessRebootPileupEventMass: Number(
+      average(trafficAwarenessRebootPileupEventMassValues).toFixed(4)
+    ),
+    averageSimultaneousRebootPileupEventMass: Number(
+      average(simultaneousRebootPileupEventMassValues).toFixed(4)
+    ),
+    averageSimultaneousRebootPileupMaximumTurnProbability: Number(
+      average(simultaneousRebootPileupMaxProbabilityValues).toFixed(4)
+    ),
+    averageSimultaneousRebootPileupClogRegisterEquivalents: Number(
+      average(simultaneousRebootPileupClogREValues).toFixed(4)
     ),
     averageForecastConfidence: Number(average(confidenceMeanValues).toFixed(3)),
     minimumForecastConfidence: confidenceEndValues.length
@@ -17613,6 +18818,10 @@ function applyNormalFullCourseEffectiveREFairnessScores(
       );
     }
 
+    const homingMissileStrategicCreditRE = Math.max(
+      0,
+      Number(intrinsicLedger?.homingMissileStrategicCreditRE) || 0
+    );
     const robotLaserDamageRE = Math.max(
       0,
       Number(
@@ -17623,10 +18832,7 @@ function applyNormalFullCourseEffectiveREFairnessScores(
       0,
       Number(analysis.fullCourseTrafficNearby) || 0
     ) / REGISTER_TEMPO_COST;
-    const residualRangedThreatRE = Math.max(
-      0,
-      Number(analysis.fullCourseTrafficResidualRangedThreatScore) || 0
-    ) / REGISTER_TEMPO_COST;
+    const residualRangedThreatRE = 0; // v49ej diagnostic-only legacy ranged score
     const competitionRE = Math.max(
       0,
       Number(analysis.fullCourseTrafficCompetition) || 0
@@ -17640,7 +18846,8 @@ function applyNormalFullCourseEffectiveREFairnessScores(
 
     const effectiveRE = Number.isFinite(intrinsicRE)
       ? (
-        intrinsicRE +
+        intrinsicRE -
+        homingMissileStrategicCreditRE +
         robotLaserDamageRE +
         nearbyControlRE +
         residualRangedThreatRE +
@@ -17664,6 +18871,9 @@ function applyNormalFullCourseEffectiveREFairnessScores(
       intrinsicRE: Number.isFinite(intrinsicRE)
         ? Number(intrinsicRE.toFixed(4))
         : null,
+      homingMissileStrategicCreditRE: Number(
+        homingMissileStrategicCreditRE.toFixed(4)
+      ),
       robotLaserDamageRE: Number(robotLaserDamageRE.toFixed(4)),
       nearbyControlRE: Number(nearbyControlRE.toFixed(4)),
       residualRangedThreatRE: Number(residualRangedThreatRE.toFixed(4)),
@@ -17749,12 +18959,18 @@ function getProgramHistoryWindow(history) {
 //   dominance key merely because their speculative usage differed.
 // - Again availability and the immediately previous action remain explicit because
 //   they can change whether the very next register is playable.
-function getProgramCacheSignature(history, absoluteActions) {
+function getProgramCacheSignature(history, absoluteActions, options = {}) {
   // Exact rolling two-program identity, including depletion of the common four-copy
-  // cards.  The allocator already interns this complete compatible-pair state, so
-  // cache/dominance keys can use the numeric id without rebuilding a second
-  // lower-fidelity signature.
-  return `q${getRollingProgramResourceContext(history, absoluteActions).pairSignatureId}`;
+  // cards. The active programming-variant model is part of the key because Less
+  // Foreshadowing changes carried depletion and Factory Rejects/Shared Deck change
+  // scarcity evaluation even when the physical history is identical.
+  return `${getProgramCardModelSignature(options)}|q${getRollingProgramResourceContext(
+    history,
+    absoluteActions,
+    null,
+    options.programHistoryAbsoluteActions,
+    options
+  ).pairSignatureId}`;
 }
 
 function getDynamicGoalCachePhase(dynamicGoal, absoluteActions) {
@@ -18019,9 +19235,9 @@ function getEstimatedProgramDemandStep(
   const absolute = Math.max(0, Math.floor(Number(absoluteActions) || 0));
   const phase = absolute % REGISTER_COUNT;
   const nextCurrentDemandCode = addApproxProgramDemandUse(currentDemandCode, actionId);
-  const previousCounts = getApproxProgramDemandCounts(
-    previousDemandCode,
-    previousAgainUsed
+  const previousCounts = getProgramCardEffectivePreviousCounts(
+    getApproxProgramDemandCounts(previousDemandCode, previousAgainUsed),
+    options
   );
   const currentCounts = getApproxProgramDemandCounts(
     currentDemandCode,
@@ -18037,8 +19253,9 @@ function getEstimatedProgramDemandStep(
       options
     );
 
-  const rollingAgainUsed = Math.max(0, Number(previousAgainUsed) || 0) +
-    Math.max(0, Number(currentAgainUsed) || 0);
+  const rollingAgainUsed = (getProgramCardModelProfile(options).previousTurnDepletionActive
+    ? Math.max(0, Number(previousAgainUsed) || 0)
+    : 0) + Math.max(0, Number(currentAgainUsed) || 0);
   const canApproximateAgain = (
     phase > 0 &&
     previousActionId === actionId &&
@@ -18075,9 +19292,10 @@ function getEstimatedProgramDemandStep(
   const nextAbsoluteActions = absolute + 1;
 
   if (nextAbsoluteActions % REGISTER_COUNT === 0) {
-    nextPreviousDemandCode = nextDemandCode;
+    const keepPreviousDepletion = getProgramCardModelProfile(options).previousTurnDepletionActive;
+    nextPreviousDemandCode = keepPreviousDepletion ? nextDemandCode : 0;
     nextDemandCode = 0;
-    nextPreviousAgainUsed = nextCurrentAgainUsed;
+    nextPreviousAgainUsed = keepPreviousDepletion ? nextCurrentAgainUsed : 0;
     nextCurrentAgainUsed = 0;
     nextPreviousActionId = null;
   }
@@ -18096,17 +19314,18 @@ function getEstimatedProgramDemandStep(
 }
 
 
-function closeEstimatedProgramDemandForEndedTurn(step = {}) {
+function closeEstimatedProgramDemandForEndedTurn(step = {}, options = {}) {
   const currentDemandCode = Math.max(0, Number(step.demandCode) || 0);
   const currentAgainUsed = Math.max(0, Number(step.currentAgainUsed) || 0);
   const currentScarceCode = Math.max(0, Number(step.currentScarceCode) || 0);
+  const keepPreviousDepletion = getProgramCardModelProfile(options).previousTurnDepletionActive;
   return {
     ...step,
-    previousDemandCode: currentDemandCode,
+    previousDemandCode: keepPreviousDepletion ? currentDemandCode : 0,
     demandCode: 0,
-    previousAgainUsed: currentAgainUsed,
+    previousAgainUsed: keepPreviousDepletion ? currentAgainUsed : 0,
     currentAgainUsed: 0,
-    previousScarceCode: currentScarceCode,
+    previousScarceCode: keepPreviousDepletion ? currentScarceCode : 0,
     currentScarceCode: 0,
     previousActionId: null
   };
@@ -18183,7 +19402,7 @@ function walkEstimatedProgramDemand(
     penalty += step.penalty;
     const executedAbsoluteAction = workingAbsoluteActions + 1;
     const rebooted = Boolean(transitions?.[index]?.rebooted);
-    if (rebooted) step = closeEstimatedProgramDemandForEndedTurn(step);
+    if (rebooted) step = closeEstimatedProgramDemandForEndedTurn(step, options);
     previousDemandCode = step.previousDemandCode;
     demandCode = step.demandCode;
     previousAgainUsed = step.previousAgainUsed;
@@ -18222,14 +19441,16 @@ function scoreEstimatedProgramDemand(
   ).penalty;
 }
 
-function finalizeApproxProgramDemandOption(option, absoluteActions, actionId) {
+function finalizeApproxProgramDemandOption(option, absoluteActions, actionId, options = {}) {
   const nextAbsoluteActions = Math.max(0, Math.floor(Number(absoluteActions) || 0)) + 1;
   if (nextAbsoluteActions % REGISTER_COUNT !== 0) {
     return { ...option, previousActionId: actionId };
   }
   return {
     ...option,
-    previousScarceCode: option.currentScarceCode,
+    previousScarceCode: getProgramCardModelProfile(options).previousTurnDepletionActive
+      ? option.currentScarceCode
+      : 0,
     currentScarceCode: 0,
     demandCode: 0,
     previousActionId: null
@@ -18257,7 +19478,9 @@ function getApproxProgramDemandOptions(
   const optionsOut = [];
 
   if (copies <= 2) {
-    const previousUses = getApproxRollingHardCount(previousScarceCode, actionId);
+    const previousUses = getProgramCardModelProfile(options).previousTurnDepletionActive
+      ? getApproxRollingHardCount(previousScarceCode, actionId)
+      : 0;
     const currentNaturalUses = getApproxRollingHardCount(currentScarceCode, actionId);
     if (previousUses + currentNaturalUses < copies) {
       const nextCurrentScarceCode = addApproxRollingHardUse(currentScarceCode, actionId);
@@ -18274,7 +19497,7 @@ function getApproxProgramDemandOptions(
           currentScarceCode: nextCurrentScarceCode,
           penalty,
           approximateProgramCard: actionId
-        }, absoluteActions, actionId));
+        }, absoluteActions, actionId, options));
       }
     }
   } else {
@@ -18294,12 +19517,14 @@ function getApproxProgramDemandOptions(
         currentScarceCode,
         penalty,
         approximateProgramCard: actionId
-      }, absoluteActions, actionId));
+      }, absoluteActions, actionId, options));
     }
   }
 
   const phase = Math.max(0, Math.floor(Number(absoluteActions) || 0)) % REGISTER_COUNT;
-  const previousAgain = getApproxRollingHardCount(previousScarceCode, "AGAIN");
+  const previousAgain = getProgramCardModelProfile(options).previousTurnDepletionActive
+    ? getApproxRollingHardCount(previousScarceCode, "AGAIN")
+    : 0;
   if (
     phase > 0 &&
     previousActionId === actionId &&
@@ -18321,7 +19546,7 @@ function getApproxProgramDemandOptions(
         currentScarceCode: nextCurrentScarceCode,
         penalty,
         approximateProgramCard: "AGAIN"
-      }, absoluteActions, actionId));
+      }, absoluteActions, actionId, options));
     }
   }
 
@@ -18384,7 +19609,7 @@ function getContextualLegCacheKey(
     `u${getContextualForecastBand(context, options)}`,
     stateKey(context.state),
     `r${context.absoluteActions % REGISTER_COUNT}`,
-    getContextualProgramCacheSignature(context),
+    getContextualProgramCacheSignature(context, options),
     !fastCardState && isRouteAwareBatteryScoringActive(options)
       ? `a${context.absoluteActions}`
       : null,
@@ -18443,14 +19668,14 @@ function getContextualSharedLegCatalogueKey(
   ].join("|");
 }
 
-function getContextualProgramCacheSignature(context) {
+function getContextualProgramCacheSignature(context, options = {}) {
   if (context?.programCardState) {
     // Leg-level cache lookup happens once per context, not once per expansion.
     // Keep an explicit prefix for collision safety/readability; the expanded-state
     // hot path is numeric.
-    return `c${getCompactProgramCardStateCode(context.programCardState)}`;
+    return `${getProgramCardModelSignature(options)}|c${getCompactProgramCardStateCode(context.programCardState)}`;
   }
-  return getProgramCacheSignature(context?.history, context?.absoluteActions);
+  return getProgramCacheSignature(context?.history, context?.absoluteActions, options);
 }
 
 function routeReachesContextualGoal(route, goal, dynamicGoal) {
@@ -18464,14 +19689,27 @@ function routeReachesContextualGoal(route, goal, dynamicGoal) {
   );
 }
 
-function createContextualQueueEntry(route, goal, dynamicGoal) {
+function createContextualQueueEntry(
+  route,
+  goal,
+  dynamicGoal,
+  tileMap = null,
+  options = {}
+) {
   const target = (
     getDynamicGoalPosition(dynamicGoal, route.absoluteActions) ??
     goal
   );
+  const missileGuidanceBonus = getHomingMissileCheapSearchGuidanceBonus(
+    tileMap,
+    route.finalState,
+    target,
+    options
+  );
   return {
     ...route,
-    estimate: route.baseCost + heuristic(route.finalState, target) * 5
+    homingMissileSearchGuidanceBonus: Number(missileGuidanceBonus.toFixed(3)),
+    estimate: route.baseCost + heuristic(route.finalState, target) * 5 - missileGuidanceBonus
   };
 }
 
@@ -18969,7 +20207,7 @@ function* enumeratePhysicalTimingLegTemplatesSteps(
   // do not provide a generation context retain v48zh's search-local behavior.
   const cardMemoRuleSignature = String(
     options.contextualEstimatedCardTransitionMemoRuleSignature ??
-    `literal-hg-v48x|lessForeshadowing:${options.lessForeshadowing ? 1 : 0}`
+    `literal-hg-v49ek|${getProgramCardModelSignature(options)}`
   );
   const generationCardMemoContext =
     options.contextualEstimatedCardTransitionMemoContext &&
@@ -19124,7 +20362,7 @@ function* enumeratePhysicalTimingLegTemplatesSteps(
     }
     profile.estimatedForecastMemoMisses += 1;
     const beforeUnionPenalty =
-      getEstimatedCardFrontierUnionAvailabilityPenalty(canonicalFrontier);
+      getEstimatedCardFrontierUnionAvailabilityPenalty(canonicalFrontier, options);
     const rawUnionFrontier = [];
     const next = new Map();
     for (const entry of canonicalFrontier) {
@@ -19164,15 +20402,12 @@ function* enumeratePhysicalTimingLegTemplatesSteps(
       .sort((left, right) => left.penalty - right.penalty)
       .slice(0, ESTIMATED_CARD_FORECAST_FRONTIER_LIMIT);
     const afterUnionPenalty =
-      getEstimatedCardFrontierUnionAvailabilityPenalty(rawUnionFrontier);
-    const lessForeshadowingFactor = options.lessForeshadowing ? 0.72 : 1;
+      getEstimatedCardFrontierUnionAvailabilityPenalty(rawUnionFrontier, options);
     const unionPenaltyDelta = Number.isFinite(afterUnionPenalty)
-      ? Number((
-        Math.max(
-          0,
-          afterUnionPenalty -
-            (Number.isFinite(beforeUnionPenalty) ? beforeUnionPenalty : 0)
-        ) * lessForeshadowingFactor
+      ? Number(Math.max(
+        0,
+        afterUnionPenalty -
+          (Number.isFinite(beforeUnionPenalty) ? beforeUnionPenalty : 0)
       ).toFixed(3))
       : Infinity;
     const result = {
@@ -19192,7 +20427,7 @@ function* enumeratePhysicalTimingLegTemplatesSteps(
     const cached = estimatedForecastCloseCache.get(frontierId);
     if (cached) return cached;
     const closed = canonicalizeEstimatedForecastFrontier(
-      closeEstimatedCardForecastFrontierForEndedTurn(canonicalFrontier)
+      closeEstimatedCardForecastFrontierForEndedTurn(canonicalFrontier, options)
     );
     estimatedForecastCloseCache.set(frontierId, closed);
     return closed;
@@ -19281,7 +20516,7 @@ function* enumeratePhysicalTimingLegTemplatesSteps(
       : getApproxProgramDemandStateCode(0, 0, 0, null);
     setNestedBestCost(bestCostByState, physicalKey, demandKey, 0);
     queue.push({
-      ...createContextualQueueEntry(root, goal, dynamicGoal),
+      ...createContextualQueueEntry(root, goal, dynamicGoal, tileMap, options),
       searchPhysicalKey: physicalKey,
       searchDemandKey: demandKey
     });
@@ -19522,7 +20757,7 @@ function* enumeratePhysicalTimingLegTemplatesSteps(
       );
       Object.assign(template, mental);
       template.score = Number((
-        template.score + mental.searchIntrinsicMentalScore
+        template.score + getCompletedRoutePostbuildScoreAdjustment(mental)
       ).toFixed(2));
       const templatePathKey = options.contextualReturnAllEstimatedPaths
         ? getEstimatedRouteIdentity(template)
@@ -19678,7 +20913,7 @@ function* enumeratePhysicalTimingLegTemplatesSteps(
             ? getRebootEndedAbsoluteActions(executedAbsoluteAction)
             : executedAbsoluteAction;
           const finalizedDemandStep = transition.rebooted
-            ? closeEstimatedProgramDemandForEndedTurn(demandStep)
+            ? closeEstimatedProgramDemandForEndedTurn(demandStep, options)
             : demandStep;
           const finalizedForecastFrontier = transition.rebooted && forecastStep.feasible
             ? getMemoizedClosedEstimatedForecastFrontier(forecastStep.frontier)
@@ -19864,7 +21099,7 @@ function* enumeratePhysicalTimingLegTemplatesSteps(
 
           blockStartedAt = profileNow();
           queue.push({
-            ...createContextualQueueEntry(nextRoute, goal, dynamicGoal),
+            ...createContextualQueueEntry(nextRoute, goal, dynamicGoal, tileMap, options),
             searchPhysicalKey: nextPhysicalKey,
             searchDemandKey: nextDemandKey
           });
@@ -20256,7 +21491,8 @@ function enumerateContextualLegRoutes(
       ? { ...context.programCardState }
       : getCompactProgramCardStateFromHistory(
         initialHistory,
-        context.absoluteActions
+        context.absoluteActions,
+        options
       );
     if (!initialProgramCardState?.feasible) {
       continue;
@@ -20313,7 +21549,7 @@ function enumerateContextualLegRoutes(
     blockStartedAt = profileNow();
     setContextualBestCost(bestCostByState, keyParts, 0);
     queue.push({
-      ...createContextualQueueEntry(root, goal, dynamicGoal),
+      ...createContextualQueueEntry(root, goal, dynamicGoal, tileMap, options),
       searchPhysicalGoalCode: keyParts.physicalGoalCode,
       searchCardStateCode: keyParts.cardStateCode
     });
@@ -20504,7 +21740,7 @@ function enumerateContextualLegRoutes(
       );
       Object.assign(route, mental);
       route.score = Number((
-        route.score + mental.searchIntrinsicMentalScore
+        route.score + getCompletedRoutePostbuildScoreAdjustment(mental)
       ).toFixed(2));
 
       profile.completedGoals += 1;
@@ -20649,7 +21885,7 @@ function enumerateContextualLegRoutes(
             ? getRebootRoutePenalty(executedAbsoluteAction)
             : (transition.rebootPenalty || 0);
           const nextProgramCardState = transition.rebooted
-            ? closeCompactProgramCardStateForEndedTurn(cardOption.state)
+            ? closeCompactProgramCardStateForEndedTurn(cardOption.state, options)
             : cardOption.state;
           profile.destinationBuildMs += profileNow() - blockStartedAt;
 
@@ -20774,7 +22010,7 @@ function enumerateContextualLegRoutes(
 
           blockStartedAt = profileNow();
           queue.push({
-            ...createContextualQueueEntry(nextRoute, goal, dynamicGoal),
+            ...createContextualQueueEntry(nextRoute, goal, dynamicGoal, tileMap, options),
             searchPhysicalGoalCode: nextParts.physicalGoalCode,
             searchCardStateCode: nextParts.cardStateCode
           });
@@ -20956,7 +22192,8 @@ function scoreContextualCardSequence(
     ? { ...initialProgramCardState }
     : getCompactProgramCardStateFromHistory(
       workingHistory,
-      absoluteActions
+      absoluteActions,
+      options
     );
   const compact = scoreCompactProgramCardSequence(
     initialCardState,
@@ -21122,7 +22359,7 @@ function rebaseContextualCachedRoute(
   const oldProgramPlausibilityPenalty = route.programPlausibilityPenalty || 0;
   const oldApproximateCardPenalty = route.approximateCardPlausibilityPenalty || 0;
   const oldEconomyReward = route.routeEnergyEconomyRewardScore || 0;
-  const oldMentalScore = route.searchIntrinsicMentalScore || 0;
+  const oldMentalScore = getCompletedRoutePostbuildScoreAdjustment(route);
   const movingTarget = route.movingTarget
     ? {
       ...route.movingTarget,
@@ -21170,7 +22407,7 @@ function rebaseContextualCachedRoute(
     cardState.programPlausibilityPenalty +
     oldEconomyReward -
     oldMentalScore +
-    mental.searchIntrinsicMentalScore -
+    getCompletedRoutePostbuildScoreAdjustment(mental) -
     economy.routeEnergyEconomyRewardScore
   ).toFixed(2));
 
@@ -21227,6 +22464,20 @@ function buildEstimatedPhysicalRouteFromTransitions(
   let searchIntrinsicMentalRE = 0;
   let searchIntrinsicMentalScore = 0;
   let searchIntrinsicMentalEventWeight = 0;
+  let homingMissileActivationCount = 0;
+  const homingMissileActivatedSpacesThisTurn = new Set(
+    Array.isArray(options.searchHomingMissileActivatedSpacesCurrentTurn)
+      ? options.searchHomingMissileActivatedSpacesCurrentTurn
+      : []
+  );
+  const variantMentalEventIdsThisTurn = new Set(
+    Array.isArray(options.searchVariantMentalEventIdsCurrentTurn)
+      ? options.searchVariantMentalEventIdsCurrentTurn
+      : []
+  );
+  let activeTurnNumber = startAbsolute > 0
+    ? Math.floor((startAbsolute - 1) / REGISTER_COUNT) + 1
+    : 1;
 
   let elapsedAbsoluteActions = startAbsolute;
   safeTransitions.forEach((transition, transitionIndex) => {
@@ -21246,14 +22497,30 @@ function buildEstimatedPhysicalRouteFromTransitions(
     );
     const checkpointHit = options.searchMentalCheckpointAtEnd !== false &&
       transitionIndex === safeTransitions.length - 1;
+    const turnNumber = Math.floor(
+      (Math.max(1, executedAbsoluteAction) - 1) / REGISTER_COUNT
+    ) + 1;
+    if (turnNumber !== activeTurnNumber) {
+      homingMissileActivatedSpacesThisTurn.clear();
+      variantMentalEventIdsThisTurn.clear();
+      activeTurnNumber = turnNumber;
+    }
     const mentalStep = getSearchIntrinsicMentalTransitionStep(
       tileMap,
       transition,
       executedAbsoluteAction,
       mentalEventCount,
       checkpointHit,
-      options
+      options,
+      {
+        homingMissileActivatedSpacesThisTurn,
+        variantMentalEventIdsThisTurn
+      }
     );
+    const stepHomingActivations = (mentalStep.events || []).filter(
+      (event) => event?.type === "homing-missile-target-choice"
+    ).length;
+    homingMissileActivationCount += stepHomingActivations;
     mentalEventCount = mentalStep.nextEventCount;
     searchIntrinsicMentalRE += mentalStep.deltaRE;
     searchIntrinsicMentalScore += mentalStep.score;
@@ -21267,7 +22534,12 @@ function buildEstimatedPhysicalRouteFromTransitions(
       (Number(transition?.hazard) || 0) +
       transitionRebootPenalty +
       actionPenalty +
-      mentalStep.score;
+      mentalStep.score -
+      stepHomingActivations * HOMING_MISSILE_STRATEGIC_CREDIT_RE * REGISTER_TEMPO_COST;
+    if (mentalStep.closesTurn) {
+      homingMissileActivatedSpacesThisTurn.clear();
+      variantMentalEventIdsThisTurn.clear();
+    }
     elapsedAbsoluteActions = transition?.rebooted
       ? getRebootEndedAbsoluteActions(executedAbsoluteAction)
       : executedAbsoluteAction;
@@ -21327,6 +22599,23 @@ function buildEstimatedPhysicalRouteFromTransitions(
     ),
     searchIntrinsicMentalEventCountStart: Number(mentalEventCountStart.toFixed(4)),
     searchIntrinsicMentalEventCountEnd: Number(mentalEventCount.toFixed(4)),
+    searchHomingMissileActivatedSpacesCurrentTurn:
+      [...homingMissileActivatedSpacesThisTurn],
+    homingMissileActivationCount,
+    homingMissileStrategicCreditRE: Number(
+      (homingMissileActivationCount * HOMING_MISSILE_STRATEGIC_CREDIT_RE).toFixed(4)
+    ),
+    homingMissileStrategicCreditScore: Number(
+      (homingMissileActivationCount * HOMING_MISSILE_STRATEGIC_CREDIT_RE *
+        REGISTER_TEMPO_COST).toFixed(2)
+    ),
+    homingMissileStrategicCreditModel:
+      "2x-neutral-damage-economy-one-damage-reference-per-turn-per-space-activation-v49ej",
+    homingMissileOneDamageReferenceRE: Number(
+      HOMING_MISSILE_ONE_DAMAGE_REFERENCE_RE.toFixed(4)
+    ),
+    homingMissileStrategicDamageEquivalents:
+      HOMING_MISSILE_STRATEGIC_DAMAGE_EQUIVALENTS,
     searchIntrinsicMentalModel: 'rounded-turn-events-quadratic-after-7-v49bc-postbuild',
     dynamicArchivePointStart: options.dynamicArchivePointStart
       ? { ...options.dynamicArchivePointStart }
@@ -21512,7 +22801,9 @@ function replayDynamicArchivingEstimatedLegPhysics(
       dynamicArchivePointStart,
       dynamicArchivePointEnd: dynamicArchivePoint,
       searchIntrinsicMentalEventCountStart:
-        context.searchIntrinsicMentalEventCountCurrentTurn ?? 0
+        context.searchIntrinsicMentalEventCountCurrentTurn ?? 0,
+      searchHomingMissileActivatedSpacesCurrentTurn:
+        context.searchHomingMissileActivatedSpacesCurrentTurn ?? []
     }
   );
   const approximateCardPenalty = Math.max(
@@ -21634,9 +22925,9 @@ function realizeEstimatedLegsWithCardSolution(
     const oldEconomyReward = Number(
       estimatedLeg?.routeEnergyEconomyRewardScore
     ) || 0;
-    const oldMentalScore = Number(
-      estimatedLeg?.searchIntrinsicMentalScore
-    ) || 0;
+    const oldMentalScore = getCompletedRoutePostbuildScoreAdjustment(
+      estimatedLeg
+    );
     const physicalScore = dynamicPhysicalReplay
       ? dynamicPhysicalReplay.physicalScore
       : (
@@ -21719,7 +23010,7 @@ function realizeEstimatedLegsWithCardSolution(
         physicalScore +
         cardAvailabilityPenalty +
         programPlausibilityPenalty +
-        mental.searchIntrinsicMentalScore -
+        getCompletedRoutePostbuildScoreAdjustment(mental) -
         economy.routeEnergyEconomyRewardScore
       ).toFixed(2))
     };
@@ -21779,6 +23070,11 @@ function getContextAfterLeg(
     searchIntrinsicMentalEventCountCurrentTurn: Math.max(
       0, Number(route.searchIntrinsicMentalEventCountEnd) || 0
     ),
+    searchHomingMissileActivatedSpacesCurrentTurn: Array.isArray(
+      route.searchHomingMissileActivatedSpacesCurrentTurn
+    )
+      ? [...route.searchHomingMissileActivatedSpacesCurrentTurn]
+      : [],
     upgradeCardUnits: null,
     hazardExposure: Number.isFinite(Number(route.contextualHazardExposure))
       ? Number(route.contextualHazardExposure)
@@ -21926,6 +23222,9 @@ function stitchContextualLegs(legs, flags) {
   let cumulativeSearchIntrinsicMentalRE = 0;
   let cumulativeSearchIntrinsicMentalScore = 0;
   let cumulativeSearchIntrinsicMentalEventWeight = 0;
+  let cumulativeHomingMissileActivationCount = 0;
+  let cumulativeHomingMissileStrategicCreditRE = 0;
+  let cumulativeHomingMissileStrategicCreditScore = 0;
   const checkpointHits = [];
 
   legs.forEach((leg, legIndex) => {
@@ -21946,6 +23245,12 @@ function stitchContextualLegs(legs, flags) {
     cumulativeSearchIntrinsicMentalScore += leg.searchIntrinsicMentalScore ?? 0;
     cumulativeSearchIntrinsicMentalEventWeight +=
       leg.searchIntrinsicMentalEventWeight ?? 0;
+    cumulativeHomingMissileActivationCount +=
+      Math.max(0, Number(leg.homingMissileActivationCount) || 0);
+    cumulativeHomingMissileStrategicCreditRE +=
+      Math.max(0, Number(leg.homingMissileStrategicCreditRE) || 0);
+    cumulativeHomingMissileStrategicCreditScore +=
+      Math.max(0, Number(leg.homingMissileStrategicCreditScore) || 0);
     const flag = flags[legIndex];
 
     checkpointHits.push({
@@ -22022,6 +23327,25 @@ function stitchContextualLegs(legs, flags) {
       legs[0].searchIntrinsicMentalEventCountStart ?? 0,
     searchIntrinsicMentalEventCountEnd:
       legs.at(-1)?.searchIntrinsicMentalEventCountEnd ?? 0,
+    searchHomingMissileActivatedSpacesCurrentTurn: Array.isArray(
+      legs.at(-1)?.searchHomingMissileActivatedSpacesCurrentTurn
+    )
+      ? [...legs.at(-1).searchHomingMissileActivatedSpacesCurrentTurn]
+      : [],
+    homingMissileActivationCount: cumulativeHomingMissileActivationCount,
+    homingMissileStrategicCreditRE: Number(
+      cumulativeHomingMissileStrategicCreditRE.toFixed(4)
+    ),
+    homingMissileStrategicCreditScore: Number(
+      cumulativeHomingMissileStrategicCreditScore.toFixed(2)
+    ),
+    homingMissileStrategicCreditModel:
+      "2x-neutral-damage-economy-one-damage-reference-per-turn-per-space-activation-v49ej",
+    homingMissileOneDamageReferenceRE: Number(
+      HOMING_MISSILE_ONE_DAMAGE_REFERENCE_RE.toFixed(4)
+    ),
+    homingMissileStrategicDamageEquivalents:
+      HOMING_MISSILE_STRATEGIC_DAMAGE_EQUIVALENTS,
     searchIntrinsicMentalModel: 'rounded-turn-events-quadratic-after-7-v49bc-postbuild',
     routeEnergyShadowReserveStart: legs[0].routeEnergyShadowReserveStart ?? null,
     routeEnergyShadowReserveEnd: legs.at(-1)?.routeEnergyShadowReserveEnd ?? null,
@@ -22033,7 +23357,7 @@ function stitchContextualLegs(legs, flags) {
   };
 }
 
-function summarizeRouteAgainUsage(route) {
+function summarizeRouteAgainUsage(route, options = {}) {
   const actions = Array.isArray(route?.actionHistory)
     ? route.actionHistory
     : [];
@@ -22121,34 +23445,36 @@ function summarizeRouteAgainUsage(route) {
     }
   });
 
-  if (literalCards) {
-    for (let turnIndex = 1; turnIndex < cardPrograms.length; turnIndex += 1) {
-      if (programTurnIds[turnIndex] !== programTurnIds[turnIndex - 1] + 1) continue;
-      const previous = cardPrograms[turnIndex - 1];
-      const current = cardPrograms[turnIndex];
-      const combined = new Map();
-      [...previous, ...current].forEach((cardId) => {
-        combined.set(cardId, (combined.get(cardId) || 0) + 1);
-      });
-      const violation = COMPACT_PROGRAM_RESOURCE_IDS.some((resourceId) => {
-        const limit = resourceId === "AGAIN"
-          ? AGAIN_CARD_COUNT
-          : (PROGRAM_CARD_COUNTS.get(resourceId) || 0);
-        return (combined.get(resourceId) || 0) > limit;
-      });
-      if (violation) rollingWindowViolations += 1;
-    }
-  } else {
-    for (let turnIndex = 1; turnIndex < programs.length; turnIndex += 1) {
-      if (programTurnIds[turnIndex] !== programTurnIds[turnIndex - 1] + 1) continue;
-      const previousStates = getLiteralProgramResourceStates(programs[turnIndex - 1]);
-      const currentStates = getLiteralProgramResourceStates(programs[turnIndex]);
-      const compatible = previousStates.some((previousState) => (
-        currentStates.some((currentState) => (
-          areRollingProgramResourceStatesCompatible(previousState, currentState)
-        ))
-      ));
-      if (!compatible) rollingWindowViolations += 1;
+  if (getProgramCardModelProfile(options).previousTurnDepletionActive) {
+    if (literalCards) {
+      for (let turnIndex = 1; turnIndex < cardPrograms.length; turnIndex += 1) {
+        if (programTurnIds[turnIndex] !== programTurnIds[turnIndex - 1] + 1) continue;
+        const previous = cardPrograms[turnIndex - 1];
+        const current = cardPrograms[turnIndex];
+        const combined = new Map();
+        [...previous, ...current].forEach((cardId) => {
+          combined.set(cardId, (combined.get(cardId) || 0) + 1);
+        });
+        const violation = COMPACT_PROGRAM_RESOURCE_IDS.some((resourceId) => {
+          const limit = resourceId === "AGAIN"
+            ? AGAIN_CARD_COUNT
+            : (PROGRAM_CARD_COUNTS.get(resourceId) || 0);
+          return (combined.get(resourceId) || 0) > limit;
+        });
+        if (violation) rollingWindowViolations += 1;
+      }
+    } else {
+      for (let turnIndex = 1; turnIndex < programs.length; turnIndex += 1) {
+        if (programTurnIds[turnIndex] !== programTurnIds[turnIndex - 1] + 1) continue;
+        const previousStates = getLiteralProgramResourceStates(programs[turnIndex - 1]);
+        const currentStates = getLiteralProgramResourceStates(programs[turnIndex]);
+        const compatible = previousStates.some((previousState) => (
+          currentStates.some((currentState) => (
+            areRollingProgramResourceStatesCompatible(previousState, currentState)
+          ))
+        ));
+        if (!compatible) rollingWindowViolations += 1;
+      }
     }
   }
 
@@ -22168,14 +23494,15 @@ function summarizeRouteAgainUsage(route) {
   };
 }
 
-function getCheapBestLiteralProgramAvailabilityProbability(actionIds = []) {
+function getCheapBestLiteralProgramAvailabilityProbability(actionIds = [], options = {}) {
   const zero = Array(PROGRAM_CHEAP_RESOURCE_IDS.length).fill(0);
   const states = getLiteralProgramResourceStates(actionIds);
   if (!states.length) return 0;
   return Math.max(...states.map((state) => (
     getCheapProgramLiteralAvailabilityProbability(
       zero,
-      getProgramResourceStateCounts(state)
+      getProgramResourceStateCounts(state),
+      options
     )
   )));
 }
@@ -22504,10 +23831,11 @@ export function summarizeTargetedSameRegisterCardPressureSearch(
 }
 
 function summarizeSelectedProgrammingScarcity(startAnalyses = [], options = {}) {
+  const cardModelProfile = getProgramCardModelProfile(options);
   const discoveredCandidateCardPressure =
     summarizeDiscoveredCandidateCardPressure(startAnalyses);
   const routeSummaries = (startAnalyses || [])
-    .map((analysis) => summarizeRouteAgainUsage(analysis?.fullCourseRoute))
+    .map((analysis) => summarizeRouteAgainUsage(analysis?.fullCourseRoute, options))
     .filter(Boolean);
   const routesUsingAgain = routeSummaries.filter((entry) => entry.againTurns > 0).length;
   const routesWithConsecutiveAgain = routeSummaries.filter(
@@ -22528,8 +23856,8 @@ function summarizeSelectedProgrammingScarcity(startAnalyses = [], options = {}) 
   const uncompressedSelectedRouteAvailabilityPenalties =
     selectedRouteAvailabilityPenalties
       .map((value) => (
-        PROGRAM_CARD_SCARCITY_ADAPTABILITY_FACTOR > 0
-          ? value / PROGRAM_CARD_SCARCITY_ADAPTABILITY_FACTOR
+        cardModelProfile.adaptabilityFactor > 0
+          ? value / cardModelProfile.adaptabilityFactor
           : value
       ))
       .filter(Number.isFinite);
@@ -22566,11 +23894,27 @@ function summarizeSelectedProgrammingScarcity(startAnalyses = [], options = {}) 
     ),
     routesWithConsecutiveAgain,
     exactHypergeometricAvailability: true,
-    handSize: PROGRAM_EXACT_HAND_SIZE,
-    cardScarcityAdaptabilityCompressionActive: true,
-    cardScarcityAdaptabilityFactor: PROGRAM_CARD_SCARCITY_ADAPTABILITY_FACTOR,
+    handSize: cardModelProfile.handSize,
+    cardScarcityAdaptabilityScalingActive: true,
+    // Compatibility alias retained for Dev/report consumers written before alpha
+    // was allowed to exceed 1.0 under Shared Deck. This is scaling, not always compression.
+    cardScarcityAdaptabilityCompressionActive: cardModelProfile.adaptabilityFactor < 1,
+    cardScarcityAdaptabilityFactor: cardModelProfile.adaptabilityFactor,
+    cardScarcityBaseAdaptabilityFactor: cardModelProfile.baseAlpha,
+    sharedDeckAdaptabilityIncrement: cardModelProfile.sharedDeckAlphaIncrement,
+    sharedDeckAlphaIncrementPerAdditionalPlayer: SHARED_DECK_ALPHA_INCREMENT_PER_ADDITIONAL_PLAYER,
+    sharedDeckEnlargedDeckModeled: cardModelProfile.sharedDeckEnlargedDeckModeled,
+    sharedDeckCrossRobotHandsModeled: cardModelProfile.sharedDeckCrossRobotHandsModeled,
+    rollingPreviousTurnDepletion: cardModelProfile.previousTurnDepletionActive,
+    resetProgrammingDeckEachTurn: cardModelProfile.resetEachTurn,
+    cardScarcityScalingRationale:
+      cardModelProfile.sharedDeck
+        ? "exact single-player hypergeometry retained; Shared Deck omitted-state uncertainty is represented by an uncapped player-count alpha uplift"
+        : cardModelProfile.resetEachTurn
+          ? "fresh full programming deck each turn removes the normal omitted-deck-state adaptability discount; alpha base is 1.0"
+          : "normal alpha discounts extra scarcity for omitted player hand adaptation / richer real deck-state information; exact hypergeometry unchanged",
     cardScarcityCompressionRationale:
-      "linear compression for omitted player hand adaptation / richer real deck-state information; exact hypergeometry unchanged",
+      "legacy field name only; see cardScarcityScalingRationale",
     meanCardAvailabilityPenaltyRE: selectedRouteAvailabilityPenaltyRE.length
       ? Number((
         selectedRouteAvailabilityPenaltyRE.reduce((sum, value) => sum + value, 0) /
@@ -22624,28 +23968,31 @@ function summarizeSelectedProgrammingScarcity(startAnalyses = [], options = {}) 
       PROGRAM_EXACT_FOUR_COPY_BASELINE_PROBABILITY.toFixed(4)
     ),
     singleCopyProbability: Number(
-      getExactProgramHandAvailabilityProbability(0, ["FORWARD_3"]).toFixed(4)
+      getExactProgramHandAvailabilityProbability(0, ["FORWARD_3"], options).toFixed(4)
     ),
     threeDistinctSingleCopyProbability: Number(
       getExactProgramHandAvailabilityProbability(
         0,
-        ["FORWARD_3", "UTURN", "BACK"]
+        ["FORWARD_3", "UTURN", "BACK"],
+        options
       ).toFixed(4)
     ),
     repeatedFourCopyWithAgainProbability: Number(
-      getExactProgramHandAvailabilityProbability(0, ["FORWARD", "FORWARD"]).toFixed(4)
+      getExactProgramHandAvailabilityProbability(0, ["FORWARD", "FORWARD"], options).toFixed(4)
     ),
     cheapSingleCopyProbability: Number(
-      getCheapBestLiteralProgramAvailabilityProbability(["FORWARD_3"]).toFixed(4)
+      getCheapBestLiteralProgramAvailabilityProbability(["FORWARD_3"], options).toFixed(4)
     ),
     cheapThreeDistinctSingleCopyProbability: Number(
       getCheapBestLiteralProgramAvailabilityProbability(
-        ["FORWARD_3", "UTURN", "BACK"]
+        ["FORWARD_3", "UTURN", "BACK"],
+        options
       ).toFixed(4)
     ),
     cheapRepeatedFourCopyBestLiteralProbability: Number(
       getCheapBestLiteralProgramAvailabilityProbability(
-        ["FORWARD", "FORWARD"]
+        ["FORWARD", "FORWARD"],
+        options
       ).toFixed(4)
     ),
     literalProgramViolations: routeSummaries.reduce(
@@ -22656,14 +24003,13 @@ function summarizeSelectedProgrammingScarcity(startAnalyses = [], options = {}) 
       (sum, entry) => sum + entry.rollingWindowViolations,
       0
     ),
-    rollingPreviousTurnDepletion: true,
     approximateSearchLiteralHypergeometric: true,
     approximateSearchAgainSpecialDiscount: false,
     normalizationInvariant:
-      "P(program)=P(four-copy baseline) => +0 card RE before and after compression",
+      "P(program)=normal 9-card fresh-deck four-copy baseline => +0 extra card RE before alpha scaling; Factory Rejects therefore raises scarcity naturally by reducing the actual draw to 7",
     halfBaselineRawScarcityRE: 1,
-    halfBaselineCompressedScarcityRE: Number(
-      PROGRAM_CARD_SCARCITY_ADAPTABILITY_FACTOR.toFixed(3)
+    halfBaselineScaledScarcityRE: Number(
+      cardModelProfile.adaptabilityFactor.toFixed(3)
     )
   };
 }
@@ -22913,7 +24259,7 @@ function analyzeSeededFullCourseContextual(tileMap, starts, flags, options = {})
         ownershipAuditV49bk: {
           behaviorChanged: true,
           robotLaserPhysicalDamageOwner: "damage-economy",
-          residualRangedThreatOwner: "legacy-traffic-proxy-pending-audit",
+          residualRangedThreatOwner: "diagnostic-only-v49ej-physical-damage-plus-awareness-mental-own-production",
           nearbyOwner: "turn-episode-control-loss-re",
           competitionActive: false,
           trafficMentalRobotLaserAwarenessActive: true,
@@ -22925,6 +24271,8 @@ function analyzeSeededFullCourseContextual(tileMap, starts, flags, options = {})
           averageRobotLaserDamageScore: selection.averageRobotLaserDamageTrafficScore ?? 0,
           averageRobotLaserDamageRE: selection.averageRobotLaserDamageTrafficRegisterEquivalents ?? 0,
           averageResidualRangedThreatPenalty: selection.averageResidualRangedThreatTrafficPenalty ?? 0,
+          averageLegacyResidualRangedThreatDiagnosticPenalty:
+            selection.averageLegacyResidualRangedThreatDiagnosticPenalty ?? 0,
           averageNearbyPenalty: selection.averageNearbyTrafficPenalty ?? 0,
           averageLegacyNearbyPenalty:
             selection.averageLegacyNearbyTrafficPenalty ?? 0,
@@ -22954,7 +24302,19 @@ function analyzeSeededFullCourseContextual(tileMap, starts, flags, options = {})
           averageTrafficAwarenessRobotLaserEventMass:
             selection.averageTrafficAwarenessRobotLaserEventMass ?? 0,
           averageTrafficAwarenessNonLaserEventMass:
-            selection.averageTrafficAwarenessNonLaserEventMass ?? 0
+            selection.averageTrafficAwarenessNonLaserEventMass ?? 0,
+          averageTrafficAwarenessRebootPileupEventMass:
+            selection.averageTrafficAwarenessRebootPileupEventMass ?? 0,
+          averageSimultaneousRebootPileupEventMass:
+            selection.averageSimultaneousRebootPileupEventMass ?? 0,
+          averageSimultaneousRebootPileupMaximumTurnProbability:
+            selection.averageSimultaneousRebootPileupMaximumTurnProbability ?? 0,
+          averageSimultaneousRebootPileupClogRE:
+            selection.averageSimultaneousRebootPileupClogRegisterEquivalents ?? 0,
+          simultaneousRebootPileupOwner:
+            "same-turn-same-reboot-space -> +1 actual clog stacked in damage-economy curve; no fabricated displacement; v49ei",
+          homingMissileOwner:
+            "strategic credit = 2x standard one-damage reference per once-per-turn/per-missile-space activation + target-choice planning event; self-hazard OFF; v49ei"
         },
         averageForecastConfidence: selection.averageForecastConfidence ?? 1,
         minimumForecastConfidence: selection.minimumForecastConfidence ?? 1,
@@ -23259,6 +24619,9 @@ function* analyzeFullCourseContextualSteps(
     moreDeadlyGame: options.moreDeadlyGame,
     lighterGame: options.lighterGame,
     upgradeWorld: options.upgradeWorld,
+    factoryRejects: Boolean(options.factoryRejects),
+    classicSharedDeck: Boolean(options.classicSharedDeck),
+    lessForeshadowing: Boolean(options.lessForeshadowing),
     lessSpammyGame: options.lessSpammyGame,
     criticalSpam: options.criticalSpam,
     criticalHaywire: options.criticalHaywire,
@@ -23418,6 +24781,11 @@ function* analyzeFullCourseContextualSteps(
       searchIntrinsicMentalEventCountCurrentTurn: Math.max(
         0, Number(context.searchIntrinsicMentalEventCountCurrentTurn) || 0
       ),
+      searchHomingMissileActivatedSpacesCurrentTurn: Array.isArray(
+        context.searchHomingMissileActivatedSpacesCurrentTurn
+      )
+        ? [...context.searchHomingMissileActivatedSpacesCurrentTurn]
+        : [],
       upgradeCardUnits: null,
       hazardExposure: Math.max(0, Number(context.hazardExposure) || 0),
       dynamicArchivePoint: context.dynamicArchivePoint
@@ -23600,6 +24968,7 @@ function* analyzeFullCourseContextualSteps(
     estimatedCardForecastFeasible: true,
     energyReserve: getInitialRouteEnergyShadowReserve(baseRouteOptions),
     searchIntrinsicMentalEventCountCurrentTurn: 0,
+    searchHomingMissileActivatedSpacesCurrentTurn: [],
     upgradeCardUnits: null,
     hazardExposure: 0,
     reNativeAdverseRE: 0,
@@ -23659,10 +25028,7 @@ function* analyzeFullCourseContextualSteps(
       0,
       Number(route.routeEnergyEconomyRewardScore) || 0
     );
-    const priorMentalScore = Math.max(
-      0,
-      Number(route.searchIntrinsicMentalScore) || 0
-    );
+    const priorMentalScore = getCompletedRoutePostbuildScoreAdjustment(route);
     const economy = replayContextualRouteEnergyForContext(
       tileMap,
       route,
@@ -23707,7 +25073,7 @@ function* analyzeFullCourseContextualSteps(
         priorEnergyReward +
         guidance.penalty +
         forecast.penalty +
-        mental.searchIntrinsicMentalScore -
+        getCompletedRoutePostbuildScoreAdjustment(mental) -
         economy.routeEnergyEconomyRewardScore
       ).toFixed(2)
     );
@@ -23774,6 +25140,11 @@ function* analyzeFullCourseContextualSteps(
       searchIntrinsicMentalEventCountCurrentTurn: Math.max(
         0, Number(guidedRoute?.searchIntrinsicMentalEventCountEnd) || 0
       ),
+      searchHomingMissileActivatedSpacesCurrentTurn: Array.isArray(
+        guidedRoute?.searchHomingMissileActivatedSpacesCurrentTurn
+      )
+        ? [...guidedRoute.searchHomingMissileActivatedSpacesCurrentTurn]
+        : [],
       dynamicArchivePoint: guidedRoute?.dynamicArchivePointEnd
         ? { ...guidedRoute.dynamicArchivePointEnd }
         : priorContext?.dynamicArchivePoint
@@ -23857,6 +25228,11 @@ function* analyzeFullCourseContextualSteps(
         priorContext?.estimatedCardForecastFeasible !== false && forecast.feasible,
       searchIntrinsicMentalEventCountCurrentTurn:
         mental.searchIntrinsicMentalEventCountEnd,
+      searchHomingMissileActivatedSpacesCurrentTurn: Array.isArray(
+        mental.searchHomingMissileActivatedSpacesCurrentTurn
+      )
+        ? [...mental.searchHomingMissileActivatedSpacesCurrentTurn]
+        : [],
       dynamicArchivePoint
     };
   };
@@ -24105,7 +25481,8 @@ function* analyzeFullCourseContextualSteps(
           history: [],
           programCardState: getCompactProgramCardStateFromHistory(
             [],
-            context.absoluteActions
+            context.absoluteActions,
+            baseRouteOptions
           ),
           energyReserve: getInitialRouteEnergyShadowReserve(baseRouteOptions),
           upgradeCardUnits: null,
@@ -25964,6 +27341,8 @@ function* analyzeFullCourseContextualSteps(
               dynamicArchivePointEnd: guidanceContext.dynamicArchivePoint ?? null,
               searchIntrinsicMentalEventCountStart:
                 legStartContext.searchIntrinsicMentalEventCountCurrentTurn ?? 0,
+              searchHomingMissileActivatedSpacesCurrentTurn:
+                legStartContext.searchHomingMissileActivatedSpacesCurrentTurn ?? [],
               searchMentalCheckpointAtEnd: false
             }
           );
@@ -27323,7 +28702,7 @@ function* analyzeFullCourseContextualSteps(
         ownershipAuditV49bk: {
           behaviorChanged: true,
           robotLaserPhysicalDamageOwner: "damage-economy",
-          residualRangedThreatOwner: "legacy-traffic-proxy-pending-audit",
+          residualRangedThreatOwner: "diagnostic-only-v49ej-physical-damage-plus-awareness-mental-own-production",
           nearbyOwner: "turn-episode-control-loss-re",
           competitionActive: false,
           trafficMentalRobotLaserAwarenessActive: true,
@@ -27335,6 +28714,8 @@ function* analyzeFullCourseContextualSteps(
           averageRobotLaserDamageScore: selection.averageRobotLaserDamageTrafficScore ?? 0,
           averageRobotLaserDamageRE: selection.averageRobotLaserDamageTrafficRegisterEquivalents ?? 0,
           averageResidualRangedThreatPenalty: selection.averageResidualRangedThreatTrafficPenalty ?? 0,
+          averageLegacyResidualRangedThreatDiagnosticPenalty:
+            selection.averageLegacyResidualRangedThreatDiagnosticPenalty ?? 0,
           averageNearbyPenalty: selection.averageNearbyTrafficPenalty ?? 0,
           averageLegacyNearbyPenalty:
             selection.averageLegacyNearbyTrafficPenalty ?? 0,
@@ -27364,7 +28745,19 @@ function* analyzeFullCourseContextualSteps(
           averageTrafficAwarenessRobotLaserEventMass:
             selection.averageTrafficAwarenessRobotLaserEventMass ?? 0,
           averageTrafficAwarenessNonLaserEventMass:
-            selection.averageTrafficAwarenessNonLaserEventMass ?? 0
+            selection.averageTrafficAwarenessNonLaserEventMass ?? 0,
+          averageTrafficAwarenessRebootPileupEventMass:
+            selection.averageTrafficAwarenessRebootPileupEventMass ?? 0,
+          averageSimultaneousRebootPileupEventMass:
+            selection.averageSimultaneousRebootPileupEventMass ?? 0,
+          averageSimultaneousRebootPileupMaximumTurnProbability:
+            selection.averageSimultaneousRebootPileupMaximumTurnProbability ?? 0,
+          averageSimultaneousRebootPileupClogRE:
+            selection.averageSimultaneousRebootPileupClogRegisterEquivalents ?? 0,
+          simultaneousRebootPileupOwner:
+            "same-turn-same-reboot-space -> +1 actual clog stacked in damage-economy curve; no fabricated displacement; v49ei",
+          homingMissileOwner:
+            "strategic credit = 2x standard one-damage reference per once-per-turn/per-missile-space activation + target-choice planning event; self-hazard OFF; v49ei"
         },
         averageForecastConfidence: selection.averageForecastConfidence ?? 1,
         minimumForecastConfidence: selection.minimumForecastConfidence ?? 1,
@@ -27582,6 +28975,9 @@ export function analyzeFullCourse(tileMap, starts, flags, options = {}) {
     moreDeadlyGame: options.moreDeadlyGame,
     lighterGame: options.lighterGame,
     upgradeWorld: options.upgradeWorld,
+    factoryRejects: Boolean(options.factoryRejects),
+    classicSharedDeck: Boolean(options.classicSharedDeck),
+    lessForeshadowing: Boolean(options.lessForeshadowing),
     lessSpammyGame: options.lessSpammyGame,
     criticalSpam: options.criticalSpam,
     criticalHaywire: options.criticalHaywire,
@@ -27607,7 +29003,6 @@ export function analyzeFullCourse(tileMap, starts, flags, options = {}) {
     repulsorOverdrive: options.repulsorOverdrive,
     setToKill: Boolean(options.setToKill),
     setToStun: Boolean(options.setToStun),
-    lessForeshadowing: options.lessForeshadowing,
     contextualTrafficAlternativeRetention: Boolean(
       options.contextualTrafficAlternativeRetention
     ),
@@ -27751,7 +29146,7 @@ export function analyzeFullCourse(tileMap, starts, flags, options = {}) {
         ownershipAuditV49bk: {
           behaviorChanged: true,
           robotLaserPhysicalDamageOwner: "damage-economy",
-          residualRangedThreatOwner: "legacy-traffic-proxy-pending-audit",
+          residualRangedThreatOwner: "diagnostic-only-v49ej-physical-damage-plus-awareness-mental-own-production",
           nearbyOwner: "turn-episode-control-loss-re",
           competitionActive: false,
           trafficMentalRobotLaserAwarenessActive: true,
@@ -27763,6 +29158,8 @@ export function analyzeFullCourse(tileMap, starts, flags, options = {}) {
           averageRobotLaserDamageScore: selection.averageRobotLaserDamageTrafficScore ?? 0,
           averageRobotLaserDamageRE: selection.averageRobotLaserDamageTrafficRegisterEquivalents ?? 0,
           averageResidualRangedThreatPenalty: selection.averageResidualRangedThreatTrafficPenalty ?? 0,
+          averageLegacyResidualRangedThreatDiagnosticPenalty:
+            selection.averageLegacyResidualRangedThreatDiagnosticPenalty ?? 0,
           averageNearbyPenalty: selection.averageNearbyTrafficPenalty ?? 0,
           averageLegacyNearbyPenalty:
             selection.averageLegacyNearbyTrafficPenalty ?? 0,
@@ -27792,7 +29189,19 @@ export function analyzeFullCourse(tileMap, starts, flags, options = {}) {
           averageTrafficAwarenessRobotLaserEventMass:
             selection.averageTrafficAwarenessRobotLaserEventMass ?? 0,
           averageTrafficAwarenessNonLaserEventMass:
-            selection.averageTrafficAwarenessNonLaserEventMass ?? 0
+            selection.averageTrafficAwarenessNonLaserEventMass ?? 0,
+          averageTrafficAwarenessRebootPileupEventMass:
+            selection.averageTrafficAwarenessRebootPileupEventMass ?? 0,
+          averageSimultaneousRebootPileupEventMass:
+            selection.averageSimultaneousRebootPileupEventMass ?? 0,
+          averageSimultaneousRebootPileupMaximumTurnProbability:
+            selection.averageSimultaneousRebootPileupMaximumTurnProbability ?? 0,
+          averageSimultaneousRebootPileupClogRE:
+            selection.averageSimultaneousRebootPileupClogRegisterEquivalents ?? 0,
+          simultaneousRebootPileupOwner:
+            "same-turn-same-reboot-space -> +1 actual clog stacked in damage-economy curve; no fabricated displacement; v49ei",
+          homingMissileOwner:
+            "strategic credit = 2x standard one-damage reference per once-per-turn/per-missile-space activation + target-choice planning event; self-hazard OFF; v49ei"
         },
         averageForecastConfidence: selection.averageForecastConfidence ?? 1,
         minimumForecastConfidence: selection.minimumForecastConfidence ?? 1,
@@ -27943,15 +29352,16 @@ export function evaluateFullCourseFocusPaymentCurveUnderOccupancy(
       traffic
     );
     const intrinsicRE = Number(candidateLedger?.observationalSubtotalWithMentalRE);
+    const homingMissileStrategicCreditRE = Math.max(
+      0,
+      Number(candidateLedger?.homingMissileStrategicCreditRE) || 0
+    );
     const robotLaserDamageRE = Math.max(
       0,
       Number(traffic?.damageEconomyRobotLaserIncrementRegisterEquivalents) || 0
     );
     const nearbyControlRE = Math.max(0, Number(traffic?.nearby) || 0) / REGISTER_TEMPO_COST;
-    const residualRangedThreatRE = Math.max(
-      0,
-      Number(traffic?.residualRangedThreatScore) || 0
-    ) / REGISTER_TEMPO_COST;
+    const residualRangedThreatRE = 0; // v49ej diagnostic-only legacy ranged score
     const competitionRE = Math.max(
       0,
       Number(traffic?.competition) || 0
@@ -27959,7 +29369,8 @@ export function evaluateFullCourseFocusPaymentCurveUnderOccupancy(
     const trafficMentalRE = Math.max(0, Number(trafficMental?.incrementRE) || 0);
     const baseEffectiveRE = Number.isFinite(intrinsicRE)
       ? (
-        intrinsicRE +
+        intrinsicRE -
+        homingMissileStrategicCreditRE +
         robotLaserDamageRE +
         nearbyControlRE +
         residualRangedThreatRE +
@@ -28257,6 +29668,9 @@ export function analyzeFlagLeg(tileMap, from, goal, options = {}) {
       moreDeadlyGame: options.moreDeadlyGame,
       lighterGame: options.lighterGame,
       upgradeWorld: options.upgradeWorld,
+      factoryRejects: Boolean(options.factoryRejects),
+      classicSharedDeck: Boolean(options.classicSharedDeck),
+      lessForeshadowing: Boolean(options.lessForeshadowing),
       lessSpammyGame: options.lessSpammyGame,
       criticalSpam: options.criticalSpam,
       criticalHaywire: options.criticalHaywire,
@@ -28365,4 +29779,4 @@ export function analyzeFlagLeg(tileMap, from, goal, options = {}) {
     }
   };
 }
-// VERSION END: v49du-energy-economy-wall-clock
+// VERSION END: v49ep-permanent-shutdown-spam-burden

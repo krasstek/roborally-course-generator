@@ -1,3 +1,7 @@
+// v49ej ownership note: this module is primarily cheap-search/construction and
+// diagnostic guidance. Do not promote these score-space weights into final course
+// evaluation when a damage/control/card/mental/economy RE owner exists.
+
 export const BOARD_PROFILE_DENSITY_WEIGHT = 1.1;
 export const BOARD_PROFILE_DENSITY_COMPONENT_WEIGHTS = {
   hazard: 1,
@@ -64,7 +68,7 @@ const FLAG_AREA_FEATURE_WEIGHTS = {
   trapdoor: 5.2,
   repulsor: 2.4,
   chopShop: -3.2,
-  homingMissile: 3.8,
+  homingMissile: 0, // v49ej: offensive opportunity; no generic flag-area hazard vote
   // Compatibility only: old board data may still expose repairDock. Optional
   // Repair Stations are modeled on checkpoints in Analyze, so this legacy tile
   // feature should be neutral rather than turning flag-area scoring into NaN.
@@ -115,8 +119,7 @@ function isDirectDamageFeature(feature) {
     feature?.type === "laser" ||
     feature?.type === "flamethrower" ||
     feature?.type === "crusher" ||
-    feature?.type === "trapdoor" ||
-    feature?.type === "homingMissile"
+    feature?.type === "trapdoor"
   );
 }
 
@@ -304,12 +307,12 @@ export function getBoardProfileDelta(feature) {
     return { ...base, hazardWeight: -0.65, complexityWeight: 0.15 };
   }
   if (feature.type === "homingMissile") {
+    // v49ej: Homing Missile is not a self-hazard. Keep only descriptive
+    // complexity/swing metadata; production route value is RE-owned downstream.
     return {
       ...base,
-      hazardWeight: 2.4,
       complexityWeight: 0.8,
-      swingWeight: 1.2,
-      hazardCount: 1
+      swingWeight: 1.2
     };
   }
 
@@ -382,11 +385,9 @@ export function getTilePenaltyForFeature(feature, options = {}) {
     return Number((3.2 * repulsorMultiplier).toFixed(2));
   }
   if (feature.type === "homingMissile") {
-    if (!options.onEntrance) {
-      return 0;
-    }
-    const playerCount = options.playerCount ?? 4;
-    return scaleHazard(Math.max(1.5, 5 - playerCount * 0.45));
+    // v49ej: generic tile penalty is hazard-shaped and must not encode an
+    // offensive benefit. Cheap search attraction has its own explicit helper.
+    return 0;
   }
   if (feature.type === "ledge") {
     return 0.8;
@@ -402,6 +403,20 @@ export function getTilePenaltyForFeature(feature, options = {}) {
   }
 
   return 0;
+}
+
+// v49ej cheap-search-only Homing Missile guidance. This deliberately uses the
+// same rough score-space scale as the cheap pathfinder and is NOT authoritative
+// route value. Completed-route evaluation uses damage-economy RE instead.
+export function getHomingMissileSearchGuidanceScore(options = {}) {
+  const oneDamageCheapGuidance = Math.max(
+    0,
+    getTilePenaltyForFeature(
+      { type: "laser", damage: 1 },
+      { ...options, cuttingFloor: false }
+    )
+  );
+  return 2 * oneDamageCheapGuidance;
 }
 
 export function getFlagAreaFeatureScore(feature, dist, options = {}) {
@@ -445,7 +460,7 @@ export function getFlagAreaFeatureScore(feature, dist, options = {}) {
   if (feature.type === "battery" && options.batteryActive) return (options.upgradeWorld ? FLAG_AREA_FEATURE_WEIGHTS.battery * 1.45 : FLAG_AREA_FEATURE_WEIGHTS.battery) * proximityWeight;
   if (feature.type === "chopShop" && options.batteryActive) return (options.upgradeWorld ? FLAG_AREA_FEATURE_WEIGHTS.chopShop * 1.35 : FLAG_AREA_FEATURE_WEIGHTS.chopShop) * proximityWeight;
   if (feature.type === "repulsor") return Number((FLAG_AREA_FEATURE_WEIGHTS.repulsor * proximityWeight * (options.repulsorOverdrive ? 1.7 : 1)).toFixed(2));
-  if (feature.type === "homingMissile") return scaleHazard(FLAG_AREA_FEATURE_WEIGHTS.homingMissile * proximityWeight);
+  if (feature.type === "homingMissile") return 0;
 
   return 0;
 }
