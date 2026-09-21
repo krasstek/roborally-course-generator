@@ -1,6 +1,6 @@
-// VERSION START: v49es-realized-variant-applicability-cleanup
+// VERSION START: v49et-requirement-aware-construction
 // Robo Rally Course Randomizer - production runtime
-const MAIN_BUILD_ID = "v49es-realized-variant-applicability-cleanup";
+const MAIN_BUILD_ID = "v49et-requirement-aware-construction";
 // Mobile browsers may auto-detect number-like rule text and restyle it as a
 // tappable link even though the app emitted ordinary text. Keep rules/course
 // annotations visually plain; this is presentation-only and does not disable
@@ -83,6 +83,7 @@ const [
   { formatFeatureLabel },
   {
     getVariantAvailabilityRule,
+    getVariantConstructionRequirement,
     getVariantDefinition: getRegisteredVariantDefinition,
     getVariantExclusiveGroupConflict,
     getVariantGuidanceRules,
@@ -2854,6 +2855,55 @@ function countFeatureTypeInSelectedSets(featureType, pieceMap = cachedAssets?.pi
   return total;
 }
 
+function isHazardousFlagEligibleUnderlyingFeature(feature, options = {}) {
+  if (!feature || feature.type === "checkpoint" || feature.type === "pit") {
+    return false;
+  }
+  return !isCheckpointActiveFeature(feature, { movingTargets: Boolean(options.movingTargets) });
+}
+
+function boardPieceSatisfiesConstructionRequirement(piece, requirement, options = {}) {
+  if (!piece || !requirement) return false;
+  const features = (piece.tiles || []).flatMap((tile) => tile.features || []);
+
+  if (requirement.type === "boardFeatureAnyOf") {
+    const featureTypes = new Set(requirement.featureTypes || []);
+    return features.some((feature) => featureTypes.has(feature.type));
+  }
+
+  if (requirement.type === "checkpointSuppressibleBoardFeature") {
+    return features.some((feature) => isHazardousFlagEligibleUnderlyingFeature(feature, options));
+  }
+
+  return false;
+}
+
+function getActiveVariantConstructionRequirements(variantBundle = {}) {
+  return VARIANT_DEFINITIONS
+    .filter((variant) => Boolean(variantBundle?.[variant.id]))
+    .map((variant) => ({
+      variantId: variant.id,
+      label: variant.label,
+      ...(getVariantConstructionRequirement(variant.id) ?? {})
+    }))
+    .filter((requirement) => requirement.type);
+}
+
+function getVariantConstructionInventoryUnavailabilityReason(variantId, preferences = {}, pieceMap = cachedAssets?.pieceMap ?? null) {
+  const requirement = getVariantConstructionRequirement(variantId);
+  if (!requirement || !pieceMap) return null;
+  const expansionIds = getSelectedExpansionIds(preferences);
+  const boardIds = getAvailableMainBoardIds(pieceMap, expansionIds);
+  const movingTargets = getVariantPreferenceState(preferences, "movingTargets") === "forced";
+  return boardIds.some((boardId) => boardPieceSatisfiesConstructionRequirement(
+    pieceMap[boardId],
+    requirement,
+    { movingTargets }
+  ))
+    ? null
+    : (requirement.reason ?? "No selected main board can support this rule.");
+}
+
 function variantsConflict(leftVariantId, rightVariantId) {
   const pair = new Set([leftVariantId, rightVariantId]);
   // Energy Crisis / A Lighter Game removes Energy and upgrades from the game, so
@@ -3013,6 +3063,11 @@ function getVariantUnavailabilityReason(variantId, preferences = {}, pieceMap = 
   const missingRequiredIds = getMissingRequiredVariantIds(variantId, preferences);
   if (missingRequiredIds.length) {
     return `Requires ${missingRequiredIds.map((id) => getVariantDefinitionLabel(id)).join(" or ")} unless ${getVariantDefinitionLabel(variantId)} is set to Must.`;
+  }
+
+  const constructionUnavailability = getVariantConstructionInventoryUnavailabilityReason(variantId, preferences, pieceMap);
+  if (constructionUnavailability) {
+    return constructionUnavailability;
   }
 
   const availabilityRule = getVariantAvailabilityRule(variantId);
@@ -6805,8 +6860,7 @@ function getVariantCourseUnavailabilityReason(variantId, tileMap, context = {}) 
     const hasSuppressedCoveredFeature = checkpoints.some((checkpoint) => {
       const tile = rawTileMap?.get(`${checkpoint.x},${checkpoint.y}`);
       return (tile?.features || []).some((feature) => (
-        feature.type !== "checkpoint" &&
-        !isCheckpointActiveFeature(feature, { movingTargets })
+        isHazardousFlagEligibleUnderlyingFeature(feature, { movingTargets })
       ));
     });
     return hasSuppressedCoveredFeature
@@ -8054,12 +8108,114 @@ function boardSelectionCompositionPenalty(boardIds, pieceMap) {
   return smallBoardCompositionPenalty(boardIds, pieceMap);
 }
 
-function selectBoardIdsForCourse(boardIds, count, pieceMap) {
+function getBoardRequirementCoverage(boardId, pieceMap, requirements = [], options = {}) {
+  const piece = pieceMap[boardId];
+  const covered = new Set();
+  requirements.forEach((requirement, index) => {
+    if (boardPieceSatisfiesConstructionRequirement(piece, requirement, options)) {
+      covered.add(index);
+    }
+  });
+  return covered;
+}
+
+function chooseRequirementCoveringBoardIds(boardIds, count, pieceMap, requirements = [], options = {}) {
+  if (!requirements.length) {
+    return sampleDistinctBoardFaces(boardIds, count, pieceMap);
+  }
+
+  const coverageByBoard = new Map(boardIds.map((boardId) => [
+    boardId,
+    getBoardRequirementCoverage(boardId, pieceMap, requirements, options)
+  ]));
+  const allRequirementIndexes = requirements.map((_, index) => index);
+  const selectionPredicate = typeof options.selectionPredicate === "function"
+    ? options.selectionPredicate
+    : () => true;
+
+  const fillSelection = (selected, usedPhysicalBoards) => {
+    if (selected.length === count) {
+      return selectionPredicate(selected) ? selected : null;
+    }
+    const fillerCandidates = shuffle(boardIds.filter((boardId) => (
+      !usedPhysicalBoards.has(getPhysicalBoardId(pieceMap[boardId]))
+    )));
+    for (const boardId of fillerCandidates) {
+      const physicalBoardId = getPhysicalBoardId(pieceMap[boardId]);
+      const result = fillSelection(
+        [...selected, boardId],
+        new Set([...usedPhysicalBoards, physicalBoardId])
+      );
+      if (result) return result;
+    }
+    return null;
+  };
+
+  const search = (selected, usedPhysicalBoards, uncovered) => {
+    if (!uncovered.length) {
+      return fillSelection(selected, usedPhysicalBoards);
+    }
+    if (selected.length >= count) return null;
+
+    const rankedRequirements = uncovered
+      .map((requirementIndex) => ({
+        requirementIndex,
+        candidateBoardIds: boardIds.filter((boardId) => {
+          const physicalBoardId = getPhysicalBoardId(pieceMap[boardId]);
+          return !usedPhysicalBoards.has(physicalBoardId) && coverageByBoard.get(boardId)?.has(requirementIndex);
+        })
+      }))
+      .filter((entry) => entry.candidateBoardIds.length)
+      .sort((left, right) => left.candidateBoardIds.length - right.candidateBoardIds.length);
+
+    const target = rankedRequirements[0];
+    if (!target) return null;
+
+    const orderedCandidates = shuffle(target.candidateBoardIds).sort((left, right) => (
+      (coverageByBoard.get(right)?.size ?? 0) - (coverageByBoard.get(left)?.size ?? 0)
+    ));
+
+    for (const boardId of orderedCandidates) {
+      const physicalBoardId = getPhysicalBoardId(pieceMap[boardId]);
+      const boardCoverage = coverageByBoard.get(boardId) ?? new Set();
+      const nextUncovered = uncovered.filter((index) => !boardCoverage.has(index));
+      const result = search(
+        [...selected, boardId],
+        new Set([...usedPhysicalBoards, physicalBoardId]),
+        nextUncovered
+      );
+      if (result) return result;
+    }
+
+    return null;
+  };
+
+  return search([], new Set(), allRequirementIndexes) ?? [];
+}
+
+function getMinimumBoardCountForConstructionRequirements(boardIds, maxBoards, pieceMap, requirements = [], options = {}) {
+  if (!requirements.length) return 1;
+  for (let count = 1; count <= maxBoards; count += 1) {
+    if (chooseRequirementCoveringBoardIds(boardIds, count, pieceMap, requirements, options).length === count) {
+      return count;
+    }
+  }
+  return null;
+}
+
+function selectBoardIdsForCourse(boardIds, count, pieceMap, options = {}) {
   const candidates = [];
   const attempts = Math.min(48, Math.max(12, boardIds.length * 2));
+  const requirements = options.requirements ?? [];
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const selectedBoardIds = sampleDistinctBoardFaces(boardIds, count, pieceMap);
+    const selectedBoardIds = chooseRequirementCoveringBoardIds(
+      boardIds,
+      count,
+      pieceMap,
+      requirements,
+      options
+    );
     if (selectedBoardIds.length !== count) continue;
     const penalty = boardSelectionCompositionPenalty(selectedBoardIds, pieceMap);
     candidates.push({
@@ -9537,7 +9693,18 @@ function pickFlags(flagCandidates, flagCount, boardPlacements, dockPlacements, p
   const movingCandidates = preferences.movingTargets
     ? new Set(flagCandidates.filter((candidate) => getMovingCheckpointTrace(tileMap, candidate, movingTargetTraceCache, preferences).moving).map((candidate) => `${candidate.x},${candidate.y}`))
     : null;
-  const requiresMovingTarget = Boolean(movingCandidates?.size);
+  const hazardousFlagCandidates = preferences.hazardousFlags
+    ? new Set(flagCandidates.filter((candidate) => {
+      const tile = tileMap.get(`${candidate.x},${candidate.y}`);
+      return (tile?.features || []).some((feature) => (
+        isHazardousFlagEligibleUnderlyingFeature(feature, { movingTargets: preferences.movingTargets })
+      ));
+    }).map((candidate) => `${candidate.x},${candidate.y}`))
+    : null;
+  if (preferences.movingTargets && !movingCandidates?.size) return null;
+  if (preferences.hazardousFlags && !hazardousFlagCandidates?.size) return null;
+  const requiresMovingTarget = Boolean(preferences.movingTargets);
+  const requiresHazardousFlag = Boolean(preferences.hazardousFlags);
 
   for (let attempt = 0; attempt < 250; attempt += 1) {
     const sampled = sampleFlagSequence(flagCandidates, flagCount, tileMap, starts, preferences, firstFlagThresholds, boardPlacements, pieceMap, movingTargetTraceCache);
@@ -9545,6 +9712,7 @@ function pickFlags(flagCandidates, flagCount, boardPlacements, dockPlacements, p
     if (!isValidFlagSequence(sampled)) continue;
     if (!isFirstFlagFarEnough(sampled[0], starts, firstFlagThresholds, preferences)) continue;
     if (requiresMovingTarget && !sampled.some((flag) => movingCandidates.has(`${flag.x},${flag.y}`))) continue;
+    if (requiresHazardousFlag && !sampled.some((flag) => hazardousFlagCandidates.has(`${flag.x},${flag.y}`))) continue;
     return sampled.map(({ x, y }) => ({ x, y }));
   }
 
@@ -9573,7 +9741,18 @@ async function pickFlagsCooperative(
   const movingCandidates = preferences.movingTargets
     ? new Set(flagCandidates.filter((candidate) => getMovingCheckpointTrace(tileMap, candidate, movingTargetTraceCache, preferences).moving).map((candidate) => `${candidate.x},${candidate.y}`))
     : null;
-  const requiresMovingTarget = Boolean(movingCandidates?.size);
+  const hazardousFlagCandidates = preferences.hazardousFlags
+    ? new Set(flagCandidates.filter((candidate) => {
+      const tile = tileMap.get(`${candidate.x},${candidate.y}`);
+      return (tile?.features || []).some((feature) => (
+        isHazardousFlagEligibleUnderlyingFeature(feature, { movingTargets: preferences.movingTargets })
+      ));
+    }).map((candidate) => `${candidate.x},${candidate.y}`))
+    : null;
+  if (preferences.movingTargets && !movingCandidates?.size) return null;
+  if (preferences.hazardousFlags && !hazardousFlagCandidates?.size) return null;
+  const requiresMovingTarget = Boolean(preferences.movingTargets);
+  const requiresHazardousFlag = Boolean(preferences.hazardousFlags);
   const shouldStopRequested = typeof control.shouldStopRequested === "function"
     ? control.shouldStopRequested
     : () => false;
@@ -9589,7 +9768,8 @@ async function pickFlagsCooperative(
       sampled.length === flagCount &&
       isValidFlagSequence(sampled) &&
       isFirstFlagFarEnough(sampled[0], starts, firstFlagThresholds, preferences) &&
-      (!requiresMovingTarget || sampled.some((flag) => movingCandidates.has(`${flag.x},${flag.y}`)))
+      (!requiresMovingTarget || sampled.some((flag) => movingCandidates.has(`${flag.x},${flag.y}`))) &&
+      (!requiresHazardousFlag || sampled.some((flag) => hazardousFlagCandidates.has(`${flag.x},${flag.y}`)))
     ) {
       return sampled.map(({ x, y }) => ({ x, y }));
     }
@@ -10040,13 +10220,34 @@ function createBoardPlacements(
   }
   const requireDockSupport = !preferences.noDocks && !preferences.virtualBots;
   const hasDockPiece = Boolean(dockPieceId && pieceMap[dockPieceId]);
+  const constructionRequirements = preferences.variantConstructionRequirements ?? [];
+  const requirementOptions = {
+    movingTargets: Boolean(preferences.movingTargets),
+    selectionPredicate: (selectedBoardIds) => (
+      !requireDockSupport || boardIdsCanSupportDock(selectedBoardIds, pieceMap, dockPieceId)
+    )
+  };
+  const minimumRequirementBoardCount = getMinimumBoardCountForConstructionRequirements(
+    mainBoardIds,
+    maxBoards,
+    pieceMap,
+    constructionRequirements,
+    requirementOptions
+  );
+  if (constructionRequirements.length && minimumRequirementBoardCount === null) {
+    return null;
+  }
+  if (minimumRequirementBoardCount !== null) {
+    boardCount = Math.max(boardCount, minimumRequirementBoardCount);
+  }
   let boardIds = [];
 
   for (let attempt = 0; attempt < 32; attempt += 1) {
     const candidateSelection = selectBoardIdsForCourse(
       mainBoardIds,
       boardCount,
-      pieceMap
+      pieceMap,
+      { requirements: constructionRequirements, ...requirementOptions }
     );
     const candidateBoardIds = candidateSelection.selectedBoardIds ?? [];
     if (candidateBoardIds.length !== boardCount) {
@@ -22839,7 +23040,8 @@ function buildScenarioReport(scenario, selectedLegIndices = null) {
     `Floor damage/repair v49eo LIVE: flamethrowers deal 1 on each active entry/pass-through +1 on end-of-register; Flaming Oil ${scenario.flamingOil ? "ON (+1 on entering any oil in a register +1 on ending that register on oil; no per-oil-tile stacking)" : "off"}; Repair Stations ${scenario.repairStations ? "ON (register-5 ordinary checkpoint removes 23/40 expected SPAM +17/40 expected Haywire, no spill)" : "off"}; flamethrower / Flaming Oil / Repair Station planning each collapse to at most one mental event per game turn when relevant.`,
     `Variant ownership v49es LIVE: Moving Targets ${scenario.movingTargets ? "ON (dynamic checkpoint routing + one tracking mental event per relevant register; old tracking/volatility production penalties OFF)" : "off"}; Repulsor Overdrive ${scenario.repulsorOverdrive ? "ON (exact doubled bounce + at most one relevant memory event per turn)" : "off"}; Hazardous Flags ${scenario.hazardousFlags ? "ON (covered board elements stay mechanically active + at most one relevant memory event per turn)" : "off"}; Critical Haywire ${scenario.criticalHaywire ? "ON (hand-size effect; no mental event)" : "off"}; Critical SPAM ${scenario.criticalSpam ? "ON (played-SPAM model: provisional 20% effective relief / 80% returned to pending; no mental event)" : "off"}.`,
     `Scenario/config ownership v49es: No Docks ${scenario.noDocks ? "full eligible exposed edge before normal pruning" : "off"}; Extra Docks ${scenario.extraDocks ? "multiple physical docks (forced mode hard-gated)" : "off"}; Sandwiched Dock ${scenario.sandwichedDock ? "intentional checkpoint-facing / both-sides construction policy" : "off"}; board offsets ${scenario.staggeredBoards ? "allowed, not guaranteed" : "disallowed/aligned required"}; Virtual Bots ${scenario.virtualBots ? "strategic player-route branching proxy, no mental event" : "off"}; overlays use a human-facing pre-game complexity envelope, while placed overlay mechanics use ordinary board ownership.`,
-    `Variant applicability v49es: Must rules must be realizable on the finished course; sampled Allowed rules with positive complexity cost obey the same realized-applicability gate, so optional complexity is never spent on a physically inert special rule.`,
+    `Variant construction v49et: selected feature-dependent rules constrain main-board sampling before layout construction; one board may satisfy several rules, board count is raised only when required to cover the selected capabilities, and Moving Targets / Hazardous Flags also constrain checkpoint sampling.`,
+    `Variant applicability v49es SAFETY NET: Must rules must be realizable on the finished course; sampled Allowed rules with positive complexity cost obey the same realized-applicability gate, so optional complexity is never spent on a physically inert special rule.`,
     currentNormalRouteModel
       ? ""
       : (summary.courseContinuationWeighted
@@ -25764,6 +25966,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     lessForeshadowing
   } = variantBundle;
   const startEnergyPricing = Boolean(payToWin || subsidizedStarts);
+  const variantConstructionRequirements = getActiveVariantConstructionRequirements(variantBundle);
   let effectiveNoDocks = noDocks;
   if (effectiveNoDocks) {
     variantBundle.extraDocks = false;
@@ -25802,7 +26005,8 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
     extraDocks,
     noDocks: effectiveNoDocks,
     sandwichedDock,
-    virtualBots
+    virtualBots,
+    variantConstructionRequirements
   }, variantBundle);
   const generationStageContext = {
     movingTargets: Boolean(movingTargets),
@@ -30911,4 +31115,4 @@ if (typeof document !== "undefined") {
   init().catch(console.error);
 
 }
-// VERSION END: v49es-realized-variant-applicability-cleanup
+// VERSION END: v49et-requirement-aware-construction

@@ -137,6 +137,11 @@ const VARIANT_DEFINITION_ROWS = [
       featureTypes: ["battery", "chopShop"],
       reason: "Requires batteries or chop shops in the selected sets."
     },
+    constructionRequirement: {
+      type: "boardFeatureAnyOf",
+      featureTypes: ["battery", "chopShop"],
+      reason: "Upgrade World needs at least one selected board with a Battery or Chop Shop."
+    },
     applyBundle: applyBooleanField("upgradeWorld")
   },
   {
@@ -273,6 +278,11 @@ const VARIANT_DEFINITION_ROWS = [
       featureType: "laser",
       reason: "Requires board lasers in the selected sets."
     },
+    constructionRequirement: {
+      type: "boardFeatureAnyOf",
+      featureTypes: ["laser"],
+      reason: "Cutting Floor needs at least one selected board with a board laser."
+    },
     applyBundle: applyBooleanField("cuttingFloor")
   },
   {
@@ -295,6 +305,11 @@ const VARIANT_DEFINITION_ROWS = [
       featureType: "oil",
       reason: "Requires oil slicks in the selected sets."
     },
+    constructionRequirement: {
+      type: "boardFeatureAnyOf",
+      featureTypes: ["oil"],
+      reason: "Flaming Oil needs at least one selected board with oil."
+    },
     applyBundle: applyBooleanField("flamingOil")
   },
   {
@@ -316,6 +331,11 @@ const VARIANT_DEFINITION_ROWS = [
       type: "featureTypeAvailable",
       featureType: "repulsor",
       reason: "Requires repulsor fields in the selected sets."
+    },
+    constructionRequirement: {
+      type: "boardFeatureAnyOf",
+      featureTypes: ["repulsor"],
+      reason: "Repulsor Overdrive needs at least one selected board with a repulsor."
     },
     applyBundle: applyBooleanField("repulsorOverdrive")
   },
@@ -387,6 +407,10 @@ const VARIANT_DEFINITION_ROWS = [
       eventType: "variant-rule:hazardous-flags",
       rationale: "Remember once in a turn that a normally suppressed board element remains active under a checkpoint when the selected route actually interacts with such a checkpoint tile."
     },
+    constructionRequirement: {
+      type: "checkpointSuppressibleBoardFeature",
+      reason: "Hazardous Flags needs at least one selected board with a feature that a normal checkpoint would suppress."
+    },
     applyBundle: applyBooleanField("hazardousFlags")
   },
   {
@@ -420,6 +444,11 @@ const VARIANT_DEFINITION_ROWS = [
       trigger: "moving-target-tracking",
       eventType: "variant-rule:moving-target-tracking",
       rationale: "A moving checkpoint must be mentally advanced relative to every programmed register; unlike ordinary variant-memory rules, this contributes one tracking event per relevant register."
+    },
+    constructionRequirement: {
+      type: "boardFeatureAnyOf",
+      featureTypes: ["belt"],
+      reason: "Moving Targets needs at least one selected board with a conveyor."
     },
     applyBundle: applyBooleanField("movingTargets")
   },
@@ -681,6 +710,10 @@ export function getVariantExclusiveGroupConflict(leftVariantId, rightVariantId) 
 
 export function getVariantAvailabilityRule(variantId) {
   return getVariantDefinition(variantId)?.availability ?? null;
+}
+
+export function getVariantConstructionRequirement(variantId) {
+  return getVariantDefinition(variantId)?.constructionRequirement ?? null;
 }
 
 // Soft rule relationships are deliberately separate from hard incompatibilities,
