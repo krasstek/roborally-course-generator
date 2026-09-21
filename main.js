@@ -1,6 +1,6 @@
-// VERSION START: v49et-requirement-aware-construction
+// VERSION START: v49eu-requirement-cover-performance
 // Robo Rally Course Randomizer - production runtime
-const MAIN_BUILD_ID = "v49et-requirement-aware-construction";
+const MAIN_BUILD_ID = "v49eu-requirement-cover-performance";
 // Mobile browsers may auto-detect number-like rule text and restyle it as a
 // tappable link even though the app emitted ordinary text. Keep rules/course
 // annotations visually plain; this is presentation-only and does not disable
@@ -8134,21 +8134,65 @@ function chooseRequirementCoveringBoardIds(boardIds, count, pieceMap, requiremen
     : () => true;
 
   const fillSelection = (selected, usedPhysicalBoards) => {
-    if (selected.length === count) {
+    const remainingSlots = count - selected.length;
+    if (remainingSlots < 0) return null;
+    if (remainingSlots === 0) {
       return selectionPredicate(selected) ? selected : null;
     }
-    const fillerCandidates = shuffle(boardIds.filter((boardId) => (
+
+    const availableBoardIds = boardIds.filter((boardId) => (
       !usedPhysicalBoards.has(getPhysicalBoardId(pieceMap[boardId]))
-    )));
-    for (const boardId of fillerCandidates) {
-      const physicalBoardId = getPhysicalBoardId(pieceMap[boardId]);
-      const result = fillSelection(
-        [...selected, boardId],
-        new Set([...usedPhysicalBoards, physicalBoardId])
-      );
-      if (result) return result;
+    ));
+    if (countPhysicalBoards(availableBoardIds, pieceMap) < remainingSlots) {
+      return null;
     }
-    return null;
+
+    const completeFromOrder = (orderedBoardIds) => {
+      const completed = [...selected];
+      const completedPhysicalBoards = new Set(usedPhysicalBoards);
+      for (const boardId of orderedBoardIds) {
+        const physicalBoardId = getPhysicalBoardId(pieceMap[boardId]);
+        if (completedPhysicalBoards.has(physicalBoardId)) continue;
+        completed.push(boardId);
+        completedPhysicalBoards.add(physicalBoardId);
+        if (completed.length === count) break;
+      }
+      return completed.length === count && selectionPredicate(completed)
+        ? completed
+        : null;
+    };
+
+    // v49eu: v49et recursively enumerated filler-board permutations here.
+    // When a feature-covering core could not also satisfy dock frontage, that
+    // synchronous recursion could monopolize the browser main thread and make
+    // generation appear frozen. A handful of randomized completions preserves
+    // ordinary composition diversity without unbounded filler backtracking.
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const completed = completeFromOrder(shuffle(availableBoardIds));
+      if (completed) return completed;
+    }
+
+    // The only production selection predicate today is dock-span feasibility.
+    // Choosing the widest available face from each unused physical board and
+    // trying those groups in descending span order is therefore an exact
+    // fallback for that constraint: if this completion cannot reach the dock
+    // frontage, no other filler choice for this fixed requirement core can.
+    // Keep the final predicate call authoritative so future predicates remain
+    // safe even though they may need their own explicit completion strategy.
+    const bestFaceByPhysicalBoard = new Map();
+    for (const boardId of availableBoardIds) {
+      const physicalBoardId = getPhysicalBoardId(pieceMap[boardId]);
+      const piece = pieceMap[boardId];
+      const span = Math.max(piece?.width ?? 0, piece?.height ?? 0);
+      const current = bestFaceByPhysicalBoard.get(physicalBoardId);
+      if (!current || span > current.span) {
+        bestFaceByPhysicalBoard.set(physicalBoardId, { boardId, span });
+      }
+    }
+    const maximumSpanOrder = [...bestFaceByPhysicalBoard.values()]
+      .sort((left, right) => right.span - left.span)
+      .map((entry) => entry.boardId);
+    return completeFromOrder(maximumSpanOrder);
   };
 
   const search = (selected, usedPhysicalBoards, uncovered) => {
@@ -23040,7 +23084,7 @@ function buildScenarioReport(scenario, selectedLegIndices = null) {
     `Floor damage/repair v49eo LIVE: flamethrowers deal 1 on each active entry/pass-through +1 on end-of-register; Flaming Oil ${scenario.flamingOil ? "ON (+1 on entering any oil in a register +1 on ending that register on oil; no per-oil-tile stacking)" : "off"}; Repair Stations ${scenario.repairStations ? "ON (register-5 ordinary checkpoint removes 23/40 expected SPAM +17/40 expected Haywire, no spill)" : "off"}; flamethrower / Flaming Oil / Repair Station planning each collapse to at most one mental event per game turn when relevant.`,
     `Variant ownership v49es LIVE: Moving Targets ${scenario.movingTargets ? "ON (dynamic checkpoint routing + one tracking mental event per relevant register; old tracking/volatility production penalties OFF)" : "off"}; Repulsor Overdrive ${scenario.repulsorOverdrive ? "ON (exact doubled bounce + at most one relevant memory event per turn)" : "off"}; Hazardous Flags ${scenario.hazardousFlags ? "ON (covered board elements stay mechanically active + at most one relevant memory event per turn)" : "off"}; Critical Haywire ${scenario.criticalHaywire ? "ON (hand-size effect; no mental event)" : "off"}; Critical SPAM ${scenario.criticalSpam ? "ON (played-SPAM model: provisional 20% effective relief / 80% returned to pending; no mental event)" : "off"}.`,
     `Scenario/config ownership v49es: No Docks ${scenario.noDocks ? "full eligible exposed edge before normal pruning" : "off"}; Extra Docks ${scenario.extraDocks ? "multiple physical docks (forced mode hard-gated)" : "off"}; Sandwiched Dock ${scenario.sandwichedDock ? "intentional checkpoint-facing / both-sides construction policy" : "off"}; board offsets ${scenario.staggeredBoards ? "allowed, not guaranteed" : "disallowed/aligned required"}; Virtual Bots ${scenario.virtualBots ? "strategic player-route branching proxy, no mental event" : "off"}; overlays use a human-facing pre-game complexity envelope, while placed overlay mechanics use ordinary board ownership.`,
-    `Variant construction v49et: selected feature-dependent rules constrain main-board sampling before layout construction; one board may satisfy several rules, board count is raised only when required to cover the selected capabilities, and Moving Targets / Hazardous Flags also constrain checkpoint sampling.`,
+    `Variant construction v49eu: v49et requirement-aware main-board selection preserved; filler-board completion is now bounded with deterministic dock-span fallback so failed requirement/dock combinations cannot recurse through filler permutations; Moving Targets / Hazardous Flags still constrain checkpoint sampling.`,
     `Variant applicability v49es SAFETY NET: Must rules must be realizable on the finished course; sampled Allowed rules with positive complexity cost obey the same realized-applicability gate, so optional complexity is never spent on a physically inert special rule.`,
     currentNormalRouteModel
       ? ""
@@ -31115,4 +31159,4 @@ if (typeof document !== "undefined") {
   init().catch(console.error);
 
 }
-// VERSION END: v49et-requirement-aware-construction
+// VERSION END: v49eu-requirement-cover-performance
