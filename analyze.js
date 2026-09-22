@@ -1,6 +1,6 @@
-// VERSION START: v49es-realized-variant-applicability-cleanup
+// VERSION START: v49fc-virtual-bots-normal-routing
 // Robo Rally Course Randomizer - route analysis and scoring runtime
-export const ANALYZE_BUILD_ID = "v49es-realized-variant-applicability-cleanup";
+export const ANALYZE_BUILD_ID = "v49fc-virtual-bots-normal-routing";
 const ASSET_VERSION = new URL(import.meta.url).searchParams.get("v") ?? "";
 const VERSION_SUFFIX = ASSET_VERSION ? `?v=${encodeURIComponent(ASSET_VERSION)}` : "";
 const versionedPath = (path) => `${path}${VERSION_SUFFIX}`;
@@ -9584,7 +9584,18 @@ function getDamageEconomyTrafficRangedRegisterInputs(
         ROTATION_ORDER.map((dir) => [dir, 0])
       );
       const focusTransition = routeLeg.transitions?.[index] ?? null;
-      if (!focusTransition?.rebooted && !focusTransition?.crashed) {
+      // v49fc Virtual Bots: during the first five registers the robots are still
+      // virtual for modeling purposes, so robot weapons cannot affect them. Keep
+      // all ordinary traffic/competition and factory-floor consequences active;
+      // suppress only robot-laser damage and its corresponding shot-awareness.
+      const virtualBotRobotWeaponsSuppressed = Boolean(
+        options.virtualBots && absoluteAction <= REGISTER_COUNT
+      );
+      if (
+        !virtualBotRobotWeaponsSuppressed &&
+        !focusTransition?.rebooted &&
+        !focusTransition?.crashed
+      ) {
         for (const dir of ROTATION_ORDER) {
           const cappedExpectedHit = Math.min(shotByRegisterFacing[index][dir], 1);
           registerExpectedHits += cappedExpectedHit;
@@ -9627,7 +9638,8 @@ function getDamageEconomyTrafficRangedRegisterInputs(
           ])
         ),
         confidence: Number(confidence.toFixed(4)),
-        legWeight
+        legWeight,
+        virtualBotRobotWeaponsSuppressed
       });
 
       carriedConfidence = getRENativeTrafficConfidenceForAbsoluteAction(
@@ -9647,7 +9659,8 @@ function getDamageEconomyTrafficRangedRegisterInputs(
     confidenceMean: Number((confidenceRegisters ? confidenceSum / confidenceRegisters : 1).toFixed(4)),
     confidenceEnd: Number((carriedConfidence ?? 1).toFixed(4)),
     occupancyTotal: Number([...occupancyByIndex.values()].reduce((a, b) => a + b, 0).toFixed(3)),
-    occupancyModel: trafficContext?.occupancyModel ?? "common-quality-weighted-route-mixture-field"
+    occupancyModel: trafficContext?.occupancyModel ?? "common-quality-weighted-route-mixture-field",
+    virtualBotsFirstTurnRobotWeaponsSuppressed: Boolean(options.virtualBots)
   };
 }
 
@@ -29238,33 +29251,13 @@ export function analyzeFullCourse(tileMap, starts, flags, options = {}) {
       : selectDistinctRoutes(preparedRoutes, flags.at(-1), maxRoutes);
   };
 
-  // All Virtual Bots share Flag 0, so avoid repeating the same expensive
-  // continuous route search once per player. Clone the candidate objects per
-  // robot so multiplayer route selection still treats them independently.
-  const sharedVirtualRoutes = options.virtualBots && starts.length
-    ? enumeratePreparedRoutesForStart(starts[0])
-    : null;
-
-  const clonePreparedRoute = (route) => route
-    ? {
-      ...route,
-      path: route.path ? [...route.path] : route.path,
-      trafficPath: route.trafficPath ? [...route.trafficPath] : route.trafficPath,
-      legRoutes: (route.legRoutes || []).map((leg) => leg
-        ? {
-          ...leg,
-          path: leg.path ? [...leg.path] : leg.path,
-          trafficPath: leg.trafficPath ? [...leg.trafficPath] : leg.trafficPath
-        }
-        : leg)
-    }
-    : route;
-
+  // v49fc: no Virtual-Bots-specific route builder. Even synchronous/diagnostic
+  // callers analyze each logical start through the ordinary route machinery.
+  // Production Virtual Bots use the cooperative contextual estimate→realize path
+  // in main; this branch is retained only as the generic synchronous fallback.
   const startAnalyses = starts.map((start, index) => {
     const sourceIndex = Number.isInteger(start.analysisIndex) ? start.analysisIndex : index;
-    const distinctFullRoutes = sharedVirtualRoutes
-      ? sharedVirtualRoutes.map(clonePreparedRoute)
-      : enumeratePreparedRoutesForStart(start);
+    const distinctFullRoutes = enumeratePreparedRoutesForStart(start);
     const fullRoute = distinctFullRoutes[0] ?? null;
 
     return buildStartAnalysisForSelectedFullRoute({

@@ -1,6 +1,6 @@
-// VERSION START: v49eu-requirement-cover-performance
+// VERSION START: v49fc-virtual-bots-normal-routing
 // Robo Rally Course Randomizer - production runtime
-const MAIN_BUILD_ID = "v49eu-requirement-cover-performance";
+const MAIN_BUILD_ID = "v49fc-virtual-bots-normal-routing";
 // Mobile browsers may auto-detect number-like rule text and restyle it as a
 // tappable link even though the app emitted ordinary text. Keep rules/course
 // annotations visually plain; this is presentation-only and does not disable
@@ -15670,10 +15670,10 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
     options.movingTargets,
     { maxActions: options.movingTargetMaxActions ?? 16 }
   );
-  // v33 production invariant: every structural start enters the contextual
-  // estimate→realize pipeline. The old lightweight first-leg pruning helper is
-  // retained below only for historical/targeted diagnostics; it is not a Normal
-  // eligibility stage and cannot hide a start before full-course routing.
+  // v49fc invariant: Virtual Bots are ordinary logical starts that happen to
+  // occupy the same physical square. They use the same cooperative contextual
+  // routing pipeline as Normal; physical estimate caches may share work, while
+  // analysisIndex keeps each player lineage distinct for traffic/selection.
   const contextualLegSearch = true;
   const prePruning = {
     starts: starts.map((start, index) => ({
@@ -23084,6 +23084,8 @@ function buildScenarioReport(scenario, selectedLegIndices = null) {
     `Floor damage/repair v49eo LIVE: flamethrowers deal 1 on each active entry/pass-through +1 on end-of-register; Flaming Oil ${scenario.flamingOil ? "ON (+1 on entering any oil in a register +1 on ending that register on oil; no per-oil-tile stacking)" : "off"}; Repair Stations ${scenario.repairStations ? "ON (register-5 ordinary checkpoint removes 23/40 expected SPAM +17/40 expected Haywire, no spill)" : "off"}; flamethrower / Flaming Oil / Repair Station planning each collapse to at most one mental event per game turn when relevant.`,
     `Variant ownership v49es LIVE: Moving Targets ${scenario.movingTargets ? "ON (dynamic checkpoint routing + one tracking mental event per relevant register; old tracking/volatility production penalties OFF)" : "off"}; Repulsor Overdrive ${scenario.repulsorOverdrive ? "ON (exact doubled bounce + at most one relevant memory event per turn)" : "off"}; Hazardous Flags ${scenario.hazardousFlags ? "ON (covered board elements stay mechanically active + at most one relevant memory event per turn)" : "off"}; Critical Haywire ${scenario.criticalHaywire ? "ON (hand-size effect; no mental event)" : "off"}; Critical SPAM ${scenario.criticalSpam ? "ON (played-SPAM model: provisional 20% effective relief / 80% returned to pending; no mental event)" : "off"}.`,
     `Scenario/config ownership v49es: No Docks ${scenario.noDocks ? "full eligible exposed edge before normal pruning" : "off"}; Extra Docks ${scenario.extraDocks ? "multiple physical docks (forced mode hard-gated)" : "off"}; Sandwiched Dock ${scenario.sandwichedDock ? "intentional checkpoint-facing / both-sides construction policy" : "off"}; board offsets ${scenario.staggeredBoards ? "allowed, not guaranteed" : "disallowed/aligned required"}; Virtual Bots ${scenario.virtualBots ? "strategic player-route branching proxy, no mental event" : "off"}; overlays use a human-facing pre-game complexity envelope, while placed overlay mechanics use ordinary board ownership.`,
+    `Virtual Bots model v49fc: ${scenario.virtualBots ? "normal cooperative estimate→realize routing over n_players logical starts at one shared square; traffic remains active; turn-1 robot-laser damage/awareness suppressed" : "off"}.`,
+    `Early-stop fallback v49fc: completed fallback candidates survive user Stop before an acceptable candidate exists; acceptable-candidate labeling remains unchanged.`,
     `Variant construction v49eu: v49et requirement-aware main-board selection preserved; filler-board completion is now bounded with deterministic dock-span fallback so failed requirement/dock combinations cannot recurse through filler permutations; Moving Targets / Hazardous Flags still constrain checkpoint sampling.`,
     `Variant applicability v49es SAFETY NET: Must rules must be realizable on the finished course; sampled Allowed rules with positive complexity cost obey the same realized-applicability gate, so optional complexity is never spent on a physically inert special rule.`,
     currentNormalRouteModel
@@ -26860,9 +26862,10 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         // preflight is an audition only and never decides start eligibility here.
         const estimateThenRealizeSharedCandidate = (
           !startEnergyPricing &&
-          !virtualBots &&
-          !effectiveNoDocks &&
-          scenarioDockPlacements.length === 1
+          (
+            virtualBots ||
+            (!effectiveNoDocks && scenarioDockPlacements.length === 1)
+          )
         );
         const variantAnalysisOptions = applyVariantAnalysisOptions({
           // Keep resource-economy inputs explicit so future optional rules can
@@ -29684,9 +29687,12 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
     generationDiagnostics.selectedCandidateScore = Number.isFinite(nearBestChoice.selectedScore)
       ? Number(nearBestChoice.selectedScore.toFixed(2))
       : Number(getAcceptableScenarioScore(bestScenario).toFixed(2));
-  } else if (terminationReason === "user-best-so-far") {
-    bestScenario = null;
   }
+  // v49fb: a user stop must not discard a completed returnable fallback merely
+  // because no ordinarily acceptable candidate has been found yet. The same
+  // bestScenario accumulated for attempt-limit / soft-budget fallback remains
+  // authoritative here. If no completed fallback exists, bestScenario is still
+  // null and the existing "No course found yet" behavior remains correct.
 
   // v49er: forced Extra Docks is a hard gate. One-dock near misses remain
   // diagnostic candidates only and are never promoted to a returned course.
@@ -31159,4 +31165,4 @@ if (typeof document !== "undefined") {
   init().catch(console.error);
 
 }
-// VERSION END: v49eu-requirement-cover-performance
+// VERSION END: v49fb-virtual-bots-early-stop-fallback
