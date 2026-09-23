@@ -1,6 +1,6 @@
-// VERSION START: v49fc-virtual-bots-normal-routing
+// VERSION START: v49fd-special-board-mechanics-ownership
 // Robo Rally Course Randomizer - route analysis and scoring runtime
-export const ANALYZE_BUILD_ID = "v49fc-virtual-bots-normal-routing";
+export const ANALYZE_BUILD_ID = "v49fd-special-board-mechanics-ownership";
 const ASSET_VERSION = new URL(import.meta.url).searchParams.get("v") ?? "";
 const VERSION_SUFFIX = ASSET_VERSION ? `?v=${encodeURIComponent(ASSET_VERSION)}` : "";
 const versionedPath = (path) => `${path}${VERSION_SUFFIX}`;
@@ -19,8 +19,9 @@ const { getActiveVariantMentalEventRules } = await import(
 
 // This module is a route-evaluation model for board setup, not a full RoboRally
 // simulator. It resolves movement-shaping effects that materially change route
-// topology, while many late-phase hazards are intentionally represented as
-// penalties instead of exact register-by-register gameplay.
+// topology and replays the board hazards that feed authoritative RE/damage
+// ownership on their actual register chronology; cheap search may still use
+// bounded guidance penalties for discovery.
 //
 // Current design invariants:
 // - Every route exposed to Dev View must remain physically/register/facing exact
@@ -2094,6 +2095,40 @@ function getFlattenedUnknownUpgradeCardValueR(
   ).toFixed(6));
 }
 
+function getFlattenedFreeRandomUpgradeInstallValueR(
+  absoluteActionCount,
+  options = {}
+) {
+  const config = getRouteEnergyEconomyConfig(options);
+  const fullHorizonActions = getRouteEconomyFullHorizonActions(options);
+  if (
+    !(fullHorizonActions > 0) ||
+    !(config.usefulUpgradeCardRate > 0)
+  ) {
+    return 0;
+  }
+
+  // The Waste benefit installs immediately at this register boundary rather
+  // than waiting for the next normal Upgrade Phase, so its useful lifetime
+  // starts after the current register.
+  const exposure = getRouteEconomyInstallExposure(
+    Math.max(0, Number(absoluteActionCount) || 0),
+    fullHorizonActions
+  );
+
+  // Radioactive Waste installs a random upgrade for free. Reverse-engineer
+  // its expected value from the existing upgrade-economy assumptions:
+  // expected useful-card rate × one full useful-install investment × remaining
+  // exposure. Unlike a normal unknown card, this branch does not require the
+  // player to hold/spend Energy before the upgrade becomes useful.
+  return Number((
+    config.usefulUpgradeCardRate *
+    Math.max(1, config.usefulEnergyPerInstall) *
+    config.powerRegistersPerEnergy *
+    exposure
+  ).toFixed(6));
+}
+
 function getFlattenedOpeningEconomyState(options = {}) {
   const config = getRouteEnergyEconomyConfig(options);
   const startingEnergy = clamp(config.startingEnergy, 0, config.maxEnergy);
@@ -2206,9 +2241,9 @@ function getRouteEnergyDominanceBoundConfig(options = {}) {
     energyCubeScore,
     unknownCardScore,
     // Each flattened marginal/card value is rounded to 1e-6 before the final
-    // register-score conversion. A single action can accumulate at most five
-    // such rounded terms (Battery + card, WAIT, Chop Shop's two-card option).
-    roundingSlackScore: nonnegativeRegisterScore * 0.000005 + 0.001,
+    // register-score conversion. A single action can accumulate at most six
+    // such rounded terms (Battery + card, WAIT, Chop Shop's two-card option, Waste).
+    roundingSlackScore: nonnegativeRegisterScore * 0.000006 + 0.001,
     upgradeWorld: Boolean(options.upgradeWorld)
   };
 }
@@ -2226,6 +2261,9 @@ function getRouteEnergyDominanceRewardUpperBound(
   const features = tile?.features || [];
   const onBattery = features.some((feature) => feature.type === "battery");
   const onChopShop = features.some((feature) => feature.type === "chopShop");
+  const onRadioactiveWaste = features.some(
+    (feature) => feature.type === "radioactiveWaste"
+  );
   const powerUp = actionId === "WAIT";
   const cardScore = boundConfig.unknownCardScore;
   const cubeScore = boundConfig.energyCubeScore;
@@ -2239,6 +2277,12 @@ function getRouteEnergyDominanceRewardUpperBound(
     const energyOption = cubeScore + upgradeCardScore;
     const cardOption = (1 + (boundConfig.upgradeWorld ? 1 : 0)) * cardScore;
     rewardUpperBound += Math.max(energyOption, cardOption);
+  }
+  if (onRadioactiveWaste) {
+    // The real step chooses the better of +1 Energy and a free random upgrade.
+    // cardScore is already the conservative full-investment random-upgrade
+    // ceiling, so max(cube, card) remains a valid one-step bound.
+    rewardUpperBound += Math.max(cubeScore, cardScore);
   }
 
   // Include both the intermediate 1e-6 rounding ceiling and the final 0.001
@@ -2255,7 +2299,8 @@ function getRouteEnergyShadowStep(
   nextAbsoluteActionCount,
   currentReserve,
   _currentUsefulCardUnits,
-  options = {}
+  options = {},
+  transition = null
 ) {
   const config = getRouteEnergyEconomyConfig(options);
   const initialState = getInitialRouteEconomyShadowState(options);
@@ -2275,6 +2320,11 @@ function getRouteEnergyShadowStep(
       batteryRewardScore: 0,
       powerUpRewardScore: 0,
       chopShopRewardScore: 0,
+      radioactiveWasteRewardScore: 0,
+      radioactiveWasteRewardRegisterEquivalents: 0,
+      radioactiveWasteChoice: null,
+      radioactiveWasteEnergyGain: 0,
+      radioactiveWasteFreeUpgradeValueR: 0,
       reserveBefore,
       reserveAfter: reserveBefore,
       usefulCardUnitsBefore: 0,
@@ -2297,12 +2347,19 @@ function getRouteEnergyShadowStep(
   const features = tile?.features || [];
   const onBattery = features.some((feature) => feature.type === "battery");
   const onChopShop = features.some((feature) => feature.type === "chopShop");
+  const onRadioactiveWaste = features.some(
+    (feature) => feature.type === "radioactiveWaste"
+  );
   const registerScore = Number(options.routeEnergyRegisterScore);
 
   let energy = reserveBefore;
   let batteryRewardR = 0;
   let powerUpRewardR = 0;
   let chopShopRewardR = 0;
+  let radioactiveWasteRewardR = 0;
+  let radioactiveWasteEnergyGain = 0;
+  let radioactiveWasteFreeUpgradeValueR = 0;
+  let radioactiveWasteChoice = null;
   let batteryEnergyGain = 0;
   let powerUpEnergyGain = 0;
   let extraCardDraws = 0;
@@ -2381,11 +2438,57 @@ function getRouteEnergyShadowStep(
     }
   }
 
+  // Radioactive Waste resolves at the end of every surviving register. Its
+  // current movement is already handled by the ordinary current machinery.
+  // The positive branch is a real player choice: +1 Energy OR install one
+  // random upgrade for free. Value both with the same flattened economy used
+  // elsewhere and take the better branch. A reboot/crash has already removed
+  // the robot before this end-of-register benefit can happen.
+  if (
+    onRadioactiveWaste &&
+    !transition?.rebooted &&
+    !transition?.crashed
+  ) {
+    const energyPackage = applyFlattenedRouteEnergyGain(
+      energy,
+      1,
+      nextAbsoluteActionCount,
+      options
+    );
+    const energyOptionRewardR = energyPackage.rewardR;
+    radioactiveWasteFreeUpgradeValueR =
+      getFlattenedFreeRandomUpgradeInstallValueR(
+        nextAbsoluteActionCount,
+        options
+      );
+    const chooseUpgrade =
+      radioactiveWasteFreeUpgradeValueR > energyOptionRewardR + 1e-9;
+    radioactiveWasteChoice = chooseUpgrade ? "free-upgrade" : "energy";
+    if (chooseUpgrade) {
+      radioactiveWasteRewardR += radioactiveWasteFreeUpgradeValueR;
+    } else {
+      radioactiveWasteRewardR += energyOptionRewardR;
+      radioactiveWasteEnergyGain += energyPackage.realizedEnergyGain;
+      energy = energyPackage.energy;
+    }
+  }
+
   const batteryRewardScore = batteryRewardR * registerScore;
   const powerUpRewardScore = powerUpRewardR * registerScore;
   const chopShopRewardScore = chopShopRewardR * registerScore;
-  const rewardScore = batteryRewardScore + powerUpRewardScore + chopShopRewardScore;
-  const rewardRegisterEquivalents = batteryRewardR + powerUpRewardR + chopShopRewardR;
+  const radioactiveWasteRewardScore = radioactiveWasteRewardR * registerScore;
+  const rewardScore = (
+    batteryRewardScore +
+    powerUpRewardScore +
+    chopShopRewardScore +
+    radioactiveWasteRewardScore
+  );
+  const rewardRegisterEquivalents = (
+    batteryRewardR +
+    powerUpRewardR +
+    chopShopRewardR +
+    radioactiveWasteRewardR
+  );
 
   return {
     rewardScore: Number(Math.max(0, rewardScore).toFixed(3)),
@@ -2393,6 +2496,17 @@ function getRouteEnergyShadowStep(
     batteryRewardScore: Number(Math.max(0, batteryRewardScore).toFixed(3)),
     powerUpRewardScore: Number(Math.max(0, powerUpRewardScore).toFixed(3)),
     chopShopRewardScore: Number(Math.max(0, chopShopRewardScore).toFixed(3)),
+    radioactiveWasteRewardScore: Number(
+      Math.max(0, radioactiveWasteRewardScore).toFixed(3)
+    ),
+    radioactiveWasteRewardRegisterEquivalents: Number(
+      Math.max(0, radioactiveWasteRewardR).toFixed(6)
+    ),
+    radioactiveWasteChoice,
+    radioactiveWasteEnergyGain,
+    radioactiveWasteFreeUpgradeValueR: Number(
+      Math.max(0, radioactiveWasteFreeUpgradeValueR).toFixed(6)
+    ),
     reserveBefore,
     reserveAfter: energy,
     usefulCardUnitsBefore: 0,
@@ -4426,14 +4540,17 @@ function getEndOfRegisterFeaturePenalty(tileMap, state, options = {}) {
 
   let penalty = 0;
 
-  // Radioactive Waste is effectively 5/5: every register spent here hurts,
-  // partly offset by the energy/free-upgrade choice.
+  // SEARCH GUIDANCE ONLY. Authoritative completed-route replay owns the real
+  // Radioactive Waste damage (+1 every surviving register) and its paired
+  // Energy/free-random-upgrade benefit. Keep a modest net hazard hint here so
+  // cheap discovery does not treat prolonged waste occupancy as neutral.
   if (hasFeatureType(tile, "radioactiveWaste")) {
     penalty += 2.4;
   }
 
-  // Radiation is an end-of-turn effect, but the nominal route register is
-  // not trusted. Score its expected 1/5 exposure instead.
+  // SEARCH GUIDANCE ONLY. Authoritative replay applies Radiation exactly at the
+  // end of register 5. The cheap pathfinder keeps the old expected 1/5 hint so
+  // it can prefer safer witnesses before exact chronological realization.
   if (hasFeatureType(tile, "radiation")) {
     penalty += 4.5 / REGISTER_COUNT;
   }
@@ -6118,6 +6235,8 @@ function getDamageEconomyRealizedDamageForTransition(
   let boardLaserDamageUnits = 0;
   let flamethrowerDamageUnits = 0;
   let flamingOilDamageUnits = 0;
+  let radiationDamageUnits = 0;
+  let radioactiveWasteDamageUnits = 0;
   let ledgeDamageUnits = 0;
   const rebootDamageUnits = transition?.rebooted
     ? (options.moreDeadlyGame ? 3 : 2)
@@ -6194,12 +6313,31 @@ function getDamageEconomyRealizedDamageForTransition(
     if (options.flamingOil && isOil(finalTile)) {
       flamingOilDamageUnits += 1;
     }
+
+    // Radiation is a once-per-round board hazard: it fires at the end of
+    // register 5, after board movement/effects, and deals one damage if the
+    // robot is still on the Radiation space.
+    if (
+      registerOptions.registerIndex === REGISTER_COUNT - 1 &&
+      hasFeatureType(finalTile, "radiation")
+    ) {
+      radiationDamageUnits += 1;
+    }
+
+    // Radioactive Waste is end-of-EVERY-register: after current/board effects,
+    // a robot that remains on the space takes one damage. The paired positive
+    // economy choice is modeled separately by getRouteEnergyShadowStep().
+    if (hasFeatureType(finalTile, "radioactiveWaste")) {
+      radioactiveWasteDamageUnits += 1;
+    }
   }
 
   const totalDamageUnits = (
     boardLaserDamageUnits +
     flamethrowerDamageUnits +
     flamingOilDamageUnits +
+    radiationDamageUnits +
+    radioactiveWasteDamageUnits +
     ledgeDamageUnits +
     rebootDamageUnits
   );
@@ -6207,6 +6345,8 @@ function getDamageEconomyRealizedDamageForTransition(
   if (boardLaserDamageUnits > 0) sourceTypes.push("board-laser-hit");
   if (flamethrowerDamageUnits > 0) sourceTypes.push("flamethrower-hit");
   if (flamingOilDamageUnits > 0) sourceTypes.push("flaming-oil-hit");
+  if (radiationDamageUnits > 0) sourceTypes.push("radiation-hit");
+  if (radioactiveWasteDamageUnits > 0) sourceTypes.push("radioactive-waste-hit");
   if (ledgeDamageUnits > 0) sourceTypes.push("ledge-damage");
   if (rebootDamageUnits > 0) sourceTypes.push("reboot-damage");
 
@@ -6214,6 +6354,8 @@ function getDamageEconomyRealizedDamageForTransition(
     boardLaserDamageUnits,
     flamethrowerDamageUnits,
     flamingOilDamageUnits,
+    radiationDamageUnits,
+    radioactiveWasteDamageUnits,
     ledgeDamageUnits,
     rebootDamageUnits,
     totalDamageUnits,
@@ -6652,6 +6794,8 @@ export function summarizeDamageEconomyFoundationForRoute(
   let boardLaserDamageUnits = 0;
   let flamethrowerDamageUnits = 0;
   let flamingOilDamageUnits = 0;
+  let radiationDamageUnits = 0;
+  let radioactiveWasteDamageUnits = 0;
   let ledgeDamageUnits = 0;
   let rebootDamageUnits = 0;
   let totalSpamAdded = 0;
@@ -6888,6 +7032,8 @@ export function summarizeDamageEconomyFoundationForRoute(
       boardLaserDamageUnits += realized.boardLaserDamageUnits;
       flamethrowerDamageUnits += realized.flamethrowerDamageUnits;
       flamingOilDamageUnits += realized.flamingOilDamageUnits;
+      radiationDamageUnits += realized.radiationDamageUnits;
+      radioactiveWasteDamageUnits += realized.radioactiveWasteDamageUnits;
       ledgeDamageUnits += realized.ledgeDamageUnits;
       rebootDamageUnits += realized.rebootDamageUnits;
       totalSpamAdded += added.spamAdded;
@@ -6916,6 +7062,10 @@ export function summarizeDamageEconomyFoundationForRoute(
         deterministicDamageUnits: Number(realized.totalDamageUnits.toFixed(4)),
         flamethrowerDamageUnits: Number(realized.flamethrowerDamageUnits.toFixed(4)),
         flamingOilDamageUnits: Number(realized.flamingOilDamageUnits.toFixed(4)),
+        radiationDamageUnits: Number(realized.radiationDamageUnits.toFixed(4)),
+        radioactiveWasteDamageUnits: Number(
+          realized.radioactiveWasteDamageUnits.toFixed(4)
+        ),
         robotLaserExpectedDamageUnits: Number(robotLaserExpectedDamage.toFixed(4)),
         robotLaserDamagePerHit: profile.robotLaserDamagePerHit,
         robotLaserSpamSuppressed: profile.robotLaserSpamSuppressed,
@@ -7176,6 +7326,8 @@ export function summarizeDamageEconomyFoundationForRoute(
     boardLaserDamageUnits: Number(boardLaserDamageUnits.toFixed(3)),
     flamethrowerDamageUnits: Number(flamethrowerDamageUnits.toFixed(3)),
     flamingOilDamageUnits: Number(flamingOilDamageUnits.toFixed(3)),
+    radiationDamageUnits: Number(radiationDamageUnits.toFixed(3)),
+    radioactiveWasteDamageUnits: Number(radioactiveWasteDamageUnits.toFixed(3)),
     ledgeDamageUnits: Number(ledgeDamageUnits.toFixed(3)),
     rebootDamageUnits: Number(rebootDamageUnits.toFixed(3)),
     totalSpamAdded: Number(totalSpamAdded.toFixed(3)),
@@ -7701,6 +7853,8 @@ function getRegisterEquivalentLedgerPlanningEventsForTransition(
 
   const sourceTypes = new Set(damageEvent?.sourceTypes || []);
   if (sourceTypes.has("board-laser-hit")) add("accepted-hazard:board-laser");
+  if (sourceTypes.has("radiation-hit")) add("accepted-hazard:radiation");
+  if (sourceTypes.has("radioactive-waste-hit")) add("accepted-hazard:radioactive-waste");
   if (sourceTypes.has("ledge-damage")) add("accepted-hazard:ledge");
 
   // Flamethrower planning is a true/false remember-the-mechanic event at the
@@ -8084,7 +8238,8 @@ export function summarizeRegisterEquivalentLedger(
         absoluteAction,
         energyReserve,
         0,
-        options
+        options,
+        transition
       );
       turn.energyRE -= Math.max(
         0,
@@ -12240,7 +12395,8 @@ function enumerateRoutes(tileMap, start, goal, options = {}) {
           executedAbsoluteAction,
           current.routeEnergyShadowReserve,
           current.routeUpgradeCardShadowUnits,
-          options
+          options,
+          transitionForDestination
         );
         const energyEconomyRewardScore = energyStep.rewardScore;
         const batteryEconomyRewardScore = energyStep.batteryRewardScore;
@@ -12715,7 +12871,8 @@ function enumerateFullCourseRoutes(tileMap, start, flags, options = {}) {
           executedAbsoluteAction,
           current.routeEnergyShadowReserve,
           current.routeUpgradeCardShadowUnits,
-          options
+          options,
+          transitionForDestination
         );
         const energyEconomyRewardScore = energyStep.rewardScore;
         const batteryEconomyRewardScore = energyStep.batteryRewardScore;
@@ -12982,7 +13139,10 @@ function buildEdgeSet(route) {
 function hasLineOfSight(tileMap, from, to) {
   const fromKey = tileKey(from.x, from.y);
   const toKey = tileKey(to.x, to.y);
-  const pairKey = fromKey <= toKey ? `${fromKey}|${toKey}` : `${toKey}|${fromKey}`;
+  // Red/green walls make LOS directional: GREEN -> RED can pass while the
+  // reverse RED -> GREEN ray is blocked. Never merge opposite ray directions
+  // into one cache entry.
+  const pairKey = `${fromKey}>${toKey}`;
   let cache = LINE_OF_SIGHT_CACHE.get(tileMap);
   if (!cache) {
     cache = new Map();
@@ -21212,7 +21372,8 @@ function* enumeratePhysicalTimingLegTemplatesSteps(
               executedAbsoluteAction,
               current.routeEnergyShadowReserve,
               0,
-              options
+              options,
+              transition
             );
           profile.energyMs += profileNow() - blockStartedAt;
           const energyEconomyRewardScore = Math.max(
@@ -22105,7 +22266,8 @@ function enumerateContextualLegRoutes(
             executedAbsoluteAction,
             current.routeEnergyShadowReserve,
             current.routeUpgradeCardShadowUnits,
-            options
+            options,
+            transition
           );
           profile.energyMs += profileNow() - blockStartedAt;
           const energyEconomyRewardScore = energyStep.rewardScore;
@@ -22490,7 +22652,8 @@ function replayContextualRouteEnergyForContext(
       executedAbsoluteAction,
       energy,
       0,
-      options
+      options,
+      transition
     );
     totalReward += step.rewardScore || 0;
     totalRewardRegisterEquivalents += step.rewardRegisterEquivalents || 0;
