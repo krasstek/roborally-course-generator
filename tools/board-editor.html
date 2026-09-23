@@ -499,7 +499,7 @@
         <div><strong>P</strong><br />Pit / Push panel (see inspector)</div>
         <div><strong>Black edge</strong><br />Ordinary wall</div>
         <div><strong>Red edge</strong><br />Red wall</div>
-        <div><strong>Green inset edge</strong><br />Green wall; can coexist with red on the same border</div>
+        <div><strong>Green inset edge</strong><br />Green wall; pair it with a red wall on the adjacent tile facing back</div>
         <div><strong>Rad</strong><br />Radiation</div>
         <div><strong>RW</strong><br />Radioactive Waste (add a Conveyor separately for a current)</div>
         <div><strong>Cn</strong><br />Checkpoint number</div>
@@ -836,6 +836,21 @@
       const tile = getTile(x, y, true);
       const normalizedFeature = normalizeFeature(feature);
       if (!normalizedFeature) return;
+
+      if (normalizedFeature.type === "redWall" || normalizedFeature.type === "greenWall") {
+        const oppositeType = normalizedFeature.type === "redWall" ? "greenWall" : "redWall";
+        const oppositeOnSameTile = tile.features.find(f => f.type === oppositeType);
+        const conflictingSides = (normalizedFeature.sides || []).filter(side =>
+          (oppositeOnSameTile?.sides || []).includes(side)
+        );
+        if (conflictingSides.length) {
+          updateStatus(
+            `Red/green wall halves belong on adjacent tiles, not the same tile edge (${conflictingSides.join(",")}). ` +
+            `Place the ${oppositeType === "redWall" ? "red" : "green"} half on the neighboring square facing back.`
+          );
+          return;
+        }
+      }
 
       if (["wall", "redWall", "greenWall", "ledge", "repulsor"].includes(normalizedFeature.type)) {
         const existing = tile.features.find(f => f.type === normalizedFeature.type);

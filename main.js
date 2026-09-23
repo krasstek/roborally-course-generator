@@ -663,6 +663,7 @@ const PIECE_DATA_FILES = [
   "concentric",
   "confusion",
   "convergence",
+  "discovery",
   "docking-bay-a",
   "docking-bay-b",
   "double-helix",
@@ -2579,6 +2580,7 @@ function formatExpansionName(expansionId) {
     "master-builder": "Master Builder",
     "wet-and-wild": "Wet & Wild",
     "chaos-and-carnage": "Chaos & Carnage",
+    "contamination": "Contamination",
     "rr-dice": "Robo Rally Dice"
   };
 
@@ -5360,7 +5362,8 @@ function getPreferencesFromControls() {
       "master-builder": document.getElementById("expansion-master-builder").checked,
       "thrills-and-spills": document.getElementById("expansion-thrills-and-spills").checked,
       "chaos-and-carnage": document.getElementById("expansion-chaos-and-carnage").checked,
-      "wet-and-wild": document.getElementById("expansion-wet-and-wild").checked
+      "wet-and-wild": document.getElementById("expansion-wet-and-wild").checked,
+      "contamination": document.getElementById("expansion-contamination").checked
     },
     allowedVariantRules: Object.fromEntries(
       VARIANT_DEFINITIONS.map((variant) => [variant.id, getVariantControlState(variant.id)])
