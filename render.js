@@ -240,6 +240,73 @@ function drawOverlayGlows(ctx, overlayPlacements, pieces, bounds, tileSize, marg
   ctx.restore();
 }
 
+let featureFocusShadeCanvas = null;
+
+function drawFeatureFocusShade(ctx, goals, overlayPlacements, pieces, bounds, tileSize, margin, boardCount) {
+  const miniOverlayPlacements = (overlayPlacements || []).filter((placement) => (
+    isMiniOverlayPiece(pieces[placement.pieceId])
+  ));
+  const visibleGoals = goals || [];
+  if (!visibleGoals.length && !miniOverlayPlacements.length) {
+    return;
+  }
+
+  if (!featureFocusShadeCanvas) {
+    featureFocusShadeCanvas = document.createElement("canvas");
+  }
+  if (
+    featureFocusShadeCanvas.width !== ctx.canvas.width ||
+    featureFocusShadeCanvas.height !== ctx.canvas.height
+  ) {
+    featureFocusShadeCanvas.width = ctx.canvas.width;
+    featureFocusShadeCanvas.height = ctx.canvas.height;
+  }
+
+  const shadeCtx = featureFocusShadeCanvas.getContext("2d");
+  shadeCtx.clearRect(0, 0, featureFocusShadeCanvas.width, featureFocusShadeCanvas.height);
+
+  const boardWidth = (bounds.maxX - bounds.minX + 1) * tileSize;
+  const boardHeight = (bounds.maxY - bounds.minY + 1) * tileSize;
+  shadeCtx.fillStyle = "rgba(8, 12, 15, 0.55)";
+  shadeCtx.fillRect(margin, margin, boardWidth, boardHeight);
+
+  // Punch target tiles out of the shade on the offscreen surface rather than
+  // erasing the already-rendered board. This behaves identically in photo and
+  // icon views and avoids redrawing feature ownership from resolved map state.
+  shadeCtx.globalCompositeOperation = "destination-out";
+  const revealPadding = Math.max(2, tileSize * 0.06);
+  const revealTile = (x, y) => {
+    const left = margin + (x - bounds.minX) * tileSize;
+    const top = margin + (y - bounds.minY) * tileSize;
+    shadeCtx.fillRect(
+      left - revealPadding,
+      top - revealPadding,
+      tileSize + revealPadding * 2,
+      tileSize + revealPadding * 2
+    );
+  };
+
+  for (const goal of visibleGoals) {
+    revealTile(goal.x, goal.y);
+  }
+
+  for (const placement of miniOverlayPlacements) {
+    const piece = pieces[placement.pieceId];
+    for (const offset of getOccupiedOffsets(piece, placement.rotation ?? 0)) {
+      revealTile(placement.x + offset.x, placement.y + offset.y);
+    }
+  }
+
+  shadeCtx.globalCompositeOperation = "source-over";
+  ctx.drawImage(featureFocusShadeCanvas, 0, 0);
+
+  // The ordinary overlay glow was drawn before the shade. Reapply only the mini
+  // overlay glow so tile overlays stay conspicuous while overlay boards remain dim.
+  if (miniOverlayPlacements.length) {
+    drawOverlayGlows(ctx, miniOverlayPlacements, pieces, bounds, tileSize, margin, boardCount);
+  }
+}
+
 function drawWalls(ctx, sides, x, y, tileSize, options = {}) {
   ctx.save();
   ctx.strokeStyle = options.strokeStyle ?? "#111";
@@ -1717,9 +1784,25 @@ export function render(canvas, pieces, imageMap = {}, options = {}) {
   drawRoutes(ctx, options.analysis, bounds, tileSize, margin, {
     showMovingTargetHits: options.showMovingTargetHits
   });
-  drawGoals(ctx, options.goals || (options.goal ? [options.goal] : []), bounds, tileSize, margin);
+  const renderedGoals = options.goals || (options.goal ? [options.goal] : []);
+  drawGoals(ctx, renderedGoals, bounds, tileSize, margin);
   drawReentryMarkers(ctx, options.reentryMarkers || [], bounds, tileSize, margin);
   if (edgeOutlineColor) {
     drawBoardEdgeOutline(ctx, footprints, bounds, tileSize, margin, edgeOutlineColor);
+  }
+  if (options.highlightMapFeatures) {
+    drawFeatureFocusShade(
+      ctx,
+      renderedGoals,
+      overlayPlacements,
+      pieces,
+      bounds,
+      tileSize,
+      margin,
+      boardCount
+    );
+    // Redraw checkpoints after the shade so the flag and its glow remain fully
+    // bright. Everything else stays visible underneath the dimmed board.
+    drawGoals(ctx, renderedGoals, bounds, tileSize, margin);
   }
 }

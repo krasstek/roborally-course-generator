@@ -9,7 +9,12 @@ export const BOARD_PROFILE_DENSITY_COMPONENT_WEIGHTS = {
   portal: 0.85,
   push: 0.8
 };
-export const RANDOMIZER_CONTROL_PENALTY = 11;
+// v49fh provisional cheap-pathfinder bridge: an isolated Randomizer start is
+// authoritative +2 turn control-clog = 2.2 RE on the current nonlinear clog
+// curve. At 6.4 score per register-equivalent, that is 14.08 score. Keep this
+// as discovery guidance only; shared-turn clog and SPAM relief are owned by the
+// completed-route damage/control economy and will be fitted later from corpus data.
+export const RANDOMIZER_CONTROL_PENALTY = 14.08;
 
 // v38 programming-pressure accounting. These weights are deliberately not
 // ordinary route hazard: they describe how much factory-controlled facing /

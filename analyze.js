@@ -1,6 +1,6 @@
-// VERSION START: v49fd-special-board-mechanics-ownership
+// VERSION START: v49fh-randomizer-re-ownership
 // Robo Rally Course Randomizer - route analysis and scoring runtime
-export const ANALYZE_BUILD_ID = "v49fd-special-board-mechanics-ownership";
+export const ANALYZE_BUILD_ID = "v49fh-randomizer-re-ownership";
 const ASSET_VERSION = new URL(import.meta.url).searchParams.get("v") ?? "";
 const VERSION_SUFFIX = ASSET_VERSION ? `?v=${encodeURIComponent(ASSET_VERSION)}` : "";
 const versionedPath = (path) => `${path}${VERSION_SUFFIX}`;
@@ -4653,11 +4653,22 @@ export function simulateAction(tileMap, startState, action, options = {}) {
     };
   }
 
+  // v49fh ownership: Randomizer is not simulated as a random card outcome.
+  // Preserve only the factual register-start event so completed-route RE can
+  // price its +2 control clog and full SPAM-relief opportunity chronologically.
+  // Trapdoor's pre-programmed-card drop returned above, so it deliberately never
+  // receives this marker.
+  const randomizerAtRegisterStart = hasActiveFeature(
+    startTile,
+    "randomizer",
+    options
+  );
+
   // v48zv hot-path allocation cleanup: only Randomizer needs the
   // register-start interpretation here. Pass that one override explicitly
   // instead of cloning the large contextual options object on every physical
   // cache miss. All other tile-penalty inputs remain the original options.
-  let hazard = getTilePenalty(startTile, options, true);
+  let hazard = getTilePenalty(startTile, options, randomizerAtRegisterStart);
   let rebootPenalty = 0;
   let distance = 0;
   let forcedDistance = 0;
@@ -4705,6 +4716,7 @@ export function simulateAction(tileMap, startState, action, options = {}) {
         if (finishPhysicalMissPhase) finishPhysicalMissPhase("physicalMissProgrammedMs");
         return {
           action: action.id,
+          randomizerAtRegisterStart,
           from: cloneState(startState),
           to: teleported.state,
           rebootChoices: teleported.rebootChoices ?? null,
@@ -4773,6 +4785,7 @@ export function simulateAction(tileMap, startState, action, options = {}) {
         if (finishPhysicalMissPhase) finishPhysicalMissPhase("physicalMissProgrammedMs");
         return {
           action: action.id,
+          randomizerAtRegisterStart,
           from: cloneState(startState),
           to: step.state,
           rebootChoices: step.rebootChoices ?? null,
@@ -4840,6 +4853,7 @@ export function simulateAction(tileMap, startState, action, options = {}) {
         if (finishPhysicalMissPhase) finishPhysicalMissPhase("physicalMissProgrammedMs");
         return {
           action: action.id,
+          randomizerAtRegisterStart,
           from: cloneState(startState),
           to: oilSlide.state,
           rebootChoices: oilSlide.rebootChoices ?? null,
@@ -5014,6 +5028,7 @@ export function simulateAction(tileMap, startState, action, options = {}) {
 
   return {
     action: action.id,
+    randomizerAtRegisterStart,
     from: cloneState(startState),
     to: state,
     rebootChoices,
@@ -5067,7 +5082,7 @@ export function simulateAction(tileMap, startState, action, options = {}) {
 // programming remains, it records one 5-RE shutdown-equivalent episode, clears only
 // that scoring replay's damage state, and continues. The raw chronology remains
 // untouched; only the compressed shutdown-equivalent result is used for routing.
-export const DAMAGE_ECONOMY_MODEL_ID = "damage-economy-v9-pressure-restored-iterative-routing";
+export const DAMAGE_ECONOMY_MODEL_ID = "damage-economy-v10-randomizer-shared-clog";
 const DAMAGE_ECONOMY_SPAM_SHARE = 23 / 40;
 const DAMAGE_ECONOMY_HAYWIRE_SHARE = 17 / 40;
 const DAMAGE_ECONOMY_SHUTDOWN_REFERENCE_RE = REGISTER_COUNT;
@@ -5657,6 +5672,10 @@ const DAMAGE_ECONOMY_RELIEF_TIMING_ALLOWANCE = Object.freeze([
   0.08, 0.30, 0.65, 0.95, 1.00
 ]);
 const DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT = 2;
+// v49fh: beginning a register on a Randomizer surrenders the same amount of
+// control as one SPAM play. It enters the SAME turn-level nonlinear clog curve;
+// it is not a standalone feature-score difficulty bonus.
+const DAMAGE_ECONOMY_RANDOMIZER_CLOG_WEIGHT = DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT;
 const DAMAGE_ECONOMY_RELIEF_FORCED_ROTATION_PENALTY = 0.15;
 const DAMAGE_ECONOMY_RELIEF_FORCED_MOVEMENT_PENALTY = 0.12;
 const DAMAGE_ECONOMY_RELIEF_CONVEYOR_STEP_BONUS = 0.06;
@@ -5746,7 +5765,8 @@ function getDamageEconomyAdjustedForcedSpamHaywireJointDistribution(
 
 function getDamageEconomyCombinedClogSummary(
   forcedSpamHaywireJointDistribution = [],
-  electiveSpamPlayDistribution = [1]
+  electiveSpamPlayDistribution = [1],
+  randomizerStartCount = 0
 ) {
   const joint = Array.isArray(forcedSpamHaywireJointDistribution) &&
     forcedSpamHaywireJointDistribution.length
@@ -5756,9 +5776,16 @@ function getDamageEconomyCombinedClogSummary(
     electiveSpamPlayDistribution.length
     ? electiveSpamPlayDistribution
     : [1];
+  const safeRandomizerStartCount = Math.max(
+    0,
+    Math.floor(Number(randomizerStartCount) || 0)
+  );
+  const safeRandomizerClogLoad =
+    safeRandomizerStartCount * DAMAGE_ECONOMY_RANDOMIZER_CLOG_WEIGHT;
   const spamPlayCountDistribution = Array(REGISTER_COUNT + 1).fill(0);
   const controlClogLoadProbability = new Map();
   let expectedSpamPlayInitiations = 0;
+  let expectedForcedSpamRandomizerOverlap = 0;
   let expectedControlClogLoad = 0;
   let clogRegisterEquivalents = 0;
   let probabilityFourPlusClogs = 0;
@@ -5772,12 +5799,20 @@ function getDamageEconomyCombinedClogSummary(
         const electiveProbability = Math.max(0, Number(electiveProbabilityRaw) || 0);
         if (electiveProbability <= 0) return;
         const probability = jointProbability * electiveProbability;
+        const forcedSpamRandomizerOverlap = Math.min(
+          forcedSpamPlays,
+          safeRandomizerStartCount
+        );
+        const clogBearingForcedSpamPlays = Math.max(
+          0,
+          forcedSpamPlays - forcedSpamRandomizerOverlap
+        );
         const spamPlayCount = Math.min(
           REGISTER_COUNT,
-          forcedSpamPlays + electiveSpamPlays
+          clogBearingForcedSpamPlays + electiveSpamPlays
         );
         const spamClogLoad = spamPlayCount * DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT;
-        const controlClogLoad = haywireCount + spamClogLoad;
+        const controlClogLoad = haywireCount + spamClogLoad + safeRandomizerClogLoad;
         spamPlayCountDistribution[spamPlayCount] += probability;
         const loadKey = Number(controlClogLoad.toFixed(6));
         controlClogLoadProbability.set(
@@ -5785,6 +5820,8 @@ function getDamageEconomyCombinedClogSummary(
           (controlClogLoadProbability.get(loadKey) || 0) + probability
         );
         expectedSpamPlayInitiations += probability * spamPlayCount;
+        expectedForcedSpamRandomizerOverlap +=
+          probability * forcedSpamRandomizerOverlap;
         expectedControlClogLoad += probability * controlClogLoad;
         clogRegisterEquivalents += probability *
           getDamageEconomyClogRegisterEquivalents(controlClogLoad);
@@ -5803,6 +5840,7 @@ function getDamageEconomyCombinedClogSummary(
       spamPlayCountDistribution[index] = probability / probabilityMass;
     });
     expectedSpamPlayInitiations /= probabilityMass;
+    expectedForcedSpamRandomizerOverlap /= probabilityMass;
     expectedControlClogLoad /= probabilityMass;
     clogRegisterEquivalents /= probabilityMass;
     probabilityFourPlusClogs /= probabilityMass;
@@ -5821,6 +5859,9 @@ function getDamageEconomyCombinedClogSummary(
 
   return {
     spamClogLoad: expectedSpamPlayInitiations * DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT,
+    randomizerStartCount: safeRandomizerStartCount,
+    randomizerClogLoad: safeRandomizerClogLoad,
+    expectedForcedSpamRandomizerOverlap,
     expectedSpamPlayInitiations,
     spamPlayCountDistribution,
     controlClogLoadDistribution,
@@ -6083,6 +6124,28 @@ function getDamageEconomyRegisterReliefProfile(
 ) {
   const register = getRegisterPosition(absoluteAction);
   const timingAllowance = DAMAGE_ECONOMY_RELIEF_TIMING_ALLOWANCE[register - 1] ?? 0;
+  const randomizerAtRegisterStart = Boolean(
+    transition?.randomizerAtRegisterStart || transition?.randomizedAction
+  );
+  if (randomizerAtRegisterStart) {
+    return {
+      timingAllowance,
+      boardOpportunity: 1,
+      conveyorMovementBonus: 0,
+      forcedRotationPenalty: 0,
+      forcedMovementPenalty: 0,
+      wallBonus: 0,
+      wallDistance: null,
+      forwardHazardPenalty: 0,
+      forwardHazardScore: 0,
+      conveyorTurns: 0,
+      currentSteps: 0,
+      pusherEvents: 0,
+      travelDirection: getDamageEconomyTravelDirection(plannedReplay),
+      randomizerAtRegisterStart: true,
+      method: "randomizer-full-spam-relief-v49fh"
+    };
+  }
   if (!transition?.from || !plannedReplay?.to || plannedReplay?.rebooted || plannedReplay?.crashed) {
     return {
       timingAllowance,
@@ -6164,6 +6227,28 @@ function getDamageEconomyActiveFlamethrowerCount(tile, registerOptions = {}) {
     feature.type === "flamethrower" &&
     isFeatureActiveThisRegister(feature, registerOptions)
   )).length;
+}
+
+function isDamageEconomyRandomizerAtRegisterStart(
+  tileMap,
+  transition,
+  options = {},
+  absoluteAction = 1
+) {
+  if (transition?.randomizerAtRegisterStart || transition?.randomizedAction) return true;
+  const start = transition?.from;
+  if (!tileMap || !start || !Number.isFinite(start.x) || !Number.isFinite(start.y)) {
+    return false;
+  }
+  const registerOptions = {
+    ...options,
+    registerIndex: (Math.max(1, absoluteAction) - 1) % REGISTER_COUNT
+  };
+  return hasActiveFeature(
+    tileMap.get(tileKey(start.x, start.y)),
+    "randomizer",
+    registerOptions
+  );
 }
 
 function isDamageEconomyRepairStationTile(tile) {
@@ -6416,10 +6501,12 @@ function getDamageEconomyReliefOpportunityByAbsoluteAction(transitionRecords = [
         (directionRunLength - 1) * 0.05
       )
       : 0;
-    opportunities.set(absoluteAction, Math.min(
-      1,
-      Math.max(0, Number(record?.reliefProfile?.boardOpportunity) || 0) + continuityBonus
-    ));
+    opportunities.set(absoluteAction, record?.randomizerAtRegisterStart
+      ? 1
+      : Math.min(
+        1,
+        Math.max(0, Number(record?.reliefProfile?.boardOpportunity) || 0) + continuityBonus
+      ));
   }
   return opportunities;
 }
@@ -6480,10 +6567,18 @@ function replayDamageEconomyShutdownEquivalentScore({
       Math.max(0, state.spamHeld + programming.expectedSpamDrawn)
     );
     let spamInHandRemaining = spamHandAtProgramming;
+    const turnRecords = recordsByTurn.get(turn) || [];
+    const turnRandomizerStarts = turnRecords.filter(
+      (record) => Boolean(record?.randomizerAtRegisterStart)
+    ).length;
     const forcedSpamReliefInitiations = Math.min(
       state.spamTotal,
       spamInHandRemaining,
       Math.max(0, Number(programming.expectedForcedSpamReliefInitiations) || 0)
+    );
+    let remainingRandomizerElectiveReliefCapacity = Math.max(
+      0,
+      turnRandomizerStarts - forcedSpamReliefInitiations
     );
     if (forcedSpamReliefInitiations > 0.0005) {
       const forcedCirculatingSpam = Math.max(0, state.spamTotal - spamInHandRemaining);
@@ -6502,16 +6597,30 @@ function replayDamageEconomyShutdownEquivalentScore({
       );
     }
 
-    const electiveReliefInitiationProbabilities = [];
-    for (const record of recordsByTurn.get(turn) || []) {
-      const { transition, realized, absoluteAction, register, repairStationEligible } = record;
+    const electiveClogInitiationProbabilities = [];
+    for (const record of turnRecords) {
+      const {
+        transition,
+        realized,
+        absoluteAction,
+        register,
+        randomizerAtRegisterStart,
+        repairStationEligible
+      } = record;
       const reliefOpportunity = Math.max(
         0,
         Number(reliefOpportunityByAbsoluteAction.get(absoluteAction)) || 0
       );
       let reliefInitiation = 0;
       if (spamInHandRemaining > 0.0005 && reliefOpportunity > 0.0005) {
-        reliefInitiation = Math.min(1, reliefOpportunity, spamInHandRemaining);
+        reliefInitiation = Math.min(
+          1,
+          reliefOpportunity,
+          spamInHandRemaining,
+          randomizerAtRegisterStart
+            ? remainingRandomizerElectiveReliefCapacity
+            : 1
+        );
         const currentCirculatingSpam = Math.max(0, state.spamTotal - spamInHandRemaining);
         const chainYield = Math.max(
           1,
@@ -6527,7 +6636,19 @@ function replayDamageEconomyShutdownEquivalentScore({
           profile
         );
       }
-      electiveReliefInitiationProbabilities.push(reliefInitiation);
+      // A SPAM deliberately consumed in the Randomizer register is relief, but it
+      // does not surrender another register of control: Randomizer already paid
+      // the +2 clog for that register. Forced SPAM uses Randomizer slots first;
+      // only the remaining slot capacity can support additional elective relief.
+      electiveClogInitiationProbabilities.push(
+        randomizerAtRegisterStart ? 0 : reliefInitiation
+      );
+      if (randomizerAtRegisterStart) {
+        remainingRandomizerElectiveReliefCapacity = Math.max(
+          0,
+          remainingRandomizerElectiveReliefCapacity - reliefInitiation
+        );
+      }
 
       if (transition?.rebooted) {
         const rebootSpamDisposalCapacity = Math.max(0, REGISTER_COUNT - register);
@@ -6571,7 +6692,7 @@ function replayDamageEconomyShutdownEquivalentScore({
     const spamHeldBeforeFilter = Math.min(state.spamTotal, spamInHandRemaining);
     state.spamHeld = profile.spamFilter ? 0 : spamHeldBeforeFilter;
     const electiveSpamPlayDistribution = getDamageEconomyPoissonBinomialDistribution(
-      electiveReliefInitiationProbabilities
+      electiveClogInitiationProbabilities
     );
     const forcedSpamHaywireJointDistribution =
       getDamageEconomyAdjustedForcedSpamHaywireJointDistribution(
@@ -6580,7 +6701,8 @@ function replayDamageEconomyShutdownEquivalentScore({
       );
     const combinedClog = getDamageEconomyCombinedClogSummary(
       forcedSpamHaywireJointDistribution,
-      electiveSpamPlayDistribution
+      electiveSpamPlayDistribution,
+      turnRandomizerStarts
     );
     const turnDamageEconomyRegisterEquivalents =
       programming.spamSupplyRegisterEquivalents + combinedClog.clogRegisterEquivalents;
@@ -6734,9 +6856,17 @@ export function summarizeDamageEconomyFoundationForRoute(
         options,
         absoluteAction
       );
-      const reliefProfile = getDamageEconomyRegisterReliefProfile(
+      const randomizerAtRegisterStart = isDamageEconomyRandomizerAtRegisterStart(
         tileMap,
         transition,
+        options,
+        absoluteAction
+      );
+      const reliefProfile = getDamageEconomyRegisterReliefProfile(
+        tileMap,
+        randomizerAtRegisterStart && !transition?.randomizerAtRegisterStart
+          ? { ...transition, randomizerAtRegisterStart: true }
+          : transition,
         transition,
         options,
         absoluteAction
@@ -6760,6 +6890,7 @@ export function summarizeDamageEconomyFoundationForRoute(
         transition,
         realized,
         reliefProfile,
+        randomizerAtRegisterStart,
         repairStationEligible
       });
       elapsedAbsoluteActions = transition?.rebooted
@@ -6804,6 +6935,10 @@ export function summarizeDamageEconomyFoundationForRoute(
   let totalSpamReliefInitiations = 0;
   let totalForcedSpamReliefInitiations = 0;
   let totalElectiveSpamReliefInitiations = 0;
+  let totalRandomizerStarts = 0;
+  let totalRandomizerReliefInitiations = 0;
+  let totalRandomizerForcedSpamOverlap = 0;
+  let totalRandomizerClogLoad = 0;
   let totalSpamChainExtraRemoved = 0;
   let totalRebootSpamRemoved = 0;
   let totalRebootSpamDisposalCapacity = 0;
@@ -6856,10 +6991,18 @@ export function summarizeDamageEconomyFoundationForRoute(
       Math.max(0, spamHeldCarry + programming.expectedSpamDrawn)
     );
     let spamInHandRemaining = spamHandAtProgramming;
+    const turnRecords = recordsByTurn.get(turn) || [];
+    const turnRandomizerStarts = turnRecords.filter(
+      (record) => Boolean(record?.randomizerAtRegisterStart)
+    ).length;
     const forcedSpamReliefInitiations = Math.min(
       state.spamTotal,
       spamInHandRemaining,
       Math.max(0, Number(programming.expectedForcedSpamReliefInitiations) || 0)
+    );
+    let remainingRandomizerElectiveReliefCapacity = Math.max(
+      0,
+      turnRandomizerStarts - forcedSpamReliefInitiations
     );
     let forcedSpamChainYield = 0;
     let forcedSpamRemoved = 0;
@@ -6904,15 +7047,17 @@ export function summarizeDamageEconomyFoundationForRoute(
     let pendingSpamAddedThisTurn = 0;
     let pendingHaywireRiskAddedThisTurn = 0;
     const registerEvents = [];
-    const electiveReliefInitiationProbabilities = [];
+    const electiveClogInitiationProbabilities = [];
+    let turnRandomizerReliefInitiations = 0;
 
-    for (const record of recordsByTurn.get(turn) || []) {
+    for (const record of turnRecords) {
       const {
         transition,
         realized,
         reliefProfile,
         absoluteAction,
         register,
+        randomizerAtRegisterStart,
         repairStationEligible
       } = record;
       const reliefOpportunity = Math.max(
@@ -6929,7 +7074,14 @@ export function summarizeDamageEconomyFoundationForRoute(
       let totalRemovedThisRegister = 0;
       let criticalSpamReturnedToPendingThisRegister = 0;
       if (spamInHandRemaining > 0.0005 && reliefOpportunity > 0.0005) {
-        reliefInitiation = Math.min(1, reliefOpportunity, spamInHandRemaining);
+        reliefInitiation = Math.min(
+          1,
+          reliefOpportunity,
+          spamInHandRemaining,
+          randomizerAtRegisterStart
+            ? remainingRandomizerElectiveReliefCapacity
+            : 1
+        );
         const currentCirculatingSpam = Math.max(0, state.spamTotal - spamInHandRemaining);
         chainYield = Math.max(
           1,
@@ -6956,7 +7108,16 @@ export function summarizeDamageEconomyFoundationForRoute(
           totalRemovedThisRegister - reliefInitiation
         );
       }
-      electiveReliefInitiationProbabilities.push(reliefInitiation);
+      electiveClogInitiationProbabilities.push(
+        randomizerAtRegisterStart ? 0 : reliefInitiation
+      );
+      if (randomizerAtRegisterStart) {
+        turnRandomizerReliefInitiations += reliefInitiation;
+        remainingRandomizerElectiveReliefCapacity = Math.max(
+          0,
+          remainingRandomizerElectiveReliefCapacity - reliefInitiation
+        );
+      }
 
       let rebootSpamRemoved = 0;
       let rebootSpamDisposalCapacity = 0;
@@ -7077,6 +7238,10 @@ export function summarizeDamageEconomyFoundationForRoute(
         ),
         haywireEventProbability: Number(haywireEventProbability.toFixed(4)),
         damageUnits: Number(combinedDamageUnits.toFixed(4)),
+        randomizerAtRegisterStart: Boolean(randomizerAtRegisterStart),
+        randomizerClogLoad: randomizerAtRegisterStart
+          ? DAMAGE_ECONOMY_RANDOMIZER_CLOG_WEIGHT
+          : 0,
         reliefOpportunity: Number(reliefOpportunity.toFixed(4)),
         reliefInitiation: Number(reliefInitiation.toFixed(4)),
         spamChainYield: Number(chainYield.toFixed(4)),
@@ -7113,6 +7278,8 @@ export function summarizeDamageEconomyFoundationForRoute(
     totalSpamReliefInitiations += turnSpamReliefInitiations;
     totalForcedSpamReliefInitiations += forcedSpamReliefInitiations;
     totalElectiveSpamReliefInitiations += turnElectiveReliefInitiations;
+    totalRandomizerStarts += turnRandomizerStarts;
+    totalRandomizerReliefInitiations += turnRandomizerReliefInitiations;
     totalSpamRemoved += turnSpamRemoved + turnRebootSpamRemoved + turnRepairStationSpamRemoved;
     totalCriticalSpamReturnedToPending += turnCriticalSpamReturnedToPending;
     totalSpamChainExtraRemoved += turnSpamChainExtraRemoved;
@@ -7135,7 +7302,7 @@ export function summarizeDamageEconomyFoundationForRoute(
       pendingHaywireDistribution
     );
     const electiveSpamPlayDistribution = getDamageEconomyPoissonBinomialDistribution(
-      electiveReliefInitiationProbabilities
+      electiveClogInitiationProbabilities
     );
     const forcedSpamHaywireJointDistribution =
       getDamageEconomyAdjustedForcedSpamHaywireJointDistribution(
@@ -7144,8 +7311,14 @@ export function summarizeDamageEconomyFoundationForRoute(
       );
     const combinedClog = getDamageEconomyCombinedClogSummary(
       forcedSpamHaywireJointDistribution,
-      electiveSpamPlayDistribution
+      electiveSpamPlayDistribution,
+      turnRandomizerStarts
     );
+    const randomizerClogLoad = combinedClog.randomizerClogLoad;
+    const randomizerForcedSpamOverlap =
+      combinedClog.expectedForcedSpamRandomizerOverlap;
+    totalRandomizerClogLoad += randomizerClogLoad;
+    totalRandomizerForcedSpamOverlap += randomizerForcedSpamOverlap;
     const turnDamageEconomyRE =
       programming.spamSupplyRegisterEquivalents +
       combinedClog.clogRegisterEquivalents;
@@ -7212,6 +7385,11 @@ export function summarizeDamageEconomyFoundationForRoute(
       electiveSpamReliefInitiations: Number(turnElectiveReliefInitiations.toFixed(3)),
       spamPlayInitiations: Number(turnSpamReliefInitiations.toFixed(3)),
       spamPlayClogWeight: DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT,
+      randomizerStarts: turnRandomizerStarts,
+      randomizerClogWeight: DAMAGE_ECONOMY_RANDOMIZER_CLOG_WEIGHT,
+      randomizerClogLoad: Number(randomizerClogLoad.toFixed(3)),
+      randomizerForcedSpamOverlap: Number(randomizerForcedSpamOverlap.toFixed(3)),
+      randomizerReliefInitiations: Number(turnRandomizerReliefInitiations.toFixed(3)),
       spamPlayClogLoad: Number(combinedClog.spamClogLoad.toFixed(3)),
       spamPlayCountDistribution: combinedClog.spamPlayCountDistribution.map(
         (value) => Number(value.toFixed(4))
@@ -7338,6 +7516,11 @@ export function summarizeDamageEconomyFoundationForRoute(
     totalSpamReliefInitiations: Number(totalSpamReliefInitiations.toFixed(3)),
     totalForcedSpamReliefInitiations: Number(totalForcedSpamReliefInitiations.toFixed(3)),
     totalElectiveSpamReliefInitiations: Number(totalElectiveSpamReliefInitiations.toFixed(3)),
+    totalRandomizerStarts,
+    totalRandomizerReliefInitiations: Number(totalRandomizerReliefInitiations.toFixed(3)),
+    totalRandomizerForcedSpamOverlap: Number(totalRandomizerForcedSpamOverlap.toFixed(3)),
+    randomizerClogWeight: DAMAGE_ECONOMY_RANDOMIZER_CLOG_WEIGHT,
+    totalRandomizerClogLoad: Number(totalRandomizerClogLoad.toFixed(3)),
     spamPlayClogWeight: DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT,
     totalSpamChainExtraRemoved: Number(totalSpamChainExtraRemoved.toFixed(3)),
     totalRebootSpamRemoved: Number(totalRebootSpamRemoved.toFixed(3)),
@@ -7348,7 +7531,7 @@ export function summarizeDamageEconomyFoundationForRoute(
     totalRepairStationSpamRemoved: Number(totalRepairStationSpamRemoved.toFixed(3)),
     totalRepairStationHaywireExpectedRemoved: Number(totalRepairStationHaywireExpectedRemoved.toFixed(3)),
     repairStationReliefMethod: "register5-checkpoint-one-damage-card-expected-split-no-spill-v49eo",
-    spamReliefMethod: "five-card-floor-forced-plus-additive-register-relief-forward-safety-v2",
+    spamReliefMethod: "five-card-floor-plus-randomizer-full-relief-shared-clog-v49fh",
     criticalSpamPlayReliefFraction: profile.criticalSpamPlayReliefFraction,
     criticalSpamPlayReturnToPendingFraction:
       profile.criticalSpamPlayReturnToPendingFraction,
@@ -7821,9 +8004,9 @@ function getRegisterEquivalentLedgerPlanningEventsForTransition(
     }
   }
 
-  if (transition?.randomizerAtRegisterStart || transition?.randomizedAction) {
-    add("randomizer");
-  }
+  // v49fh: Randomizer uncertainty is owned by the authoritative turn-level
+  // control-clog economy (+2 clog at register start). Do not also add a generic
+  // mental event here; that would double-price the same loss of control.
 
   for (const featureEvent of getRegisterEquivalentLedgerTouchedFeatureEvents(
     tileMap,

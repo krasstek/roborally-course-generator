@@ -8,7 +8,7 @@
   <meta name="mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="mobile-web-app-title" content="RoboRally" />
   <meta name="application-name" content="RoboRally Course Generator" />
-  <meta name="app-version" content="20260923184600" />
+  <meta name="app-version" content="20260923204854" />
   <title>RoboRally Course Generator</title>
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="icon" type="image/png" sizes="16x16" href="./assets/icons/favicon-16.png" />
@@ -35,6 +35,11 @@
       --hazard-dark: #1a1e22;
       --shadow: 0 24px 54px rgba(0, 0, 0, 0.32);
       --inset: inset 0 1px 0 rgba(255, 255, 255, 0.16);
+    }
+
+    html {
+      -webkit-text-size-adjust: 100%;
+      text-size-adjust: 100%;
     }
 
     body {
@@ -396,12 +401,15 @@
     .toggle-label input {
       width: 16px;
       height: 16px;
+      margin: 0;
+      flex: 0 0 16px;
       accent-color: var(--accent);
     }
 
     button,
     select {
       font: 600 14px/1.2 "Trebuchet MS", Verdana, sans-serif;
+      touch-action: manipulation;
       padding: 8px 10px;
       border-radius: 8px;
       border: 1px solid rgba(76, 91, 102, 0.34);
@@ -446,6 +454,20 @@
       outline-offset: 2px;
     }
 
+    /*
+      v49fi iOS/WebKit interaction stability. Touch taps should not promote a
+      button into a transformed/filtered compositing layer: that can make text
+      appear to resize or jump even though document layout has not changed.
+      Keep the pressed shadow, but reserve scale/filter feedback for pointer
+      devices.
+    */
+    @media (hover: none) and (pointer: coarse) {
+      button:active {
+        transform: none;
+        filter: none;
+      }
+    }
+
     canvas {
       border: 2px solid rgba(43, 52, 60, 0.36);
       border-radius: 10px;
@@ -464,6 +486,31 @@
       align-items: end;
       flex-wrap: wrap;
       margin: 12px 0 8px;
+    }
+
+    .map-highlight-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 10px 0 8px;
+    }
+
+    .map-highlight-button {
+      min-height: 34px;
+      padding: 6px 10px;
+      font-size: 12px;
+      text-transform: none;
+      letter-spacing: 0.02em;
+    }
+
+    .map-highlight-button[aria-pressed="true"] {
+      border-color: rgba(154, 60, 15, 0.55);
+      background: linear-gradient(180deg, #e7bd4e 0%, #bd8424 100%);
+      color: #2d2108;
+    }
+
+    .map-highlight-button[aria-pressed="true"]:hover {
+      background: linear-gradient(180deg, #edc960 0%, #c8902b 100%);
     }
 
     .map-inspection-control {
@@ -1340,6 +1387,13 @@
         min-height: 44px;
       }
 
+      /* Prevent iOS Safari form-control focus/text-size zoom from changing the
+         apparent typography or viewport around an interaction. */
+      button,
+      select {
+        font-size: 16px;
+      }
+
       #about-button,
       #reroll {
         grid-column: 1 / -1;
@@ -1442,6 +1496,15 @@
             <option value="6">6</option>
             <option value="7">7</option>
             <option value="8">8</option>
+          </select>
+        </label>
+        <label title="Controls ordinary Normal start pruning. In Competitive, it applies only to the final best N starts after N player blocks are simulated. Pay to Win and Subsidized Starts keep their own pricing balance.">
+          Start Balance
+          <select id="start-balance" aria-label="Start balance">
+            <option value="strict">Strict</option>
+            <option value="standard" selected>Standard</option>
+            <option value="relaxed">Relaxed</option>
+            <option value="off">Off</option>
           </select>
         </label>
         <label>
@@ -1607,6 +1670,9 @@
           <p id="rules-advice-note" class="rules-note rules-advice-note hidden"></p>
         </div>
       </div>
+      <div id="map-highlight-controls" class="map-highlight-controls hidden">
+        <button id="map-feature-highlight" class="secondary-button map-highlight-button" type="button" aria-pressed="false">Highlight checkpoints</button>
+      </div>
       <div id="trace-leg-label" class="map-inspection-controls hidden">
         <label class="map-inspection-control">
           Trace legs
@@ -1745,3 +1811,4 @@
   </script>
 </body>
 </html>
+<!-- VERSION END: v49fj-start-balance-control -->

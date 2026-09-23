@@ -1,6 +1,6 @@
-// VERSION START: v49ff-reload-start-disposition-fidelity
+// VERSION START: v49fj-start-balance-control
 // Robo Rally Course Randomizer - production runtime
-const MAIN_BUILD_ID = "v49ff-reload-start-disposition-fidelity";
+const MAIN_BUILD_ID = "v49fj-start-balance-control";
 // Mobile browsers may auto-detect number-like rule text and restyle it as a
 // tappable link even though the app emitted ordinary text. Keep rules/course
 // annotations visually plain; this is presentation-only and does not disable
@@ -488,6 +488,61 @@ const COMPETITIVE_EFFECTIVE_RE_RANGE_MIN = 3.0;
 const COMPETITIVE_EFFECTIVE_RE_RANGE_PER_TURN = 0.60;
 const COMPETITIVE_EFFECTIVE_RE_HARD_RANGE_MULTIPLIER = 1.50;
 
+// v49fj user-facing Start Balance policy. This changes how tightly starting
+// choices must cluster in completed effective RE; it never removes traffic,
+// card-pressure, mental-pressure or any other RE owner from the estimator.
+// Normal applies it to the range-first pruning/soft-overflow policy. Competitive
+// applies it ONLY to the final best-P choice set after the ordinary P sequential
+// optimal blocks; block choices themselves are unchanged.
+const START_BALANCE_PROFILES = Object.freeze({
+  strict: Object.freeze({
+    id: "strict",
+    label: "Strict",
+    rangeMultiplier: 0.75,
+    softOverflowMultiplier: 0.75,
+    enforced: true
+  }),
+  standard: Object.freeze({
+    id: "standard",
+    label: "Standard",
+    rangeMultiplier: 1,
+    softOverflowMultiplier: 1,
+    enforced: true
+  }),
+  relaxed: Object.freeze({
+    id: "relaxed",
+    label: "Relaxed",
+    rangeMultiplier: 1.5,
+    softOverflowMultiplier: 1.5,
+    enforced: true
+  }),
+  off: Object.freeze({
+    id: "off",
+    label: "Off",
+    rangeMultiplier: 1,
+    softOverflowMultiplier: 1,
+    enforced: false
+  })
+});
+
+function normalizeStartBalance(value) {
+  const key = String(value ?? "standard").trim().toLowerCase();
+  return Object.prototype.hasOwnProperty.call(START_BALANCE_PROFILES, key)
+    ? key
+    : "standard";
+}
+
+function getStartBalanceProfile(options = {}) {
+  const value = typeof options === "string"
+    ? options
+    : options?.startBalance;
+  return START_BALANCE_PROFILES[normalizeStartBalance(value)];
+}
+
+function formatStartBalanceLabel(value) {
+  return getStartBalanceProfile(value).label;
+}
+
 // v49ec: Competitive difficulty calibration stays mode-specific, but all
 // evidence is RE-native. Easy asks for a tighter post-block range and more
 // legible completed-RE block decisions. Higher difficulties tolerate more
@@ -784,6 +839,7 @@ let routeInspectionState = {
 let traceSelectionState = {
   startIndices: new Set()
 };
+let mapFeatureHighlightEnabled = false;
 let lastRenderDiagnostics = {
   blankFallbackTriggered: false
 };
@@ -5351,6 +5407,7 @@ function getPreferencesFromControls() {
     playerCount: Number(document.getElementById("player-count").value),
     difficulty: document.getElementById("difficulty").value,
     length: document.getElementById("length").value,
+    startBalance: normalizeStartBalance(document.getElementById("start-balance")?.value),
     generationMode: normalizeGenerationMode(document.getElementById("generation-mode")?.value),
     boardSpread: normalizeBoardSpread(document.getElementById("board-spread")?.value),
     overlayMode: normalizeOverlayMode(document.getElementById("overlay-mode")?.value),
@@ -5384,6 +5441,10 @@ function applyPreferencesToControls(preferences) {
   document.getElementById("player-count").value = String(normalizedPreferences.playerCount ?? 4);
   document.getElementById("difficulty").value = normalizedPreferences.difficulty ?? "any";
   document.getElementById("length").value = normalizedPreferences.length ?? "any";
+  const startBalanceEl = document.getElementById("start-balance");
+  if (startBalanceEl) {
+    startBalanceEl.value = normalizeStartBalance(normalizedPreferences.startBalance);
+  }
   const generationModeEl = document.getElementById("generation-mode");
   if (generationModeEl) {
     // Missing means a pre-Mode saved scenario, whose search behavior was the
@@ -14447,7 +14508,7 @@ function rankNormalEffectiveREOutliers(
     ));
 }
 
-function getNormalEffectiveRERangeTarget(entries = []) {
+function getNormalEffectiveRERangeTarget(entries = [], options = {}) {
   const active = (entries || []).filter((entry) =>
     Number.isFinite(getNormalEffectiveREFairnessValue(entry))
   );
@@ -14459,35 +14520,55 @@ function getNormalEffectiveRERangeTarget(entries = []) {
     .sort((left, right) => left - right);
   const medianRegisters = registerCounts.length ? medianValue(registerCounts) : 0;
   const medianTurns = Math.max(1, medianRegisters / 5);
-  const rangeLimit = Math.max(
+  const baseRangeLimit = Math.max(
     NORMAL_EFFECTIVE_RE_RANGE_MIN,
     medianTurns * NORMAL_EFFECTIVE_RE_RANGE_PER_TURN
   );
+  const startBalance = getStartBalanceProfile(options);
+  const rangeLimit = baseRangeLimit * startBalance.rangeMultiplier;
+  const baseSoftOverflowAllowance = Math.max(
+    NORMAL_EFFECTIVE_RE_SOFT_OVERFLOW_MIN,
+    baseRangeLimit * NORMAL_EFFECTIVE_RE_SOFT_OVERFLOW_FRACTION
+  );
+  const softOverflowAllowance =
+    baseSoftOverflowAllowance * startBalance.softOverflowMultiplier;
   const values = active.map(getNormalEffectiveREFairnessValue);
   const min = values.length ? Math.min(...values) : null;
   const max = values.length ? Math.max(...values) : null;
   const range = Number.isFinite(min) && Number.isFinite(max) ? max - min : 0;
+  const observedRangeExcess = Math.max(0, range - rangeLimit);
   return {
     medianRegisters: Number(medianRegisters.toFixed(2)),
     medianTurns: Number(medianTurns.toFixed(2)),
+    baseRangeLimit: Number(baseRangeLimit.toFixed(3)),
     rangeLimit: Number(rangeLimit.toFixed(3)),
     range: Number(range.toFixed(3)),
-    rangeExcess: Number(Math.max(0, range - rangeLimit).toFixed(3)),
+    rangeExcess: Number((startBalance.enforced ? observedRangeExcess : 0).toFixed(3)),
+    observedRangeExcess: Number(observedRangeExcess.toFixed(3)),
+    softOverflowAllowance: Number(softOverflowAllowance.toFixed(3)),
     min: Number.isFinite(min) ? Number(min.toFixed(3)) : null,
     max: Number.isFinite(max) ? Number(max.toFixed(3)) : null,
-    policy: "best-worst-completed-re-range-max3-or-0.6-per-median-programming-turn-v49dx"
+    startBalance: startBalance.id,
+    startBalanceLabel: startBalance.label,
+    startBalanceRangeMultiplier: startBalance.rangeMultiplier,
+    startBalanceSoftOverflowMultiplier: startBalance.softOverflowMultiplier,
+    startBalanceEnforced: startBalance.enforced,
+    policy: "best-worst-completed-re-range-start-balance-v49fj"
   };
 }
 
-function getNormalFairnessSoftOverflowAllowance(rangeLimit) {
-  const limit = Math.max(0, Number(rangeLimit) || 0);
-  return Number(Math.max(
+function getNormalFairnessSoftOverflowAllowance(rangeLimit, options = {}) {
+  const startBalance = getStartBalanceProfile(options);
+  const multiplier = Math.max(0.0001, Number(startBalance.rangeMultiplier) || 1);
+  const baseRangeLimit = Math.max(0, Number(rangeLimit) || 0) / multiplier;
+  const baseAllowance = Math.max(
     NORMAL_EFFECTIVE_RE_SOFT_OVERFLOW_MIN,
-    limit * NORMAL_EFFECTIVE_RE_SOFT_OVERFLOW_FRACTION
-  ).toFixed(3));
+    baseRangeLimit * NORMAL_EFFECTIVE_RE_SOFT_OVERFLOW_FRACTION
+  );
+  return Number((baseAllowance * startBalance.softOverflowMultiplier).toFixed(3));
 }
 
-function summarizeNormalRetainedREBalance(entries = []) {
+function summarizeNormalRetainedREBalance(entries = [], options = {}) {
   const active = (entries || []).filter((entry) =>
     Number.isFinite(getNormalEffectiveREFairnessValue(entry))
   );
@@ -14524,7 +14605,7 @@ function summarizeNormalRetainedREBalance(entries = []) {
 
   const min = Math.min(...values);
   const max = Math.max(...values);
-  const rangeTarget = getNormalEffectiveRERangeTarget(active);
+  const rangeTarget = getNormalEffectiveRERangeTarget(active, options);
   return {
     count: active.length,
     stdDev: Number(
@@ -14538,6 +14619,11 @@ function summarizeNormalRetainedREBalance(entries = []) {
     range: Number((max - min).toFixed(3)),
     rangeLimit: rangeTarget.rangeLimit,
     rangeExcess: rangeTarget.rangeExcess,
+    observedRangeExcess: rangeTarget.observedRangeExcess,
+    softOverflowAllowance: rangeTarget.softOverflowAllowance,
+    startBalance: rangeTarget.startBalance,
+    startBalanceLabel: rangeTarget.startBalanceLabel,
+    startBalanceEnforced: rangeTarget.startBalanceEnforced,
     medianRegisters: rangeTarget.medianRegisters,
     medianTurns: rangeTarget.medianTurns,
     worstScoreZ: Number(Math.max(0, worstScore.z).toFixed(2)),
@@ -14592,11 +14678,11 @@ function getNormalRegisterDurationGuardrail(entries = []) {
 }
 
 
-function getNormalResidualBalanceSelectionPenalty(entries = []) {
+function getNormalResidualBalanceSelectionPenalty(entries = [], options = {}) {
   const active = (entries || []).filter((entry) =>
     Number.isFinite(getNormalEffectiveREFairnessValue(entry))
   );
-  const rangeTarget = getNormalEffectiveRERangeTarget(active);
+  const rangeTarget = getNormalEffectiveRERangeTarget(active, options);
   if (!active.length) {
     return {
       total: 0,
@@ -14604,7 +14690,7 @@ function getNormalResidualBalanceSelectionPenalty(entries = []) {
       rangeLimit: rangeTarget.rangeLimit,
       rangeExcess: 0,
       rangePenalty: 0,
-      softOverflowAllowance: getNormalFairnessSoftOverflowAllowance(rangeTarget.rangeLimit),
+      softOverflowAllowance: rangeTarget.softOverflowAllowance,
       overflowWithinSoftAllowance: true,
       reDispersion: 0,
       duration: 0,
@@ -14622,7 +14708,7 @@ function getNormalResidualBalanceSelectionPenalty(entries = []) {
     "normalFairnessEffectiveRE"
   );
   const durationGuardrail = getNormalRegisterDurationGuardrail(active);
-  const retained = summarizeNormalRetainedREBalance(active);
+  const retained = summarizeNormalRetainedREBalance(active, options);
   const rangePenalty =
     rangeTarget.rangeExcess * NORMAL_EFFECTIVE_RE_SCORE_PER_RE;
   const durationExcess = Math.max(
@@ -14640,9 +14726,10 @@ function getNormalResidualBalanceSelectionPenalty(entries = []) {
     rangeLimit: rangeTarget.rangeLimit,
     rangeExcess: rangeTarget.rangeExcess,
     rangePenalty: Number(rangePenalty.toFixed(3)),
-    softOverflowAllowance: getNormalFairnessSoftOverflowAllowance(rangeTarget.rangeLimit),
+    softOverflowAllowance: rangeTarget.softOverflowAllowance,
     overflowWithinSoftAllowance:
-      rangeTarget.rangeExcess <= getNormalFairnessSoftOverflowAllowance(rangeTarget.rangeLimit) + 1e-9,
+      !rangeTarget.startBalanceEnforced ||
+      rangeTarget.observedRangeExcess <= rangeTarget.softOverflowAllowance + 1e-9,
     reDispersion: 0,
     duration: Number(duration.toFixed(3)),
     outlier: 0,
@@ -14656,8 +14743,12 @@ function getNormalResidualBalanceSelectionPenalty(entries = []) {
       active,
       NORMAL_EFFECTIVE_RE_OUTLIER_Z
     ).length,
+    observedRangeExcess: rangeTarget.observedRangeExcess,
+    startBalance: rangeTarget.startBalance,
+    startBalanceLabel: rangeTarget.startBalanceLabel,
+    startBalanceEnforced: rangeTarget.startBalanceEnforced,
     policy:
-      "range-first-length-responsive-normal-fairness-v49dx; sd-z-diagnostic-only"
+      "range-first-length-responsive-start-balance-v49fj; sd-z-diagnostic-only"
   };
 }
 
@@ -14680,7 +14771,7 @@ function getEconomyEnergyActionableResidualBalanceSelectionPenalty(entries = [])
 }
 
 
-function chooseNormalStartBalanceRemoval(entries, playerCount, stdDevLimit = null) {
+function chooseNormalStartBalanceRemoval(entries, playerCount, options = {}) {
   const minimumStarts = Math.max(1, playerCount || 1);
   if (entries.length <= minimumStarts) return null;
 
@@ -14689,7 +14780,7 @@ function chooseNormalStartBalanceRemoval(entries, playerCount, stdDevLimit = nul
   );
   if (active.length <= minimumStarts) return null;
 
-  const currentRange = getNormalEffectiveRERangeTarget(active);
+  const currentRange = getNormalEffectiveRERangeTarget(active, options);
   if (!(currentRange.rangeExcess > 1e-9)) {
     return null;
   }
@@ -14708,7 +14799,7 @@ function chooseNormalStartBalanceRemoval(entries, playerCount, stdDevLimit = nul
     const retained = active.filter((item) => item.index !== entry.index);
     if (retained.length < minimumStarts) return null;
 
-    const afterRange = getNormalEffectiveRERangeTarget(retained);
+    const afterRange = getNormalEffectiveRERangeTarget(retained, options);
     const afterStdDev = getNormalStartDispersion(
       retained,
       "normalFairnessEffectiveRE"
@@ -15453,7 +15544,8 @@ function adjustNormalStartsAfterFullTraffic(
     const belowPlayerFloor = initialActive.length < playerFloor;
     const floorReached = initialActive.length === playerFloor;
     const residualBalancePenalty = getNormalResidualBalanceSelectionPenalty(
-      initialActive
+      initialActive,
+      options
     );
     const reject = belowPlayerFloor;
     return {
@@ -15476,14 +15568,17 @@ function adjustNormalStartsAfterFullTraffic(
           residualSelectionPenaltyComponents: residualBalancePenalty,
           residualImbalanceFeedsCourseScorer: true,
           fairnessMetric: "full-course-effective-RE",
-          fairnessModel: "range-first-length-responsive-v49dx",
+          fairnessModel: "range-first-length-responsive-start-balance-v49fj",
+          startBalance: normalizeStartBalance(options.startBalance),
+          startBalanceLabel: formatStartBalanceLabel(options.startBalance),
+          startBalanceEnforced: getStartBalanceProfile(options).enforced,
           retainedEffectiveRERange: residualBalancePenalty.range,
           retainedEffectiveRERangeLimit: residualBalancePenalty.rangeLimit,
           retainedEffectiveRERangeExcess: residualBalancePenalty.rangeExcess,
           fairnessMedianTurns: residualBalancePenalty.medianTurns,
           actionPruningActive: false,
           dispersionPruningActive: false,
-          rangePruningActive: true,
+          rangePruningActive: getStartBalanceProfile(options).enforced,
           dispersionPruningPolicy:
             "SD/z diagnostic only; best-worst completed-RE range owns pruning",
           remainingBadStarts: remainingOutliers.map((item) => ({
@@ -15505,7 +15600,8 @@ function adjustNormalStartsAfterFullTraffic(
     analysisOptions,
     ({ activeStarts }) => chooseNormalStartBalanceRemoval(
       activeStarts,
-      playerCount
+      playerCount,
+      options
     ),
     {
       initialExcludedIndices: [...initialExcludedIndices],
@@ -15566,7 +15662,8 @@ function adjustNormalStartsAfterFullTraffic(
   const belowPlayerFloor = remainingActive.length < playerFloor;
   const floorReached = remainingActive.length === playerFloor;
   const residualBalancePenalty = getNormalResidualBalanceSelectionPenalty(
-    remainingActive
+    remainingActive,
+    options
   );
   const reject = belowPlayerFloor;
 
@@ -15607,14 +15704,17 @@ function adjustNormalStartsAfterFullTraffic(
         residualSelectionPenaltyComponents: residualBalancePenalty,
         residualImbalanceFeedsCourseScorer: true,
         fairnessMetric: "full-course-effective-RE",
-        fairnessModel: "range-first-length-responsive-v49dx",
+        fairnessModel: "range-first-length-responsive-start-balance-v49fj",
+        startBalance: normalizeStartBalance(options.startBalance),
+        startBalanceLabel: formatStartBalanceLabel(options.startBalance),
+        startBalanceEnforced: getStartBalanceProfile(options).enforced,
         retainedEffectiveRERange: residualBalancePenalty.range,
         retainedEffectiveRERangeLimit: residualBalancePenalty.rangeLimit,
         retainedEffectiveRERangeExcess: residualBalancePenalty.rangeExcess,
         fairnessMedianTurns: residualBalancePenalty.medianTurns,
         actionPruningActive: false,
         dispersionPruningActive: false,
-        rangePruningActive: true,
+        rangePruningActive: getStartBalanceProfile(options).enforced,
         dispersionPruningPolicy:
           "SD/z diagnostic only; best-worst completed-RE range owns pruning",
         remainingBadStarts: remainingOutliers.map((item) => ({
@@ -15960,6 +16060,7 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
           })
         : adjustStartOutliersForCourseLength(firstLeg, totalLength, tileMap, playerCount, {
           ...getRouteAnalysisVariantOptions(options),
+          startBalance: normalizeStartBalance(options.startBalance),
           totalActions,
           trafficOccupancyUseBalanceScore: true,
           carryOccupancyScores: true,
@@ -16100,7 +16201,8 @@ function adjustStartOutliersForCourseLength(firstLeg, totalLength, tileMap, play
       analysisOptions,
       ({ activeStarts }) => chooseNormalStartBalanceRemoval(
         activeStarts,
-        playerCount
+        playerCount,
+        options
       ),
       {
         initialExcludedIndices: [...initialExcludedIndices],
@@ -16116,7 +16218,8 @@ function adjustStartOutliersForCourseLength(firstLeg, totalLength, tileMap, play
       analysisOptions,
       ({ activeStarts }) => chooseNormalStartBalanceRemoval(
         activeStarts,
-        playerCount
+        playerCount,
+        options
       ),
       {
         initialExcludedIndices: [...initialExcludedIndices],
@@ -16171,7 +16274,7 @@ function adjustStartOutliersForCourseLength(firstLeg, totalLength, tileMap, play
     remainingActive,
     "normalFairnessEffectiveRE"
   );
-  const retainedBalance = summarizeNormalRetainedREBalance(remainingActive);
+  const retainedBalance = summarizeNormalRetainedREBalance(remainingActive, options);
   const durationGuardrail = getNormalRegisterDurationGuardrail(remainingActive);
   const legacyAdjustedScoreStdDev = Number(currentFirstLeg.summary?.scoreStdDev);
   const badLimit = Math.ceil((playerCount || 1) * 0.25);
@@ -16224,7 +16327,8 @@ function adjustStartOutliersForCourseLength(firstLeg, totalLength, tileMap, play
   const playerFloor = Math.max(1, playerCount || 1);
   const belowPlayerFloor = remainingActive.length < playerFloor;
   const residualBalancePenalty = getNormalResidualBalanceSelectionPenalty(
-    remainingActive
+    remainingActive,
+    options
   );
   const floorReached = remainingActive.length === playerFloor;
   const provisionalReject = belowPlayerFloor;
@@ -16316,10 +16420,13 @@ function adjustStartOutliersForCourseLength(firstLeg, totalLength, tileMap, play
           ? Number(legacyAdjustedScoreStdDev.toFixed(2))
           : null,
         fairnessMetric: "full-course-effective-RE",
-        fairnessModel: "range-first-length-responsive-v49dx",
+        fairnessModel: "range-first-length-responsive-start-balance-v49fj",
+        startBalance: normalizeStartBalance(options.startBalance),
+        startBalanceLabel: formatStartBalanceLabel(options.startBalance),
+        startBalanceEnforced: getStartBalanceProfile(options).enforced,
         actionPruningActive: false,
         dispersionPruningActive: false,
-        rangePruningActive: true,
+        rangePruningActive: getStartBalanceProfile(options).enforced,
         durationGuardrail,
         playerFloor,
         floorReached,
@@ -16461,7 +16568,8 @@ function chooseNearBestCandidate(candidates = []) {
 
 function getCompetitiveEffectiveRERangeTarget(
   entries = [],
-  calibration = getCompetitiveDifficultyCalibration()
+  calibration = getCompetitiveDifficultyCalibration(),
+  options = {}
 ) {
   const active = (entries || []).filter((entry) => (
     Number.isFinite(entry?.normalFairnessEffectiveRE)
@@ -16478,33 +16586,48 @@ function getCompetitiveEffectiveRERangeTarget(
     COMPETITIVE_EFFECTIVE_RE_RANGE_MIN,
     medianTurns * COMPETITIVE_EFFECTIVE_RE_RANGE_PER_TURN
   );
-  const softRangeLimit = baseRangeLimit * Number(calibration.softRangeMultiplier ?? 1);
-  const hardRangeLimit =
+  const startBalance = getStartBalanceProfile(options);
+  const difficultySoftRangeLimit =
+    baseRangeLimit * Number(calibration.softRangeMultiplier ?? 1);
+  const difficultyHardRangeLimit =
     baseRangeLimit * COMPETITIVE_EFFECTIVE_RE_HARD_RANGE_MULTIPLIER *
     Number(calibration.hardRangeMultiplier ?? 1);
+  const softRangeLimit = difficultySoftRangeLimit * startBalance.rangeMultiplier;
+  const hardRangeLimit = difficultyHardRangeLimit * startBalance.rangeMultiplier;
   const values = active.map((entry) => Number(entry.normalFairnessEffectiveRE));
   const min = values.length ? Math.min(...values) : null;
   const max = values.length ? Math.max(...values) : null;
   const range = Number.isFinite(min) && Number.isFinite(max) ? max - min : 0;
+  const observedSoftExcess = Math.max(0, range - softRangeLimit);
+  const observedHardExcess = Math.max(0, range - hardRangeLimit);
   return {
     medianRegisters: Number(medianRegisters.toFixed(2)),
     medianTurns: Number(medianTurns.toFixed(2)),
     baseRangeLimit: Number(baseRangeLimit.toFixed(3)),
+    difficultySoftRangeLimit: Number(difficultySoftRangeLimit.toFixed(3)),
+    difficultyHardRangeLimit: Number(difficultyHardRangeLimit.toFixed(3)),
     softRangeLimit: Number(softRangeLimit.toFixed(3)),
     hardRangeLimit: Number(hardRangeLimit.toFixed(3)),
     range: Number(range.toFixed(3)),
-    rangeExcess: Number(Math.max(0, range - softRangeLimit).toFixed(3)),
-    hardRangeExcess: Number(Math.max(0, range - hardRangeLimit).toFixed(3)),
+    rangeExcess: Number((startBalance.enforced ? observedSoftExcess : 0).toFixed(3)),
+    hardRangeExcess: Number((startBalance.enforced ? observedHardExcess : 0).toFixed(3)),
+    observedRangeExcess: Number(observedSoftExcess.toFixed(3)),
+    observedHardRangeExcess: Number(observedHardExcess.toFixed(3)),
     minRE: Number.isFinite(min) ? Number(min.toFixed(3)) : null,
     maxRE: Number.isFinite(max) ? Number(max.toFixed(3)) : null,
     requestedDifficulty: calibration.requestedDifficulty,
-    policy: "competitive-best-p-range-max3-or-0.6-per-median-turn-v49ec"
+    startBalance: startBalance.id,
+    startBalanceLabel: startBalance.label,
+    startBalanceRangeMultiplier: startBalance.rangeMultiplier,
+    startBalanceEnforced: startBalance.enforced,
+    policy: "competitive-post-block-best-p-start-balance-v49fj"
   };
 }
 
 function getCompetitiveBalanceProfile(
   entries = [],
-  calibration = getCompetitiveDifficultyCalibration()
+  calibration = getCompetitiveDifficultyCalibration(),
+  options = {}
 ) {
   const active = (entries || []).filter((entry) => (
     Number.isFinite(entry?.normalFairnessEffectiveRE)
@@ -16514,7 +16637,7 @@ function getCompetitiveBalanceProfile(
     active,
     FULL_START_OUTLIER_Z
   );
-  const rangePolicy = getCompetitiveEffectiveRERangeTarget(active, calibration);
+  const rangePolicy = getCompetitiveEffectiveRERangeTarget(active, calibration, options);
   return {
     outliers: softOutliers,
     softOutliers,
@@ -16846,33 +16969,48 @@ function applyCompetitiveStrategicBlocking(
   const completedREChoiceSetIndices = completedREChoiceSetEntries.map((entry) => entry.index);
   const profile = getCompetitiveBalanceProfile(
     selectedEntries,
-    competitiveCalibration
+    competitiveCalibration,
+    options
   );
   const selectedStdDev = profile.stdDev;
   const selectedRangeRE = Number(profile.selectedRangeRE) || 0;
   const competitiveSoftRangeLimit = Number(profile.softRangeLimit) || 0;
   const competitiveHardRangeLimit = Number(profile.hardRangeLimit) || 0;
+  const competitiveStartBalanceProfile = getStartBalanceProfile(options);
+  // Start Balance changes only final-subset acceptance. Competitive strategic
+  // difficulty keeps its existing difficulty-calibrated reference so choosing
+  // Strict/Relaxed/Off cannot itself make the same course easier or harder.
+  const competitiveDifficultyReferenceRangeLimit =
+    Number(profile.rangePolicy?.difficultySoftRangeLimit) ||
+    competitiveSoftRangeLimit;
   const strategicDifficulty = getCompetitiveStrategicDifficulty(
     blockSequence,
     selectedRangeRE,
-    competitiveSoftRangeLimit
+    competitiveDifficultyReferenceRangeLimit
   );
   const sufficientPhysicalField = (
     sourceStartCount >= requiredOfferedStarts &&
     routedStarts.length >= requiredOfferedStarts &&
     unavailableIndices.length === 0
   );
-  const softBalanced = (
+  const competitiveSubsetComplete = (
     sufficientPhysicalField &&
     blockSequence.length === count &&
-    selectedEntries.length === count &&
-    selectedRangeRE <= competitiveSoftRangeLimit + 1e-9
+    selectedEntries.length === count
+  );
+  const softBalanced = (
+    competitiveSubsetComplete &&
+    (
+      !competitiveStartBalanceProfile.enforced ||
+      selectedRangeRE <= competitiveSoftRangeLimit + 1e-9
+    )
   );
   const hardAcceptable = (
-    sufficientPhysicalField &&
-    blockSequence.length === count &&
-    selectedEntries.length === count &&
-    selectedRangeRE <= competitiveHardRangeLimit + 1e-9
+    competitiveSubsetComplete &&
+    (
+      !competitiveStartBalanceProfile.enforced ||
+      selectedRangeRE <= competitiveHardRangeLimit + 1e-9
+    )
   );
   const blockReadability = summarizeCompetitiveBlockReadability(
     blockSequence,
@@ -16900,8 +17038,18 @@ function applyCompetitiveStrategicBlocking(
     selectedRangeRE: Number(selectedRangeRE.toFixed(3)),
     balanceRangeLimit: Number(competitiveSoftRangeLimit.toFixed(3)),
     hardBalanceRangeLimit: Number(competitiveHardRangeLimit.toFixed(3)),
-    balanceRangeExcess: Number(Math.max(0, selectedRangeRE - competitiveSoftRangeLimit).toFixed(3)),
-    hardBalanceRangeExcess: Number(Math.max(0, selectedRangeRE - competitiveHardRangeLimit).toFixed(3)),
+    balanceRangeExcess: Number((competitiveStartBalanceProfile.enforced
+      ? Math.max(0, selectedRangeRE - competitiveSoftRangeLimit)
+      : 0).toFixed(3)),
+    hardBalanceRangeExcess: Number((competitiveStartBalanceProfile.enforced
+      ? Math.max(0, selectedRangeRE - competitiveHardRangeLimit)
+      : 0).toFixed(3)),
+    observedBalanceRangeExcess: Number(Math.max(0, selectedRangeRE - competitiveSoftRangeLimit).toFixed(3)),
+    observedHardBalanceRangeExcess: Number(Math.max(0, selectedRangeRE - competitiveHardRangeLimit).toFixed(3)),
+    startBalance: competitiveStartBalanceProfile.id,
+    startBalanceLabel: competitiveStartBalanceProfile.label,
+    startBalanceEnforced: competitiveStartBalanceProfile.enforced,
+    startBalanceRangeMultiplier: competitiveStartBalanceProfile.rangeMultiplier,
     selectedMinRE: profile.minRE,
     selectedMaxRE: profile.maxRE,
     selectedMedianTurns: profile.medianTurns,
@@ -16913,7 +17061,10 @@ function applyCompetitiveStrategicBlocking(
       baseRangePolicy: `max(${COMPETITIVE_EFFECTIVE_RE_RANGE_MIN}RE, ${COMPETITIVE_EFFECTIVE_RE_RANGE_PER_TURN}RE × median programming turns)`,
       hardRangeMultiplier: COMPETITIVE_EFFECTIVE_RE_HARD_RANGE_MULTIPLIER,
       softRangeMultiplier: competitiveCalibration.softRangeMultiplier,
-      difficultyHardRangeMultiplier: competitiveCalibration.hardRangeMultiplier
+      difficultyHardRangeMultiplier: competitiveCalibration.hardRangeMultiplier,
+      startBalance: competitiveStartBalanceProfile.id,
+      startBalanceRangeMultiplier: competitiveStartBalanceProfile.rangeMultiplier,
+      startBalanceEnforced: competitiveStartBalanceProfile.enforced
     },
     blockReadability,
     selectedOutlierCount: profile.softOutliers.length,
@@ -16966,10 +17117,13 @@ function applyCompetitiveStrategicBlocking(
         hardRangeLimit: Number(competitiveHardRangeLimit.toFixed(3)),
         blockReadability
       },
-      futureStartBalanceCalibration: {
+      startBalanceControl: {
         appliesToCompetitive: true,
-        competitiveSpecificThresholds: true,
-        implemented: false
+        scope: "post-block-best-p-subset-only",
+        preset: competitiveStartBalanceProfile.id,
+        multiplier: competitiveStartBalanceProfile.rangeMultiplier,
+        enforced: competitiveStartBalanceProfile.enforced,
+        implemented: true
       }
     },
     softBalanced,
@@ -16988,8 +17142,12 @@ function applyCompetitiveStrategicBlocking(
       scoreStdDev: Number(selectedStdDev.toFixed(3)),
       fairnessScore: Number(Math.max(
         0,
-        100 - Math.max(0, selectedRangeRE - competitiveSoftRangeLimit) *
-          NORMAL_EFFECTIVE_RE_SCORE_PER_RE * 4
+        100 - Math.max(
+          0,
+          selectedRangeRE - (competitiveStartBalanceProfile.enforced
+            ? competitiveSoftRangeLimit
+            : competitiveDifficultyReferenceRangeLimit)
+        ) * NORMAL_EFFECTIVE_RE_SCORE_PER_RE * 4
       ).toFixed(2)),
       outliers: [],
       competitiveStartBalance,
@@ -21067,6 +21225,7 @@ function classifyCandidate(sequence, preferences, context = {}) {
     ? Math.max(0, Number(pricedResidual?.worstResidualPenalty) || 0)
     : 0;
 
+  const startBalanceProfile = getStartBalanceProfile(preferences);
   const normalFairnessRangeLimit = Math.max(
     0,
     Number(normalBalance?.retainedEffectiveRERangeLimit) || 0
@@ -21083,14 +21242,20 @@ function classifyCandidate(sequence, preferences, context = {}) {
     0,
     Number(pricedResidual?.worstRangeExcess) || 0
   );
+  const normalAcceptanceRangeLimit = startBalanceProfile.enforced
+    ? normalFairnessRangeLimit
+    : 0;
+  const normalAcceptanceOverflow = startBalanceProfile.enforced
+    ? normalFairnessOverflow
+    : 0;
   const fairnessRangeLimit = preferences.competitiveMode
     ? 0
-    : Math.max(normalFairnessRangeLimit, pricedFairnessRangeLimit);
+    : Math.max(normalAcceptanceRangeLimit, pricedFairnessRangeLimit);
   const fairnessOverflowRE = preferences.competitiveMode
     ? 0
-    : Math.max(normalFairnessOverflow, pricedFairnessOverflow);
+    : Math.max(normalAcceptanceOverflow, pricedFairnessOverflow);
   const normalFairnessSoftOverflowAllowance =
-    getNormalFairnessSoftOverflowAllowance(normalFairnessRangeLimit);
+    getNormalFairnessSoftOverflowAllowance(normalFairnessRangeLimit, preferences);
   const pricedFairnessSoftOverflowAllowance = Math.max(
     0,
     Number(pricedResidual?.worstSoftOverflowAllowance) || 0
@@ -21098,14 +21263,21 @@ function classifyCandidate(sequence, preferences, context = {}) {
   const fairnessSoftOverflowAllowance = preferences.competitiveMode
     ? 0
     : Math.max(
-      normalBalance?.active ? normalFairnessSoftOverflowAllowance : 0,
+      normalBalance?.active && startBalanceProfile.enforced
+        ? normalFairnessSoftOverflowAllowance
+        : 0,
       pricedSummary?.active ? pricedFairnessSoftOverflowAllowance : 0
     );
   const fairnessOverflowFitPenalty = preferences.competitiveMode
     ? 0
     : fairnessOverflowRE * NORMAL_EFFECTIVE_RE_SCORE_PER_RE;
   const fairnessAcceptance = {
-    active: !preferences.competitiveMode && fairnessRangeLimit > 0,
+    active: !preferences.competitiveMode &&
+      fairnessRangeLimit > 0 &&
+      (
+        (normalBalance?.active && startBalanceProfile.enforced) ||
+        pricedSummary?.active
+      ),
     rangeLimit: Number(fairnessRangeLimit.toFixed(3)),
     overflowRE: Number(fairnessOverflowRE.toFixed(3)),
     softOverflowAllowance: Number(fairnessSoftOverflowAllowance.toFixed(3)),
@@ -21114,11 +21286,12 @@ function classifyCandidate(sequence, preferences, context = {}) {
       preferences.competitiveMode ||
       (
         (!normalBalance?.active ||
+          !startBalanceProfile.enforced ||
           normalFairnessOverflow <= normalFairnessSoftOverflowAllowance + 1e-9) &&
         (!pricedSummary?.active || pricedResidual?.softOverflowAcceptable !== false)
       ),
     policy:
-      "zero-penalty-inside-range; increasing-overflow-penalty; bounded-soft-overflow-v49dy"
+      "start-balance-normal-plus-independent-priced-residual-v49fj"
   };
 
   const forcedEconomyVariantId = preferences.subsidizedStarts &&
@@ -21900,7 +22073,7 @@ function buildScenarioCopySummary(scenario) {
     }
   } else if (scenario.competitiveMode && competitive) {
     lines.push(
-      `Competitive balance v49ec: sequential best-one completed-RE blocks ${competitive.blockedStartCount ?? 0}/${scenario.playerCount ?? scenario.preferences?.playerCount ?? "?"} [${(competitive.blockedIndices ?? []).map((index) => `#${index + 1}`).join(", ") || "none"}], traffic recomputed after every block (${competitive.trafficRecomputations ?? 0} total); remaining choices ${competitive.remainingStartCount ?? 0}, post-block best-${scenario.playerCount ?? scenario.preferences?.playerCount ?? "P"} [${(competitive.selectedIndices ?? []).map((index) => `#${index + 1}`).join(", ") || "none"}], RE range ${competitive.selectedRangeRE ?? competitive.scoreRange ?? "n/a"}/${competitive.balanceRangeLimit ?? "n/a"} soft/${competitive.hardBalanceRangeLimit ?? "n/a"} hard (excess ${competitive.balanceRangeExcess ?? "n/a"}; median ${competitive.selectedMedianTurns ?? "n/a"} turns), SD ${competitive.selectedStdDev ?? "n/a"} diagnostic-only, strategic difficulty +${competitive.strategicDifficulty ?? "n/a"} (block challenge ${competitive.strategicDifficultyEvidence?.meanBlockChallenge ?? "n/a"}, selection ambiguity ${competitive.strategicDifficultyEvidence?.selectionAmbiguity ?? "n/a"}), RE-native legibility fit +${competitive.blockReadability?.fitPenalty ?? 0} (${competitive.blockReadability?.requestedDifficulty ?? "any"}; legacy shadow OFF), block traffic ${competitive.blockTrafficScope ?? "n/a"}, softBalanced ${competitive.softBalanced ? "yes" : "no"}, hardAcceptable ${competitive.hardAcceptable ? "yes" : "no"}, method ${competitive.method ?? "n/a"}`
+      `Competitive balance v49fj: Start Balance ${formatStartBalanceLabel(scenario.preferences?.startBalance)} applies to post-block best-P only; sequential best-one completed-RE blocks ${competitive.blockedStartCount ?? 0}/${scenario.playerCount ?? scenario.preferences?.playerCount ?? "?"} [${(competitive.blockedIndices ?? []).map((index) => `#${index + 1}`).join(", ") || "none"}], traffic recomputed after every block (${competitive.trafficRecomputations ?? 0} total); remaining choices ${competitive.remainingStartCount ?? 0}, post-block best-${scenario.playerCount ?? scenario.preferences?.playerCount ?? "P"} [${(competitive.selectedIndices ?? []).map((index) => `#${index + 1}`).join(", ") || "none"}], RE range ${competitive.selectedRangeRE ?? competitive.scoreRange ?? "n/a"}/${competitive.balanceRangeLimit ?? "n/a"} soft/${competitive.hardBalanceRangeLimit ?? "n/a"} hard (excess ${competitive.balanceRangeExcess ?? "n/a"}; observed ${competitive.observedBalanceRangeExcess ?? competitive.balanceRangeExcess ?? "n/a"}; median ${competitive.selectedMedianTurns ?? "n/a"} turns), SD ${competitive.selectedStdDev ?? "n/a"} diagnostic-only, strategic difficulty +${competitive.strategicDifficulty ?? "n/a"} (block challenge ${competitive.strategicDifficultyEvidence?.meanBlockChallenge ?? "n/a"}, selection ambiguity ${competitive.strategicDifficultyEvidence?.selectionAmbiguity ?? "n/a"}), RE-native legibility fit +${competitive.blockReadability?.fitPenalty ?? 0} (${competitive.blockReadability?.requestedDifficulty ?? "any"}; legacy shadow OFF), block traffic ${competitive.blockTrafficScope ?? "n/a"}, softBalanced ${competitive.softBalanced ? "yes" : "no"}, hardAcceptable ${competitive.hardAcceptable ? "yes" : "no"}, method ${competitive.method ?? "n/a"}`
     );
   } else if ((scenario.payToWin || scenario.subsidizedStarts) && payToWin?.active) {
     const subsidyMode = Boolean(scenario.subsidizedStarts);
@@ -22356,7 +22529,7 @@ function buildScenarioBenchmarkSummary(scenario) {
     "Traffic route-family starts:",
     "Programming supply:",
     "Card-pressure candidate audit ",
-    "Damage economy v9:",
+    "Damage economy v10:",
     "Damage foundation ",
     "Exact reboot chronology "
   ];
@@ -22535,7 +22708,7 @@ function buildDamageFoundationReportLines(scenario, options = {}) {
   const starts = (scenario?.sequence?.firstLeg?.starts ?? [])
     .filter((entry) => entry?.reachable && entry?.fullCourseRoute);
   if (!tileMap || !starts.length) {
-    return ["Damage economy v9: unavailable (no selected full-course routes)"];
+    return ["Damage economy v10: unavailable (no selected full-course routes)"];
   }
 
   const damageOptions = getDamageFoundationScenarioOptions(scenario);
@@ -22552,7 +22725,7 @@ function buildDamageFoundationReportLines(scenario, options = {}) {
       )
     )
   })).filter((entry) => entry.foundation);
-  if (!entries.length) return ["Damage economy v9: unavailable (replay failed)"];
+  if (!entries.length) return ["Damage economy v10: unavailable (replay failed)"];
 
   const sum = (key) => Number(entries.reduce(
     (total, entry) => total + (Number(entry.foundation?.[key]) || 0),
@@ -22580,14 +22753,14 @@ function buildDamageFoundationReportLines(scenario, options = {}) {
     0
   ) / Math.max(1, starts.length)).toFixed(3));
   const lines = [
-    `Damage economy v9: ROUTING ACTIVE; damage input avg ${mean("totalDamageUnits")} = deterministic ${mean("deterministicDamageUnits")} + robot-laser expected ${mean("robotLaserExpectedDamageUnits")}; persistent SPAM total/held final avg ${mean("finalSpamTotal")}/${mean("finalSpamHeld")}; transient Haywire max expected clog avg ${mean("maxExpectedHaywireClogs")}; AUTHORITATIVE raw economy RE avg total ${mean("totalDamageEconomyRegisterEquivalents")} [supply ${mean("totalSpamSupplyRegisterEquivalents")} = base ${mean("totalRawSpamSupplyRegisterEquivalents")} + Permanent-Shutdown pressure ${mean("totalPermanentShutdownPressureRegisterEquivalents")}, control-clog ${mean("totalClogRegisterEquivalents")}], max-turn ${Number((entries.reduce((t,e)=>t+(Number(e.foundation?.maxTurnDamageEconomyRegisterEquivalents)||0),0)/Math.max(1,entries.length)).toFixed(3))}; SPAM plays avg forced/elective ${mean("totalForcedSpamReliefInitiations")}/${mean("totalElectiveSpamReliefInitiations")}, removed avg ${mean("totalSpamRemoved")} (Critical-SPAM returned-to-pending ${mean("totalCriticalSpamReturnedToPending")}, reboot ${mean("totalRebootSpamRemoved")}, capacity ${mean("totalRebootSpamDisposalCapacity")}, repair ${mean("totalRepairStationSpamRemoved")}); repair-station uses ${sum("repairStationReliefCount")} / Haywire expected removed ${mean("totalRepairStationHaywireExpectedRemoved")} avg; radiation deterministic damage avg ${mean("radiationDamageUnits")}; radioactive-waste deterministic damage avg ${mean("radioactiveWasteDamageUnits")}; flaming-oil deterministic damage avg ${mean("flamingOilDamageUnits")}; Permanent Shutdown pressure ${entries[0]?.foundation?.permanentShutdownPressureActive ? `LIVE, max supply multiplier avg ${mean("maxPermanentShutdownSupplyMultiplier")}x, provisional curve calibration queued` : "OFF"}; Shutdown tolerance reference ${entries[0]?.foundation?.shutdownReferenceRegisterEquivalents ?? 5} RE is COUNTERFACTUAL ONLY, not programmed, not a cap; diagnostic threshold replay avg ${mean("shutdownEquivalentDamageScoreRegisterEquivalents")} RE = ${mean("shutdownEquivalentRegisterEquivalents")} threshold-chunk RE + ${mean("shutdownResidualRegisterEquivalents")} residual, ${sum("shutdownEquivalentEpisodeCount")} threshold crossing(s), high/elevated tolerance pressure ${entries.filter((entry)=>entry.foundation?.shutdownThreatLevel === "high").length}/${entries.filter((entry)=>entry.foundation?.shutdownThreatLevel === "elevated").length}; selected-route intrinsic damage adjustment avg ${selectedRouteMean("intrinsicDamageRoutingAdjustmentScore")} score from ${selectedRouteMean("intrinsicDamageEconomyRegisterEquivalents")} raw damage-economy RE; traffic robot-laser marginal raw-damage increment avg ${selectedTrafficMean("fullCourseTrafficDamageEconomyRobotLaserIncrementRegisterEquivalents")} RE; legacy residual ranged-threat score ${selectedTrafficMean("fullCourseTrafficLegacyResidualRangedThreatScoreDiagnostic")} is diagnostic-only and contributes 0 RE; exact candidate re-ranking active; Shutdown reference is search-worthiness context only; cheap primary search graph/budgets unchanged; tolerance replay ${telemetry.shutdownScoringReplayCount ?? 0} route(s)/${telemetry.shutdownScoringReplayTurns ?? 0} turn(s); relief coefficients unchanged from v49x; state cache ${telemetry.effectiveStateCacheHits ?? 0}/${telemetry.effectiveStateLookups ?? 0}, program cache ${telemetry.programCacheHits ?? 0}/${telemetry.programLookups ?? 0}, draw cache ${telemetry.spamDrawCacheHits ?? 0}/${telemetry.spamDrawLookups ?? 0}, route replay cache ${telemetry.routeSummaryCacheHits ?? 0}/${telemetry.routeSummaryLookups ?? 0}; implemented hooks ${implementedHooks.length ? implementedHooks.join(",") : "none"}, deferred ${deferredHooks.length ? deferredHooks.join(",") : "none"}`
+    `Damage economy v10: ROUTING ACTIVE; damage input avg ${mean("totalDamageUnits")} = deterministic ${mean("deterministicDamageUnits")} + robot-laser expected ${mean("robotLaserExpectedDamageUnits")}; persistent SPAM total/held final avg ${mean("finalSpamTotal")}/${mean("finalSpamHeld")}; transient Haywire max expected clog avg ${mean("maxExpectedHaywireClogs")}; AUTHORITATIVE raw economy RE avg total ${mean("totalDamageEconomyRegisterEquivalents")} [supply ${mean("totalSpamSupplyRegisterEquivalents")} = base ${mean("totalRawSpamSupplyRegisterEquivalents")} + Permanent-Shutdown pressure ${mean("totalPermanentShutdownPressureRegisterEquivalents")}, control-clog ${mean("totalClogRegisterEquivalents")}], max-turn ${Number((entries.reduce((t,e)=>t+(Number(e.foundation?.maxTurnDamageEconomyRegisterEquivalents)||0),0)/Math.max(1,entries.length)).toFixed(3))}; SPAM relief avg forced/elective ${mean("totalForcedSpamReliefInitiations")}/${mean("totalElectiveSpamReliefInitiations")}, removed avg ${mean("totalSpamRemoved")} (Critical-SPAM returned-to-pending ${mean("totalCriticalSpamReturnedToPending")}, reboot ${mean("totalRebootSpamRemoved")}, capacity ${mean("totalRebootSpamDisposalCapacity")}, repair ${mean("totalRepairStationSpamRemoved")}); Randomizer starts avg ${mean("totalRandomizerStarts")} -> base control-clog ${mean("totalRandomizerClogLoad")} (2/start), SPAM use there forced/elective ${mean("totalRandomizerForcedSpamOverlap")}/${mean("totalRandomizerReliefInitiations")}; repair-station uses ${sum("repairStationReliefCount")} / Haywire expected removed ${mean("totalRepairStationHaywireExpectedRemoved")} avg; radiation deterministic damage avg ${mean("radiationDamageUnits")}; radioactive-waste deterministic damage avg ${mean("radioactiveWasteDamageUnits")}; flaming-oil deterministic damage avg ${mean("flamingOilDamageUnits")}; Permanent Shutdown pressure ${entries[0]?.foundation?.permanentShutdownPressureActive ? `LIVE, max supply multiplier avg ${mean("maxPermanentShutdownSupplyMultiplier")}x, provisional curve calibration queued` : "OFF"}; Shutdown tolerance reference ${entries[0]?.foundation?.shutdownReferenceRegisterEquivalents ?? 5} RE is COUNTERFACTUAL ONLY, not programmed, not a cap; diagnostic threshold replay avg ${mean("shutdownEquivalentDamageScoreRegisterEquivalents")} RE = ${mean("shutdownEquivalentRegisterEquivalents")} threshold-chunk RE + ${mean("shutdownResidualRegisterEquivalents")} residual, ${sum("shutdownEquivalentEpisodeCount")} threshold crossing(s), high/elevated tolerance pressure ${entries.filter((entry)=>entry.foundation?.shutdownThreatLevel === "high").length}/${entries.filter((entry)=>entry.foundation?.shutdownThreatLevel === "elevated").length}; selected-route intrinsic damage adjustment avg ${selectedRouteMean("intrinsicDamageRoutingAdjustmentScore")} score from ${selectedRouteMean("intrinsicDamageEconomyRegisterEquivalents")} raw damage-economy RE; traffic robot-laser marginal raw-damage increment avg ${selectedTrafficMean("fullCourseTrafficDamageEconomyRobotLaserIncrementRegisterEquivalents")} RE; legacy residual ranged-threat score ${selectedTrafficMean("fullCourseTrafficLegacyResidualRangedThreatScoreDiagnostic")} is diagnostic-only and contributes 0 RE; exact candidate re-ranking active; Shutdown reference is search-worthiness context only; cheap primary search graph/budgets unchanged; tolerance replay ${telemetry.shutdownScoringReplayCount ?? 0} route(s)/${telemetry.shutdownScoringReplayTurns ?? 0} turn(s); relief coefficients unchanged from v49x; state cache ${telemetry.effectiveStateCacheHits ?? 0}/${telemetry.effectiveStateLookups ?? 0}, program cache ${telemetry.programCacheHits ?? 0}/${telemetry.programLookups ?? 0}, draw cache ${telemetry.spamDrawCacheHits ?? 0}/${telemetry.spamDrawLookups ?? 0}, route replay cache ${telemetry.routeSummaryCacheHits ?? 0}/${telemetry.routeSummaryLookups ?? 0}; implemented hooks ${implementedHooks.length ? implementedHooks.join(",") : "none"}, deferred ${deferredHooks.length ? deferredHooks.join(",") : "none"}`
   ];
 
   if (includePerStart) {
     entries.forEach((entry) => {
       const d = entry.foundation;
       lines.push(
-        `Damage economy start #${entry.startIndex + 1}: input ${d.totalDamageUnits} = deterministic ${d.deterministicDamageUnits} [board laser ${d.boardLaserDamageUnits}, radiation ${d.radiationDamageUnits ?? 0}, radioactive waste ${d.radioactiveWasteDamageUnits ?? 0}, flamer ${d.flamethrowerDamageUnits}, flaming oil ${d.flamingOilDamageUnits ?? 0}, ledge ${d.ledgeDamageUnits}, reboot ${d.rebootDamageUnits}] + robot laser expected ${d.robotLaserExpectedDamageUnits}; SPAM added/removed ${d.totalSpamAdded}/${d.totalSpamRemoved} [reboot ${d.totalRebootSpamRemoved}, reboot capacity ${d.totalRebootSpamDisposalCapacity}, repair ${d.totalRepairStationSpamRemoved ?? 0}], repair stations ${d.repairStationReliefCount ?? 0} use(s) / Haywire expected removed ${d.totalRepairStationHaywireExpectedRemoved ?? 0}; final total/held/circulating ${d.finalSpamTotal}/${d.finalSpamHeld}/${d.finalSpamCirculating}; AUTHORITATIVE raw RE supply/clog/total ${d.totalSpamSupplyRegisterEquivalents}/${d.totalClogRegisterEquivalents}/${d.totalDamageEconomyRegisterEquivalents} [supply base ${d.totalRawSpamSupplyRegisterEquivalents ?? d.totalSpamSupplyRegisterEquivalents}, Permanent-Shutdown +${d.totalPermanentShutdownPressureRegisterEquivalents ?? 0}, max ×${d.maxPermanentShutdownSupplyMultiplier ?? 1}]; Shutdown tolerance ${d.shutdownThreatLevel}, reference ${d.shutdownReferenceRegisterEquivalents} RE, diagnostic threshold replay ${d.shutdownEquivalentDamageScoreRegisterEquivalents} RE (${d.shutdownEquivalentEpisodeCount} crossing(s) + residual ${d.shutdownResidualRegisterEquivalents}); selected route intrinsic adjustment ${starts.find((start)=>start.index===entry.startIndex)?.fullCourseRoute?.intrinsicDamageRoutingAdjustmentScore ?? 0} score from raw damage, robot-laser marginal traffic increment ${starts.find((start)=>start.index===entry.startIndex)?.fullCourseTrafficDamageEconomyRobotLaserIncrementRegisterEquivalents ?? 0} RE; variants implemented ${d.implementedVariantHooks?.join(",") || "none"}, deferred ${d.deferredVariantHooks?.join(",") || "none"}`
+        `Damage economy start #${entry.startIndex + 1}: input ${d.totalDamageUnits} = deterministic ${d.deterministicDamageUnits} [board laser ${d.boardLaserDamageUnits}, radiation ${d.radiationDamageUnits ?? 0}, radioactive waste ${d.radioactiveWasteDamageUnits ?? 0}, flamer ${d.flamethrowerDamageUnits}, flaming oil ${d.flamingOilDamageUnits ?? 0}, ledge ${d.ledgeDamageUnits}, reboot ${d.rebootDamageUnits}] + robot laser expected ${d.robotLaserExpectedDamageUnits}; SPAM added/removed ${d.totalSpamAdded}/${d.totalSpamRemoved} [reboot ${d.totalRebootSpamRemoved}, reboot capacity ${d.totalRebootSpamDisposalCapacity}, repair ${d.totalRepairStationSpamRemoved ?? 0}], repair stations ${d.repairStationReliefCount ?? 0} use(s) / Haywire expected removed ${d.totalRepairStationHaywireExpectedRemoved ?? 0}; final total/held/circulating ${d.finalSpamTotal}/${d.finalSpamHeld}/${d.finalSpamCirculating}; AUTHORITATIVE raw RE supply/clog/total ${d.totalSpamSupplyRegisterEquivalents}/${d.totalClogRegisterEquivalents}/${d.totalDamageEconomyRegisterEquivalents} [supply base ${d.totalRawSpamSupplyRegisterEquivalents ?? d.totalSpamSupplyRegisterEquivalents}, Permanent-Shutdown +${d.totalPermanentShutdownPressureRegisterEquivalents ?? 0}, max ×${d.maxPermanentShutdownSupplyMultiplier ?? 1}]; Randomizer starts/clog/forced-overlap/elective-relief ${d.totalRandomizerStarts ?? 0}/${d.totalRandomizerClogLoad ?? 0}/${d.totalRandomizerForcedSpamOverlap ?? 0}/${d.totalRandomizerReliefInitiations ?? 0}; Shutdown tolerance ${d.shutdownThreatLevel}, reference ${d.shutdownReferenceRegisterEquivalents} RE, diagnostic threshold replay ${d.shutdownEquivalentDamageScoreRegisterEquivalents} RE (${d.shutdownEquivalentEpisodeCount} crossing(s) + residual ${d.shutdownResidualRegisterEquivalents}); selected route intrinsic adjustment ${starts.find((start)=>start.index===entry.startIndex)?.fullCourseRoute?.intrinsicDamageRoutingAdjustmentScore ?? 0} score from raw damage, robot-laser marginal traffic increment ${starts.find((start)=>start.index===entry.startIndex)?.fullCourseTrafficDamageEconomyRobotLaserIncrementRegisterEquivalents ?? 0} RE; variants implemented ${d.implementedVariantHooks?.join(",") || "none"}, deferred ${d.deferredVariantHooks?.join(",") || "none"}`
       );
     });
   }
@@ -22600,21 +22773,22 @@ function buildDamageFoundationReportLines(scenario, options = {}) {
           turn.expectedHaywireClogs > 0 ||
           turn.pendingSpamAddedThisTurn > 0 ||
           turn.reliefInitiations > 0 ||
+          turn.randomizerStarts > 0 ||
           turn.rebootRegister ||
           turn.repairStationReliefCount > 0
         ))
         .forEach((turn) => {
           lines.push(
-            `Damage economy turn start #${entry.startIndex + 1} T${turn.turn}: SPAM total ${turn.spamTotalAtProgramming}, held ${turn.spamHeldAtProgramming}, circulating ${turn.spamCirculatingAtProgramming} -> effective held/circ ${turn.effectiveHeldSpam}/${turn.effectiveCirculatingSpam}; hand ${turn.baseHandSize}, fresh draw ${turn.expectedFreshDrawSlots}, expected newly drawn/in-hand SPAM ${turn.expectedSpamDrawn}/${turn.expectedSpamInHand}; program P clean/damaged ${turn.cleanProgramProbability}/${turn.damagedProgramProbability}; Haywire clog ${turn.expectedHaywireClogs}; SPAM plays forced/elective ${turn.forcedSpamReliefInitiations}/${turn.electiveSpamReliefInitiations} @2 clog each, play-count P0..P5 ${turn.spamPlayCountDistribution.join("/")} -> expected SPAM clog ${turn.spamPlayClogLoad}, combined control-clog ${turn.expectedTotalControlClogLoad} -> clog RE ${turn.clogRegisterEquivalents}; supply RE ${turn.spamSupplyRegisterEquivalents} [base ${turn.rawSpamSupplyRegisterEquivalents ?? turn.spamSupplyRegisterEquivalents}, Permanent-Shutdown +${turn.permanentShutdownPressureRegisterEquivalents ?? 0} @burden${turn.permanentShutdownSpamBurden ?? 0} ×${turn.permanentShutdownSupplyMultiplier ?? 1}]; total RE ${turn.damageEconomyRegisterEquivalents}; Shutdown-tolerance segment ${turn.shutdownThreatSegmentRegisterEquivalents} RE${turn.shutdownEquivalentEpisodeAfterTurn ? " -> threshold crossing" : ""}; damage this turn ${turn.totalDamageUnits} = deterministic ${turn.deterministicDamageUnits} + robot-laser expected ${turn.robotLaserExpectedDamageUnits}; relief opportunity/initiation/removal ${turn.reliefOpportunity}/${turn.reliefInitiations}/${turn.spamRemoved} [forced removed ${turn.forcedSpamRemoved}; Critical-SPAM ->pending ${turn.criticalSpamReturnedToPending ?? 0}]; reboot ${turn.rebootRegister ? `R${turn.rebootRegister}, SPAM dump ${turn.rebootSpamRemoved}/${turn.rebootSpamDisposalCapacity}, active-H clear ${turn.rebootHaywireCleared}` : "none"}; repair ${turn.repairStationReliefCount ? `${turn.repairStationReliefCount}x, SPAM -${turn.repairStationSpamRemoved}, H-exp -${turn.repairStationHaywireExpectedRemoved}` : "none"}; held end ${turn.spamHeldAtTurnEnd}; pending next S/H ${turn.pendingSpamAtTurnEnd}/${turn.pendingHaywireExpectedForNextTurn} [register H risks ${turn.pendingHaywireRegisterRisks.join("/")}]`
+            `Damage economy turn start #${entry.startIndex + 1} T${turn.turn}: SPAM total ${turn.spamTotalAtProgramming}, held ${turn.spamHeldAtProgramming}, circulating ${turn.spamCirculatingAtProgramming} -> effective held/circ ${turn.effectiveHeldSpam}/${turn.effectiveCirculatingSpam}; hand ${turn.baseHandSize}, fresh draw ${turn.expectedFreshDrawSlots}, expected newly drawn/in-hand SPAM ${turn.expectedSpamDrawn}/${turn.expectedSpamInHand}; program P clean/damaged ${turn.cleanProgramProbability}/${turn.damagedProgramProbability}; Haywire clog ${turn.expectedHaywireClogs}; SPAM relief forced/elective ${turn.forcedSpamReliefInitiations}/${turn.electiveSpamReliefInitiations}; clog-bearing SPAM play-count P0..P5 ${turn.spamPlayCountDistribution.join("/")} -> SPAM clog ${turn.spamPlayClogLoad}; Randomizer ${turn.randomizerStarts ?? 0} start(s) -> +${turn.randomizerClogLoad ?? 0} clog, SPAM use forced/elective ${turn.randomizerForcedSpamOverlap ?? 0}/${turn.randomizerReliefInitiations ?? 0}; combined control-clog ${turn.expectedTotalControlClogLoad} -> clog RE ${turn.clogRegisterEquivalents}; supply RE ${turn.spamSupplyRegisterEquivalents} [base ${turn.rawSpamSupplyRegisterEquivalents ?? turn.spamSupplyRegisterEquivalents}, Permanent-Shutdown +${turn.permanentShutdownPressureRegisterEquivalents ?? 0} @burden${turn.permanentShutdownSpamBurden ?? 0} ×${turn.permanentShutdownSupplyMultiplier ?? 1}]; total RE ${turn.damageEconomyRegisterEquivalents}; Shutdown-tolerance segment ${turn.shutdownThreatSegmentRegisterEquivalents} RE${turn.shutdownEquivalentEpisodeAfterTurn ? " -> threshold crossing" : ""}; damage this turn ${turn.totalDamageUnits} = deterministic ${turn.deterministicDamageUnits} + robot-laser expected ${turn.robotLaserExpectedDamageUnits}; relief opportunity/initiation/removal ${turn.reliefOpportunity}/${turn.reliefInitiations}/${turn.spamRemoved} [forced removed ${turn.forcedSpamRemoved}; Critical-SPAM ->pending ${turn.criticalSpamReturnedToPending ?? 0}]; reboot ${turn.rebootRegister ? `R${turn.rebootRegister}, SPAM dump ${turn.rebootSpamRemoved}/${turn.rebootSpamDisposalCapacity}, active-H clear ${turn.rebootHaywireCleared}` : "none"}; repair ${turn.repairStationReliefCount ? `${turn.repairStationReliefCount}x, SPAM -${turn.repairStationSpamRemoved}, H-exp -${turn.repairStationHaywireExpectedRemoved}` : "none"}; held end ${turn.spamHeldAtTurnEnd}; pending next S/H ${turn.pendingSpamAtTurnEnd}/${turn.pendingHaywireExpectedForNextTurn} [register H risks ${turn.pendingHaywireRegisterRisks.join("/")}]`
           );
         });
       (entry.foundation?.events ?? [])
         .filter((event) => (
-          event.damageUnits > 0 || event.reliefInitiation > 0 || event.rebooted || event.repairStationEligible
+          event.damageUnits > 0 || event.reliefInitiation > 0 || event.randomizerAtRegisterStart || event.rebooted || event.repairStationEligible
         ))
         .forEach((event) => {
           lines.push(
-            `Damage economy event start #${entry.startIndex + 1} T${event.turn}R${event.register} a${event.absoluteAction}: tactical relief ${event.reliefInitiation} (opp ${event.reliefOpportunity}, chain ${event.spamChainYield}x, removed ${event.spamRemoved}, Critical-SPAM ->pending ${event.criticalSpamReturnedToPending ?? 0}; wall +${event.reliefWallBonus}${event.reliefWallDistance ? `@${event.reliefWallDistance}` : ""}, forward hazard -${event.reliefForwardHazardPenalty}, conveyor +${event.reliefConveyorMovementBonus}, rotation -${event.reliefForcedRotationPenalty}, forced move -${event.reliefForcedMovementPenalty});${event.rebooted ? ` REBOOT clears active-H ${event.rebootHaywireCleared}, SPAM dump ${event.rebootSpamRemoved}/${event.rebootSpamDisposalCapacity};` : ""} damage ${event.damageUnits} = deterministic ${event.deterministicDamageUnits} + robot-laser expected ${event.robotLaserExpectedDamageUnits} [${event.sourceTypes?.join("+") || "none"}], robot-hit p by N/E/S/W ${event.robotLaserHitProbabilities?.join("/") || "0/0/0/0"}, H-event p ${event.haywireEventProbability} -> +SPAM ${event.spamAdded}, pending H-register risk +${event.haywireRegisterRiskAdded} -> ${event.pendingHaywireRegisterRiskAfter}${event.repairStationEligible ? `; REPAIR SPAM -${event.repairStationSpamRemoved}, H-exp -${event.repairStationHaywireExpectedRemoved}` : ""}`
+            `Damage economy event start #${entry.startIndex + 1} T${event.turn}R${event.register} a${event.absoluteAction}:${event.randomizerAtRegisterStart ? ` RANDOMIZER +${event.randomizerClogLoad ?? 2} clog;` : ""} tactical relief ${event.reliefInitiation} (opp ${event.reliefOpportunity}, chain ${event.spamChainYield}x, removed ${event.spamRemoved}, Critical-SPAM ->pending ${event.criticalSpamReturnedToPending ?? 0}; wall +${event.reliefWallBonus}${event.reliefWallDistance ? `@${event.reliefWallDistance}` : ""}, forward hazard -${event.reliefForwardHazardPenalty}, conveyor +${event.reliefConveyorMovementBonus}, rotation -${event.reliefForcedRotationPenalty}, forced move -${event.reliefForcedMovementPenalty});${event.rebooted ? ` REBOOT clears active-H ${event.rebootHaywireCleared}, SPAM dump ${event.rebootSpamRemoved}/${event.rebootSpamDisposalCapacity};` : ""} damage ${event.damageUnits} = deterministic ${event.deterministicDamageUnits} + robot-laser expected ${event.robotLaserExpectedDamageUnits} [${event.sourceTypes?.join("+") || "none"}], robot-hit p by N/E/S/W ${event.robotLaserHitProbabilities?.join("/") || "0/0/0/0"}, H-event p ${event.haywireEventProbability} -> +SPAM ${event.spamAdded}, pending H-register risk +${event.haywireRegisterRiskAdded} -> ${event.pendingHaywireRegisterRiskAfter}${event.repairStationEligible ? `; REPAIR SPAM -${event.repairStationSpamRemoved}, H-exp -${event.repairStationHaywireExpectedRemoved}` : ""}`
           );
         });
     });
@@ -22825,6 +22999,7 @@ function buildScenarioReport(scenario, selectedLegIndices = null) {
       : "Generation timing: n/a",
     `Analyzer build: ${scenario.generationDiagnostics?.analyzeBuildId ?? analyzeBuildIdSafe}`,
     `UI build: ${MAIN_BUILD_ID}`,
+    `Start balance: ${formatStartBalanceLabel(scenario.preferences?.startBalance)} (${normalizeStartBalance(scenario.preferences?.startBalance)})`,
     Number.isFinite(Number(scenario?.devPerformance?.generateClickToRenderMs))
       ? `Dev render timing: Generate click -> first rendered course ${formatDevMilliseconds(Number(scenario.devPerformance.generateClickToRenderMs))}; last Dev render ${formatDevMilliseconds(Number(scenario.devPerformance.lastRenderMs) || 0)}`
       : "Dev render timing: first-render measurement unavailable",
@@ -23006,7 +23181,7 @@ function buildScenarioReport(scenario, selectedLegIndices = null) {
           `${Number.isFinite(entry.effectiveRE) ? `@${entry.effectiveRE}RE` : ""}` +
           `${Number.isFinite(entry.decisionMarginRE) ? `(gap ${entry.decisionMarginRE}RE)` : ""}`
         )).join(" -> ") || "none";
-        return `Competitive completed-RE ownership v49ec LIVE: production block/choice owner ${audit.productionRankingOwner ?? "completed-effective-re"}; P sequential best-one blocks [${trace}] with traffic recomputed between decisions; post-block choice set best-${audit.intendedChoiceSetCount ?? audit.productionChoiceSetCount ?? "P"} [${(audit.completedREChoiceSetIndices ?? []).map((index) => index + 1).join(", ") || "none"}], RE sd/range ${choice.stdDev ?? "n/a"}/${choice.rangeRE ?? "n/a"}RE; final fairness owner ${audit.finalFairnessOwner ?? "best-worst-completed-effective-re-range"}, soft/hard ${audit.finalRangePolicy?.softRangeLimit ?? "n/a"}/${audit.finalRangePolicy?.hardRangeLimit ?? "n/a"}RE; legacy ranking/readability comparator OFF; occupancy ${audit.occupancyOwner ?? "completed-effective-re"} (${audit.occupancyQualityScale ?? "RE-native"}); traffic ${audit.productionTrafficScope ?? "full"}; RE-native difficulty legibility LIVE; future Start Balance via Competitive-specific calibration pending; Dev ★ = expected selected start`;
+        return `Competitive completed-RE ownership v49ec LIVE: production block/choice owner ${audit.productionRankingOwner ?? "completed-effective-re"}; P sequential best-one blocks [${trace}] with traffic recomputed between decisions; post-block choice set best-${audit.intendedChoiceSetCount ?? audit.productionChoiceSetCount ?? "P"} [${(audit.completedREChoiceSetIndices ?? []).map((index) => index + 1).join(", ") || "none"}], RE sd/range ${choice.stdDev ?? "n/a"}/${choice.rangeRE ?? "n/a"}RE; final fairness owner ${audit.finalFairnessOwner ?? "best-worst-completed-effective-re-range"}, soft/hard ${audit.finalRangePolicy?.softRangeLimit ?? "n/a"}/${audit.finalRangePolicy?.hardRangeLimit ?? "n/a"}RE; legacy ranking/readability comparator OFF; occupancy ${audit.occupancyOwner ?? "completed-effective-re"} (${audit.occupancyQualityScale ?? "RE-native"}); traffic ${audit.productionTrafficScope ?? "full"}; RE-native difficulty legibility LIVE; Start Balance ${audit.startBalanceControl?.preset ?? "standard"} applies only to the post-block best-P range; Dev ★ = expected selected start`;
       })()
       : "Competitive completed-RE ownership v49ec: n/a",
     summary.payToWin?.active
@@ -23053,7 +23228,7 @@ function buildScenarioReport(scenario, selectedLegIndices = null) {
       }).join(" | ")}`
       : "Priced start residuals: n/a",
     summary.normalStartBalance?.active
-      ? `Normal start balance v49dx: RANGE-FIRST completed-RE, pruned ${(summary.normalStartBalance.pressurePruned ?? []).length ? (summary.normalStartBalance.pressurePruned ?? []).map((item) => `#${item.index + 1}(ΔRE ${item.diagnostics?.scoreDelta ?? "n/a"}; range ${item.diagnostics?.rangeBefore ?? "n/a"}->${item.diagnostics?.rangeAfterEstimate ?? "n/a"}/${item.diagnostics?.rangeLimit ?? "n/a"}; SD ${item.diagnostics?.balanceStdDevBefore ?? "n/a"}->${item.diagnostics?.balanceStdDevAfter ?? item.diagnostics?.balanceStdDevAfterEstimate ?? "n/a"}; pass ${item.pass ?? "n/a"})`).join(", ") : "none"}, retained ${summary.normalStartBalance.retainedCount ?? scenario.metrics?.usableStarts?.length ?? "n/a"}, effectiveRE ${summary.normalStartBalance.retainedEffectiveREMin ?? summary.normalStartBalance.retainedScoreMin ?? "n/a"}..${summary.normalStartBalance.retainedEffectiveREMax ?? summary.normalStartBalance.retainedScoreMax ?? "n/a"}, range ${summary.normalStartBalance.retainedEffectiveRERange ?? "n/a"}/${summary.normalStartBalance.retainedEffectiveRERangeLimit ?? "n/a"} (excess ${summary.normalStartBalance.retainedEffectiveRERangeExcess ?? "n/a"}; soft +${summary.normalStartBalance.residualSelectionPenaltyComponents?.softOverflowAllowance ?? "n/a"}; median ${summary.normalStartBalance.fairnessMedianTurns ?? "n/a"} turns), SD ${summary.normalStartBalance.balanceStdDevBefore ?? "n/a"}->${summary.normalStartBalance.balanceStdDevAfter ?? "n/a"} diagnostic/tiebreak only, action pruning OFF, duration guardrail ${(summary.normalStartBalance.durationGuardrail?.min ?? "n/a")}..${(summary.normalStartBalance.durationGuardrail?.max ?? "n/a")} regs (range ${summary.normalStartBalance.durationGuardrail?.range ?? "n/a"}/${summary.normalStartBalance.durationGuardrail?.allowedRange ?? "n/a"}; ${summary.normalStartBalance.durationGuardrail?.violation ? "VIOLATION" : "pass"}), traffic recomputations ${summary.normalStartBalance.trafficRecomputations ?? 0}, floor ${summary.normalStartBalance.retainedCount ?? "n/a"}/${summary.normalStartBalance.playerFloor ?? scenario.playerCount ?? "?"}${summary.normalStartBalance.floorReached ? " reached" : ""}, residual scorer penalty ${summary.normalStartBalance.residualSelectionPenalty ?? 0}, hard-fail ${summary.normalStartBalance.belowPlayerFloor ? "yes" : "no"}`
+      ? `Normal start balance v49fj: ${formatStartBalanceLabel(scenario.preferences?.startBalance)} RANGE-FIRST completed-RE, pruned ${(summary.normalStartBalance.pressurePruned ?? []).length ? (summary.normalStartBalance.pressurePruned ?? []).map((item) => `#${item.index + 1}(ΔRE ${item.diagnostics?.scoreDelta ?? "n/a"}; range ${item.diagnostics?.rangeBefore ?? "n/a"}->${item.diagnostics?.rangeAfterEstimate ?? "n/a"}/${item.diagnostics?.rangeLimit ?? "n/a"}; SD ${item.diagnostics?.balanceStdDevBefore ?? "n/a"}->${item.diagnostics?.balanceStdDevAfter ?? item.diagnostics?.balanceStdDevAfterEstimate ?? "n/a"}; pass ${item.pass ?? "n/a"})`).join(", ") : "none"}, retained ${summary.normalStartBalance.retainedCount ?? scenario.metrics?.usableStarts?.length ?? "n/a"}, effectiveRE ${summary.normalStartBalance.retainedEffectiveREMin ?? summary.normalStartBalance.retainedScoreMin ?? "n/a"}..${summary.normalStartBalance.retainedEffectiveREMax ?? summary.normalStartBalance.retainedScoreMax ?? "n/a"}, range ${summary.normalStartBalance.retainedEffectiveRERange ?? "n/a"}/${summary.normalStartBalance.retainedEffectiveRERangeLimit ?? "n/a"} (excess ${summary.normalStartBalance.retainedEffectiveRERangeExcess ?? "n/a"}; observed ${summary.normalStartBalance.residualSelectionPenaltyComponents?.observedRangeExcess ?? summary.normalStartBalance.retainedEffectiveRERangeExcess ?? "n/a"}; soft +${summary.normalStartBalance.residualSelectionPenaltyComponents?.softOverflowAllowance ?? "n/a"}; median ${summary.normalStartBalance.fairnessMedianTurns ?? "n/a"} turns), SD ${summary.normalStartBalance.balanceStdDevBefore ?? "n/a"}->${summary.normalStartBalance.balanceStdDevAfter ?? "n/a"} diagnostic/tiebreak only, action pruning OFF, duration guardrail ${(summary.normalStartBalance.durationGuardrail?.min ?? "n/a")}..${(summary.normalStartBalance.durationGuardrail?.max ?? "n/a")} regs (range ${summary.normalStartBalance.durationGuardrail?.range ?? "n/a"}/${summary.normalStartBalance.durationGuardrail?.allowedRange ?? "n/a"}; ${summary.normalStartBalance.durationGuardrail?.violation ? "VIOLATION" : "pass"}), traffic recomputations ${summary.normalStartBalance.trafficRecomputations ?? 0}, floor ${summary.normalStartBalance.retainedCount ?? "n/a"}/${summary.normalStartBalance.playerFloor ?? scenario.playerCount ?? "?"}${summary.normalStartBalance.floorReached ? " reached" : ""}, residual scorer penalty ${summary.normalStartBalance.residualSelectionPenalty ?? 0}, hard-fail ${summary.normalStartBalance.belowPlayerFloor ? "yes" : "no"}`
       : "Normal start balance: n/a",
     reDifficultyShadow?.active
       ? `RE-turn difficulty starts v49de: ${(reDifficultyShadow.perStart ?? []).map((entry) => `#${entry.index + 1} occ${Number(entry.occupancy).toFixed(3)} mix${entry.routeCount} eff${Number(entry.effectiveRE).toFixed(2)}RE regs${Number(entry.programmedRegisters).toFixed(2)} turns${Number(entry.programmingTurns).toFixed(2)} lost${Number(entry.lostRegisterTempoRE).toFixed(2)} burden${Number(entry.burdenRE).toFixed(2)} meanTurn${Number(entry.meanTurnBurdenRE).toFixed(3)} peakTurn${Number(entry.turnTailBurdenRE).toFixed(3)} composite${Number(entry.routeTurnDifficultyRE).toFixed(3)}`).join(" | ")}`
@@ -23089,6 +23264,9 @@ function buildScenarioReport(scenario, selectedLegIndices = null) {
     currentNormalRouteModel
       ? "Board mechanics v49fe LIVE: Radiation is authoritative +1 damage at end of register 5; Radioactive Waste uses ordinary Water-current movement plus authoritative +1 end-of-every-register damage and the better of +1 Energy vs free random-upgrade-install value from the existing upgrade economy; red/green walls use one directional boundary rule for movement and robot-laser LOS with directional LOS caching, both remain active under checkpoints, and either wall color can anchor laser overlay tiles. Homing Missile, robot-laser traffic and reboot-pileup ownership remain as in v49ej."
       : "Board mechanics v49fe: n/a",
+    currentNormalRouteModel
+      ? "Randomizer ownership v49fh LIVE: an active Randomizer at register start contributes deterministic +2 control-clog to that game turn through the shared nonlinear SPAM/Haywire clog curve; that register is a full SPAM-relief opportunity, and forced or elective SPAM assigned to that Randomizer register adds no second +2 clog. Randomizer has no separate production mental-event charge; cheap pathfinder guidance is a provisional isolated 2-clog bridge pending corpus calibration."
+      : "Randomizer ownership v49fh: n/a",
     `Robot-laser variants v49eo LIVE: Set to Kill ${scenario.setToKill ? "ON (2 damage cards per main-laser hit)" : "off"}; Set to Stun ${scenario.setToStun ? "ON (robot-laser SPAM goes to the damage discard pile / does not enter persistent SPAM state; Haywire unchanged per damage card)" : "off"}; LOS/hit probability and robot-laser awareness mental are unchanged; neither rule adds a variant-memory event.`,
     `Floor damage/repair v49eo LIVE: flamethrowers deal 1 on each active entry/pass-through +1 on end-of-register; Flaming Oil ${scenario.flamingOil ? "ON (+1 on entering any oil in a register +1 on ending that register on oil; no per-oil-tile stacking)" : "off"}; Repair Stations ${scenario.repairStations ? "ON (register-5 ordinary checkpoint removes 23/40 expected SPAM +17/40 expected Haywire, no spill)" : "off"}; flamethrower / Flaming Oil / Repair Station planning each collapse to at most one mental event per game turn when relevant.`,
     `Variant ownership v49es LIVE: Moving Targets ${scenario.movingTargets ? "ON (dynamic checkpoint routing + one tracking mental event per relevant register; old tracking/volatility production penalties OFF)" : "off"}; Repulsor Overdrive ${scenario.repulsorOverdrive ? "ON (exact doubled bounce + at most one relevant memory event per turn)" : "off"}; Hazardous Flags ${scenario.hazardousFlags ? "ON (covered board elements stay mechanically active + at most one relevant memory event per turn)" : "off"}; Critical Haywire ${scenario.criticalHaywire ? "ON (hand-size effect; no mental event)" : "off"}; Critical SPAM ${scenario.criticalSpam ? "ON (played-SPAM model: provisional 20% effective relief / 80% returned to pending; no mental event)" : "off"}.`,
@@ -24262,7 +24440,7 @@ function formatRouteDetail(scenario, entry) {
         ))
         .forEach((turn) => {
           lines.push(
-            `  Damage T${turn.turn} programming: SPAM total/held/circ ${turn.spamTotalAtProgramming}/${turn.spamHeldAtProgramming}/${turn.spamCirculatingAtProgramming} -> effective held/circ ${turn.effectiveHeldSpam}/${turn.effectiveCirculatingSpam}; hand ${turn.baseHandSize}, fresh draw ${turn.expectedFreshDrawSlots}; expected SPAM drawn/in-hand ${turn.expectedSpamDrawn}/${turn.expectedSpamInHand}; program P clean/damaged ${turn.cleanProgramProbability}/${turn.damagedProgramProbability}; H clog ${turn.expectedHaywireClogs}; SPAM forced/elective ${turn.forcedSpamReliefInitiations}/${turn.electiveSpamReliefInitiations}, P0..P5 ${turn.spamPlayCountDistribution.join("/")} -> expected SPAM clog ${turn.spamPlayClogLoad}, combined ${turn.expectedTotalControlClogLoad}; RE supply/clog/total ${turn.spamSupplyRegisterEquivalents}/${turn.clogRegisterEquivalents}/${turn.damageEconomyRegisterEquivalents} [supply base ${turn.rawSpamSupplyRegisterEquivalents ?? turn.spamSupplyRegisterEquivalents}, Permanent-Shutdown +${turn.permanentShutdownPressureRegisterEquivalents ?? 0} @burden${turn.permanentShutdownSpamBurden ?? 0} ×${turn.permanentShutdownSupplyMultiplier ?? 1}]; Shutdown-tolerance segment ${turn.shutdownThreatSegmentRegisterEquivalents}${turn.shutdownEquivalentEpisodeAfterTurn ? " -> threshold crossing" : ""}`
+            `  Damage T${turn.turn} programming: SPAM total/held/circ ${turn.spamTotalAtProgramming}/${turn.spamHeldAtProgramming}/${turn.spamCirculatingAtProgramming} -> effective held/circ ${turn.effectiveHeldSpam}/${turn.effectiveCirculatingSpam}; hand ${turn.baseHandSize}, fresh draw ${turn.expectedFreshDrawSlots}; expected SPAM drawn/in-hand ${turn.expectedSpamDrawn}/${turn.expectedSpamInHand}; program P clean/damaged ${turn.cleanProgramProbability}/${turn.damagedProgramProbability}; H clog ${turn.expectedHaywireClogs}; SPAM relief forced/elective ${turn.forcedSpamReliefInitiations}/${turn.electiveSpamReliefInitiations}, clog-bearing P0..P5 ${turn.spamPlayCountDistribution.join("/")} -> SPAM clog ${turn.spamPlayClogLoad}; Randomizer ${turn.randomizerStarts ?? 0} start(s) / +${turn.randomizerClogLoad ?? 0} clog / SPAM use forced/elective ${turn.randomizerForcedSpamOverlap ?? 0}/${turn.randomizerReliefInitiations ?? 0}; combined ${turn.expectedTotalControlClogLoad}; RE supply/clog/total ${turn.spamSupplyRegisterEquivalents}/${turn.clogRegisterEquivalents}/${turn.damageEconomyRegisterEquivalents} [supply base ${turn.rawSpamSupplyRegisterEquivalents ?? turn.spamSupplyRegisterEquivalents}, Permanent-Shutdown +${turn.permanentShutdownPressureRegisterEquivalents ?? 0} @burden${turn.permanentShutdownSpamBurden ?? 0} ×${turn.permanentShutdownSupplyMultiplier ?? 1}]; Shutdown-tolerance segment ${turn.shutdownThreatSegmentRegisterEquivalents}${turn.shutdownEquivalentEpisodeAfterTurn ? " -> threshold crossing" : ""}`
           );
           if (
             turn.reliefInitiations > 0 ||
@@ -25570,6 +25748,59 @@ function tileTouchesVisibleTrace(scenario, tile, selectedLegIndices) {
 }
 
 
+function getMapFeatureHighlightTargets(scenario) {
+  const checkpointCount = getPlayableCheckpoints(
+    scenario?.checkpoints ?? [],
+    Boolean(scenario?.virtualBots)
+  ).length;
+  const overlayTileCount = (scenario?.placements ?? []).filter((placement) => (
+    placement?.overlay && isMiniOverlayPiece(scenario?.pieceMap?.[placement.pieceId])
+  )).length;
+
+  return {
+    checkpointCount,
+    overlayTileCount,
+    hasTargets: checkpointCount > 0 || overlayTileCount > 0
+  };
+}
+
+function updateMapFeatureHighlightControl(scenario) {
+  const controls = document.getElementById("map-highlight-controls");
+  const button = document.getElementById("map-feature-highlight");
+  if (!controls || !button) return;
+
+  const targets = getMapFeatureHighlightTargets(scenario);
+  controls.classList.toggle("hidden", !targets.hasTargets);
+  if (!targets.hasTargets) {
+    button.setAttribute("aria-pressed", "false");
+    return;
+  }
+
+  const active = Boolean(mapFeatureHighlightEnabled);
+  button.setAttribute("aria-pressed", active ? "true" : "false");
+
+  if (active) {
+    button.textContent = "Show full board";
+    button.title = "Restore the board to normal brightness.";
+    button.setAttribute("aria-label", "Show full board");
+    return;
+  }
+
+  let label = "Highlight checkpoints";
+  let targetDescription = "checkpoints";
+  if (targets.checkpointCount > 0 && targets.overlayTileCount > 0) {
+    label = "Highlight checkpoints + overlay tiles";
+    targetDescription = "checkpoints and overlay tiles";
+  } else if (targets.overlayTileCount > 0) {
+    label = "Highlight overlay tiles";
+    targetDescription = "overlay tiles";
+  }
+
+  button.textContent = label;
+  button.title = `Dim the rest of the course so ${targetDescription} are easier to spot.`;
+  button.setAttribute("aria-label", label);
+}
+
 function getScenarioRenderState(scenario) {
   const devViewEnabled = isDevViewEnabled();
   const selectedLegIndices = devViewEnabled
@@ -25667,11 +25898,14 @@ function getScenarioRenderState(scenario) {
     ? scenario.activeStarts.map((start) => lateUnavailableByKey.get(`${start.x},${start.y}`) ?? false)
     : [];
 
+  const highlightTargets = getMapFeatureHighlightTargets(scenario);
+
   return {
     devViewEnabled, goal, iconBoardView, renderAnalysis, selectedLegIndices,
     startLabels, selectedStartIndices, startEnergyCosts, startLateEnergyCosts,
     startEarlyUnavailable, startLateUnavailable,
-    startEnergyIsSubsidy: Boolean(scenario.subsidizedStarts), unusableStartIndices
+    startEnergyIsSubsidy: Boolean(scenario.subsidizedStarts), unusableStartIndices,
+    highlightMapFeatures: Boolean(mapFeatureHighlightEnabled && highlightTargets.hasTargets)
   };
 }
 
@@ -25692,7 +25926,8 @@ function drawScenarioCanvas(scenario, options = {}) {
     startEarlyUnavailable,
     startLateUnavailable,
     startEnergyIsSubsidy,
-    unusableStartIndices
+    unusableStartIndices,
+    highlightMapFeatures
   } = getScenarioRenderState(scenario);
   const canvas = document.getElementById("canvas");
   const renderOptions = {
@@ -25733,7 +25968,8 @@ function drawScenarioCanvas(scenario, options = {}) {
     showWalls: iconBoardView || devViewEnabled,
     showPieceImages: !iconBoardView,
     showFootprints: true,
-    showFeatureIcons: iconBoardView
+    showFeatureIcons: iconBoardView,
+    highlightMapFeatures
   };
 
   render(canvas, scenario.pieceMap, scenario.imageMap, renderOptions);
@@ -25852,6 +26088,7 @@ function buildScenarioDevOverview(scenario, selectedLegIndices) {
   const lines = [
     "Course Evaluation — quick Dev overview",
     `UI build: ${MAIN_BUILD_ID}`,
+    `Start balance: ${formatStartBalanceLabel(scenario.preferences?.startBalance)} (${normalizeStartBalance(scenario.preferences?.startBalance)})`,
     `Trace legs: ${legLabels.length === scenario.sequence.legs.length ? "all real legs" : legLabels.join(", ") || "all real legs"}`,
     "Deep per-route/register replay is lazy. Click a start for structured route detail; use Copy All for the full event-level diagnostic ledger.",
     `Automatic v49cd targeted card-pressure search: disabled (the capped experiment is closed as inconclusive).`,
@@ -25872,6 +26109,7 @@ function renderScenario(scenario) {
   updateSetupSummary(scenario);
   updateRulesNote(scenario);
   updateLegend(scenario);
+  updateMapFeatureHighlightControl(scenario);
   const legSelect = document.getElementById("leg-select");
   const legOptions = scenario.sequence.legs.map((leg, index) => ({
     value: String(index),
@@ -28694,8 +28932,8 @@ function restoreSavedNormalStartDispositionForHydration(
   });
 
   const retainedEntries = getActivePruningStarts(restoredFirstLeg, excludedIndices);
-  const retainedBalance = summarizeNormalRetainedREBalance(retainedEntries);
-  const residualBalancePenalty = getNormalResidualBalanceSelectionPenalty(retainedEntries);
+  const retainedBalance = summarizeNormalRetainedREBalance(retainedEntries, options);
+  const residualBalancePenalty = getNormalResidualBalanceSelectionPenalty(retainedEntries, options);
   const durationGuardrail = getNormalRegisterDurationGuardrail(retainedEntries);
   const remainingOutliers = rankNormalEffectiveREOutliers(
     retainedEntries,
@@ -28752,10 +28990,13 @@ function restoreSavedNormalStartDispositionForHydration(
         residualSelectionPenaltyComponents: residualBalancePenalty,
         residualImbalanceFeedsCourseScorer: true,
         fairnessMetric: "full-course-effective-RE",
-        fairnessModel: "range-first-length-responsive-v49dx",
+        fairnessModel: "range-first-length-responsive-start-balance-v49fj",
+        startBalance: normalizeStartBalance(options.startBalance),
+        startBalanceLabel: formatStartBalanceLabel(options.startBalance),
+        startBalanceEnforced: getStartBalanceProfile(options).enforced,
         actionPruningActive: false,
         dispersionPruningActive: false,
-        rangePruningActive: true,
+        rangePruningActive: getStartBalanceProfile(options).enforced,
         remainingBadStarts: remainingOutliers.map((item) => ({
           index: item.entry.index,
           score: item.score,
@@ -31159,6 +31400,12 @@ if (typeof document !== "undefined") {
     }
   });
 
+  document.getElementById("map-feature-highlight")?.addEventListener("click", () => {
+    if (!currentScenario) return;
+    mapFeatureHighlightEnabled = !mapFeatureHighlightEnabled;
+    renderScenario(currentScenario);
+  });
+
   document.getElementById("course-explanation-toggle").addEventListener("click", () => {
     if (!currentScenario) {
       return;
@@ -31416,4 +31663,4 @@ if (typeof document !== "undefined") {
   init().catch(console.error);
 
 }
-// VERSION END: v49fb-virtual-bots-early-stop-fallback
+// VERSION END: v49fj-start-balance-control
