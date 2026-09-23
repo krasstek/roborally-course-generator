@@ -1,6 +1,6 @@
-// VERSION START: v49fc-virtual-bots-normal-routing
+// VERSION START: v49ff-reload-start-disposition-fidelity
 // Robo Rally Course Randomizer - production runtime
-const MAIN_BUILD_ID = "v49fc-virtual-bots-normal-routing";
+const MAIN_BUILD_ID = "v49ff-reload-start-disposition-fidelity";
 // Mobile browsers may auto-detect number-like rule text and restyle it as a
 // tappable link even though the app emitted ordinary text. Keep rules/course
 // annotations visually plain; this is presentation-only and does not disable
@@ -748,7 +748,7 @@ const PIECE_DATA_FILES = [
   "winding",
   "whirlpool"
 ];
-const DEFAULT_CHECKPOINT_ACTIVE_FEATURE_TYPES = new Set(["wall", "laser"]);
+const DEFAULT_CHECKPOINT_ACTIVE_FEATURE_TYPES = new Set(["wall", "redWall", "greenWall", "laser"]);
 
 function isCheckpointActiveFeature(feature, options = {}) {
   if (DEFAULT_CHECKPOINT_ACTIVE_FEATURE_TYPES.has(feature?.type)) {
@@ -7432,6 +7432,10 @@ function tileHasRedWallOnSide(features = [], side) {
   return features.some((feature) => feature.type === "redWall" && (feature.sides || []).includes(side));
 }
 
+function tileHasGreenWallOnSide(features = [], side) {
+  return features.some((feature) => feature.type === "greenWall" && (feature.sides || []).includes(side));
+}
+
 function tileHasLedgeOnSide(features = [], side) {
   return features.some((feature) => feature.type === "ledge" && (feature.sides || []).includes(side));
 }
@@ -7440,14 +7444,16 @@ function tileHasLaserSupportBlock(features = [], side, options = {}) {
   if (
     tileHasWallOnSide(features, side) ||
     tileHasRepulsorOnEdge(features, side) ||
-    tileHasRedWallOnSide(features, side)
+    tileHasRedWallOnSide(features, side) ||
+    tileHasGreenWallOnSide(features, side)
   ) {
     return true;
   }
 
   // A ledge only provides a physical laser-support wall from its LOWER tile.
   // The neighboring upper/platform tile does not have a wall face on that edge.
-  // Green wall markers never provide support by themselves.
+  // Red and green walls both count as physical laser anchors even though their
+  // traversal behavior differs when they face each other across a border.
   return Boolean(options.includeLowerLedge && tileHasLedgeOnSide(features, side));
 }
 
@@ -22571,14 +22577,14 @@ function buildDamageFoundationReportLines(scenario, options = {}) {
     0
   ) / Math.max(1, starts.length)).toFixed(3));
   const lines = [
-    `Damage economy v9: ROUTING ACTIVE; damage input avg ${mean("totalDamageUnits")} = deterministic ${mean("deterministicDamageUnits")} + robot-laser expected ${mean("robotLaserExpectedDamageUnits")}; persistent SPAM total/held final avg ${mean("finalSpamTotal")}/${mean("finalSpamHeld")}; transient Haywire max expected clog avg ${mean("maxExpectedHaywireClogs")}; AUTHORITATIVE raw economy RE avg total ${mean("totalDamageEconomyRegisterEquivalents")} [supply ${mean("totalSpamSupplyRegisterEquivalents")} = base ${mean("totalRawSpamSupplyRegisterEquivalents")} + Permanent-Shutdown pressure ${mean("totalPermanentShutdownPressureRegisterEquivalents")}, control-clog ${mean("totalClogRegisterEquivalents")}], max-turn ${Number((entries.reduce((t,e)=>t+(Number(e.foundation?.maxTurnDamageEconomyRegisterEquivalents)||0),0)/Math.max(1,entries.length)).toFixed(3))}; SPAM plays avg forced/elective ${mean("totalForcedSpamReliefInitiations")}/${mean("totalElectiveSpamReliefInitiations")}, removed avg ${mean("totalSpamRemoved")} (Critical-SPAM returned-to-pending ${mean("totalCriticalSpamReturnedToPending")}, reboot ${mean("totalRebootSpamRemoved")}, capacity ${mean("totalRebootSpamDisposalCapacity")}, repair ${mean("totalRepairStationSpamRemoved")}); repair-station uses ${sum("repairStationReliefCount")} / Haywire expected removed ${mean("totalRepairStationHaywireExpectedRemoved")} avg; flaming-oil deterministic damage avg ${mean("flamingOilDamageUnits")}; Permanent Shutdown pressure ${entries[0]?.foundation?.permanentShutdownPressureActive ? `LIVE, max supply multiplier avg ${mean("maxPermanentShutdownSupplyMultiplier")}x, provisional curve calibration queued` : "OFF"}; Shutdown tolerance reference ${entries[0]?.foundation?.shutdownReferenceRegisterEquivalents ?? 5} RE is COUNTERFACTUAL ONLY, not programmed, not a cap; diagnostic threshold replay avg ${mean("shutdownEquivalentDamageScoreRegisterEquivalents")} RE = ${mean("shutdownEquivalentRegisterEquivalents")} threshold-chunk RE + ${mean("shutdownResidualRegisterEquivalents")} residual, ${sum("shutdownEquivalentEpisodeCount")} threshold crossing(s), high/elevated tolerance pressure ${entries.filter((entry)=>entry.foundation?.shutdownThreatLevel === "high").length}/${entries.filter((entry)=>entry.foundation?.shutdownThreatLevel === "elevated").length}; selected-route intrinsic damage adjustment avg ${selectedRouteMean("intrinsicDamageRoutingAdjustmentScore")} score from ${selectedRouteMean("intrinsicDamageEconomyRegisterEquivalents")} raw damage-economy RE; traffic robot-laser marginal raw-damage increment avg ${selectedTrafficMean("fullCourseTrafficDamageEconomyRobotLaserIncrementRegisterEquivalents")} RE; legacy residual ranged-threat score ${selectedTrafficMean("fullCourseTrafficLegacyResidualRangedThreatScoreDiagnostic")} is diagnostic-only and contributes 0 RE; exact candidate re-ranking active; Shutdown reference is search-worthiness context only; cheap primary search graph/budgets unchanged; tolerance replay ${telemetry.shutdownScoringReplayCount ?? 0} route(s)/${telemetry.shutdownScoringReplayTurns ?? 0} turn(s); relief coefficients unchanged from v49x; state cache ${telemetry.effectiveStateCacheHits ?? 0}/${telemetry.effectiveStateLookups ?? 0}, program cache ${telemetry.programCacheHits ?? 0}/${telemetry.programLookups ?? 0}, draw cache ${telemetry.spamDrawCacheHits ?? 0}/${telemetry.spamDrawLookups ?? 0}, route replay cache ${telemetry.routeSummaryCacheHits ?? 0}/${telemetry.routeSummaryLookups ?? 0}; implemented hooks ${implementedHooks.length ? implementedHooks.join(",") : "none"}, deferred ${deferredHooks.length ? deferredHooks.join(",") : "none"}`
+    `Damage economy v9: ROUTING ACTIVE; damage input avg ${mean("totalDamageUnits")} = deterministic ${mean("deterministicDamageUnits")} + robot-laser expected ${mean("robotLaserExpectedDamageUnits")}; persistent SPAM total/held final avg ${mean("finalSpamTotal")}/${mean("finalSpamHeld")}; transient Haywire max expected clog avg ${mean("maxExpectedHaywireClogs")}; AUTHORITATIVE raw economy RE avg total ${mean("totalDamageEconomyRegisterEquivalents")} [supply ${mean("totalSpamSupplyRegisterEquivalents")} = base ${mean("totalRawSpamSupplyRegisterEquivalents")} + Permanent-Shutdown pressure ${mean("totalPermanentShutdownPressureRegisterEquivalents")}, control-clog ${mean("totalClogRegisterEquivalents")}], max-turn ${Number((entries.reduce((t,e)=>t+(Number(e.foundation?.maxTurnDamageEconomyRegisterEquivalents)||0),0)/Math.max(1,entries.length)).toFixed(3))}; SPAM plays avg forced/elective ${mean("totalForcedSpamReliefInitiations")}/${mean("totalElectiveSpamReliefInitiations")}, removed avg ${mean("totalSpamRemoved")} (Critical-SPAM returned-to-pending ${mean("totalCriticalSpamReturnedToPending")}, reboot ${mean("totalRebootSpamRemoved")}, capacity ${mean("totalRebootSpamDisposalCapacity")}, repair ${mean("totalRepairStationSpamRemoved")}); repair-station uses ${sum("repairStationReliefCount")} / Haywire expected removed ${mean("totalRepairStationHaywireExpectedRemoved")} avg; radiation deterministic damage avg ${mean("radiationDamageUnits")}; radioactive-waste deterministic damage avg ${mean("radioactiveWasteDamageUnits")}; flaming-oil deterministic damage avg ${mean("flamingOilDamageUnits")}; Permanent Shutdown pressure ${entries[0]?.foundation?.permanentShutdownPressureActive ? `LIVE, max supply multiplier avg ${mean("maxPermanentShutdownSupplyMultiplier")}x, provisional curve calibration queued` : "OFF"}; Shutdown tolerance reference ${entries[0]?.foundation?.shutdownReferenceRegisterEquivalents ?? 5} RE is COUNTERFACTUAL ONLY, not programmed, not a cap; diagnostic threshold replay avg ${mean("shutdownEquivalentDamageScoreRegisterEquivalents")} RE = ${mean("shutdownEquivalentRegisterEquivalents")} threshold-chunk RE + ${mean("shutdownResidualRegisterEquivalents")} residual, ${sum("shutdownEquivalentEpisodeCount")} threshold crossing(s), high/elevated tolerance pressure ${entries.filter((entry)=>entry.foundation?.shutdownThreatLevel === "high").length}/${entries.filter((entry)=>entry.foundation?.shutdownThreatLevel === "elevated").length}; selected-route intrinsic damage adjustment avg ${selectedRouteMean("intrinsicDamageRoutingAdjustmentScore")} score from ${selectedRouteMean("intrinsicDamageEconomyRegisterEquivalents")} raw damage-economy RE; traffic robot-laser marginal raw-damage increment avg ${selectedTrafficMean("fullCourseTrafficDamageEconomyRobotLaserIncrementRegisterEquivalents")} RE; legacy residual ranged-threat score ${selectedTrafficMean("fullCourseTrafficLegacyResidualRangedThreatScoreDiagnostic")} is diagnostic-only and contributes 0 RE; exact candidate re-ranking active; Shutdown reference is search-worthiness context only; cheap primary search graph/budgets unchanged; tolerance replay ${telemetry.shutdownScoringReplayCount ?? 0} route(s)/${telemetry.shutdownScoringReplayTurns ?? 0} turn(s); relief coefficients unchanged from v49x; state cache ${telemetry.effectiveStateCacheHits ?? 0}/${telemetry.effectiveStateLookups ?? 0}, program cache ${telemetry.programCacheHits ?? 0}/${telemetry.programLookups ?? 0}, draw cache ${telemetry.spamDrawCacheHits ?? 0}/${telemetry.spamDrawLookups ?? 0}, route replay cache ${telemetry.routeSummaryCacheHits ?? 0}/${telemetry.routeSummaryLookups ?? 0}; implemented hooks ${implementedHooks.length ? implementedHooks.join(",") : "none"}, deferred ${deferredHooks.length ? deferredHooks.join(",") : "none"}`
   ];
 
   if (includePerStart) {
     entries.forEach((entry) => {
       const d = entry.foundation;
       lines.push(
-        `Damage economy start #${entry.startIndex + 1}: input ${d.totalDamageUnits} = deterministic ${d.deterministicDamageUnits} [board laser ${d.boardLaserDamageUnits}, flamer ${d.flamethrowerDamageUnits}, flaming oil ${d.flamingOilDamageUnits ?? 0}, ledge ${d.ledgeDamageUnits}, reboot ${d.rebootDamageUnits}] + robot laser expected ${d.robotLaserExpectedDamageUnits}; SPAM added/removed ${d.totalSpamAdded}/${d.totalSpamRemoved} [reboot ${d.totalRebootSpamRemoved}, reboot capacity ${d.totalRebootSpamDisposalCapacity}, repair ${d.totalRepairStationSpamRemoved ?? 0}], repair stations ${d.repairStationReliefCount ?? 0} use(s) / Haywire expected removed ${d.totalRepairStationHaywireExpectedRemoved ?? 0}; final total/held/circulating ${d.finalSpamTotal}/${d.finalSpamHeld}/${d.finalSpamCirculating}; AUTHORITATIVE raw RE supply/clog/total ${d.totalSpamSupplyRegisterEquivalents}/${d.totalClogRegisterEquivalents}/${d.totalDamageEconomyRegisterEquivalents} [supply base ${d.totalRawSpamSupplyRegisterEquivalents ?? d.totalSpamSupplyRegisterEquivalents}, Permanent-Shutdown +${d.totalPermanentShutdownPressureRegisterEquivalents ?? 0}, max ×${d.maxPermanentShutdownSupplyMultiplier ?? 1}]; Shutdown tolerance ${d.shutdownThreatLevel}, reference ${d.shutdownReferenceRegisterEquivalents} RE, diagnostic threshold replay ${d.shutdownEquivalentDamageScoreRegisterEquivalents} RE (${d.shutdownEquivalentEpisodeCount} crossing(s) + residual ${d.shutdownResidualRegisterEquivalents}); selected route intrinsic adjustment ${starts.find((start)=>start.index===entry.startIndex)?.fullCourseRoute?.intrinsicDamageRoutingAdjustmentScore ?? 0} score from raw damage, robot-laser marginal traffic increment ${starts.find((start)=>start.index===entry.startIndex)?.fullCourseTrafficDamageEconomyRobotLaserIncrementRegisterEquivalents ?? 0} RE; variants implemented ${d.implementedVariantHooks?.join(",") || "none"}, deferred ${d.deferredVariantHooks?.join(",") || "none"}`
+        `Damage economy start #${entry.startIndex + 1}: input ${d.totalDamageUnits} = deterministic ${d.deterministicDamageUnits} [board laser ${d.boardLaserDamageUnits}, radiation ${d.radiationDamageUnits ?? 0}, radioactive waste ${d.radioactiveWasteDamageUnits ?? 0}, flamer ${d.flamethrowerDamageUnits}, flaming oil ${d.flamingOilDamageUnits ?? 0}, ledge ${d.ledgeDamageUnits}, reboot ${d.rebootDamageUnits}] + robot laser expected ${d.robotLaserExpectedDamageUnits}; SPAM added/removed ${d.totalSpamAdded}/${d.totalSpamRemoved} [reboot ${d.totalRebootSpamRemoved}, reboot capacity ${d.totalRebootSpamDisposalCapacity}, repair ${d.totalRepairStationSpamRemoved ?? 0}], repair stations ${d.repairStationReliefCount ?? 0} use(s) / Haywire expected removed ${d.totalRepairStationHaywireExpectedRemoved ?? 0}; final total/held/circulating ${d.finalSpamTotal}/${d.finalSpamHeld}/${d.finalSpamCirculating}; AUTHORITATIVE raw RE supply/clog/total ${d.totalSpamSupplyRegisterEquivalents}/${d.totalClogRegisterEquivalents}/${d.totalDamageEconomyRegisterEquivalents} [supply base ${d.totalRawSpamSupplyRegisterEquivalents ?? d.totalSpamSupplyRegisterEquivalents}, Permanent-Shutdown +${d.totalPermanentShutdownPressureRegisterEquivalents ?? 0}, max ×${d.maxPermanentShutdownSupplyMultiplier ?? 1}]; Shutdown tolerance ${d.shutdownThreatLevel}, reference ${d.shutdownReferenceRegisterEquivalents} RE, diagnostic threshold replay ${d.shutdownEquivalentDamageScoreRegisterEquivalents} RE (${d.shutdownEquivalentEpisodeCount} crossing(s) + residual ${d.shutdownResidualRegisterEquivalents}); selected route intrinsic adjustment ${starts.find((start)=>start.index===entry.startIndex)?.fullCourseRoute?.intrinsicDamageRoutingAdjustmentScore ?? 0} score from raw damage, robot-laser marginal traffic increment ${starts.find((start)=>start.index===entry.startIndex)?.fullCourseTrafficDamageEconomyRobotLaserIncrementRegisterEquivalents ?? 0} RE; variants implemented ${d.implementedVariantHooks?.join(",") || "none"}, deferred ${d.deferredVariantHooks?.join(",") || "none"}`
       );
     });
   }
@@ -23078,14 +23084,17 @@ function buildScenarioReport(scenario, selectedLegIndices = null) {
       })()
       : "Traffic ownership v49ce: n/a",
     currentNormalRouteModel
-      ? "Board mechanics v49ej LIVE: Homing Missile entrance self-hazard/flag danger OFF; cheap search gets explicit heuristic missile-opportunity guidance only, while completed-route value uses 2x a neutral damage-economy one-damage RE reference plus one target-choice planning event; robot-laser physical traffic is damage-economy RE and awareness is mental RE, with legacy residual ranged score diagnostic-only; simultaneous same-turn/same-reboot-space pile-up adds +1 actual clog inside the existing damage-economy clog curve (therefore stacking with Haywire/SPAM and other clog sources), with occupancy/RE-native traffic confidence and no fabricated displacement."
-      : "Board mechanics v49ej: n/a",
+      ? "Board mechanics v49fe LIVE: Radiation is authoritative +1 damage at end of register 5; Radioactive Waste uses ordinary Water-current movement plus authoritative +1 end-of-every-register damage and the better of +1 Energy vs free random-upgrade-install value from the existing upgrade economy; red/green walls use one directional boundary rule for movement and robot-laser LOS with directional LOS caching, both remain active under checkpoints, and either wall color can anchor laser overlay tiles. Homing Missile, robot-laser traffic and reboot-pileup ownership remain as in v49ej."
+      : "Board mechanics v49fe: n/a",
     `Robot-laser variants v49eo LIVE: Set to Kill ${scenario.setToKill ? "ON (2 damage cards per main-laser hit)" : "off"}; Set to Stun ${scenario.setToStun ? "ON (robot-laser SPAM goes to the damage discard pile / does not enter persistent SPAM state; Haywire unchanged per damage card)" : "off"}; LOS/hit probability and robot-laser awareness mental are unchanged; neither rule adds a variant-memory event.`,
     `Floor damage/repair v49eo LIVE: flamethrowers deal 1 on each active entry/pass-through +1 on end-of-register; Flaming Oil ${scenario.flamingOil ? "ON (+1 on entering any oil in a register +1 on ending that register on oil; no per-oil-tile stacking)" : "off"}; Repair Stations ${scenario.repairStations ? "ON (register-5 ordinary checkpoint removes 23/40 expected SPAM +17/40 expected Haywire, no spill)" : "off"}; flamethrower / Flaming Oil / Repair Station planning each collapse to at most one mental event per game turn when relevant.`,
     `Variant ownership v49es LIVE: Moving Targets ${scenario.movingTargets ? "ON (dynamic checkpoint routing + one tracking mental event per relevant register; old tracking/volatility production penalties OFF)" : "off"}; Repulsor Overdrive ${scenario.repulsorOverdrive ? "ON (exact doubled bounce + at most one relevant memory event per turn)" : "off"}; Hazardous Flags ${scenario.hazardousFlags ? "ON (covered board elements stay mechanically active + at most one relevant memory event per turn)" : "off"}; Critical Haywire ${scenario.criticalHaywire ? "ON (hand-size effect; no mental event)" : "off"}; Critical SPAM ${scenario.criticalSpam ? "ON (played-SPAM model: provisional 20% effective relief / 80% returned to pending; no mental event)" : "off"}.`,
     `Scenario/config ownership v49es: No Docks ${scenario.noDocks ? "full eligible exposed edge before normal pruning" : "off"}; Extra Docks ${scenario.extraDocks ? "multiple physical docks (forced mode hard-gated)" : "off"}; Sandwiched Dock ${scenario.sandwichedDock ? "intentional checkpoint-facing / both-sides construction policy" : "off"}; board offsets ${scenario.staggeredBoards ? "allowed, not guaranteed" : "disallowed/aligned required"}; Virtual Bots ${scenario.virtualBots ? "strategic player-route branching proxy, no mental event" : "off"}; overlays use a human-facing pre-game complexity envelope, while placed overlay mechanics use ordinary board ownership.`,
     `Virtual Bots model v49fc: ${scenario.virtualBots ? "normal cooperative estimate→realize routing over n_players logical starts at one shared square; traffic remains active; turn-1 robot-laser damage/awareness suppressed" : "off"}.`,
     `Early-stop fallback v49fc: completed fallback candidates survive user Stop before an acceptable candidate exists; acceptable-candidate labeling remains unchanged.`,
+    scenario.hydrationStartDispositionRestored
+      ? `Saved-course start disposition v49ff: restored the accepted Normal prune set before recomputing traffic/RE; refresh cannot intersect a stale saved blocked set with a newly chosen prune set.`
+      : `Saved-course start disposition v49ff: generation/live analysis; no hydration restore needed.`,
     `Variant construction v49eu: v49et requirement-aware main-board selection preserved; filler-board completion is now bounded with deterministic dock-span fallback so failed requirement/dock combinations cannot recurse through filler permutations; Moving Targets / Hazardous Flags still constrain checkpoint sampling.`,
     `Variant applicability v49es SAFETY NET: Must rules must be realizable on the finished course; sampled Allowed rules with positive complexity cost obey the same realized-applicability gate, so optional complexity is never spent on a physically inert special rule.`,
     currentNormalRouteModel
@@ -25582,7 +25591,11 @@ function getScenarioRenderState(scenario) {
     scenario.hydrationReanalysisStopped ||
     scenario.hydrationReanalysisFailed
   );
-  const metricUnusableStartIndices = (scenario.competitiveMode || preserveSavedStartDisposition)
+  const metricUnusableStartIndices = (
+    scenario.competitiveMode ||
+    preserveSavedStartDisposition ||
+    scenario.hydrationStartDispositionRestored
+  )
     ? []
     : scenario.sequence.firstLeg.starts
       .filter((startAnalysis) => !scenario.metrics.usableStarts.some((item) => item.index === startAnalysis.index))
@@ -28295,6 +28308,12 @@ function serializeScenario(scenario) {
       }))
       : null,
     payToWinPricing: (scenario.payToWin || scenario.subsidizedStarts) ? (scenario.sequence?.firstLeg?.summary?.payToWin ?? null) : null,
+    // v49ff reload fidelity: Normal start availability is part of the accepted
+    // saved course, not a fresh choice to make on every page load. Persist the
+    // accepted balance summary when available so future reloads can reproduce
+    // both the retained set and its diagnostics exactly. Older saves can still
+    // reconstruct the retained set from startDisposition.normalPrunedIndices.
+    normalStartBalance: scenario.sequence?.firstLeg?.summary?.normalStartBalance ?? null,
     // Preflight itself is not rerun during hydration, but its resolved production
     // context is part of the accepted analysis. Persist it so route-aware Energy
     // scoring and Dev diagnostics do not fall back to legacy tile rewards after a
@@ -28578,6 +28597,213 @@ function buildSavedScenarioPresentationShell(assets, snapshot, status = "pending
   };
 }
 
+function getSavedNormalHydrationPrunedIndices(snapshot, activeStartCount, playerCount) {
+  if (
+    snapshot?.competitiveMode ||
+    snapshot?.payToWin ||
+    snapshot?.subsidizedStarts ||
+    snapshot?.virtualBots
+  ) {
+    return null;
+  }
+
+  const source = snapshot?.startDisposition?.normalPrunedIndices;
+  if (!Array.isArray(source)) return null;
+
+  const pruned = [...new Set(source
+    .filter((index) => Number.isInteger(index) && index >= 0 && index < activeStartCount)
+  )].sort((left, right) => left - right);
+  const retainedCount = Math.max(0, activeStartCount - pruned.length);
+  if (retainedCount < Math.max(1, Number(playerCount) || 1)) return null;
+  return pruned;
+}
+
+function restoreSavedNormalStartDispositionForHydration(
+  sequence,
+  tileMap,
+  playerCount,
+  savedPrunedIndices,
+  options = {},
+  savedBalance = null
+) {
+  if (!sequence?.firstLeg || !Array.isArray(savedPrunedIndices)) return sequence;
+
+  const excludedIndices = new Set(savedPrunedIndices);
+  const savedRemovalByIndex = new Map(
+    (savedBalance?.pressurePruned ?? []).map((entry) => [entry.index, entry])
+  );
+  const pressurePruned = savedPrunedIndices.map((index) => {
+    const saved = savedRemovalByIndex.get(index);
+    if (saved) return saved;
+    const entry = sequence.firstLeg.starts?.find((item) => item.index === index);
+    return {
+      index,
+      score: Number(entry?.normalFairnessEffectiveRE ?? entry?.balanceScore ?? 0),
+      actions: Number(entry?.normalFairnessRegisterCount ?? entry?.bestActions ?? 0),
+      pass: null,
+      diagnostics: {
+        normalBalancePruned: true,
+        hydrationSavedDisposition: true,
+        stage: "saved-course-reconstruction",
+        removalReason: "persisted accepted Normal starting-space disposition"
+      }
+    };
+  });
+  const outliers = pressurePruned.map((removal) => ({
+    index: removal.index,
+    score: removal.score,
+    delta: 0,
+    actionDelta: Number(removal.actions ?? 0),
+    reasons: {
+      ...(removal.diagnostics ?? {}),
+      normalBalancePruned: true,
+      hydrationSavedDisposition: true
+    }
+  }));
+
+  let restoredFirstLeg = {
+    ...sequence.firstLeg,
+    summary: {
+      ...sequence.firstLeg.summary,
+      outliers,
+      normalStartBalance: {
+        ...(savedBalance ?? sequence.firstLeg.summary?.normalStartBalance ?? {}),
+        active: true,
+        pressurePruned,
+        lightweightPruned: savedBalance?.lightweightPruned ?? [],
+        fullTrafficPruned: savedBalance?.fullTrafficPruned ?? [],
+        hydrationSavedDisposition: true
+      }
+    }
+  };
+
+  restoredFirstLeg = recomputeFirstLegPressure(tileMap, restoredFirstLeg, {
+    ...getRouteAnalysisVariantOptions(options),
+    playerCount,
+    excludedIndices: [...excludedIndices],
+    openingTrafficOnly: false,
+    balanceTrafficScope: "full",
+    trafficOccupancyUseBalanceScore: true,
+    carryOccupancyScores: true,
+    fullCourseTrafficPasses:
+      options.fullCourseTrafficPasses ?? NORMAL_FULL_COURSE_TRAFFIC_PASSES,
+    skipTraffic: Boolean(options.skipTraffic)
+  });
+
+  const retainedEntries = getActivePruningStarts(restoredFirstLeg, excludedIndices);
+  const retainedBalance = summarizeNormalRetainedREBalance(retainedEntries);
+  const residualBalancePenalty = getNormalResidualBalanceSelectionPenalty(retainedEntries);
+  const durationGuardrail = getNormalRegisterDurationGuardrail(retainedEntries);
+  const remainingOutliers = rankNormalEffectiveREOutliers(
+    retainedEntries,
+    NORMAL_EFFECTIVE_RE_OUTLIER_Z
+  );
+  const playerFloor = Math.max(1, Number(playerCount) || 1);
+  const belowPlayerFloor = retainedEntries.length < playerFloor;
+  const floorReached = retainedEntries.length === playerFloor;
+  const priorBalance = restoredFirstLeg.summary?.normalStartBalance ?? {};
+
+  restoredFirstLeg = {
+    ...restoredFirstLeg,
+    summary: {
+      ...restoredFirstLeg.summary,
+      scoreStdDev: retainedBalance.stdDev,
+      fairnessScore: Number(Math.max(
+        0,
+        100 - (
+          retainedBalance.rangeLimit > 1e-9
+            ? (retainedBalance.range / retainedBalance.rangeLimit) * 35
+            : 0
+        )
+      ).toFixed(2)),
+      outliers,
+      normalStartBalance: {
+        ...priorBalance,
+        active: true,
+        staged: true,
+        iterative: true,
+        pressurePruned,
+        lightweightPruned: savedBalance?.lightweightPruned ?? [],
+        fullTrafficPruned: savedBalance?.fullTrafficPruned ?? [],
+        hydrationSavedDisposition: true,
+        retainedCount: retainedBalance.count,
+        retainedScoreMin: retainedBalance.min,
+        retainedScoreMax: retainedBalance.max,
+        retainedScoreRange: retainedBalance.range,
+        retainedEffectiveREMin: retainedBalance.min,
+        retainedEffectiveREMax: retainedBalance.max,
+        retainedEffectiveRERange: retainedBalance.range,
+        retainedEffectiveRERangeLimit: retainedBalance.rangeLimit,
+        retainedEffectiveRERangeExcess: retainedBalance.rangeExcess,
+        fairnessMedianRegisters: retainedBalance.medianRegisters,
+        fairnessMedianTurns: retainedBalance.medianTurns,
+        worstRemainingScoreZ: retainedBalance.worstScoreZ,
+        worstRemainingScoreIndex: retainedBalance.worstScoreIndex,
+        worstRemainingActionZ: retainedBalance.worstActionZ,
+        worstRemainingActionIndex: retainedBalance.worstActionIndex,
+        durationGuardrail,
+        playerFloor,
+        floorReached,
+        belowPlayerFloor,
+        residualSelectionPenalty: residualBalancePenalty.total,
+        residualSelectionPenaltyComponents: residualBalancePenalty,
+        residualImbalanceFeedsCourseScorer: true,
+        fairnessMetric: "full-course-effective-RE",
+        fairnessModel: "range-first-length-responsive-v49dx",
+        actionPruningActive: false,
+        dispersionPruningActive: false,
+        rangePruningActive: true,
+        remainingBadStarts: remainingOutliers.map((item) => ({
+          index: item.entry.index,
+          score: item.score,
+          scoreZ: Number(item.scoreZ.toFixed(2)),
+          actionZ: Number(item.actionZ.toFixed(2))
+        })),
+        provisionalReject: belowPlayerFloor,
+        reject: belowPlayerFloor
+      }
+    }
+  };
+  restoredFirstLeg.summary.normalStartBalance.startResiduals =
+    summarizePostBalanceStartResiduals(restoredFirstLeg, playerCount);
+
+  const legs = [
+    {
+      ...(sequence.legs?.[0] ?? { from: "dock", to: 1 }),
+      analysis: restoredFirstLeg
+    },
+    ...(restoredFirstLeg.expectedLegAnalyses || []).map((analysis, index) => ({
+      from: index + 1,
+      to: index + 2,
+      analysis
+    }))
+  ];
+  const totalDifficulty = Number((legs.reduce((sum, leg) => {
+    if (leg.analysis.summary.difficultyScore !== undefined) {
+      return sum + leg.analysis.summary.difficultyScore;
+    }
+    return sum + leg.analysis.summary.averageRouteScore +
+      leg.analysis.summary.congestionScore - leg.analysis.summary.diversityScore * 0.2;
+  }, 0)).toFixed(2));
+  const totalLength = Number((legs.reduce((sum, leg) => {
+    if (leg.analysis.summary.lengthScore !== undefined) {
+      return sum + leg.analysis.summary.lengthScore;
+    }
+    return sum + leg.analysis.summary.averageRouteDistance;
+  }, 0)).toFixed(2));
+
+  return {
+    ...sequence,
+    firstLeg: restoredFirstLeg,
+    legs,
+    summary: {
+      ...sequence.summary,
+      totalDifficulty,
+      totalLength
+    }
+  };
+}
+
 async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}) {
   if (!snapshot?.placements?.length || !snapshot?.checkpoints?.length || !snapshot?.preferences) {
     return null;
@@ -28680,6 +28906,12 @@ async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}) {
   const activeStarts = Array.isArray(snapshot.activeStarts) && snapshot.activeStarts.length
     ? snapshot.activeStarts
     : resolvedActiveStarts;
+  const savedNormalPrunedIndices = getSavedNormalHydrationPrunedIndices(
+    snapshot,
+    activeStarts.length,
+    snapshot.preferences.playerCount
+  );
+  const restoreSavedNormalDisposition = Array.isArray(savedNormalPrunedIndices);
   const savedAnalysisIndices = new Set(
     Array.isArray(snapshot.analysisStartIndices) && snapshot.analysisStartIndices.length
       ? snapshot.analysisStartIndices
@@ -28776,7 +29008,7 @@ async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}) {
       : {})
   };
   if (onStage) await onStage("Preparing saved-course route analysis");
-  const sequence = await analyzeFlagSequence(goalTileMap, analysisStarts, playableCheckpoints, snapshot.preferences.playerCount, applyVariantAnalysisOptions({
+  let sequence = await analyzeFlagSequence(goalTileMap, analysisStarts, playableCheckpoints, snapshot.preferences.playerCount, applyVariantAnalysisOptions({
     ...getRouteAnalysisVariantOptions(hydrationPreferences),
     ...hydrationEnergyOptions,
     rebootTokens,
@@ -28850,12 +29082,12 @@ async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}) {
     // could remove a second start from an already accepted economy setup; restore
     // the persisted pricing fields after route reconstruction instead.
     skipStartEnergyPricing: startEnergyPricing && Array.isArray(snapshot.startPricing),
-    // Reconstruction now replays Normal balancing from the same full analyzed
-    // field. The old shortcut skipped balancing *after first shrinking routing to
-    // the retained subset*, which changed fairness, traffic, difficulty and the
-    // Dev summary on refresh. Replaying the original deterministic balance pass is
-    // required for the accepted analysis to reconstruct faithfully.
-    skipNormalStartBalancing: false
+    // v49ff: the accepted Normal starting-space disposition is part of the saved
+    // course. Route every physical start, but do not choose a new Normal prune set
+    // on reload when the snapshot already records the accepted one. After routing,
+    // restore that saved set and recompute traffic/RE over exactly those starts.
+    // Legacy saves without a recorded Normal disposition retain the old replay.
+    skipNormalStartBalancing: restoreSavedNormalDisposition
   }, {
     competitiveMode,
     payToWin,
@@ -28875,6 +29107,21 @@ async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}) {
     hazardousFlags,
     lessForeshadowing
   }));
+  if (restoreSavedNormalDisposition) {
+    sequence = restoreSavedNormalStartDispositionForHydration(
+      sequence,
+      goalTileMap,
+      snapshot.preferences.playerCount,
+      savedNormalPrunedIndices,
+      {
+        ...hydrationBaseVariantOptions,
+        skipTraffic: !hydrationTrafficEnabled,
+        fullCourseTrafficPasses: NORMAL_FULL_COURSE_TRAFFIC_PASSES
+      },
+      snapshot.normalStartBalance ?? null
+    );
+  }
+
   // Hydration does not rerun the cheap course preflight, but route-aware Energy
   // is production route context, not a generation-only diagnostic. Restore the
   // saved metadata when available. For older snapshots, reconstruct only that
@@ -29105,6 +29352,7 @@ async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}) {
     hydrationReanalysisPending: false,
     hydrationReanalysisStopped: false,
     hydrationReanalysisFailed: false,
+    hydrationStartDispositionRestored: restoreSavedNormalDisposition,
     movingTargetStats: metrics.movingTargetStats,
     movingTargetTimelines,
     movingTargetReentryMarkers,

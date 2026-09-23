@@ -327,12 +327,16 @@
           <button data-tool="portal">Portal</button>
           <button data-tool="push">Push panel</button>
           <button data-tool="randomizer">Randomizer</button>
+          <button data-tool="radiation">Radiation</button>
+          <button data-tool="radioactiveWaste">Radioactive Waste</button>
           <button data-tool="ramp">Ramp</button>
+          <button data-tool="redWall">Red wall</button>
           <button data-tool="repulsor">Repulsor</button>
           <button data-tool="start">Start</button>
           <button data-tool="teleporter">Teleporter</button>
           <button data-tool="trapdoor">Trapdoor</button>
           <button data-tool="wall">Wall</button>
+          <button data-tool="greenWall">Green wall</button>
           <button data-tool="water">Water</button>
         </div>
 
@@ -422,9 +426,15 @@
         </div>
 
         <p class="small-note">
+          Radioactive Waste is a tile feature. If that Waste space also has a current,
+          add a normal Conveyor to the same tile; the exported JSON keeps both features.
+          Red and green walls are directional edge features and may coexist on the same border.
+        </p>
+
+        <p class="small-note">
           Click a tile to add the selected feature. Most same-type tile features
-          replace earlier ones on that tile. Walls, ledges, repulsors, lasers,
-          and ramps can still accumulate. Use “Erase feature” to remove only the
+          replace earlier ones on that tile. Walls, red/green walls, ledges, repulsors,
+          lasers, and ramps can still accumulate. Use “Erase feature” to remove only the
           selected type, or “Erase tile” to wipe the tile entirely.
         </p>
       </div>
@@ -487,7 +497,11 @@
         <div><strong>G</strong><br />Gear</div>
         <div><strong>Oil</strong><br />Oil slick</div>
         <div><strong>P</strong><br />Pit / Push panel (see inspector)</div>
-        <div><strong>W edge lines</strong><br />Walls on tile sides</div>
+        <div><strong>Black edge</strong><br />Ordinary wall</div>
+        <div><strong>Red edge</strong><br />Red wall</div>
+        <div><strong>Green inset edge</strong><br />Green wall; can coexist with red on the same border</div>
+        <div><strong>Rad</strong><br />Radiation</div>
+        <div><strong>RW</strong><br />Radioactive Waste (add a Conveyor separately for a current)</div>
         <div><strong>Cn</strong><br />Checkpoint number</div>
         <div><strong>S</strong><br />Start tile</div>
       </div>
@@ -581,6 +595,8 @@
         case "battery":
         case "randomizer":
         case "water":
+        case "radiation":
+        case "radioactiveWaste":
         case "chopShop":
         case "homingMissile":
           return { type: feature.type };
@@ -606,6 +622,8 @@
             damage: Number.isFinite(feature.damage) && feature.damage > 0 ? Number(feature.damage) : 1
           };
         case "wall":
+        case "redWall":
+        case "greenWall":
         case "repulsor":
           return {
             type: feature.type,
@@ -681,6 +699,10 @@
           return `laser dir=${feature.dir ?? "?"} damage=${feature.damage ?? 1}`;
         case "wall":
           return `wall sides=${(feature.sides || []).join(",")}`;
+        case "redWall":
+          return `red wall sides=${(feature.sides || []).join(",")}`;
+        case "greenWall":
+          return `green wall sides=${(feature.sides || []).join(",")}`;
         case "repulsor":
           return `repulsor sides=${(feature.sides || []).join(",")}`;
         case "push":
@@ -703,6 +725,10 @@
           return `ramp dir=${feature.dir}`;
         case "water":
           return "water";
+        case "radiation":
+          return "radiation";
+        case "radioactiveWaste":
+          return "radioactive waste";
         case "checkpoint":
           return `checkpoint id=${feature.id}`;
         case "battery":
@@ -770,6 +796,8 @@
         case "battery":
         case "randomizer":
         case "water":
+        case "radiation":
+        case "radioactiveWaste":
         case "chopShop":
         case "homingMissile":
           return true;
@@ -780,6 +808,8 @@
         case "laser":
           return a.dir === b.dir && a.damage === b.damage;
         case "wall":
+        case "redWall":
+        case "greenWall":
         case "repulsor":
           return sameArray(a.sides || [], b.sides || []);
         case "push":
@@ -807,7 +837,7 @@
       const normalizedFeature = normalizeFeature(feature);
       if (!normalizedFeature) return;
 
-      if (normalizedFeature.type === "wall" || normalizedFeature.type === "ledge" || normalizedFeature.type === "repulsor") {
+      if (["wall", "redWall", "greenWall", "ledge", "repulsor"].includes(normalizedFeature.type)) {
         const existing = tile.features.find(f => f.type === normalizedFeature.type);
         if (existing) {
           for (const side of normalizedFeature.sides) {
@@ -823,7 +853,7 @@
       const exists = tile.features.some(f => sameFeature(f, normalizedFeature));
       if (exists) return;
 
-      const sameTypeStacks = new Set(["wall", "ledge", "repulsor", "laser", "ramp"]);
+      const sameTypeStacks = new Set(["wall", "redWall", "greenWall", "ledge", "repulsor", "laser", "ramp"]);
       if (!sameTypeStacks.has(normalizedFeature.type)) {
         tile.features = tile.features.filter(f => f.type !== normalizedFeature.type);
       }
@@ -834,7 +864,7 @@
       const tile = getTile(x, y, false);
       if (!tile) return;
 
-      if (selectedType === "wall" || selectedType === "repulsor") {
+      if (["wall", "redWall", "greenWall", "repulsor"].includes(selectedType)) {
         const existing = tile.features.find(f => f.type === selectedType);
         if (!existing) return;
 
@@ -910,6 +940,10 @@
           return normalizeFeature({ type: "laser", dir, damage: laserDamage });
         case "wall":
           return normalizeFeature({ type: "wall", sides: [dir] });
+        case "redWall":
+          return normalizeFeature({ type: "redWall", sides: [dir] });
+        case "greenWall":
+          return normalizeFeature({ type: "greenWall", sides: [dir] });
         case "repulsor":
           return normalizeFeature({ type: "repulsor", sides: [dir] });
         case "push":
@@ -932,6 +966,10 @@
           return normalizeFeature({ type: "ramp", dir });
         case "water":
           return normalizeFeature({ type: "water" });
+        case "radiation":
+          return normalizeFeature({ type: "radiation" });
+        case "radioactiveWaste":
+          return normalizeFeature({ type: "radioactiveWaste" });
         case "checkpoint":
           return normalizeFeature({ type: "checkpoint", id: checkpointId });
         case "battery":
@@ -1104,34 +1142,40 @@
       }
     }
 
-    function drawWalls(x, y, sides) {
+    function drawEdgeFeature(x, y, sides, options = {}) {
       const left = x * tileWidth;
       const top = y * tileHeight;
       const right = left + tileWidth;
       const bottom = top + tileHeight;
+      const inset = Number(options.inset || 0);
 
       ctx.save();
-      ctx.strokeStyle = "#111";
-      ctx.lineWidth = 3;
+      ctx.strokeStyle = options.strokeStyle || "#111";
+      ctx.lineWidth = options.lineWidth || 3;
+      ctx.setLineDash(options.lineDash || []);
 
       for (const side of sides) {
         ctx.beginPath();
         if (side === "N") {
-          ctx.moveTo(left, top);
-          ctx.lineTo(right, top);
+          ctx.moveTo(left, top + inset);
+          ctx.lineTo(right, top + inset);
         } else if (side === "E") {
-          ctx.moveTo(right, top);
-          ctx.lineTo(right, bottom);
+          ctx.moveTo(right - inset, top);
+          ctx.lineTo(right - inset, bottom);
         } else if (side === "S") {
-          ctx.moveTo(left, bottom);
-          ctx.lineTo(right, bottom);
+          ctx.moveTo(left, bottom - inset);
+          ctx.lineTo(right, bottom - inset);
         } else if (side === "W") {
-          ctx.moveTo(left, top);
-          ctx.lineTo(left, bottom);
+          ctx.moveTo(left + inset, top);
+          ctx.lineTo(left + inset, bottom);
         }
         ctx.stroke();
       }
       ctx.restore();
+    }
+
+    function drawWalls(x, y, sides) {
+      drawEdgeFeature(x, y, sides, { strokeStyle: "#111", lineWidth: 3 });
     }
 
     function drawTileFeatures(tile) {
@@ -1151,13 +1195,18 @@
       if (wallFeature) {
         drawWalls(x, y, wallFeature.sides || []);
       }
+      const redWallFeature = features.find(f => f.type === "redWall");
+      if (redWallFeature) {
+        drawEdgeFeature(x, y, redWallFeature.sides || [], { strokeStyle: "#b91c1c", lineWidth: 4 });
+      }
+      const greenWallFeature = features.find(f => f.type === "greenWall");
+      if (greenWallFeature) {
+        // Inset the green marker so a co-located red+green boundary stays visible.
+        drawEdgeFeature(x, y, greenWallFeature.sides || [], { strokeStyle: "#15803d", lineWidth: 3, inset: 4 });
+      }
       const repulsorFeature = features.find(f => f.type === "repulsor");
       if (repulsorFeature) {
-        ctx.save();
-        ctx.strokeStyle = "#7c2d12";
-        ctx.lineWidth = 2;
-        drawWalls(x, y, repulsorFeature.sides || []);
-        ctx.restore();
+        drawEdgeFeature(x, y, repulsorFeature.sides || [], { strokeStyle: "#7c2d12", lineWidth: 2, lineDash: [5, 3], inset: 7 });
       }
 
       ctx.font = "12px sans-serif";
@@ -1214,6 +1263,12 @@
         } else if (f.type === "water") {
           ctx.fillText("Water", left + 4, textY);
           textY += 12;
+        } else if (f.type === "radiation") {
+          ctx.fillText("Rad", left + 4, textY);
+          textY += 12;
+        } else if (f.type === "radioactiveWaste") {
+          ctx.fillText("RW", left + 4, textY);
+          textY += 12;
         } else if (f.type === "checkpoint") {
           ctx.fillText(`C${f.id}`, left + 4, textY);
           textY += 12;
@@ -1226,7 +1281,7 @@
         } else if (f.type === "homingMissile") {
           ctx.fillText("HM", left + 4, textY);
           textY += 12;
-        } else if (f.type === "wall") {
+        } else if (f.type === "wall" || f.type === "redWall" || f.type === "greenWall") {
           // drawn separately
         } else {
           if (i < maxTextLines) {
@@ -1353,21 +1408,25 @@
         gear: 4,
         laser: 5,
         wall: 6,
-        repulsor: 7,
-        push: 8,
-        flamethrower: 9,
-        crusher: 10,
-        trapdoor: 11,
-        portal: 12,
-        teleporter: 13,
-        randomizer: 14,
-        ledge: 15,
-        ramp: 16,
-        water: 17,
-        checkpoint: 18,
-        battery: 19,
-        chopShop: 20,
-        homingMissile: 21
+        redWall: 7,
+        greenWall: 8,
+        repulsor: 9,
+        push: 10,
+        flamethrower: 11,
+        crusher: 12,
+        trapdoor: 13,
+        portal: 14,
+        teleporter: 15,
+        randomizer: 16,
+        ledge: 17,
+        ramp: 18,
+        water: 19,
+        radiation: 20,
+        radioactiveWaste: 21,
+        checkpoint: 22,
+        battery: 23,
+        chopShop: 24,
+        homingMissile: 25
       };
 
       return [...features].sort((a, b) => {
