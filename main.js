@@ -3989,6 +3989,9 @@ function updateExpansionSummary() {
   if (document.getElementById("expansion-wet-and-wild").checked) {
     enabled.push(formatExpansionName("wet-and-wild"));
   }
+  if (document.getElementById("expansion-contamination").checked) {
+    enabled.push(formatExpansionName("contamination"));
+  }
 
   summaryEl.textContent = `${enabled.length} selected`;
   summaryEl.title = enabled.length ? enabled.join(", ") : "None";
@@ -5466,6 +5469,7 @@ function applyPreferencesToControls(preferences) {
   document.getElementById("expansion-thrills-and-spills").checked = normalizedPreferences.selectedExpansions?.["thrills-and-spills"] ?? false;
   document.getElementById("expansion-chaos-and-carnage").checked = normalizedPreferences.selectedExpansions?.["chaos-and-carnage"] ?? false;
   document.getElementById("expansion-wet-and-wild").checked = normalizedPreferences.selectedExpansions?.["wet-and-wild"] ?? false;
+  document.getElementById("expansion-contamination").checked = normalizedPreferences.selectedExpansions?.["contamination"] ?? false;
   VARIANT_DEFINITIONS.forEach((variant) => {
     if (variant.id === "actFast") {
       return;
@@ -31885,6 +31889,10 @@ if (typeof document !== "undefined") {
   });
 
   document.getElementById("expansion-wet-and-wild").addEventListener("change", () => {
+    updateExpansionSummary();
+  });
+
+  document.getElementById("expansion-contamination").addEventListener("change", () => {
     updateExpansionSummary();
   });
 
