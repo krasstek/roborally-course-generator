@@ -1,6 +1,6 @@
-// VERSION START: v49fj-start-balance-control
+// VERSION START: v49fp-safari-dev-panel-tightening
 // Robo Rally Course Randomizer - production runtime
-const MAIN_BUILD_ID = "v49fj-start-balance-control";
+const MAIN_BUILD_ID = "v49fp-safari-dev-panel-tightening";
 // Mobile browsers may auto-detect number-like rule text and restyle it as a
 // tappable link even though the app emitted ordinary text. Keep rules/course
 // annotations visually plain; this is presentation-only and does not disable
@@ -493,7 +493,11 @@ const COMPETITIVE_EFFECTIVE_RE_HARD_RANGE_MULTIPLIER = 1.50;
 // card-pressure, mental-pressure or any other RE owner from the estimator.
 // Normal applies it to the range-first pruning/soft-overflow policy. Competitive
 // applies it ONLY to the final best-P choice set after the ordinary P sequential
-// optimal blocks; block choices themselves are unchanged.
+// optimal blocks; block choices themselves are unchanged. Priced-start variants
+// keep their pre-control Energy economy completely unchanged; only after that
+// economy has finished does Start Balance get one terminal adjusted-RE range
+// check, one frozen-field batch prune if needed, and at most one final traffic +
+// repricing pass.
 const START_BALANCE_PROFILES = Object.freeze({
   strict: Object.freeze({
     id: "strict",
@@ -13688,6 +13692,201 @@ function attemptEconomyTargetedEnergyRescue({
   };
 }
 
+
+// v49fn: Start Balance is deliberately downstream of the priced-start economy.
+// The ordinary Pay to Win / Subsidized Starts model first completes its own
+// selector-aware Energy pricing and pruning exactly as it did before Start Balance
+// existed. Only the already-priced completed-RE field is inspected here.
+function summarizePricedFinalStartBalancePhase(
+  entries = [],
+  costKey = "energyCost",
+  options = {}
+) {
+  const balanceEntries = buildEconomyPricedNormalREEntries(entries, costKey);
+  const rangeTarget = getNormalEffectiveRERangeTarget(balanceEntries, options);
+  const profile = getStartBalanceProfile(options);
+  return {
+    count: balanceEntries.length,
+    range: Number(rangeTarget.range ?? 0),
+    rangeLimit: Number(rangeTarget.rangeLimit ?? 0),
+    observedRangeExcess: Number(rangeTarget.observedRangeExcess ?? 0),
+    medianTurns: Number(rangeTarget.medianTurns ?? 0),
+    withinTarget: !profile.enforced || Number(rangeTarget.observedRangeExcess ?? 0) <= 1e-9,
+    balanceEntries
+  };
+}
+
+function summarizePricedFinalStartBalanceField(
+  earlyEntries = [],
+  lateEntries = [],
+  latePricingActive = false,
+  options = {}
+) {
+  const early = summarizePricedFinalStartBalancePhase(
+    earlyEntries,
+    "energyCost",
+    options
+  );
+  const late = latePricingActive
+    ? summarizePricedFinalStartBalancePhase(
+      lateEntries,
+      "lateEnergyCost",
+      options
+    )
+    : early;
+  const profile = getStartBalanceProfile(options);
+  const worstObservedExcess = Math.max(
+    early.observedRangeExcess,
+    late.observedRangeExcess
+  );
+  const worstNormalizedExcess = Math.max(
+    early.rangeLimit > 1e-9 ? early.observedRangeExcess / early.rangeLimit : early.observedRangeExcess,
+    late.rangeLimit > 1e-9 ? late.observedRangeExcess / late.rangeLimit : late.observedRangeExcess
+  );
+  return {
+    startBalance: normalizeStartBalance(options.startBalance),
+    startBalanceLabel: profile.label,
+    enforced: profile.enforced,
+    early: {
+      count: early.count,
+      range: early.range,
+      rangeLimit: early.rangeLimit,
+      observedRangeExcess: early.observedRangeExcess,
+      medianTurns: early.medianTurns,
+      withinTarget: early.withinTarget
+    },
+    late: {
+      count: late.count,
+      range: late.range,
+      rangeLimit: late.rangeLimit,
+      observedRangeExcess: late.observedRangeExcess,
+      medianTurns: late.medianTurns,
+      withinTarget: late.withinTarget
+    },
+    latePricingActive: Boolean(latePricingActive),
+    worstObservedExcess: Number(worstObservedExcess.toFixed(3)),
+    worstNormalizedExcess: Number(worstNormalizedExcess.toFixed(6)),
+    withinTarget: !profile.enforced || (
+      early.observedRangeExcess <= 1e-9 &&
+      late.observedRangeExcess <= 1e-9
+    )
+  };
+}
+
+// Pick every Start-Balance removal on one frozen priced field. This loop is only
+// cheap arithmetic over <= a few dozen starts: it NEVER recomputes traffic,
+// routes, or Energy prices between removals. The complete batch is committed once,
+// followed by one traffic recomputation and one final pricing pass.
+function choosePricedFinalStartBalanceBatch(
+  earlyEntries = [],
+  lateEntries = [],
+  playerCount = 1,
+  latePricingActive = false,
+  options = {}
+) {
+  const profile = getStartBalanceProfile(options);
+  const floor = Math.max(1, Math.floor(Number(playerCount) || 1));
+  const earlyByIndex = new Map((earlyEntries || []).map((entry) => [entry.index, entry]));
+  const lateByIndex = new Map((lateEntries || []).map((entry) => [entry.index, entry]));
+  let retainedIndices = [...earlyByIndex.keys()]
+    .filter((index) => !latePricingActive || lateByIndex.has(index))
+    .sort((left, right) => left - right);
+
+  const summarizeIndices = (indices) => {
+    const keep = new Set(indices);
+    return summarizePricedFinalStartBalanceField(
+      (earlyEntries || []).filter((entry) => keep.has(entry.index)),
+      latePricingActive
+        ? (lateEntries || []).filter((entry) => keep.has(entry.index))
+        : [],
+      latePricingActive,
+      options
+    );
+  };
+
+  const before = summarizeIndices(retainedIndices);
+  if (!profile.enforced || before.withinTarget || retainedIndices.length <= floor) {
+    return {
+      ...before,
+      before,
+      expectedAfter: before,
+      retainedIndices,
+      prunedIndices: [],
+      pruneCount: 0,
+      floorReached: retainedIndices.length <= floor,
+      expectedWithinTargetAfterBatch: before.withinTarget
+    };
+  }
+
+  const prunedIndices = [];
+  let current = before;
+  while (retainedIndices.length > floor && !current.withinTarget) {
+    const candidates = retainedIndices.map((index) => {
+      const afterIndices = retainedIndices.filter((candidate) => candidate !== index);
+      const after = summarizeIndices(afterIndices);
+      const improvement = current.worstNormalizedExcess - after.worstNormalizedExcess;
+      const rawImprovement = current.worstObservedExcess - after.worstObservedExcess;
+      const earlyValue = Number(
+        buildEconomyPricedNormalREEntries([earlyByIndex.get(index)], "energyCost")[0]
+          ?.normalFairnessEffectiveRE
+      );
+      const lateValue = latePricingActive
+        ? Number(
+          buildEconomyPricedNormalREEntries([lateByIndex.get(index)], "lateEnergyCost")[0]
+            ?.normalFairnessEffectiveRE
+        )
+        : earlyValue;
+      const currentEarlyValues = buildEconomyPricedNormalREEntries(
+        retainedIndices.map((candidate) => earlyByIndex.get(candidate)),
+        "energyCost"
+      ).map((entry) => entry.normalFairnessEffectiveRE).filter(Number.isFinite);
+      const currentLateValues = latePricingActive
+        ? buildEconomyPricedNormalREEntries(
+          retainedIndices.map((candidate) => lateByIndex.get(candidate)),
+          "lateEnergyCost"
+        ).map((entry) => entry.normalFairnessEffectiveRE).filter(Number.isFinite)
+        : currentEarlyValues;
+      const earlyCenter = currentEarlyValues.length ? medianValue(currentEarlyValues) : 0;
+      const lateCenter = currentLateValues.length ? medianValue(currentLateValues) : earlyCenter;
+      const edgeDistance = Math.max(
+        Number.isFinite(earlyValue) ? Math.abs(earlyValue - earlyCenter) : 0,
+        Number.isFinite(lateValue) ? Math.abs(lateValue - lateCenter) : 0
+      );
+      return {
+        index,
+        afterIndices,
+        after,
+        improvement,
+        rawImprovement,
+        edgeDistance
+      };
+    });
+    candidates.sort((left, right) => (
+      right.improvement - left.improvement ||
+      right.rawImprovement - left.rawImprovement ||
+      left.after.worstNormalizedExcess - right.after.worstNormalizedExcess ||
+      right.edgeDistance - left.edgeDistance ||
+      left.index - right.index
+    ));
+    const selected = candidates[0];
+    if (!selected) break;
+    prunedIndices.push(selected.index);
+    retainedIndices = selected.afterIndices;
+    current = selected.after;
+  }
+
+  return {
+    ...current,
+    before,
+    expectedAfter: current,
+    retainedIndices,
+    prunedIndices,
+    pruneCount: prunedIndices.length,
+    floorReached: retainedIndices.length <= floor,
+    expectedWithinTargetAfterBatch: current.withinTarget
+  };
+}
+
 function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {}) {
   const analysisOptions = {
     ...options,
@@ -13867,23 +14066,23 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
     );
 
   return mapMaybePromise(balancingResult, (result) => {
-  const { currentFirstLeg, excludedIndices, removals: pruned } = result;
+  let { currentFirstLeg, excludedIndices, removals: pruned } = result;
   const startingEnergy = getCourseStartingEnergy(options);
   const maxEnergy = getCourseMaxEnergy(options);
   const startingUpgradeCards = getCourseStartingUpgradeCards(options);
   const denialCost = getPayToWinDenialCost(options);
-  const cachedFinalPricing = getMatchingPricingSnapshot(
+  let cachedFinalPricing = getMatchingPricingSnapshot(
     currentFirstLeg,
     excludedIndices
   );
-  const finalPricingStateReused = Boolean(cachedFinalPricing);
-  const finalCostState = cachedFinalPricing?.costState ?? getPayToWinCostEntries(
+  let finalPricingStateReused = Boolean(cachedFinalPricing);
+  let finalCostState = cachedFinalPricing?.costState ?? getPayToWinCostEntries(
     currentFirstLeg,
     tileMap,
     excludedIndices,
     pricingOptions
   );
-  const finalEconomyState = cachedFinalPricing?.economyState ?? evaluatePayToWinSelectorAwarePricingState(
+  let finalEconomyState = cachedFinalPricing?.economyState ?? evaluatePayToWinSelectorAwarePricingState(
     currentFirstLeg,
     tileMap,
     excludedIndices,
@@ -13891,15 +14090,132 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
     pricingOptions,
     finalCostState
   );
-  const lateCostState = finalEconomyState.lateCostState;
-  const earlyCostState = {
+  let lateCostState = finalEconomyState.lateCostState;
+  let earlyCostState = {
     entries: lateCostState.earlyEntries ?? finalCostState.entries,
     costUnit: lateCostState.earlyCostUnit ?? finalCostState.costUnit,
     minScore: finalCostState.minScore,
     maxScore: finalCostState.maxScore,
     pricingModel: lateCostState.earlyPricingModel ?? finalCostState.pricingModel
   };
-  const latePricingActive = Boolean(lateCostState.active);
+  let latePricingActive = Boolean(lateCostState.active);
+
+  // v49fn: the priced-start Energy economy above is the untouched pre-control
+  // owner. Start Balance gets one terminal check only after that work is done.
+  // All fairness removals are chosen on this one frozen priced field and committed
+  // as a batch. Only when the batch is non-empty do we pay for one final traffic
+  // recomputation and one final selector-aware repricing pass.
+  const finalStartBalanceBatch = choosePricedFinalStartBalanceBatch(
+    earlyCostState.entries,
+    lateCostState.entries,
+    playerCount,
+    latePricingActive,
+    pricingOptions
+  );
+  const finalStartBalancePrunedIndices = [...finalStartBalanceBatch.prunedIndices];
+  let finalStartBalanceTrafficRecomputed = false;
+
+  if (finalStartBalancePrunedIndices.length) {
+    const preliminaryEarlyByIndex = new Map(
+      earlyCostState.entries.map((entry) => [entry.index, entry])
+    );
+    const preliminaryLateByIndex = new Map(
+      lateCostState.entries.map((entry) => [entry.index, entry])
+    );
+    for (const index of finalStartBalancePrunedIndices) {
+      if (excludedIndices.has(index)) continue;
+      excludedIndices.add(index);
+      const entry = preliminaryEarlyByIndex.get(index);
+      const lateEntry = preliminaryLateByIndex.get(index);
+      pruned.push({
+        index,
+        score: Number(entry?.postPaymentFullScore ?? entry?.fullScore ?? 0),
+        fullScore: Number(entry?.fullScore ?? entry?.postPaymentFullScore ?? 0),
+        energyCost: entry?.energyCost ?? null,
+        lateEnergyCost: lateEntry?.lateEnergyCost ?? entry?.energyCost ?? null,
+        registerEquivalent: entry?.registerEquivalent ?? null,
+        lateRegisterEquivalent:
+          lateEntry?.lateRegisterEquivalent ?? entry?.registerEquivalent ?? null,
+        effectiveREPruned: true,
+        balanceDispersionPruned: false,
+        finalStartBalancePruned: true,
+        pass: "final",
+        batchIndex: finalStartBalancePrunedIndices.indexOf(index),
+        residualPenaltyBefore: 0,
+        residualPenaltyAfterEstimate: 0,
+        removalImprovement: 0,
+        reason:
+          `final Start Balance ${finalStartBalanceBatch.startBalanceLabel} adjusted-RE range batch prune`
+      });
+    }
+
+    if (!analysisOptions.skipTraffic) {
+      currentFirstLeg = recomputeFirstLegPressure(
+        tileMap,
+        analysisOptions.carryOccupancyScores ? currentFirstLeg : result.baseFirstLeg,
+        {
+          playerCount,
+          ...analysisOptions,
+          excludedIndices: [...excludedIndices]
+        }
+      );
+      finalStartBalanceTrafficRecomputed = true;
+    }
+
+    // The one allowed post-fairness pricing pass is deliberately NOT fed back
+    // into another fairness prune loop. If traffic/repricing leaves a small
+    // residual miss, telemetry reports it and ordinary candidate acceptance can
+    // reject the course; generation does not chase the target recursively.
+    cachedFinalPricing = null;
+    finalPricingStateReused = false;
+    finalCostState = getPayToWinCostEntries(
+      currentFirstLeg,
+      tileMap,
+      excludedIndices,
+      pricingOptions
+    );
+    finalEconomyState = evaluatePayToWinSelectorAwarePricingState(
+      currentFirstLeg,
+      tileMap,
+      excludedIndices,
+      playerCount,
+      pricingOptions,
+      finalCostState
+    );
+    lateCostState = finalEconomyState.lateCostState;
+    earlyCostState = {
+      entries: lateCostState.earlyEntries ?? finalCostState.entries,
+      costUnit: lateCostState.earlyCostUnit ?? finalCostState.costUnit,
+      minScore: finalCostState.minScore,
+      maxScore: finalCostState.maxScore,
+      pricingModel: lateCostState.earlyPricingModel ?? finalCostState.pricingModel
+    };
+    latePricingActive = Boolean(lateCostState.active);
+  }
+
+  const finalStartBalanceAfter = summarizePricedFinalStartBalanceField(
+    earlyCostState.entries,
+    lateCostState.entries,
+    latePricingActive,
+    pricingOptions
+  );
+  const pricedStartBalanceFinalCheck = {
+    model: "post-energy-one-shot-range-batch-v49fn",
+    startBalance: finalStartBalanceBatch.startBalance,
+    startBalanceLabel: finalStartBalanceBatch.startBalanceLabel,
+    enforced: finalStartBalanceBatch.enforced,
+    before: finalStartBalanceBatch.before,
+    expectedAfterFrozenBatch: finalStartBalanceBatch.expectedAfter,
+    afterReprice: finalStartBalanceAfter,
+    prunedIndices: finalStartBalancePrunedIndices,
+    pruneCount: finalStartBalancePrunedIndices.length,
+    trafficRecomputed: finalStartBalanceTrafficRecomputed,
+    repriced: finalStartBalancePrunedIndices.length > 0,
+    expectedWithinTargetAfterBatch:
+      finalStartBalanceBatch.expectedWithinTargetAfterBatch,
+    withinTargetAfterReprice: finalStartBalanceAfter.withinTarget,
+    floorReached: finalStartBalanceBatch.floorReached
+  };
 
   const costByIndex = new Map(earlyCostState.entries.map((entry) => [entry.index, entry.energyCost]));
   const earlyUnavailableByIndex = new Map(earlyCostState.entries.map((entry) => [
@@ -13923,7 +14239,9 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
   const availabilityValid = pricedStartCount >= Math.max(1, playerCount || 1);
 
   const residualBalance = finalEconomyState.residualBalance;
-  const balanceValid = finalEconomyState.balanceValid;
+  const energyEconomyBalanceValid = finalEconomyState.balanceValid;
+  const startBalanceValid = finalStartBalanceAfter.withinTarget;
+  const balanceValid = energyEconomyBalanceValid && startBalanceValid;
   const reOwnershipAudit = finalEconomyState.reOwnershipAudit;
 
   const hasLatePriceDifference = latePricingActive && lateCostState.entries.some((entry) => {
@@ -13960,6 +14278,7 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
       energyCost: item.energyCost,
       outlierPass: item.pass,
       removalReason: item.reason,
+      finalStartBalancePruned: Boolean(item.finalStartBalancePruned),
       costThreshold: denialCost
     }
   }));
@@ -14047,7 +14366,7 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
         mode: isSubsidizedStartsPricing(options) ? "subsidy" : "payment",
         subsidizedStarts: isSubsidizedStartsPricing(options),
         pricingEconomyMethod: "card-aware-fixed-route-expected-economy-v37",
-        pruningPolicy: "selector-aware-start-specific-energy-balance-then-range-prune-v49dz",
+        pruningPolicy: "pre-control-energy-economy-v49dz + one-shot-final-start-balance-v49fn",
         compensationFirst: true,
         routeReselectionPolicy: "completed-effective-re-existing-candidates-then-prune-gated-direction-aware-energy-rescue-v49dw",
         freshEnergySpecificReroutes: targetedRescueTelemetry.attempts,
@@ -14107,6 +14426,9 @@ function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, options = {})
         availabilityValid,
         residualBalance,
         reOwnershipAudit,
+        startBalanceFinalCheck: pricedStartBalanceFinalCheck,
+        energyEconomyBalanceValid,
+        startBalanceValid,
         balanceValid,
         latePriceHigherCount,
         latePriceLowerCount,
@@ -21002,10 +21324,13 @@ function classifyCandidate(sequence, preferences, context = {}) {
       0,
       Number(sequence.firstLeg.summary.normalStartBalance?.retainedEffectiveRERangeExcess) || 0
     );
-    const pricedOverflow = Math.max(
-      0,
-      Number(sequence.firstLeg.summary.payToWin?.residualBalance?.worstRangeExcess) || 0
-    );
+    const pricedFinalBalance = sequence.firstLeg.summary.payToWin?.startBalanceFinalCheck ?? null;
+    const pricedOverflow = pricedFinalBalance?.enforced
+      ? Math.max(
+        0,
+        Number(pricedFinalBalance?.afterReprice?.worstObservedExcess) || 0
+      )
+      : 0;
     if (Math.max(normalOverflow, pricedOverflow) > 1e-9) {
       softFailures.push("fairness-range-overflow");
     }
@@ -21220,10 +21545,18 @@ function classifyCandidate(sequence, preferences, context = {}) {
     );
   const pricedSummary = sequence.firstLeg.summary.payToWin ?? null;
   const pricedResidual = pricedSummary?.residualBalance ?? null;
-  const pricedStartBalancePenalty = (preferences.payToWin || preferences.subsidizedStarts) &&
-    pricedSummary?.balanceValid === false
+  const pricedFinalBalance = pricedSummary?.startBalanceFinalCheck ?? null;
+  const pricedEnergyEconomyPenalty = (preferences.payToWin || preferences.subsidizedStarts) &&
+    pricedSummary?.energyEconomyBalanceValid === false
     ? Math.max(0, Number(pricedResidual?.worstResidualPenalty) || 0)
     : 0;
+  const pricedFinalStartBalancePenalty = pricedFinalBalance?.enforced &&
+    pricedFinalBalance?.withinTargetAfterReprice === false
+    ? Math.max(0, Number(pricedFinalBalance?.afterReprice?.worstObservedExcess) || 0) *
+      NORMAL_EFFECTIVE_RE_SCORE_PER_RE
+    : 0;
+  const pricedStartBalancePenalty =
+    pricedEnergyEconomyPenalty + pricedFinalStartBalancePenalty;
 
   const startBalanceProfile = getStartBalanceProfile(preferences);
   const normalFairnessRangeLimit = Math.max(
@@ -21234,14 +21567,18 @@ function classifyCandidate(sequence, preferences, context = {}) {
     0,
     Number(normalBalance?.retainedEffectiveRERangeExcess) || 0
   );
-  const pricedFairnessRangeLimit = Math.max(
-    0,
-    Number(pricedResidual?.worstRangeLimit) || 0
-  );
-  const pricedFairnessOverflow = Math.max(
-    0,
-    Number(pricedResidual?.worstRangeExcess) || 0
-  );
+  const pricedFairnessRangeLimit = pricedFinalBalance?.enforced
+    ? Math.max(
+      Number(pricedFinalBalance?.afterReprice?.early?.rangeLimit) || 0,
+      Number(pricedFinalBalance?.afterReprice?.late?.rangeLimit) || 0
+    )
+    : 0;
+  const pricedFairnessOverflow = pricedFinalBalance?.enforced
+    ? Math.max(
+      0,
+      Number(pricedFinalBalance?.afterReprice?.worstObservedExcess) || 0
+    )
+    : 0;
   const normalAcceptanceRangeLimit = startBalanceProfile.enforced
     ? normalFairnessRangeLimit
     : 0;
@@ -21256,17 +21593,19 @@ function classifyCandidate(sequence, preferences, context = {}) {
     : Math.max(normalAcceptanceOverflow, pricedFairnessOverflow);
   const normalFairnessSoftOverflowAllowance =
     getNormalFairnessSoftOverflowAllowance(normalFairnessRangeLimit, preferences);
-  const pricedFairnessSoftOverflowAllowance = Math.max(
-    0,
-    Number(pricedResidual?.worstSoftOverflowAllowance) || 0
-  );
+  // Priced starts use the selected RE-range target directly. Their own Energy
+  // economy has already completed before this terminal Start Balance check, so
+  // there is no second priced soft-overflow concept to feed back into pricing.
+  const pricedFairnessSoftOverflowAllowance = 0;
   const fairnessSoftOverflowAllowance = preferences.competitiveMode
     ? 0
     : Math.max(
       normalBalance?.active && startBalanceProfile.enforced
         ? normalFairnessSoftOverflowAllowance
         : 0,
-      pricedSummary?.active ? pricedFairnessSoftOverflowAllowance : 0
+      pricedSummary?.active && pricedFinalBalance?.enforced
+        ? pricedFairnessSoftOverflowAllowance
+        : 0
     );
   const fairnessOverflowFitPenalty = preferences.competitiveMode
     ? 0
@@ -21276,7 +21615,7 @@ function classifyCandidate(sequence, preferences, context = {}) {
       fairnessRangeLimit > 0 &&
       (
         (normalBalance?.active && startBalanceProfile.enforced) ||
-        pricedSummary?.active
+        (pricedSummary?.active && pricedFinalBalance?.enforced)
       ),
     rangeLimit: Number(fairnessRangeLimit.toFixed(3)),
     overflowRE: Number(fairnessOverflowRE.toFixed(3)),
@@ -21288,10 +21627,12 @@ function classifyCandidate(sequence, preferences, context = {}) {
         (!normalBalance?.active ||
           !startBalanceProfile.enforced ||
           normalFairnessOverflow <= normalFairnessSoftOverflowAllowance + 1e-9) &&
-        (!pricedSummary?.active || pricedResidual?.softOverflowAcceptable !== false)
+        (!pricedSummary?.active ||
+          !pricedFinalBalance?.enforced ||
+          pricedFinalBalance?.withinTargetAfterReprice !== false)
       ),
     policy:
-      "start-balance-normal-plus-independent-priced-residual-v49fj"
+      "start-balance-normal-plus-post-energy-one-shot-priced-v49fn"
   };
 
   const forcedEconomyVariantId = preferences.subsidizedStarts &&
@@ -22081,9 +22422,15 @@ function buildScenarioCopySummary(scenario) {
     const pricingShortLabel = subsidyMode ? "Subsidy" : "P2W";
     const pricingModel = payToWin.pricingModel ?? {};
     const selectorSplit = payToWin.selectorSplit ?? null;
+    const finalStartBalance = payToWin.startBalanceFinalCheck ?? null;
     lines.push(
-      `${pricingLabel}: model ${pricingModel.method ?? "n/a"}, economy ${payToWin.pricingEconomyMethod ?? "n/a"}, pruning ${payToWin.pruningPolicy ?? "legacy"}, target ${pricingModel.target ?? "n/a"}, ${subsidyMode ? `startingEnergy ${payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY}E / subsidy-total ceiling ${payToWin.subsidyStartingEnergyCeiling ?? pricingModel.subsidyStartingEnergyCeiling ?? "n/a"}E / storage ${payToWin.maxEnergy ?? ROUTE_ENERGY_ECONOMY_DEFAULTS.maxEnergy}E` : `startingEnergy ${payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY}E / storage ${payToWin.maxEnergy ?? ROUTE_ENERGY_ECONOMY_DEFAULTS.maxEnergy}E`}, startingUpgradeCards ${payToWin.startingUpgradeCards ?? DEFAULT_STARTING_UPGRADE_CARDS} (unknown at start choice), offered ${payToWin.pricedStartCount ?? "n/a"}, pruned ${(payToWin.pruned ?? []).length}, selector-unavailable ${payToWin.fullyUnavailableCount ?? 0}, residualRange ${payToWin.residualBalance?.worstRange ?? "n/a"}/${payToWin.residualBalance?.worstRangeLimit ?? "n/a"}RE (overflow ${payToWin.residualBalance?.worstRangeExcess ?? 0}; soft +${payToWin.residualBalance?.worstSoftOverflowAllowance ?? "n/a"}), residualPenalty ${payToWin.residualBalance?.worstResidualPenalty ?? 0}, meaningfulEnergy ${payToWin.meaningfulEnergyAdjustmentCount ?? 0}, SD ${payToWin.residualBalance?.worstStdDev ?? "n/a"} diagnostic-only, balance ${payToWin.balanceValid === false ? "residual" : "pass"}, surplusStarts ${payToWin.surplusStarts ?? 0}, latePricing ${payToWin.latePricingActive ? "active" : "inactive"}, slashPrices ${payToWin.hasLatePriceDifference ? "yes" : "no"}`
+      `${pricingLabel}: model ${pricingModel.method ?? "n/a"}, economy ${payToWin.pricingEconomyMethod ?? "n/a"}, pruning ${payToWin.pruningPolicy ?? "legacy"}, target ${pricingModel.target ?? "n/a"}, ${subsidyMode ? `startingEnergy ${payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY}E / subsidy-total ceiling ${payToWin.subsidyStartingEnergyCeiling ?? pricingModel.subsidyStartingEnergyCeiling ?? "n/a"}E / storage ${payToWin.maxEnergy ?? ROUTE_ENERGY_ECONOMY_DEFAULTS.maxEnergy}E` : `startingEnergy ${payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY}E / storage ${payToWin.maxEnergy ?? ROUTE_ENERGY_ECONOMY_DEFAULTS.maxEnergy}E`}, startingUpgradeCards ${payToWin.startingUpgradeCards ?? DEFAULT_STARTING_UPGRADE_CARDS} (unknown at start choice), offered ${payToWin.pricedStartCount ?? "n/a"}, pruned ${(payToWin.pruned ?? []).length}, selector-unavailable ${payToWin.fullyUnavailableCount ?? 0}, residualRange ${payToWin.residualBalance?.worstRange ?? "n/a"}/${payToWin.residualBalance?.worstRangeLimit ?? "n/a"}RE (overflow ${payToWin.residualBalance?.worstRangeExcess ?? 0}; soft +${payToWin.residualBalance?.worstSoftOverflowAllowance ?? "n/a"}), residualPenalty ${payToWin.residualBalance?.worstResidualPenalty ?? 0}, meaningfulEnergy ${payToWin.meaningfulEnergyAdjustmentCount ?? 0}, Start Balance ${finalStartBalance?.startBalanceLabel ?? formatStartBalanceLabel(scenario.preferences?.startBalance)} final-pruned ${finalStartBalance?.pruneCount ?? 0}, SD ${payToWin.residualBalance?.worstStdDev ?? "n/a"} diagnostic-only, balance ${payToWin.balanceValid === false ? "residual" : "pass"}, surplusStarts ${payToWin.surplusStarts ?? 0}, latePricing ${payToWin.latePricingActive ? "active" : "inactive"}, slashPrices ${payToWin.hasLatePriceDifference ? "yes" : "no"}`
     );
+    if (finalStartBalance) {
+      lines.push(
+        `${pricingShortLabel} final Start Balance v49fn: ${finalStartBalance.startBalanceLabel} ${finalStartBalance.enforced ? "ON" : "off"}; before early ${finalStartBalance.before?.early?.range ?? "n/a"}/${finalStartBalance.before?.early?.rangeLimit ?? "n/a"}RE${finalStartBalance.before?.latePricingActive ? `, late ${finalStartBalance.before?.late?.range ?? "n/a"}/${finalStartBalance.before?.late?.rangeLimit ?? "n/a"}RE` : ""}; batch pruned [${(finalStartBalance.prunedIndices ?? []).map((index) => `#${index + 1}`).join(", ") || "none"}]; traffic recompute ${finalStartBalance.trafficRecomputed ? "yes" : "no"}, repriced ${finalStartBalance.repriced ? "yes" : "no"}; final early ${finalStartBalance.afterReprice?.early?.range ?? "n/a"}/${finalStartBalance.afterReprice?.early?.rangeLimit ?? "n/a"}RE${finalStartBalance.afterReprice?.latePricingActive ? `, late ${finalStartBalance.afterReprice?.late?.range ?? "n/a"}/${finalStartBalance.afterReprice?.late?.rangeLimit ?? "n/a"}RE` : ""}; pass ${finalStartBalance.withinTargetAfterReprice ? "yes" : "NO"}`
+      );
+    }
     if (payToWin.selectorPricingEvaluated && selectorSplit) {
       if (selectorSplit.selected) {
         lines.push(
@@ -22148,9 +22495,18 @@ function buildScenarioCopySummary(scenario) {
       );
     }
     if ((payToWin.pruned ?? []).length) {
-      lines.push(
-        `${pricingShortLabel} compensation-first pruning: ${payToWin.pruned.map((item) => `p${item.pass} -> #${item.index + 1} (${item.reason})`).join("; ")}`
-      );
+      const economyPruned = (payToWin.pruned ?? []).filter((item) => !item.finalStartBalancePruned);
+      const fairnessPruned = (payToWin.pruned ?? []).filter((item) => item.finalStartBalancePruned);
+      if (economyPruned.length) {
+        lines.push(
+          `${pricingShortLabel} ordinary Energy-economy pruning: ${economyPruned.map((item) => `p${item.pass} -> #${item.index + 1} (${item.reason})`).join("; ")}`
+        );
+      }
+      if (fairnessPruned.length) {
+        lines.push(
+          `${pricingShortLabel} final Start Balance batch: ${fairnessPruned.map((item) => `#${item.index + 1}`).join(", ")}`
+        );
+      }
     }
     if ((payToWin.pricingEntries ?? []).length) {
       const formatAdjustment = (value) => Number.isFinite(Number(value))
@@ -23187,12 +23543,20 @@ function buildScenarioReport(scenario, selectedLegIndices = null) {
     summary.payToWin?.active
       ? `${summary.payToWin.subsidizedStarts ? "Subsidized Starts" : "Pay to Win"}: model ${summary.payToWin.pricingModel?.method ?? "n/a"}, economy ${summary.payToWin.pricingEconomyMethod ?? "n/a"}, target ${summary.payToWin.pricingModel?.target ?? "n/a"}, ${summary.payToWin.subsidizedStarts ? `start ${summary.payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY}E / subsidy-total ceiling ${summary.payToWin.subsidyStartingEnergyCeiling ?? summary.payToWin.pricingModel?.subsidyStartingEnergyCeiling ?? "n/a"}E / storage ${summary.payToWin.maxEnergy ?? ROUTE_ENERGY_ECONOMY_DEFAULTS.maxEnergy}E` : `start ${summary.payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY}E / storage ${summary.payToWin.maxEnergy ?? ROUTE_ENERGY_ECONOMY_DEFAULTS.maxEnergy}E`}, startingCards ${summary.payToWin.startingUpgradeCards ?? DEFAULT_STARTING_UPGRADE_CARDS}, offered ${summary.payToWin.pricedStartCount ?? "n/a"}, pruned ${(summary.payToWin.pruned ?? []).length}, residualRange ${summary.payToWin.residualBalance?.worstRange ?? "n/a"}/${summary.payToWin.residualBalance?.worstRangeLimit ?? "n/a"}RE (overflow ${summary.payToWin.residualBalance?.worstRangeExcess ?? 0}; soft +${summary.payToWin.residualBalance?.worstSoftOverflowAllowance ?? "n/a"}), residualPenalty ${summary.payToWin.residualBalance?.worstResidualPenalty ?? 0}, meaningfulEnergy ${summary.payToWin.meaningfulEnergyAdjustmentCount ?? 0}, capLimited ${summary.payToWin.capLimitedEnergyAdjustmentCount ?? 0}, SD ${summary.payToWin.residualBalance?.worstStdDev ?? "n/a"} diagnostic-only, availability ${summary.payToWin.availabilityValid === false ? "FAIL" : "pass"}, balance ${summary.payToWin.balanceValid === false ? "residual" : "pass"}, latePricing ${summary.payToWin.latePricingActive ? "active" : "inactive"}, selectorSplit ${summary.payToWin.selectorSplit?.selected ? `after-p${summary.payToWin.selectorSplit.cutoffAfter}` : "none"}`
       : "Priced starts: n/a",
+    summary.payToWin?.startBalanceFinalCheck
+      ? (() => {
+        const finalBalance = summary.payToWin.startBalanceFinalCheck;
+        const before = finalBalance.before ?? {};
+        const after = finalBalance.afterReprice ?? {};
+        return `Priced Start Balance v49fn: ${finalBalance.startBalanceLabel ?? "Standard"} ${finalBalance.enforced ? "ON" : "off"}; ordinary Energy economy completed first; before early ${before.early?.range ?? "n/a"}/${before.early?.rangeLimit ?? "n/a"}RE${before.latePricingActive ? `, late ${before.late?.range ?? "n/a"}/${before.late?.rangeLimit ?? "n/a"}RE` : ""}; one frozen-field batch pruned [${(finalBalance.prunedIndices ?? []).map((index) => index + 1).join(", ") || "none"}]; traffic recompute ${finalBalance.trafficRecomputed ? "yes" : "no"}; one final repricing ${finalBalance.repriced ? "yes" : "no"}; after early ${after.early?.range ?? "n/a"}/${after.early?.rangeLimit ?? "n/a"}RE${after.latePricingActive ? `, late ${after.late?.range ?? "n/a"}/${after.late?.rangeLimit ?? "n/a"}RE` : ""}; target ${finalBalance.withinTargetAfterReprice ? "pass" : "MISS"}`;
+      })()
+      : "Priced Start Balance v49fn: n/a",
     summary.payToWin?.reOwnershipAudit?.early
       ? (() => {
         const audit = summary.payToWin.reOwnershipAudit;
         const early = audit.early;
         const late = audit.late;
-        return `Economy start RE ownership v49ea LIVE: ${audit.mode}; start-specific completed-RE Energy balancing toward the directional field anchor BEFORE range-first pruning; each start chooses the closest legal integer Energy result, then residual outliers are pruned and the field is rebalanced; ${summary.payToWin.subsidizedStarts ? "Subsidized Starts cap total starting Energy at min(base+3, storage max); " : ""}literal duration diagnostic-only; early range ${summary.payToWin.residualBalance?.early?.rangeRE ?? "n/a"}/${summary.payToWin.residualBalance?.early?.residualPenaltyComponents?.rangeLimit ?? "n/a"}RE, penalty ${early.residualPenalty ?? 0}, nonzero ${early.nonzeroAdjustments ?? 0}, max ${summary.payToWin.subsidizedStarts ? "+" : ""}${early.maxAdjustment ?? 0}E${summary.payToWin.latePricingActive ? `; late range ${summary.payToWin.residualBalance?.late?.rangeRE ?? "n/a"}/${summary.payToWin.residualBalance?.late?.residualPenaltyComponents?.rangeLimit ?? "n/a"}RE, penalty ${late.residualPenalty ?? 0}, nonzero ${late.nonzeroAdjustments ?? 0}, max ${summary.payToWin.subsidizedStarts ? "+" : ""}${late.maxAdjustment ?? 0}E` : ""}; target ${early.targetPolicy ?? "n/a"}@${early.targetEffectiveRE ?? "n/a"}RE${summary.payToWin.latePricingActive ? ` / late ${late.targetPolicy ?? "n/a"}@${late.targetEffectiveRE ?? "n/a"}RE` : ""}; cap-limited ${early.capLimitedAdjustments ?? 0}${summary.payToWin.latePricingActive ? `/${late.capLimitedAdjustments ?? 0}` : ""}; SD is diagnostic/tiebreak only; balance→prune→rebalance loop LIVE`;
+        return `Economy start RE ownership v49ea PRE-CONTROL CORE: ${audit.mode}; original start-specific completed-RE Energy balancing toward the directional field anchor, including its ordinary residual prune/rebalance loop, is unchanged by Start Balance; ${summary.payToWin.subsidizedStarts ? "Subsidized Starts cap total starting Energy at min(base+3, storage max); " : ""}literal duration diagnostic-only; early range ${summary.payToWin.residualBalance?.early?.rangeRE ?? "n/a"}/${summary.payToWin.residualBalance?.early?.residualPenaltyComponents?.rangeLimit ?? "n/a"}RE, penalty ${early.residualPenalty ?? 0}, nonzero ${early.nonzeroAdjustments ?? 0}, max ${summary.payToWin.subsidizedStarts ? "+" : ""}${early.maxAdjustment ?? 0}E${summary.payToWin.latePricingActive ? `; late range ${summary.payToWin.residualBalance?.late?.rangeRE ?? "n/a"}/${summary.payToWin.residualBalance?.late?.residualPenaltyComponents?.rangeLimit ?? "n/a"}RE, penalty ${late.residualPenalty ?? 0}, nonzero ${late.nonzeroAdjustments ?? 0}, max ${summary.payToWin.subsidizedStarts ? "+" : ""}${late.maxAdjustment ?? 0}E` : ""}; target ${early.targetPolicy ?? "n/a"}@${early.targetEffectiveRE ?? "n/a"}RE${summary.payToWin.latePricingActive ? ` / late ${late.targetPolicy ?? "n/a"}@${late.targetEffectiveRE ?? "n/a"}RE` : ""}; cap-limited ${early.capLimitedAdjustments ?? 0}${summary.payToWin.latePricingActive ? `/${late.capLimitedAdjustments ?? 0}` : ""}; Start Balance is downstream in the separate v49fn one-shot final check`;
       })()
       : "Economy start RE ownership v49ea: n/a",
     summary.payToWin?.selectorRuntimeOptimization
@@ -25158,14 +25522,13 @@ function updateDevGenerationSeedControls(message = "") {
   }
 
   const frozen = Number.isInteger(devFrozenGenerationSeed);
-  toggle.textContent = frozen ? "Unfreeze test seed" : "Freeze test seed";
+  toggle.textContent = frozen ? "Unfreeze" : "Freeze";
   renew.classList.toggle("hidden", !frozen);
   if (frozen && document.activeElement !== input) {
     input.value = formatDevGenerationSeed(devFrozenGenerationSeed);
   }
-  status.textContent = message || (frozen
-    ? `Construction RNG frozen at ${formatDevGenerationSeed(devFrozenGenerationSeed)}. Rerolls repeat the same random construction sequence while settings and analyzer code remain editable.`
-    : "Enter an 8-digit hex seed (for example 56BAC99D) and apply it, or freeze a new random seed.");
+  status.textContent = message;
+  status.classList.toggle("hidden", !message);
 }
 
 function ensureDevGenerationSeedControls() {
@@ -25182,7 +25545,6 @@ function ensureDevGenerationSeedControls() {
   const wrapper = document.createElement("div");
   wrapper.id = "dev-generation-seed-controls";
   wrapper.className = "hidden";
-  wrapper.style.margin = "0.5rem 0";
 
   const toggle = document.createElement("button");
   toggle.id = "dev-generation-seed-toggle";
@@ -25195,33 +25557,28 @@ function ensureDevGenerationSeedControls() {
   input.autocomplete = "off";
   input.spellcheck = false;
   input.maxLength = 10;
-  input.placeholder = "Seed, e.g. 56BAC99D";
+  input.placeholder = "Test seed";
   input.value = "56BAC99D";
-  input.setAttribute("aria-label", "Dev generation test seed");
-  input.style.marginLeft = "0.4rem";
-  input.style.width = "10.5rem";
+  input.setAttribute("aria-label", "Test seed");
 
   const apply = document.createElement("button");
   apply.id = "dev-generation-seed-apply";
   apply.type = "button";
-  apply.textContent = "Apply seed";
-  apply.style.marginLeft = "0.4rem";
+  apply.textContent = "Use";
 
   const renew = document.createElement("button");
   renew.id = "dev-generation-seed-renew";
   renew.type = "button";
-  renew.textContent = "New test seed";
-  renew.style.marginLeft = "0.4rem";
+  renew.textContent = "New";
 
   const status = document.createElement("div");
   status.id = "dev-generation-seed-status";
-  status.style.marginTop = "0.35rem";
-  status.style.fontSize = "0.9em";
+  status.className = "hidden";
 
   const applyTypedSeed = () => {
     const parsed = parseDevGenerationSeed(input.value);
     if (!Number.isInteger(parsed)) {
-      updateDevGenerationSeedControls("Invalid seed. Enter up to 8 hexadecimal digits, for example 56BAC99D.");
+      updateDevGenerationSeedControls("Use up to 8 hexadecimal digits.");
       return;
     }
     devFrozenGenerationSeed = parsed;
@@ -31663,4 +32020,4 @@ if (typeof document !== "undefined") {
   init().catch(console.error);
 
 }
-// VERSION END: v49fj-start-balance-control
+// VERSION END: v49fp-safari-dev-panel-tightening

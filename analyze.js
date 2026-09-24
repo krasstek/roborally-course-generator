@@ -1,6 +1,6 @@
-// VERSION START: v49fh-randomizer-re-ownership
+// VERSION START: v49fo-randomizer-hotpath-fix
 // Robo Rally Course Randomizer - route analysis and scoring runtime
-export const ANALYZE_BUILD_ID = "v49fh-randomizer-re-ownership";
+export const ANALYZE_BUILD_ID = "v49fo-randomizer-hotpath-fix";
 const ASSET_VERSION = new URL(import.meta.url).searchParams.get("v") ?? "";
 const VERSION_SUFFIX = ASSET_VERSION ? `?v=${encodeURIComponent(ASSET_VERSION)}` : "";
 const versionedPath = (path) => `${path}${VERSION_SUFFIX}`;
@@ -1665,6 +1665,28 @@ function hasActiveFeature(tile, type, options = {}) {
   return (tile?.features || []).some((feature) => (
     feature.type === type && isFeatureActiveThisRegister(feature, options)
   ));
+}
+
+// v49fo hot path: Trapdoor and Randomizer are the only features that need to be
+// interpreted specifically at the start of a programmed register here. Scan the
+// tile once for both instead of calling hasActiveFeature() separately for each.
+const REGISTER_START_FEATURE_TRAPDOOR = 1;
+const REGISTER_START_FEATURE_RANDOMIZER = 2;
+function getRegisterStartFeatureMask(tile, options = {}) {
+  let mask = 0;
+  for (const feature of tile?.features || []) {
+    let bit = 0;
+    if (feature.type === "trapdoor") bit = REGISTER_START_FEATURE_TRAPDOOR;
+    else if (feature.type === "randomizer") bit = REGISTER_START_FEATURE_RANDOMIZER;
+    else continue;
+    if (isFeatureActiveThisRegister(feature, options)) {
+      mask |= bit;
+      if (mask === (REGISTER_START_FEATURE_TRAPDOOR | REGISTER_START_FEATURE_RANDOMIZER)) {
+        break;
+      }
+    }
+  }
+  return mask;
 }
 
 function getFeatureDutyCycle(feature, fallback = 1) {
@@ -4615,9 +4637,11 @@ export function simulateAction(tileMap, startState, action, options = {}) {
   const boardEvents = [];
   const startTile = tileMap.get(tileKey(state.x, state.y));
 
+  const registerStartFeatureMask = getRegisterStartFeatureMask(startTile, options);
+
   // Trapdoors are open for the entire listed register. A robot beginning that
   // register on an open trapdoor drops before its programmed card can move it.
-  if (hasActiveFeature(startTile, "trapdoor", options)) {
+  if (registerStartFeatureMask & REGISTER_START_FEATURE_TRAPDOOR) {
     const dropped = resolveCrashOrReboot(
       tileMap,
       state,
@@ -4657,11 +4681,9 @@ export function simulateAction(tileMap, startState, action, options = {}) {
   // Preserve only the factual register-start event so completed-route RE can
   // price its +2 control clog and full SPAM-relief opportunity chronologically.
   // Trapdoor's pre-programmed-card drop returned above, so it deliberately never
-  // receives this marker.
-  const randomizerAtRegisterStart = hasActiveFeature(
-    startTile,
-    "randomizer",
-    options
+  // receives this marker. v49fo reuses the combined start-feature scan above.
+  const randomizerAtRegisterStart = Boolean(
+    registerStartFeatureMask & REGISTER_START_FEATURE_RANDOMIZER
   );
 
   // v48zv hot-path allocation cleanup: only Randomizer needs the
@@ -6235,7 +6257,13 @@ function isDamageEconomyRandomizerAtRegisterStart(
   options = {},
   absoluteAction = 1
 ) {
-  if (transition?.randomizerAtRegisterStart || transition?.randomizedAction) return true;
+  if (transition?.randomizedAction) return true;
+  // v49fo: v49fh+ transitions always carry an explicit boolean marker. `false`
+  // is authoritative too. Only legacy/foreign transitions that genuinely lack
+  // the property need the compatibility board lookup and register-options clone.
+  if (transition && Object.prototype.hasOwnProperty.call(transition, "randomizerAtRegisterStart")) {
+    return Boolean(transition.randomizerAtRegisterStart);
+  }
   const start = transition?.from;
   if (!tileMap || !start || !Number.isFinite(start.x) || !Number.isFinite(start.y)) {
     return false;
@@ -30313,4 +30341,4 @@ export function analyzeFlagLeg(tileMap, from, goal, options = {}) {
     }
   };
 }
-// VERSION END: v49es-realized-variant-applicability-cleanup
+// VERSION END: v49fo-randomizer-hotpath-fix
