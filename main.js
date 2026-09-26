@@ -782,6 +782,7 @@ const PIECE_DATA_FILES = [
   "misdirection",
   "portal-palace",
   "pushy",
+  "reactor-core",
   "sampler",
   "spin-class",
   "sidewinder",
