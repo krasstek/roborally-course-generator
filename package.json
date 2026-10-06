@@ -3,10 +3,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "version:stamp": "node ./scripts/stamp-version.js",
-    "verify:movement": "node --experimental-default-type=module ./scripts/verify-movement.js",
-    "score:damage": "node --experimental-default-type=module ./scripts/score-damage.js",
-    "score:traffic": "node --experimental-default-type=module ./scripts/score-traffic.js",
+    "version:stamp": "node ./scripts/stamp-version.cjs",
+    "verify:movement": "node ./scripts/verify-movement.js",
+    "score:damage": "node ./scripts/score-damage.js",
+    "score:traffic": "node ./scripts/score-traffic.js",
+    "golden": "node ./scripts/golden.js",
     "predev": "npm run version:stamp",
     "dev": "serve -l tcp://127.0.0.1:3000 ."
   },
@@ -16,5 +17,4 @@
   "overrides": {
     "fast-uri": "3.1.2"
   }
-  
 }

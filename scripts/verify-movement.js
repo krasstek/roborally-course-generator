@@ -354,7 +354,9 @@ const cases = [
     expected: { x: -3, y: 0, facing: "E", turnedSteps: 0 }
   },
   {
-    name: "pushes still trigger repulsors",
+    // A repulsor bounces by the spaces of a programmed move; a pusher's push is
+    // not a move, so the robot enters the repulsor space without bouncing.
+    name: "pushes do not trigger repulsors",
     tiles: [
       tile(-1, 0),
       {
@@ -370,7 +372,8 @@ const cases = [
     ],
     start: { x: 0, y: 0, facing: "N" },
     action: WAIT,
-    expected: { x: -1, y: 0, facing: "N", turnedSteps: 0 }
+    options: { registerIndex: 0 },
+    expected: { x: 1, y: 0, facing: "N", turnedSteps: 0 }
   },
   {
     name: "repulsor on the source edge also bounces backward",
@@ -422,6 +425,7 @@ const cases = [
     start: { x: 0, y: 0, facing: "N" },
     action: WAIT,
     options: {
+      registerIndex: 0,
       recoveryRule: "reboot_tokens",
       boardRects: [{ index: 0, x: 0, y: 0, width: 1, height: 1 }],
       rebootTokens: [{ boardIndex: 0, x: 5, y: 5 }]

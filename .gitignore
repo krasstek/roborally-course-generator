@@ -1,3 +1,5 @@
 node_modules/
 calibration-output
 **/.DS_Store
+ROADMAP.md
+golden-output/

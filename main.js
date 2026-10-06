@@ -57,7 +57,7 @@ const versionedPath = (path) => `${path}${VERSION_SUFFIX}`;
 
 const [
   { render },
-  { ANALYZE_BUILD_ID, analyzeCourse, analyzeFullCourse, analyzeFullCourseCooperative, analyzeFlagLeg, buildStartOccupancyMap, clearAnalysisCaches, evaluateFullCourseFocusPaymentCurveUnderOccupancy, evaluateRouteUpgradePotential, estimateInitialUpgradeOpportunitiesRemaining, getAnalysisTelemetrySnapshot, getDamageEconomyTelemetrySnapshot, getCourseMaxEnergy, getCourseStartingEnergy, getCourseStartingUpgradeCards, getRouteEnergyEconomyConfig, getRouteEnergyGainUtility, getRouteMarginalEnergyUtility, getRouteUpgradePotential, recomputeFirstLegPressure, rescoreFixedRouteUpgradeEconomy, resetAnalysisTelemetry, ROUTE_ENERGY_ECONOMY_DEFAULTS, scoreFlagArea, summarizeDamageEconomyFoundationForRoute, summarizeFixedRouteUpgradeEconomyActivity, summarizeRegisterEquivalentLedger, summarizeRENativeRouteUncertaintyEvidence, summarizeCheapSearchRegisterEquivalentShadow, summarizeIntrinsicRouteForecastConfidence, summarizePowerUpOpportunityBenchmark, summarizeProgramSequencePressure, summarizePowerUpProgramFeasibility, summarizePathfinderObjectiveAudit, summarizeTrafficOwnershipAudit, summarizeFixedRouteBoardAblation },
+  { ANALYZE_BUILD_ID, analyzeCourse, analyzeFullCourse, analyzeFullCourseCooperative, analyzeFlagLeg, buildStartOccupancyMap, clearAnalysisCaches, evaluateFullCourseFocusPaymentCurveUnderOccupancy, evaluateRouteUpgradePotential, estimateInitialUpgradeOpportunitiesRemaining, getAnalysisTelemetrySnapshot, getDamageEconomyTelemetrySnapshot, getCourseMaxEnergy, getCourseStartingEnergy, getCourseStartingUpgradeCards, getRouteEnergyEconomyConfig, getRouteEnergyGainUtility, getRouteMarginalEnergyUtility, getRouteUpgradePotential, recomputeFirstLegPressure, rescoreFixedRouteUpgradeEconomy, resetAnalysisTelemetry, ROUTE_ENERGY_ECONOMY_DEFAULTS, scoreFlagArea, simulateAction, summarizeDamageEconomyFoundationForRoute, summarizeFixedRouteUpgradeEconomyActivity, summarizeRegisterEquivalentLedger, summarizeRENativeRouteUncertaintyEvidence, summarizeCheapSearchRegisterEquivalentShadow, summarizeIntrinsicRouteForecastConfidence, summarizePowerUpOpportunityBenchmark, summarizeProgramSequencePressure, summarizePowerUpProgramFeasibility, summarizePathfinderObjectiveAudit, summarizeTrafficOwnershipAudit, summarizeFixedRouteBoardAblation },
   {
     buildMainFootprintTiles,
     buildResolvedMap,
@@ -1653,8 +1653,13 @@ function isSmallBoardLayoutAcceptable(boardPlacements, pieceMap, layoutValidatio
 
 function nextFrame() {
   return new Promise((resolve) => {
+    // Headless runs have no animation frames; a timer turn is the equivalent yield.
+    if (typeof requestAnimationFrame !== "function") {
+      globalThis.setTimeout(resolve, 0);
+      return;
+    }
     requestAnimationFrame(() => {
-      window.setTimeout(resolve, 0);
+      globalThis.setTimeout(resolve, 0);
     });
   });
 }
@@ -1667,7 +1672,7 @@ function nextEventLoopTurn() {
     return globalThis.scheduler.yield();
   }
   return new Promise((resolve) => {
-    window.setTimeout(resolve, 0);
+    globalThis.setTimeout(resolve, 0);
   });
 }
 
@@ -4506,7 +4511,7 @@ function updateRulesNote(scenario) {
 
   if (hasHazardousFlagsEffect(scenario)) {
     notes.push(appendRuleReference(
-      "Hazardous Flags: board elements under checkpoints remain active, but do not affect the checkpoints.",
+      "Hazardous Checkpoints: board elements under checkpoints remain active, but do not affect the checkpoints.",
       { source: "previous-editions" }
     ));
   }
@@ -5345,6 +5350,10 @@ function getScenarioGenerationMaxAttempts(scenario) {
 
 function getAvailableConcretePreferenceValues(selectId) {
   if (typeof document === "undefined") {
+    // Headless runs (comparison harness) have no controls; use the full option
+    // set a fresh page offers, so "Any" resolves exactly as it would there.
+    if (selectId === "difficulty") return [...DIAGNOSTIC_DIFFICULTIES];
+    if (selectId === "length") return [...DIAGNOSTIC_LENGTHS];
     return [];
   }
 
@@ -9482,7 +9491,61 @@ function canUseCheckpointTile(candidate, tileMap, starts, preferences = {}) {
   }
 
   const tile = tileMap.get(`${candidate.x},${candidate.y}`);
-  return !(tile?.features || []).some((feature) => feature.type === "pit");
+  if ((tile?.features || []).some((feature) => feature.type === "pit")) return false;
+  // With Moving Targets the checkpoint rides the same conveyors as the robot, so
+  // the static claim test below does not apply.
+  return preferences.movingTargets || isHazardousCheckpointClaimable(tileMap, candidate);
+}
+
+// Hazardous Flags keeps the board element under a checkpoint active for robots,
+// and a checkpoint is claimed only at the very end of a register, after board
+// elements. A checkpoint on, say, an express conveyor is therefore claimable
+// only if some robot that ends its programmed move nearby is left on the
+// checkpoint once the board elements have acted. This checks exactly that with
+// the movement simulator (a Wait from every nearby space, for every register),
+// so placement never asks route search to prove an unclaimable leg impossible,
+// which makes it exhaust the whole board. Robot-on-robot pushes are ignored.
+const HAZARDOUS_CHECKPOINT_CLAIM_RADIUS = 3;
+const HAZARDOUS_CHECKPOINT_WAIT_ACTION = Object.freeze({ id: "WAIT", type: "wait" });
+const hazardousCheckpointClaimCache = new WeakMap();
+
+function isHazardousCheckpointClaimable(tileMap, checkpoint) {
+  const checkpointTile = tileMap.get(`${checkpoint.x},${checkpoint.y}`);
+  const covered = (checkpointTile?.features || []).some((feature) => (
+    isHazardousFlagEligibleUnderlyingFeature(feature)
+  ));
+  if (!covered) return true;
+
+  let cache = hazardousCheckpointClaimCache.get(tileMap);
+  if (!cache) {
+    cache = new Map();
+    hazardousCheckpointClaimCache.set(tileMap, cache);
+  }
+  const key = `${checkpoint.x},${checkpoint.y}`;
+  if (cache.has(key)) return cache.get(key);
+
+  const simulationOptions = { portalMap: new Map() };
+  let claimable = false;
+  for (let dy = -HAZARDOUS_CHECKPOINT_CLAIM_RADIUS; dy <= HAZARDOUS_CHECKPOINT_CLAIM_RADIUS && !claimable; dy += 1) {
+    const span = HAZARDOUS_CHECKPOINT_CLAIM_RADIUS - Math.abs(dy);
+    for (let dx = -span; dx <= span && !claimable; dx += 1) {
+      const x = checkpoint.x + dx;
+      const y = checkpoint.y + dy;
+      const tile = tileMap.get(`${x},${y}`);
+      if (!tile || (tile.features || []).some((feature) => feature.type === "pit")) continue;
+      for (let registerIndex = 0; registerIndex < 5 && !claimable; registerIndex += 1) {
+        const result = simulateAction(
+          tileMap,
+          { x, y, facing: "N" },
+          HAZARDOUS_CHECKPOINT_WAIT_ACTION,
+          { ...simulationOptions, registerIndex }
+        );
+        claimable = !result.rebooted && result.to.x === checkpoint.x && result.to.y === checkpoint.y;
+      }
+    }
+  }
+  cache.set(key, claimable);
+  return claimable;
 }
 
 function getFlagCandidateTilePenalty(candidate, tileMap, difficulty, preferences = {}) {
@@ -23333,7 +23396,7 @@ function buildScenarioReport(scenario, selectedLegIndices = null) {
     `Hard Reboot / A More Deadly Game used: ${scenario.moreDeadlyGame ? "yes" : "no"}`,
     `Flaming Oil used: ${scenario.flamingOil ? "yes" : "no"}`,
     `Shared Deck used: ${scenario.classicSharedDeck ? "yes" : "no"}`,
-    `Hazardous Flags used: ${scenario.hazardousFlags ? "yes" : "no"}`,
+    `Hazardous Checkpoints used: ${scenario.hazardousFlags ? "yes" : "no"}`,
     `Repair Stations used: ${scenario.repairStations ? "yes" : "no"}`,
     `Moving Targets used: ${scenario.movingTargets ? "yes" : "no"}`,
     `Less Foreshadowing used: ${scenario.lessForeshadowing ? "yes" : "no"}`,
@@ -26581,7 +26644,18 @@ function getFlagRetryStallLimit(preferences = {}) {
   return limitsByMode[normalizeGenerationMode(preferences.generationMode)] ?? 2;
 }
 
-async function createRandomCandidate(assets, preferences, attempt = 1, remainingEvaluations = 1, onEvaluation = null, onStage = null, shouldStopBeforeRetry = null, shouldStopDuringAnalysis = null, onCooperativeProgress = null, sharedEstimatedCardTransitionMemoContext = null) {
+// See the route-work safety net in createRandomCandidate. Sized from the
+// comparison-harness baseline (2026-09-29): ordinary candidates use a median of
+// ~9k expansions and at most ~183k, at up to 8.8x the calibrated prediction
+// (p90 2.5x). While no acceptable course exists yet the budget is generous so a
+// hard setup still finds one; once one exists, further candidates only compete
+// for "better", so an expensive one is dropped much sooner.
+const CANDIDATE_ROUTE_WORK_BUDGET_FLOOR = 200000;
+const CANDIDATE_ROUTE_WORK_BUDGET_PREDICTION_MULTIPLIER = 10;
+const EXTRA_CANDIDATE_ROUTE_WORK_BUDGET_FLOOR = 60000;
+const EXTRA_CANDIDATE_ROUTE_WORK_BUDGET_PREDICTION_MULTIPLIER = 3;
+
+async function createRandomCandidate(assets, preferences, attempt = 1, remainingEvaluations = 1, onEvaluation = null, onStage = null, shouldStopBeforeRetry = null, shouldStopDuringAnalysis = null, onCooperativeProgress = null, sharedEstimatedCardTransitionMemoContext = null, hasAcceptableCandidate = null) {
   if (preferences?.difficulty === "any" || preferences?.length === "any") {
     throw new Error("Generation requires concrete difficulty and length targets; resolve Any before construction.");
   }
@@ -27656,6 +27730,23 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         // The old up-front alternate breadth model is intentionally not controlled
         // by the Dev checkbox anymore. Gameplay alternatives now come from traffic
         // demand; keeping legacy breadth off gives the three clean benchmark states.
+        // Route-work safety net: primary route search deliberately widens to
+        // exhausting the physical graph rather than calling a leg unreachable, so a
+        // pathological layout can search practically forever. A candidate whose
+        // analysis pass far exceeds the calibrated work prediction is dropped as too
+        // expensive to verify. This is never a reachability verdict; the candidate
+        // is simply not offered, and generation moves on.
+        const routeWorkBaseline = getAnalysisTelemetrySnapshotSafe().totalExpansions ?? 0;
+        const predictedRouteWork = Number(checkpointsKnownGuidance?.routeCost?.predictedExpansions);
+        const extraCandidate = typeof hasAcceptableCandidate === "function" && hasAcceptableCandidate();
+        const routeWorkBudget = Math.max(
+          extraCandidate ? EXTRA_CANDIDATE_ROUTE_WORK_BUDGET_FLOOR : CANDIDATE_ROUTE_WORK_BUDGET_FLOOR,
+          Number.isFinite(predictedRouteWork)
+            ? predictedRouteWork * (extraCandidate
+              ? EXTRA_CANDIDATE_ROUTE_WORK_BUDGET_PREDICTION_MULTIPLIER
+              : CANDIDATE_ROUTE_WORK_BUDGET_PREDICTION_MULTIPLIER)
+            : 0
+        );
         const productionAnalysisOptions = {
           ...baseAnalysisOptions,
           ...routeAwareBatteryScoringOptions,
@@ -27670,6 +27761,14 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
             : analyzeFullCourse,
           cooperativeYield: typeof shouldStopDuringAnalysis === "function"
             ? async (progress) => {
+              const routeWork = (getAnalysisTelemetrySnapshotSafe().totalExpansions ?? 0) - routeWorkBaseline;
+              if (routeWork > routeWorkBudget) {
+                const error = new Error(
+                  `Route verification too costly: ${routeWork} expansions (budget ${Math.round(routeWorkBudget)})`
+                );
+                error.code = "CANDIDATE_ROUTE_WORK_BUDGET_EXCEEDED";
+                throw error;
+              }
               const now = generationNow();
               const shouldRenderProgress = Boolean(
                 typeof onCooperativeProgress === "function" &&
@@ -28842,6 +28941,9 @@ function serializeScenario(scenario) {
     savedScenarioSchema: SAVED_SCENARIO_SCHEMA_VERSION,
     preferences: scenario.preferences,
     effectiveTargetPreferences: scenario.effectiveTargetPreferences ?? null,
+    // Every registry rule the course was generated with. The explicit fields
+    // below predate this and still take precedence for older readers.
+    ...Object.fromEntries(VARIANT_DEFINITIONS.map((variant) => [variant.id, Boolean(scenario[variant.id])])),
     actFast: scenario.actFast,
     actFastMode: scenario.actFastMode,
     competitiveMode: scenario.competitiveMode,
@@ -29463,6 +29565,19 @@ async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}) {
   const movingTargets = Boolean(snapshot.movingTargets);
   const staggeredBoards = Boolean(snapshot.staggeredBoards);
   const lessForeshadowing = Boolean(snapshot.lessForeshadowing);
+  // Rebuild the course's rules from the variant registry, exactly as generation's
+  // applyVariantScenarioState recorded them. A hand-kept list here used to drop
+  // route-relevant rules (Moving Targets, More Deadly Game, Repair Stations, ...),
+  // so a reload analysed a different course from the one that was accepted.
+  const hydrationVariantBundle = {
+    ...Object.fromEntries(VARIANT_DEFINITIONS.map((variant) => [variant.id, Boolean(snapshot[variant.id])])),
+    // Saves made before every registry id was persisted still carry Dynamic
+    // Archiving through the recovery rule.
+    dynamicArchiving: Boolean(snapshot.dynamicArchiving ?? recoveryRule === "dynamic_archiving"),
+    actFastMode,
+    recoveryRule,
+    homeReboot
+  };
   const placements = snapshot.placements;
   const checkpoints = snapshot.checkpoints;
   const boardPlacements = placements.filter((placement) => {
@@ -29479,7 +29594,10 @@ async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}) {
     return null;
   }
 
-  clearAnalysisCachesSafe();
+  // Canonical evaluation during generation keeps the warm caches: they are pure
+  // memos, and the comparison harness (leak + restore checks) verifies that the
+  // result matches a cold page reload exactly.
+  if (!control.keepAnalysisCaches) clearAnalysisCachesSafe();
   const { tileMap, starts } = buildResolvedMap(placements, pieceMap);
   const rebootTokens = recoveryRule === "home_reboot"
     ? placeHomeRebootTokens(dockPlacements, pieceMap, starts, tileMap, checkpoints, {
@@ -29545,12 +29663,12 @@ async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}) {
   // generic reanalysis cannot turn accepted starts into false zero-route failures.
   // In particular, priced-start modes were generated through the shared physical
   // estimate -> exact-program realization foundation and must hydrate through it.
-  const hydrationUsesSharedRouteFoundation = Boolean(
-    !virtualBots && (
-      startEnergyPricing ||
-      (!noDocks && !sandwichedDock && dockPlacements.length === 1)
-    )
-  );
+  // Same predicate generation uses: priced starts route every start through the
+  // shared foundation (except Virtual Bots, which skip pricing); otherwise Virtual
+  // Bots and single-dock layouts do.
+  const hydrationUsesSharedRouteFoundation = startEnergyPricing
+    ? !virtualBots
+    : Boolean(virtualBots || (!noDocks && dockPlacements.length === 1));
   const hydrationRouteFoundationOptions = hydrationUsesSharedRouteFoundation
     ? {
         contextualSharedLaterLegCatalogue: true,
@@ -29570,23 +29688,7 @@ async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}) {
     : {};
   const hydrationBaseVariantOptions = {
     ...hydrationPreferences,
-    competitiveMode,
-    payToWin,
-    subsidizedStarts,
-    recoveryRule,
-    lessDeadlyGame,
-    lessSpammyGame,
-    criticalSpam,
-    criticalHaywire,
-    permanentShutdown,
-    homeReboot,
-    cuttingFloor,
-    startupSpinUp,
-    virtualBots,
-    upgradeWorld,
-    lighterGame,
-    hazardousFlags,
-    lessForeshadowing
+    ...hydrationVariantBundle
   };
   const savedRouteAwareEnergy = snapshot.coursePreflight?.routeAwareBatteryScoring ?? null;
   const hydrationEnergyOptions = {
@@ -29693,26 +29795,10 @@ async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}) {
     // on reload when the snapshot already records the accepted one. After routing,
     // restore that saved set and recompute traffic/RE over exactly those starts.
     // Legacy saves without a recorded Normal disposition retain the old replay.
-    skipNormalStartBalancing: restoreSavedNormalDisposition
-  }, {
-    competitiveMode,
-    payToWin,
-    subsidizedStarts,
-    recoveryRule,
-    lessDeadlyGame,
-    lessSpammyGame,
-    criticalSpam,
-    criticalHaywire,
-    permanentShutdown,
-    homeReboot,
-    cuttingFloor,
-    startupSpinUp,
-    virtualBots,
-    upgradeWorld,
-    lighterGame,
-    hazardousFlags,
-    lessForeshadowing
-  }));
+    skipNormalStartBalancing: restoreSavedNormalDisposition,
+    // Generation analyses every candidate with early exit enabled.
+    contextualEarlyExit: true
+  }, hydrationVariantBundle));
   if (restoreSavedNormalDisposition) {
     sequence = restoreSavedNormalStartDispositionForHydration(
       sequence,
@@ -29903,6 +29989,7 @@ async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}) {
         selectorUnavailableIndices: [],
         otherBlockedIndices: Array.isArray(snapshot.blockedStartIndices) ? [...snapshot.blockedStartIndices] : []
       },
+    ...hydrationVariantBundle,
     playerCount: snapshot.preferences.playerCount,
     actFast,
     actFastMode,
@@ -29993,6 +30080,57 @@ async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}) {
     },
     attempts: snapshot.attempts ?? 0
   };
+}
+
+// Reload-only presentation bookkeeping that must not leak into a freshly
+// generated course.
+const HYDRATION_ONLY_SCENARIO_FIELDS = [
+  "generationAcceptedAtSave",
+  "hydrationAcceptanceDrift",
+  "hydrationAcceptanceImproved",
+  "savedPresentationMetrics",
+  "savedCourseNotesHtml",
+  "hydrationPresentationFallback",
+  "hydrationPresentationUnavailable",
+  "hydrationPresentationStatusReason",
+  "hydrationReanalysisPending",
+  "hydrationReanalysisStopped",
+  "hydrationReanalysisFailed",
+  "hydrationStartDispositionRestored"
+];
+
+// Canonical evaluation of a finished course: save it exactly as the app would,
+// then reanalyse it through the reload path. Generation adopts this result as
+// the course's authoritative numbers, so a later reload (or the course editor)
+// reproduces them exactly instead of landing on history-dependent values from
+// the incremental generation passes. Returns null when the reanalysis cannot
+// rebuild a complete presentation; a reload of that course would fail too.
+async function evaluateCourseCanonically(assets, candidate, preferences, control = {}) {
+  const snapshot = JSON.parse(JSON.stringify(serializeScenario(candidate)));
+  // Mirror what the final save records for "Any" targets (see
+  // runProductionGeneration): the concrete target stays in
+  // effectiveTargetPreferences, the saved preference remains "any".
+  const concreteTarget = {
+    difficulty: preferences.difficulty,
+    length: preferences.length
+  };
+  snapshot.effectiveTargetPreferences = concreteTarget;
+  snapshot.preferences = {
+    ...snapshot.preferences,
+    difficulty: preferences.targetGuidanceOnlyDifficulty ? "any" : concreteTarget.difficulty,
+    length: preferences.targetGuidanceOnlyLength ? "any" : concreteTarget.length
+  };
+  const canonical = await hydrateScenarioFromSnapshot(assets, snapshot, { ...control, keepAnalysisCaches: true });
+  if (!canonical || canonical.hydrationPresentationFallback || canonical.hydrationPresentationUnavailable) {
+    return null;
+  }
+  for (const field of HYDRATION_ONLY_SCENARIO_FIELDS) delete canonical[field];
+  // The final save overwrites these again once the run ends.
+  canonical.preferences = { ...candidate.preferences, ...canonical.preferences, ...concreteTarget };
+  delete canonical.effectiveTargetPreferences;
+  canonical.attempts = candidate.attempts;
+  canonical.canonicallyEvaluated = true;
+  return canonical;
 }
 
 async function generateScenarioForPreferences(assets, preferences, options = {}) {
@@ -30137,6 +30275,81 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
   let bestAcceptableScenario = null;
   let bestAcceptableScore = Infinity;
   let bestScenario = null;
+  generationDiagnostics.canonicalEvaluations = [];
+  // Canonical evaluation reports progress like any other generation stage, which
+  // also gives the page regular turns while the chosen course is re-analysed.
+  const canonicalEvaluationControl = {
+    shouldStopRequested,
+    onStage: async (stage) => {
+      if (onProgress) await onProgress(attempt, maxAttempts, `Verifying the chosen course — ${stage}`);
+      else await nextEventLoopTurn();
+    },
+    onCooperativeProgress: async (progress) => {
+      if (onCooperativeProgress) {
+        onCooperativeProgress(
+          attempt,
+          maxAttempts,
+          `Verifying the chosen course — ${formatCooperativeRouteProgressStage(progress)}`
+        );
+      }
+      await nextEventLoopTurn();
+    }
+  };
+
+  // Candidates are ranked on their generation-time numbers; only the one picked
+  // for the player is evaluated canonically (the numbers a reload reproduces).
+  // If that evaluation rejects it, it leaves the pool and the next pick is
+  // tried. Returns { choice, scenario } or null when no candidate survives.
+  // A stop request skips the canonical step so Stop stays prompt.
+  async function chooseCanonicalAcceptableCandidate() {
+    while (acceptableCandidates.length) {
+      const choice = chooseNearBestCandidate(acceptableCandidates);
+      const picked = choice.scenario ?? bestAcceptableScenario ?? acceptableCandidates[0];
+      if (picked.canonicallyEvaluated || shouldStopRequested()) return { choice, scenario: picked };
+      const startedAt = generationNow();
+      let canonical = null;
+      try {
+        canonical = await evaluateCourseCanonically(assets, picked, preferences, canonicalEvaluationControl);
+      } catch (error) {
+        if (error?.code === "ANALYSIS_STOP_REQUESTED" && shouldStopRequested()) {
+          return { choice, scenario: picked };
+        }
+        throw error;
+      }
+      generationDiagnostics.canonicalEvaluations.push({
+        attempt: picked.attempts ?? null,
+        complete: Boolean(canonical),
+        acceptable: Boolean(canonical?.metrics?.acceptable),
+        generationDifficultyTurnRE: picked.metrics?.difficultyTurnRE ?? null,
+        canonicalDifficultyTurnRE: canonical?.metrics?.difficultyTurnRE ?? null,
+        elapsedMs: Number((generationNow() - startedAt).toFixed(2))
+      });
+      if (canonical?.metrics?.acceptable) return { choice, scenario: canonical };
+
+      acceptableCandidates.splice(acceptableCandidates.indexOf(picked), 1);
+      bestAcceptableScenario = null;
+      bestAcceptableScore = Infinity;
+      for (const candidate of acceptableCandidates) {
+        const score = getAcceptableScenarioScore(candidate);
+        if (score < bestAcceptableScore) {
+          bestAcceptableScenario = candidate;
+          bestAcceptableScore = score;
+        }
+      }
+      generationDiagnostics.acceptableCandidatesFound = acceptableCandidates.length;
+      if (canonical) {
+        // Still a possible near-miss fallback, now with its reload-stable numbers.
+        if (bestScenario === picked) bestScenario = null;
+        const fallbackScore = getFallbackScenarioScore(canonical);
+        if (Number.isFinite(fallbackScore) && fallbackScore < getFallbackScenarioScore(bestScenario)) {
+          bestScenario = canonical;
+        }
+      } else if (bestScenario === picked) {
+        bestScenario = null;
+      }
+    }
+    return null;
+  }
   let bestExtraDocksNearMissScenario = null;
   let crashedAttempts = 0;
   let lastAttemptError = null;
@@ -30241,8 +30454,10 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
 
     const progressMaxAttempts = emergencyActivated ? effectiveMaxAttempts : maxAttempts;
     const workSnapshot = getAnalysisTelemetrySnapshotSafe();
+    // The minimum-attempt guard protects against settling for a poor fallback;
+    // once an acceptable course exists, the work allowance alone decides.
     const softBudgetReached = (
-      attempt >= softBudgetMinAttempts &&
+      (attempt >= softBudgetMinAttempts || acceptableCandidates.length > 0) &&
       bestScenario &&
       (workSnapshot.totalExpansions ?? 0) >= softExpansionBudget
     );
@@ -30334,7 +30549,8 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
             );
           }
           : null,
-        estimatedCardTransitionMemoContext
+        estimatedCardTransitionMemoContext,
+        () => acceptableCandidates.length > 0
       );
     } catch (error) {
       if (error?.code === "ANALYSIS_STOP_REQUESTED" && shouldStopRequested()) {
@@ -30342,9 +30558,12 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
         terminationReason = "user-best-so-far";
         break;
       }
-      recordStageBoundary("Crashed");
-      crashedAttempts += 1;
-      lastAttemptError = error;
+      const overRouteWorkBudget = error?.code === "CANDIDATE_ROUTE_WORK_BUDGET_EXCEEDED";
+      recordStageBoundary(overRouteWorkBudget ? "Over route-work budget" : "Crashed");
+      if (!overRouteWorkBudget) {
+        crashedAttempts += 1;
+        lastAttemptError = error;
+      }
       attempt += 1;
       if (emergencyActivated) {
         generationDiagnostics.emergencyAttemptsUsed = Math.max(0, attempt - maxAttempts);
@@ -30356,7 +30575,7 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
         endAttempt: attemptLabel,
         evaluationsUsed: 1,
         elapsedMs: Number((generationNow() - candidateStartedAt).toFixed(2)),
-        outcome: "crashed",
+        outcome: overRouteWorkBudget ? "rejected" : "crashed",
         reason: error?.message ?? String(error),
         stages: stageTimings,
         routeSearches: routeDelta.searches,
@@ -30476,10 +30695,13 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
       break;
     }
 
-    if (acceptableCandidates.length >= acceptableCandidateTarget) {
+    const selection = acceptableCandidates.length >= acceptableCandidateTarget
+      ? await chooseCanonicalAcceptableCandidate()
+      : null;
+    if (selection) {
       terminationReason = "accepted";
-      const nearBestChoice = chooseNearBestCandidate(acceptableCandidates);
-      const selectedScenario = nearBestChoice.scenario ?? bestAcceptableScenario ?? scenario;
+      const nearBestChoice = selection.choice;
+      const selectedScenario = selection.scenario;
       generationDiagnostics.nearBestCandidateScores = nearBestChoice.pool.map((entry) => (
         Number(entry.score.toFixed(2))
       ));
@@ -30529,9 +30751,12 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
       : "search-ended";
   }
 
-  if (acceptableCandidates.length) {
-    const nearBestChoice = chooseNearBestCandidate(acceptableCandidates);
-    bestScenario = nearBestChoice.scenario ?? bestAcceptableScenario;
+  const finalSelection = acceptableCandidates.length
+    ? await chooseCanonicalAcceptableCandidate()
+    : null;
+  if (finalSelection) {
+    const nearBestChoice = finalSelection.choice;
+    bestScenario = finalSelection.scenario;
     generationDiagnostics.nearBestCandidateScores = nearBestChoice.pool.map((entry) => (
       Number(entry.score.toFixed(2))
     ));
@@ -30550,6 +30775,18 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
 
   // v49er: forced Extra Docks is a hard gate. One-dock near misses remain
   // diagnostic candidates only and are never promoted to a returned course.
+
+  // A near-miss fallback shown to the player gets the same canonical numbers.
+  // A stop request skips this so Stop stays prompt; the fallback then keeps its
+  // generation-time values.
+  if (bestScenario && !bestScenario.canonicallyEvaluated && !shouldStopRequested()) {
+    try {
+      const canonical = await evaluateCourseCanonically(assets, bestScenario, preferences, canonicalEvaluationControl);
+      if (canonical) bestScenario = canonical;
+    } catch (error) {
+      if (error?.code !== "ANALYSIS_STOP_REQUESTED") throw error;
+    }
+  }
 
   if (bestScenario) {
     bestScenario.generationBestMatch = !Boolean(bestScenario.metrics?.acceptable);
@@ -31139,6 +31376,25 @@ export async function loadCalibrationAssets() {
   return loadAssets();
 }
 
+// Headless entry points for scripts/golden.js. They wrap the exact production
+// generate / save / reload paths without any DOM or storage access.
+export async function generateScenarioForTesting(assets, preferences, options = {}) {
+  resetAnalysisTelemetrySafe();
+  return runProductionGeneration(assets, preferences, {
+    seed: options.seed,
+    // Optional Stop / progress hooks, as the Generate button passes them.
+    generationOptions: options.generationOptions
+  });
+}
+
+export function serializeScenarioForTesting(scenario) {
+  return serializeScenario(scenario);
+}
+
+export async function hydrateScenarioForTesting(assets, snapshot) {
+  return hydrateScenarioFromSnapshot(assets, snapshot);
+}
+
 export function describeCalibrationInventory(assets, requestedExpansionIds = null) {
   const pieceMap = assets?.pieceMap ?? {};
   const expansionIds = normalizeCalibrationExpansionIds(pieceMap, requestedExpansionIds);
@@ -31453,6 +31709,53 @@ export function reanalyzeCalibrationScenario(assets, sourceScenario, options = {
 // v49ce: automatic v49cd targeted card-pressure diagnostic retired.
 // The analyzer implementation remains dormant for explicit future experiments.
 
+// Shared by the Generate button and the headless comparison harness, so both
+// run the identical production path: cache reset, "Any" target resolution,
+// optional seeded randomness, and the scenario bookkeeping applied afterward.
+async function runProductionGeneration(assets, preferences, options = {}) {
+  const seed = Number.isInteger(options.seed) ? options.seed : null;
+  const maxAttempts = options.maxAttempts ?? getGenerationModeProfile(preferences).maxAttempts;
+  clearAnalysisCachesSafe();
+  let effectivePreferences = preferences;
+  let anyTargetResolution = null;
+  const runGeneration = () => {
+    const resolved = resolveAnyPreferencesForGeneration(preferences);
+    effectivePreferences = resolved.effectivePreferences;
+    anyTargetResolution = resolved.resolution;
+    return generateScenarioForPreferences(assets, effectivePreferences, {
+      maxAttempts,
+      emergencyAttemptReserve: GENERATION_EMERGENCY_ATTEMPT_RESERVE,
+      ...(options.generationOptions ?? {})
+    });
+  };
+  const generation = seed === null
+    ? await runGeneration()
+    : await withGenerationRandomSeed(seed, runGeneration);
+
+  if (!generation.scenario) return generation;
+
+  generation.scenario.effectiveTargetPreferences = {
+    difficulty: effectivePreferences.difficulty,
+    length: effectivePreferences.length
+  };
+  generation.scenario.preferences = {
+    ...(generation.scenario.preferences ?? {}),
+    difficulty: preferences.difficulty,
+    length: preferences.length
+  };
+  if (anyTargetResolution && generation.scenario.generationDiagnostics) {
+    generation.scenario.generationDiagnostics.anyTargetResolution = { ...anyTargetResolution };
+  }
+
+  if (seed !== null) {
+    generation.scenario.devTestSeed = seed;
+    // v49ce: do not run the v49cd 28k-expansion card-pressure experiment
+    // automatically. Frozen-seed generation now ends when production analysis
+    // ends; optional deep Dev diagnostics are user-invoked after render.
+  }
+  return generation;
+}
+
 async function start() {
   const preferences = getPreferencesFromControls();
   const generationProfile = getGenerationModeProfile(preferences);
@@ -31487,20 +31790,14 @@ async function start() {
       return;
     }
 
-    clearAnalysisCachesSafe();
     const frozenTestSeed = Number.isInteger(devFrozenGenerationSeed)
       ? devFrozenGenerationSeed
       : null;
     let lastGenerationUiYieldAt = 0;
-    let effectivePreferences = preferences;
-    let anyTargetResolution = null;
-    const runGeneration = () => {
-      const resolved = resolveAnyPreferencesForGeneration(preferences);
-      effectivePreferences = resolved.effectivePreferences;
-      anyTargetResolution = resolved.resolution;
-      return generateScenarioForPreferences(assets, effectivePreferences, {
-        maxAttempts,
-        emergencyAttemptReserve: GENERATION_EMERGENCY_ATTEMPT_RESERVE,
+    const generation = await runProductionGeneration(assets, preferences, {
+      seed: frozenTestSeed,
+      maxAttempts,
+      generationOptions: {
         shouldStopRequested: () => generationStopRequested,
         onRetainableCandidate: async ({ found, target }) => {
           setGenerationRetainedCandidateProgress(found, target);
@@ -31541,11 +31838,8 @@ async function start() {
             await nextFrame();
           }
         }
-      });
-    };
-    const generation = frozenTestSeed === null
-      ? await runGeneration()
-      : await withGenerationRandomSeed(frozenTestSeed, runGeneration);
+      }
+    });
 
     if (!generation.scenario) {
       if (generation.terminationReason === "user-best-so-far") {
@@ -31560,25 +31854,6 @@ async function start() {
       return;
     }
 
-    generation.scenario.effectiveTargetPreferences = {
-      difficulty: effectivePreferences.difficulty,
-      length: effectivePreferences.length
-    };
-    generation.scenario.preferences = {
-      ...(generation.scenario.preferences ?? {}),
-      difficulty: preferences.difficulty,
-      length: preferences.length
-    };
-    if (anyTargetResolution && generation.scenario.generationDiagnostics) {
-      generation.scenario.generationDiagnostics.anyTargetResolution = { ...anyTargetResolution };
-    }
-
-    if (frozenTestSeed !== null) {
-      generation.scenario.devTestSeed = frozenTestSeed;
-      // v49ce: do not run the v49cd 28k-expansion card-pressure experiment
-      // automatically. Frozen-seed generation now ends when production analysis
-      // ends; optional deep Dev diagnostics are user-invoked after render.
-    }
     currentScenario = generation.scenario;
     clearTraceStarts();
     clearRouteInspection();

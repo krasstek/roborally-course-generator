@@ -394,7 +394,7 @@ const VARIANT_DEFINITION_ROWS = [
   },
   {
     id: "hazardousFlags",
-    label: "Hazardous Flags",
+    label: "Hazardous Checkpoints",
     category: VARIANT_CATEGORIES.factoryFloor,
     controlId: "variant-hazardous-flags",
     defaultState: "off",
