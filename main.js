@@ -25141,7 +25141,17 @@ function updateDevStartResidualTable(scenario) {
     tbody.append(row);
   });
   table.append(tbody);
-  details.append(table);
+  details.append(wrapTableForScroll(table));
+}
+
+// Dev View tables have many columns. On a phone they would be clipped, so each
+// sits in a container that scrolls sideways when the table is wider than the
+// screen; on wider screens nothing changes.
+function wrapTableForScroll(table) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "dev-table-scroll";
+  wrapper.append(table);
+  return wrapper;
 }
 
 function appendInspectionDetails(parent, title, { open = false } = {}) {
@@ -25191,7 +25201,7 @@ function appendInspectionTable(parent, headers, rows, options = {}) {
     tbody.append(tr);
   });
   table.append(tbody);
-  parent.append(table);
+  parent.append(wrapTableForScroll(table));
   return table;
 }
 
@@ -25308,7 +25318,7 @@ function renderInspectionTraceTable(parent, rows) {
     });
     tbody?.append(tr);
   });
-  parent.append(table);
+  parent.append(wrapTableForScroll(table));
 }
 
 function renderStructuredRouteInspection(detailEl, scenario, entry) {
@@ -25351,7 +25361,7 @@ function renderStructuredRouteInspection(detailEl, scenario, entry) {
     });
     summaryTable.append(tr);
   });
-  detailEl.append(summaryTable);
+  detailEl.append(wrapTableForScroll(summaryTable));
 
   if (fullCourseDetail && entry?.startAnalysis?.normalFairnessComponents) {
     const components = entry.startAnalysis.normalFairnessComponents;
@@ -25806,6 +25816,18 @@ function ensureDevFastBaselineControls() {
   updateNote();
 }
 
+// Dev View is offered only when the address contains ?dev (e.g. ?dev=1), to keep
+// the ordinary interface uncluttered. It is presentation only: generation behaves
+// the same either way, so the parameter unlocks nothing. Without it the checkbox
+// is forced off, because browsers can restore a ticked checkbox on reload.
+function applyDevViewAvailability() {
+  if (typeof document === "undefined") return;
+  const available = new URLSearchParams(location.search).has("dev");
+  document.getElementById("dev-view-toggle-label")?.classList.toggle("hidden", !available);
+  const checkbox = document.getElementById("dev-view");
+  if (!available && checkbox) checkbox.checked = false;
+}
+
 function updateDevView() {
   ensureDevGenerationSeedControls();
   // Traffic/alternate-route experiment controls are intentionally no longer
@@ -25961,6 +25983,21 @@ function clearTraceStarts() {
   traceSelectionState = { startIndices: new Set() };
 }
 
+// A freshly generated or restored course starts by tracing every start that is
+// in play (the retained, usable starts). Pruned outliers can still be added from
+// the start picker, and a double-click on a trace selects every routable start.
+function selectDefaultTraceStarts(scenario) {
+  if (!scenario?.sequence?.firstLeg?.starts) {
+    clearTraceStarts();
+    return;
+  }
+  const traceable = new Set(getTraceableStartIndices(scenario));
+  const usable = (scenario?.metrics?.usableStarts ?? [])
+    .map((entry) => entry.index)
+    .filter((index) => traceable.has(index));
+  traceSelectionState = { startIndices: new Set(usable.length ? usable : traceable) };
+}
+
 function applyRouteInspection(inspection) {
   if (!inspection) {
     clearRouteInspection();
@@ -26070,7 +26107,7 @@ function ensureTraceLegPicker(scenario, legOptions) {
       if (![...select.options].some((item) => item.selected)) {
         if (target) target.selected = true;
       }
-      if (currentScenario) renderScenario(currentScenario);
+      if (currentScenario) renderScenarioKeepingMapInPlace(currentScenario);
     });
     label.append(checkbox, document.createTextNode(option.label));
     panel.append(label);
@@ -26134,7 +26171,7 @@ function ensureTraceStartPicker(scenario) {
       // selection-owned route detail/summary instead of leaving a checkpoint
       // inspection pinned beside a new route selection.
       clearRouteInspection();
-      if (currentScenario) renderScenario(currentScenario);
+      if (currentScenario) renderScenarioKeepingMapInPlace(currentScenario);
     });
     const status = startAnalysis?.reachable && startAnalysis?.fullCourseRoute ? "" : " (unavailable)";
     const coords = start ? ` (${start.x},${start.y})` : "";
@@ -26181,11 +26218,20 @@ function getMapFeatureHighlightTargets(scenario) {
   const overlayTileCount = (scenario?.placements ?? []).filter((placement) => (
     placement?.overlay && isMiniOverlayPiece(scenario?.pieceMap?.[placement.pieceId])
   )).length;
+  const rebootTokenCount = (scenario?.rebootTokens ?? []).length;
+  // No Docks and Virtual Bots replace the docks with fixed starting spaces.
+  const fixedStartCount = scenario?.virtualBots
+    ? (scenario.virtualBotEntry ? 1 : 0)
+    : scenario?.noDocks
+      ? (scenario.activeStarts ?? []).length
+      : 0;
 
   return {
     checkpointCount,
     overlayTileCount,
-    hasTargets: checkpointCount > 0 || overlayTileCount > 0
+    rebootTokenCount,
+    fixedStartCount,
+    hasTargets: checkpointCount > 0 || overlayTileCount > 0 || rebootTokenCount > 0 || fixedStartCount > 0
   };
 }
 
@@ -26211,15 +26257,17 @@ function updateMapFeatureHighlightControl(scenario) {
     return;
   }
 
-  let label = "Highlight checkpoints";
-  let targetDescription = "checkpoints";
-  if (targets.checkpointCount > 0 && targets.overlayTileCount > 0) {
-    label = "Highlight checkpoints + overlay tiles";
-    targetDescription = "checkpoints and overlay tiles";
-  } else if (targets.overlayTileCount > 0) {
-    label = "Highlight overlay tiles";
-    targetDescription = "overlay tiles";
-  }
+  const targetNames = [
+    targets.checkpointCount > 0 ? "checkpoints" : null,
+    targets.rebootTokenCount > 0 ? "reboot tokens" : null,
+    targets.fixedStartCount > 0 ? "starting spaces" : null,
+    targets.overlayTileCount > 0 ? "overlay tiles" : null
+  ].filter(Boolean);
+  // A short label keeps the button narrow on phones; the tooltip lists everything.
+  const label = targetNames.length === 1 ? `Highlight ${targetNames[0]}` : "Highlight key spaces";
+  const targetDescription = targetNames.length > 1
+    ? `${targetNames.slice(0, -1).join(", ")} and ${targetNames.at(-1)}`
+    : targetNames[0];
 
   button.textContent = label;
   button.title = `Dim the rest of the course so ${targetDescription} are easier to spot.`;
@@ -26526,6 +26574,19 @@ function buildScenarioDevOverview(scenario, selectedLegIndices) {
     buildScenarioBenchmarkSummary(scenario)
   ];
   return lines.filter((line) => line !== null).join("\n");
+}
+
+// Dev View taps re-render the whole scenario, which rebuilds the pickers above
+// the map and the panels around it. On phones a change in their height shifted
+// the map under the user's finger; this keeps the map where it was on screen.
+function renderScenarioKeepingMapInPlace(scenario) {
+  const canvas = document.getElementById("canvas");
+  const topBefore = canvas?.getBoundingClientRect().top;
+  renderScenario(scenario);
+  const topAfter = canvas?.getBoundingClientRect().top;
+  if (Number.isFinite(topBefore) && Number.isFinite(topAfter) && Math.abs(topAfter - topBefore) > 1) {
+    window.scrollBy(0, topAfter - topBefore);
+  }
 }
 
 function renderScenario(scenario) {
@@ -31855,7 +31916,7 @@ async function start() {
     }
 
     currentScenario = generation.scenario;
-    clearTraceStarts();
+    selectDefaultTraceStarts(currentScenario);
     clearRouteInspection();
     await ensureScenarioImages(assets, currentScenario);
     pruneImageCache(assets, [
@@ -31897,7 +31958,7 @@ if (typeof document !== "undefined") {
     if (!currentScenario || !isDevViewEnabled()) return;
     const tile = getCanvasTileFromEvent(event);
     applyRouteInspection(getInspectableAtTile(currentScenario, tile));
-    renderScenario(currentScenario);
+    renderScenarioKeepingMapInPlace(currentScenario);
   });
 
   document.getElementById("canvas")?.addEventListener("dblclick", (event) => {
@@ -31911,7 +31972,7 @@ if (typeof document !== "undefined") {
       clearTraceStarts();
       clearRouteInspection();
     }
-    renderScenario(currentScenario);
+    renderScenarioKeepingMapInPlace(currentScenario);
   });
 
 
@@ -32202,6 +32263,7 @@ if (typeof document !== "undefined") {
     ensureScenarioAnimationLoop();
     renderVariantControls();
     updateExpansionSummary();
+    applyDevViewAvailability();
     updateDevView();
     const snapshot = loadScenarioSnapshot();
 
@@ -32288,6 +32350,7 @@ if (typeof document !== "undefined") {
       }
       if (restoredScenario) {
         currentScenario = restoredScenario;
+        selectDefaultTraceStarts(currentScenario);
         await ensureScenarioImages(assets, currentScenario);
         pruneImageCache(assets, [
           ...getPlacementImagePieceIds(currentScenario.placements, currentScenario.pieceMap),

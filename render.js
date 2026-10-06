@@ -242,12 +242,15 @@ function drawOverlayGlows(ctx, overlayPlacements, pieces, bounds, tileSize, marg
 
 let featureFocusShadeCanvas = null;
 
-function drawFeatureFocusShade(ctx, goals, overlayPlacements, pieces, bounds, tileSize, margin, boardCount) {
+// revealPoints: further single spaces kept bright (reboot tokens, and the fixed
+// starting spaces of No Docks / Virtual Bots). Their markers sit inside the tile,
+// so cutting the tile out of the shade is enough; no redraw is needed.
+function drawFeatureFocusShade(ctx, goals, overlayPlacements, pieces, bounds, tileSize, margin, boardCount, revealPoints = []) {
   const miniOverlayPlacements = (overlayPlacements || []).filter((placement) => (
     isMiniOverlayPiece(pieces[placement.pieceId])
   ));
   const visibleGoals = goals || [];
-  if (!visibleGoals.length && !miniOverlayPlacements.length) {
+  if (!visibleGoals.length && !miniOverlayPlacements.length && !revealPoints.length) {
     return;
   }
 
@@ -288,6 +291,10 @@ function drawFeatureFocusShade(ctx, goals, overlayPlacements, pieces, bounds, ti
 
   for (const goal of visibleGoals) {
     revealTile(goal.x, goal.y);
+  }
+
+  for (const point of revealPoints) {
+    revealTile(point.x, point.y);
   }
 
   for (const placement of miniOverlayPlacements) {
@@ -1791,6 +1798,9 @@ export function render(canvas, pieces, imageMap = {}, options = {}) {
     drawBoardEdgeOutline(ctx, footprints, bounds, tileSize, margin, edgeOutlineColor);
   }
   if (options.highlightMapFeatures) {
+    const fixedStarts = noDockStarts
+      ? starts.filter((start, index) => !unusableStartIndices.has(index))
+      : [];
     drawFeatureFocusShade(
       ctx,
       renderedGoals,
@@ -1799,7 +1809,12 @@ export function render(canvas, pieces, imageMap = {}, options = {}) {
       bounds,
       tileSize,
       margin,
-      boardCount
+      boardCount,
+      [
+        ...(options.rebootTokens || []),
+        ...fixedStarts,
+        ...(options.virtualBotEntry ? [options.virtualBotEntry] : [])
+      ]
     );
     // Redraw checkpoints after the shade so the flag and its glow remain fully
     // bright. Everything else stays visible underneath the dimmed board.

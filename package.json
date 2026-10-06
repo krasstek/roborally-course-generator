@@ -8,7 +8,6 @@
     "score:damage": "node ./scripts/score-damage.js",
     "score:traffic": "node ./scripts/score-traffic.js",
     "golden": "node ./scripts/golden.js",
-    "predev": "npm run version:stamp",
     "dev": "serve -l tcp://127.0.0.1:3000 ."
   },
   "devDependencies": {

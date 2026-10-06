@@ -8,7 +8,7 @@
   <meta name="mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="mobile-web-app-title" content="RoboRally" />
   <meta name="application-name" content="RoboRally Course Generator" />
-  <meta name="app-version" content="20260926061628" />
+  <meta name="app-version" content="20261006112727" />
   <title>RoboRally Course Generator</title>
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="icon" type="image/png" sizes="16x16" href="./assets/icons/favicon-16.png" />
@@ -530,6 +530,12 @@
       }
     }
 
+    /* Map taps select routes in Dev View: no double-tap zoom or tap delay on
+       phones (pinch zoom and scrolling still work). */
+    #canvas {
+      touch-action: manipulation;
+    }
+
     canvas {
       border: 2px solid rgba(43, 52, 60, 0.36);
       border-radius: 10px;
@@ -765,6 +771,19 @@
       border: 1px solid rgba(74, 89, 99, 0.18);
       color: #171d22;
       box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.42);
+    }
+
+    /* Keep the inspector's single column no wider than the panel; otherwise a wide
+       Dev View table stretches the grid past the screen edge on phones. */
+    .route-inspector {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .dev-table-scroll {
+      max-width: 100%;
+      min-width: 0;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
     }
 
     .route-inspector.hidden {
@@ -1699,7 +1718,7 @@
             </label>
           </div>
         </div>
-        <label class="toggle-label">
+        <label id="dev-view-toggle-label" class="toggle-label hidden">
           <input id="dev-view" type="checkbox" />
           Dev View
         </label>
@@ -1881,12 +1900,28 @@
       .querySelector('meta[name="app-version"]')
       ?.getAttribute("content") ?? "dev";
 
+    // Local development always runs the files on disk: no service worker on
+    // localhost, and any one left over from an earlier visit is removed together
+    // with its caches. Add ?sw=1 to the local address to test offline behaviour.
+    const isLocalDevelopment = ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname) &&
+      !new URLSearchParams(location.search).has("sw");
+
     if ("serviceWorker" in navigator) {
-      window.addEventListener("load", () => {
-        navigator.serviceWorker
-          .register(`./sw.js?v=${encodeURIComponent(assetVersion)}`, { scope: "./" })
+      if (isLocalDevelopment) {
+        navigator.serviceWorker.getRegistrations()
+          .then((registrations) => Promise.all(registrations.map((registration) => registration.unregister())))
+          .then(() => (globalThis.caches ? caches.keys() : []))
+          .then((names) => Promise.all(
+            names.filter((name) => name.startsWith("roborally-")).map((name) => caches.delete(name))
+          ))
           .catch(console.error);
-      });
+      } else {
+        window.addEventListener("load", () => {
+          navigator.serviceWorker
+            .register(`./sw.js?v=${encodeURIComponent(assetVersion)}`, { scope: "./" })
+            .catch(console.error);
+        });
+      }
     }
 
     import(`./main.js?v=${encodeURIComponent(assetVersion)}`).catch(console.error);
