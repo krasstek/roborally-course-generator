@@ -28,6 +28,7 @@ const VERSIONED_ASSETS = [
   "./src/analysis/energy-economy.js",
   "./src/analysis/math.js",
   "./src/analysis/movement.js",
+  "./src/analysis/program-availability.js",
   "./src/analysis/reboot-recovery.js",
   "./src/analysis/rule-options.js",
   "./src/analysis/telemetry.js",
