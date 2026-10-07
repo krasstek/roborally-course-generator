@@ -333,6 +333,13 @@ const PROGRAM_ACTION_TRANSITION_CACHE_LIMIT = 50000;
 const ROLLING_PROGRAM_SIGNATURE_IDS = new Map();
 let nextRollingProgramSignatureId = 1;
 
+// Reset by clearAnalysisCaches. A module-level binding can only be reassigned
+// by its own module, so each reassigned cache has a reset function beside it.
+function resetRollingProgramSignatureIds() {
+  ROLLING_PROGRAM_SIGNATURE_IDS.clear();
+  nextRollingProgramSignatureId = 1;
+}
+
 const ROUTE_PATH_KEY_CACHE = new WeakMap();
 const ROUTE_TILE_SET_CACHE = new WeakMap();
 const ROUTE_EDGE_SET_CACHE = new WeakMap();
@@ -1064,22 +1071,20 @@ export function clearAnalysisCaches() {
   OVERLAP_PENALTY_CACHE.clear();
   LATERAL_THREAT_CACHE.clear();
   REAR_THREAT_CACHE.clear();
-  FIXED_ROUTE_PRICING_ECONOMY_CACHE = new WeakMap();
-  FIXED_ROUTE_PRICING_ECONOMY_ACTIVITY_CACHE = new WeakMap();
-  FIXED_ROUTE_PRICING_RE_LEDGER_CACHE = new WeakMap();
-  TRAFFIC_INTRINSIC_RE_LEDGER_CACHE = new WeakMap();
-  RE_NATIVE_TRAFFIC_CONFIDENCE_PROFILE_CACHE = new WeakMap();
+  resetFixedRoutePricingEconomyCache();
+  resetFixedRoutePricingEconomyActivityCache();
+  resetFixedRoutePricingRELedgerCache();
+  resetTrafficIntrinsicRELedgerCache();
+  resetRENativeTrafficConfidenceProfileCache();
   PROGRAM_RESOURCE_SUMMARY_CACHE.clear();
   ROLLING_PROGRAM_CONTEXT_CACHE.clear();
   PROGRAM_ACTION_TRANSITION_CACHE.clear();
   PROGRAM_EXACT_AVAILABILITY_CACHE.clear();
-  ROLLING_PROGRAM_SIGNATURE_IDS.clear();
-  nextRollingProgramSignatureId = 1;
+  resetRollingProgramSignatureIds();
   DAMAGE_ECONOMY_EFFECTIVE_STATE_CACHE.clear();
   DAMAGE_ECONOMY_PROGRAM_CACHE.clear();
   DAMAGE_ECONOMY_SPAM_DRAW_CACHE.clear();
-  DAMAGE_ECONOMY_ROUTE_SUMMARY_CACHE = new WeakMap();
-  DAMAGE_ECONOMY_TRAFFIC_ROUTE_SUMMARY_CACHE = new WeakMap();
+  resetDamageEconomyRouteSummaryCaches();
   DAMAGE_ECONOMY_TELEMETRY.effectiveStateLookups = 0;
   DAMAGE_ECONOMY_TELEMETRY.effectiveStateCacheHits = 0;
   DAMAGE_ECONOMY_TELEMETRY.effectiveStateCacheMisses = 0;
@@ -1113,6 +1118,28 @@ let TRAFFIC_INTRINSIC_RE_LEDGER_CACHE = new WeakMap();
 // RE ledger so economy-pricing replays cannot contaminate traffic semantics (or
 // vice versa) when callers carry different option overlays.
 let RE_NATIVE_TRAFFIC_CONFIDENCE_PROFILE_CACHE = new WeakMap();
+
+// Reset by clearAnalysisCaches. A module-level binding can only be reassigned
+// by its own module, so each reassigned cache has a reset function beside it.
+function resetFixedRoutePricingEconomyCache() {
+  FIXED_ROUTE_PRICING_ECONOMY_CACHE = new WeakMap();
+}
+
+function resetFixedRoutePricingEconomyActivityCache() {
+  FIXED_ROUTE_PRICING_ECONOMY_ACTIVITY_CACHE = new WeakMap();
+}
+
+function resetFixedRoutePricingRELedgerCache() {
+  FIXED_ROUTE_PRICING_RE_LEDGER_CACHE = new WeakMap();
+}
+
+function resetTrafficIntrinsicRELedgerCache() {
+  TRAFFIC_INTRINSIC_RE_LEDGER_CACHE = new WeakMap();
+}
+
+function resetRENativeTrafficConfidenceProfileCache() {
+  RE_NATIVE_TRAFFIC_CONFIDENCE_PROFILE_CACHE = new WeakMap();
+}
 
 function getFixedRoutePricingBaseRELedger(tileMap, route, options = {}) {
   if (!route) return null;
@@ -1611,6 +1638,12 @@ const DAMAGE_ECONOMY_SPAM_DRAW_CACHE = new Map();
 const DAMAGE_ECONOMY_SPAM_DRAW_CACHE_LIMIT = 8000;
 let DAMAGE_ECONOMY_ROUTE_SUMMARY_CACHE = new WeakMap();
 let DAMAGE_ECONOMY_TRAFFIC_ROUTE_SUMMARY_CACHE = new WeakMap();
+// Reset by clearAnalysisCaches. A module-level binding can only be reassigned
+// by its own module, so each reassigned cache has a reset function beside it.
+function resetDamageEconomyRouteSummaryCaches() {
+  DAMAGE_ECONOMY_ROUTE_SUMMARY_CACHE = new WeakMap();
+  DAMAGE_ECONOMY_TRAFFIC_ROUTE_SUMMARY_CACHE = new WeakMap();
+}
 const DAMAGE_ECONOMY_TELEMETRY = {
   effectiveStateLookups: 0,
   effectiveStateCacheHits: 0,
