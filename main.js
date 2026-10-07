@@ -30339,6 +30339,11 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
   generationDiagnostics.canonicalEvaluations = [];
   // Canonical evaluation reports progress like any other generation stage, which
   // also gives the page regular turns while the chosen course is re-analysed.
+  // Overlay updates are throttled exactly like generation's own route progress:
+  // on phones every DOM update and repaint is costly, and the search yields many
+  // times per second.
+  let lastCanonicalProgressDisplayAt = 0;
+  let canonicalProgressTickerStep = 0;
   const canonicalEvaluationControl = {
     shouldStopRequested,
     onStage: async (stage) => {
@@ -30346,14 +30351,22 @@ async function generateScenarioForPreferences(assets, preferences, options = {})
       else await nextEventLoopTurn();
     },
     onCooperativeProgress: async (progress) => {
-      if (onCooperativeProgress) {
+      const now = generationNow();
+      if (
+        onCooperativeProgress &&
+        now - lastCanonicalProgressDisplayAt >= GENERATION_ROUTE_PROGRESS_DISPLAY_INTERVAL_MS
+      ) {
+        lastCanonicalProgressDisplayAt = now;
         onCooperativeProgress(
           attempt,
           maxAttempts,
-          `Verifying the chosen course — ${formatCooperativeRouteProgressStage(progress)}`
+          `Verifying the chosen course — ${formatCooperativeRouteProgressStage(progress, canonicalProgressTickerStep)}`
         );
+        canonicalProgressTickerStep += 1;
+        await nextFrame();
+      } else {
+        await nextEventLoopTurn();
       }
-      await nextEventLoopTurn();
     }
   };
 
