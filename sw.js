@@ -23,6 +23,7 @@ const VERSIONED_ASSETS = [
   "./feature-weights.js",
   "./main.js",
   "./render.js",
+  "./src/analysis/board-geometry.js",
   "./src/analysis/constants.js",
   "./variants.js",
   "./data/30th-docking-bay-a.json",
