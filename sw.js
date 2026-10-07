@@ -25,6 +25,8 @@ const VERSIONED_ASSETS = [
   "./render.js",
   "./src/analysis/board-geometry.js",
   "./src/analysis/constants.js",
+  "./src/analysis/energy-economy.js",
+  "./src/analysis/math.js",
   "./src/analysis/movement.js",
   "./src/analysis/reboot-recovery.js",
   "./src/analysis/rule-options.js",
