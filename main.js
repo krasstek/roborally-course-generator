@@ -1,5 +1,46 @@
 // VERSION START: v49fp-safari-dev-panel-tightening
 // Robo Rally Course Randomizer - production runtime
+import { render } from "./render.js";
+import { ANALYZE_BUILD_ID, analyzeCourse, analyzeFullCourse, analyzeFullCourseCooperative, analyzeFlagLeg, buildStartOccupancyMap, clearAnalysisCaches, evaluateFullCourseFocusPaymentCurveUnderOccupancy, evaluateRouteUpgradePotential, estimateInitialUpgradeOpportunitiesRemaining, getAnalysisTelemetrySnapshot, getDamageEconomyTelemetrySnapshot, getCourseMaxEnergy, getCourseStartingEnergy, getCourseStartingUpgradeCards, getRouteEnergyEconomyConfig, getRouteEnergyGainUtility, getRouteMarginalEnergyUtility, getRouteUpgradePotential, recomputeFirstLegPressure, rescoreFixedRouteUpgradeEconomy, getCompletedRouteExpansions, resetAnalysisTelemetry, ROUTE_ENERGY_ECONOMY_DEFAULTS, scoreFlagArea, simulateAction, summarizeDamageEconomyFoundationForRoute, summarizeFixedRouteUpgradeEconomyActivity, summarizeRegisterEquivalentLedger, summarizeRENativeRouteUncertaintyEvidence, summarizeCheapSearchRegisterEquivalentShadow, summarizeIntrinsicRouteForecastConfidence, summarizePowerUpOpportunityBenchmark, summarizeProgramSequencePressure, summarizePowerUpProgramFeasibility, summarizePathfinderObjectiveAudit, summarizeTrafficOwnershipAudit, summarizeFixedRouteBoardAblation } from "./analyze.js";
+import {
+  buildMainFootprintTiles,
+  buildResolvedMap,
+  getDockFrontageLength,
+  getBoundaryEdges,
+  getValidDockRuns,
+  groupBoundaryRuns,
+  getPlacedRect,
+  placePiece,
+  projectDockPlacement,
+  rotatedDimensions,
+  validateDockPlacement,
+  validateMainBoardLayout
+} from "./board.js";
+import {
+  BOARD_PROFILE_DENSITY_COMPONENT_WEIGHTS,
+  BOARD_PROFILE_DENSITY_WEIGHT,
+  PROGRAMMING_CONTROL_PRESSURE_WEIGHTS,
+  getBoardProfileDelta,
+  getEffectiveLaserDamage,
+  getTilePenaltyForFeature
+} from "./feature-weights.js";
+import { formatFeatureLabel } from "./feature-meta.js";
+import {
+  getVariantAvailabilityRule,
+  getVariantConstructionRequirement,
+  getVariantDefinition as getRegisteredVariantDefinition,
+  getVariantExclusiveGroupConflict,
+  getVariantGuidanceRules,
+  getVariantRequirementIds,
+  VARIANT_CONTROL_IDS,
+  VARIANT_DEFINITIONS,
+  VARIANT_STATES,
+  applyVariantAnalysisOptions,
+  applyVariantGenerationOptions,
+  applyVariantScenarioState,
+  buildVariantBundle
+} from "./variants.js";
+import { buildCourseNoteFacts, buildCourseNotesHtml, clearCourseNotesCache, getCheckpointPlacementAdvisory } from "./course-notes.js";
 const MAIN_BUILD_ID = "v49fp-safari-dev-panel-tightening";
 // Mobile browsers may auto-detect number-like rule text and restyle it as a
 // tappable link even though the app emitted ordinary text. Keep rules/course
@@ -51,61 +92,12 @@ if (typeof document !== "undefined") {
   }
 }
 
+// Module imports get their ?v= version from the import map in index.html; the
+// version is still appended by hand to board data fetches and board photos.
 const ASSET_VERSION = new URL(import.meta.url).searchParams.get("v") ?? "";
 const VERSION_SUFFIX = ASSET_VERSION ? `?v=${encodeURIComponent(ASSET_VERSION)}` : "";
 const versionedPath = (path) => `${path}${VERSION_SUFFIX}`;
 
-const [
-  { render },
-  { ANALYZE_BUILD_ID, analyzeCourse, analyzeFullCourse, analyzeFullCourseCooperative, analyzeFlagLeg, buildStartOccupancyMap, clearAnalysisCaches, evaluateFullCourseFocusPaymentCurveUnderOccupancy, evaluateRouteUpgradePotential, estimateInitialUpgradeOpportunitiesRemaining, getAnalysisTelemetrySnapshot, getDamageEconomyTelemetrySnapshot, getCourseMaxEnergy, getCourseStartingEnergy, getCourseStartingUpgradeCards, getRouteEnergyEconomyConfig, getRouteEnergyGainUtility, getRouteMarginalEnergyUtility, getRouteUpgradePotential, recomputeFirstLegPressure, rescoreFixedRouteUpgradeEconomy, resetAnalysisTelemetry, ROUTE_ENERGY_ECONOMY_DEFAULTS, scoreFlagArea, simulateAction, summarizeDamageEconomyFoundationForRoute, summarizeFixedRouteUpgradeEconomyActivity, summarizeRegisterEquivalentLedger, summarizeRENativeRouteUncertaintyEvidence, summarizeCheapSearchRegisterEquivalentShadow, summarizeIntrinsicRouteForecastConfidence, summarizePowerUpOpportunityBenchmark, summarizeProgramSequencePressure, summarizePowerUpProgramFeasibility, summarizePathfinderObjectiveAudit, summarizeTrafficOwnershipAudit, summarizeFixedRouteBoardAblation },
-  {
-    buildMainFootprintTiles,
-    buildResolvedMap,
-    getDockFrontageLength,
-    getBoundaryEdges,
-    getValidDockRuns,
-    groupBoundaryRuns,
-    getPlacedRect,
-    placePiece,
-    projectDockPlacement,
-    rotatedDimensions,
-    validateDockPlacement,
-    validateMainBoardLayout
-  },
-  {
-    BOARD_PROFILE_DENSITY_COMPONENT_WEIGHTS,
-    BOARD_PROFILE_DENSITY_WEIGHT,
-    PROGRAMMING_CONTROL_PRESSURE_WEIGHTS,
-    getBoardProfileDelta,
-    getEffectiveLaserDamage,
-    getTilePenaltyForFeature
-  },
-  { formatFeatureLabel },
-  {
-    getVariantAvailabilityRule,
-    getVariantConstructionRequirement,
-    getVariantDefinition: getRegisteredVariantDefinition,
-    getVariantExclusiveGroupConflict,
-    getVariantGuidanceRules,
-    getVariantRequirementIds,
-    VARIANT_CONTROL_IDS,
-    VARIANT_DEFINITIONS,
-    VARIANT_STATES,
-    applyVariantAnalysisOptions,
-    applyVariantGenerationOptions,
-    applyVariantScenarioState,
-    buildVariantBundle
-  },
-  { buildCourseNoteFacts, buildCourseNotesHtml, clearCourseNotesCache, getCheckpointPlacementAdvisory }
-] = await Promise.all([
-  import(versionedPath("./render.js")),
-  import(versionedPath("./analyze.js")),
-  import(versionedPath("./board.js")),
-  import(versionedPath("./feature-weights.js")),
-  import(versionedPath("./feature-meta.js")),
-  import(versionedPath("./variants.js")),
-  import(versionedPath("./course-notes.js"))
-]);
 
 // Versioned strings stored in diagnostic `method` fields are compatibility
 // identifiers, not ordinary comments. They may appear in saved/debug output and
@@ -16280,6 +16272,7 @@ function analyzeFlagSequence(tileMap, starts, flags, playerCount, options = {}) 
         options.contextualCooperativeSearchSliceMs,
       contextualCooperativeSearchCheckPops:
         options.contextualCooperativeSearchCheckPops,
+      contextualWorkGuard: options.contextualWorkGuard,
       shouldStopRequested: options.shouldStopRequested,
       contextualFastCardState: options.contextualFastCardState !== false,
       skipTraffic: Boolean(options.skipTraffic || !trafficEnabled),
@@ -27797,7 +27790,7 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         // analysis pass far exceeds the calibrated work prediction is dropped as too
         // expensive to verify. This is never a reachability verdict; the candidate
         // is simply not offered, and generation moves on.
-        const routeWorkBaseline = getAnalysisTelemetrySnapshotSafe().totalExpansions ?? 0;
+        const routeWorkBaseline = getCompletedRouteExpansions();
         const predictedRouteWork = Number(checkpointsKnownGuidance?.routeCost?.predictedExpansions);
         const extraCandidate = typeof hasAcceptableCandidate === "function" && hasAcceptableCandidate();
         const routeWorkBudget = Math.max(
@@ -27810,6 +27803,18 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
         );
         const productionAnalysisOptions = {
           ...baseAnalysisOptions,
+          // Checked by route search every few steps (deterministic), counting the
+          // completed searches of this pass plus the search in progress.
+          contextualWorkGuard: (currentSearchExpansions) => {
+            const routeWork = getCompletedRouteExpansions() - routeWorkBaseline + currentSearchExpansions;
+            if (routeWork > routeWorkBudget) {
+              const error = new Error(
+                `Route verification too costly: ${routeWork} expansions (budget ${Math.round(routeWorkBudget)})`
+              );
+              error.code = "CANDIDATE_ROUTE_WORK_BUDGET_EXCEEDED";
+              throw error;
+            }
+          },
           ...routeAwareBatteryScoringOptions,
           // v49al mode contract. All modes share one exact Normal model and the
           // same traffic-feedback search/judgement contract. Mode differences here
@@ -27822,14 +27827,6 @@ async function createRandomCandidate(assets, preferences, attempt = 1, remaining
             : analyzeFullCourse,
           cooperativeYield: typeof shouldStopDuringAnalysis === "function"
             ? async (progress) => {
-              const routeWork = (getAnalysisTelemetrySnapshotSafe().totalExpansions ?? 0) - routeWorkBaseline;
-              if (routeWork > routeWorkBudget) {
-                const error = new Error(
-                  `Route verification too costly: ${routeWork} expansions (budget ${Math.round(routeWorkBudget)})`
-                );
-                error.code = "CANDIDATE_ROUTE_WORK_BUDGET_EXCEEDED";
-                throw error;
-              }
               const now = generationNow();
               const shouldRenderProgress = Boolean(
                 typeof onCooperativeProgress === "function" &&

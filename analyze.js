@@ -1,21 +1,16 @@
 // VERSION START: v49fo-randomizer-hotpath-fix
 // Robo Rally Course Randomizer - route analysis and scoring runtime
-export const ANALYZE_BUILD_ID = "v49fo-randomizer-hotpath-fix";
-const ASSET_VERSION = new URL(import.meta.url).searchParams.get("v") ?? "";
-const VERSION_SUFFIX = ASSET_VERSION ? `?v=${encodeURIComponent(ASSET_VERSION)}` : "";
-const versionedPath = (path) => `${path}${VERSION_SUFFIX}`;
-
-const {
+import {
   FLAG_APPROACH_WEIGHTS,
   getDamageDeckPressureMultipliers,
   getEffectiveLaserDamage,
   getFlagAreaFeatureScore,
   getHomingMissileSearchGuidanceScore,
   getTilePenaltyForFeature
-} = await import(versionedPath("./feature-weights.js"));
-const { getActiveVariantMentalEventRules } = await import(
-  versionedPath("./variants.js")
-);
+} from "./feature-weights.js";
+import { getActiveVariantMentalEventRules } from "./variants.js";
+export const ANALYZE_BUILD_ID = "v49fo-randomizer-hotpath-fix";
+
 
 // This module is a route-evaluation model for board setup, not a full RoboRally
 // simulator. It resolves movement-shaping effects that materially change route
@@ -977,6 +972,9 @@ const ROUTE_PAIR_CACHE_LIMIT = 2500;
 const ANALYSIS_TELEMETRY_MAX_SEARCHES = 5000;
 const ANALYSIS_TELEMETRY = {
   routeSearches: [],
+  // Running total of expansions over every completed route search. Unlike the
+  // routeSearches log it is never capped, and reading it is cheap.
+  completedRouteExpansions: 0,
   cooperativeIteratorSlices: 0,
   cooperativeIteratorWorkMs: 0,
   cooperativeBrowserYields: 0,
@@ -1019,6 +1017,7 @@ function analysisTelemetryNow() {
 
 export function resetAnalysisTelemetry() {
   ANALYSIS_TELEMETRY.routeSearches.length = 0;
+  ANALYSIS_TELEMETRY.completedRouteExpansions = 0;
   ANALYSIS_TELEMETRY.cooperativeIteratorSlices = 0;
   ANALYSIS_TELEMETRY.cooperativeIteratorWorkMs = 0;
   ANALYSIS_TELEMETRY.cooperativeBrowserYields = 0;
@@ -1370,7 +1369,12 @@ export function getAnalysisTelemetrySnapshot() {
   };
 }
 
+export function getCompletedRouteExpansions() {
+  return ANALYSIS_TELEMETRY.completedRouteExpansions;
+}
+
 function recordRouteSearchTelemetry(kind, startedAt, details = {}) {
+  ANALYSIS_TELEMETRY.completedRouteExpansions += Number(details.expansions) || 0;
   const entry = {
     kind,
     durationMs: Number((
@@ -21158,6 +21162,12 @@ function* enumeratePhysicalTimingLegTemplatesSteps(
       profilePoppedNodes >= nextCooperativeTimeCheckPop
     ) {
       nextCooperativeTimeCheckPop = profilePoppedNodes + cooperativeCheckPops;
+      // Optional work guard (generation's route-work budget). It runs at this
+      // step-count boundary, not on the clock, so a candidate is always stopped
+      // at the same point and generation stays deterministic. It may throw.
+      if (typeof options.contextualWorkGuard === "function") {
+        options.contextualWorkGuard(workExpansions);
+      }
       const checkedAt = analysisTelemetryNow();
       if (checkedAt - cooperativeSliceWorkStartedAt >= cooperativeSliceMs) {
         cooperativeMaxSliceWorkMs = Math.max(
@@ -25425,7 +25435,8 @@ function* analyzeFullCourseContextualSteps(
           contextualCooperativeSearchSliceMs:
             options.contextualCooperativeSearchSliceMs,
           contextualCooperativeSearchCheckPops:
-            options.contextualCooperativeSearchCheckPops
+            options.contextualCooperativeSearchCheckPops,
+          contextualWorkGuard: options.contextualWorkGuard
         }
       );
     }

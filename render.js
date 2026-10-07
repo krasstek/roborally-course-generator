@@ -1,17 +1,11 @@
-const ASSET_VERSION = new URL(import.meta.url).searchParams.get("v") ?? "";
-const VERSION_SUFFIX = ASSET_VERSION ? `?v=${encodeURIComponent(ASSET_VERSION)}` : "";
-const versionedPath = (path) => `${path}${VERSION_SUFFIX}`;
-
-const {
+import {
   buildResolvedMap,
   getBoundaryEdges,
   getBounds,
   groupBoundaryRuns,
   rotateXY
-} = await import(versionedPath("./board.js"));
-const {
-  formatFeatureLabel
-} = await import(versionedPath("./feature-meta.js"));
+} from "./board.js";
+import { formatFeatureLabel } from "./feature-meta.js";
 
 function isMiniOverlayPiece(piece) {
   return piece?.kind === "overlay";
