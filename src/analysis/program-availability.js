@@ -10,6 +10,7 @@ import {
 } from "./constants.js";
 import { getRebootEndedAbsoluteActions } from "./reboot-recovery.js";
 import { analysisTelemetryNow } from "./telemetry.js";
+import { getTurnEndAfterActionIndexes } from "./reboot-recovery.js";
 
 export function getProgramCardModelProfile(options = {}) {
   const playerCount = Math.max(1, Math.floor(Number(options.playerCount) || 4));
@@ -1717,4 +1718,47 @@ export function getCardAvailabilityPressure(history, actionId, options = {}) {
 
 export function getProgramHistoryWindow(history) {
   return (history || []).slice(-PROGRAM_HISTORY_WINDOW_SIZE);
+}
+
+export function scoreContextualCardSequence(
+  history,
+  absoluteActions,
+  actionIds,
+  options = {},
+  initialProgramCardState = null,
+  transitions = []
+) {
+  const workingHistory = getProgramHistoryWindow(history);
+  const initialCardState = initialProgramCardState
+    ? { ...initialProgramCardState }
+    : getCompactProgramCardStateFromHistory(
+      workingHistory,
+      absoluteActions,
+      options
+    );
+  const compact = scoreCompactProgramCardSequence(
+    initialCardState,
+    absoluteActions,
+    actionIds,
+    options,
+    workingHistory,
+    getTurnEndAfterActionIndexes(transitions)
+  );
+  return {
+    feasible: compact.feasible,
+    penalty: compact.penalty,
+    scarcityPenalty: compact.scarcityPenalty,
+    programPlausibilityPenalty: compact.programPlausibilityPenalty,
+    actionScarcityPenalties: compact.actionScarcityPenalties,
+    actionPlausibilityPenalties: compact.actionPlausibilityPenalties,
+    history: compact.feasible
+      ? getProgramHistoryWindow([
+        ...workingHistory,
+        ...(actionIds || [])
+      ])
+      : workingHistory,
+    absoluteActions: compact.absoluteActions,
+    programCardState: compact.cardState,
+    programCardIds: compact.programCardIds
+  };
 }
