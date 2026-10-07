@@ -25,6 +25,7 @@ const VERSIONED_ASSETS = [
   "./render.js",
   "./src/analysis/board-geometry.js",
   "./src/analysis/constants.js",
+  "./src/analysis/reboot-recovery.js",
   "./variants.js",
   "./data/30th-docking-bay-a.json",
   "./data/30th-docking-bay-b.json",
