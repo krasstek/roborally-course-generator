@@ -1,5 +1,7 @@
 // Robo Rally Course Randomizer - preference normalisation: board spread, overlays, Act Fast modes, expansions
 import { titleCaseWords } from "./labels.js";
+import { getAvailableConcretePreferenceValues } from "./environment.js";
+import { generationRandom } from "./random.js";
 
 export function getTuningDifficulty(difficultyPreference) {
   return difficultyPreference === "brutal" ? "hard" : (difficultyPreference ?? "moderate");
@@ -99,4 +101,45 @@ export function formatExpansionName(expansionId) {
   };
 
   return labels[expansionId] ?? titleCaseWords(expansionId);
+}
+
+export function resolveAnyPreferencesForGeneration(preferences = {}) {
+  const effectivePreferences = { ...preferences };
+  const resolution = {};
+
+  for (const [key, selectId] of [["difficulty", "difficulty"], ["length", "length"]]) {
+    if (effectivePreferences[key] !== "any") {
+      continue;
+    }
+
+    const choices = getAvailableConcretePreferenceValues(selectId);
+    if (!choices.length) {
+      throw new Error(`Cannot resolve Any ${key}: no concrete ${key} options are currently available.`);
+    }
+
+    // Epic is deliberately opt-in until the fresh Epic-aware calibration exists.
+    // Any is guidance-only and may omit unusually costly target combinations;
+    // after recalibration this pool can become work-aware instead of hard-coded.
+    const ordinaryChoices = key === "length"
+      ? choices.filter((value) => value !== "epic")
+      : choices;
+    const selectionPool = ordinaryChoices.length ? ordinaryChoices : choices;
+    const selectedIndex = Math.min(
+      selectionPool.length - 1,
+      Math.floor(generationRandom() * selectionPool.length)
+    );
+    const selected = selectionPool[selectedIndex];
+    effectivePreferences[key] = selected;
+    resolution[key] = selected;
+  }
+
+  // Any is a hidden construction target only. It may steer calibrated proposal
+  // ranking, but it must never become an acceptance/rejection requirement.
+  effectivePreferences.targetGuidanceOnlyDifficulty = preferences.difficulty === "any";
+  effectivePreferences.targetGuidanceOnlyLength = preferences.length === "any";
+
+  return {
+    effectivePreferences,
+    resolution: Object.keys(resolution).length ? resolution : null
+  };
 }

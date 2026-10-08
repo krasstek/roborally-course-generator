@@ -1038,3 +1038,9 @@ export function getCalibratedConstructionPlan(
       : null
   };
 }
+
+export function guidanceLevelForAttempt(attempt) {
+  if (attempt >= 36) return 2;
+  if (attempt >= 13) return 1;
+  return 0;
+}
