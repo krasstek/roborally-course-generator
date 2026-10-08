@@ -23,6 +23,7 @@ const VERSIONED_ASSETS = [
   "./feature-weights.js",
   "./main.js",
   "./render.js",
+  "./src/analysis/analysis-state.js",
   "./src/analysis/board-ablation.js",
   "./src/analysis/board-geometry.js",
   "./src/analysis/collections.js",

@@ -16,6 +16,11 @@ import {
 import { getObservationalMentalRegisterEquivalents } from "./re-ledger.js";
 import { getRebootEndedAbsoluteActions } from "./reboot-recovery.js";
 import { summarizeRegisterEquivalentLedger } from "./route-evaluation.js";
+import {
+  evaluateProgramAction,
+  getProgramHistoryWindow,
+  getRollingProgramResourceContext
+} from "./program-availability.js";
 
 export function summarizeEstimatedProgramDemandByTurn(
   actionIds,
@@ -478,5 +483,80 @@ export function summarizeCheapSearchRegisterEquivalentShadow(
     fullObservationalRE: Number(
       (Number(ledger.observationalSubtotalWithMentalRE) || 0).toFixed(4)
     )
+  };
+}
+
+export const PATHFINDER_OBJECTIVE_AUDIT_ID =
+  "pathfinder-objective-v49bf-movement-reboot-ownership";
+
+export function summarizePathfinderObjectiveAudit() {
+  return {
+    id: PATHFINDER_OBJECTIVE_AUDIT_ID,
+    registerTempoScore: REGISTER_TEMPO_COST,
+    programmedActionTypePremiumsActive: false,
+    reverseSurchargeActive: false,
+    heavyMoveSurchargeActive: false,
+    cardPlausibilityActive: true,
+    energyGuidanceActive: true,
+    hazardGuidanceActive: true,
+    rebootGuidanceActive: true,
+    rebootLostRegisterTempoActive: true,
+    rebootDiscontinuityPremiumActive: false,
+    conveyorComplexityGuidanceActive: false,
+    genericGearHazardPremiumActive: false,
+    weightedMovementGuidanceActive: false,
+    directionalDistanceQueueHeuristicActive: true,
+    movementTelemetryRetained: true,
+    note: "One programmed card = one register. Raw travelled-space premiums are off; distance remains telemetry and Manhattan distance remains queue-order guidance only. Reboots retain factual skipped-register tempo and hazard/damage guidance, but the legacy fixed discontinuity surcharge is off."
+  };
+}
+
+// Power Up is WAIT in the route action vocabulary. Its card scarcity follows the
+// same one-copy rule as every other unique program card; any strategic benefit
+// from charging Energy belongs to the separate Energy-economy model.
+export function summarizePowerUpProgramFeasibility(history, absoluteActions) {
+  const base = getRollingProgramResourceContext(history, absoluteActions);
+  const powerUp = evaluateProgramAction(history, absoluteActions, "WAIT");
+  const phase = ((Number(absoluteActions) || 0) % REGISTER_COUNT + REGISTER_COUNT) % REGISTER_COUNT;
+  const nextRegister = phase + 1;
+  const againFitsSameProgram = nextRegister < REGISTER_COUNT;
+
+  let powerUpAgain = { feasible: false, penalty: Infinity };
+  if (powerUp.feasible && againFitsSameProgram) {
+    const afterPowerUpHistory = getProgramHistoryWindow([
+      ...(history || []),
+      "WAIT"
+    ]);
+    const second = evaluateProgramAction(
+      afterPowerUpHistory,
+      Number(absoluteActions || 0) + 1,
+      "WAIT"
+    );
+    powerUpAgain = {
+      feasible: second.feasible,
+      penalty: Number((powerUp.penalty + (second.feasible ? second.penalty : 0)).toFixed(2))
+    };
+  }
+
+  return {
+    registerPhase: phase,
+    nextRegister,
+    currentTurnActions: [...base.currentTurnActions],
+    currentProgramFeasible: base.feasible,
+    currentProgramRequiresAgain: base.currentRequiresAgain,
+    powerUp: {
+      feasible: powerUp.feasible,
+      reason: powerUp.feasible
+        ? null
+        : "Power Up is unavailable under the rolling previous-turn card supply"
+    },
+    powerUpAgain: {
+      feasible: powerUpAgain.feasible,
+      reason: powerUpAgain.feasible
+        ? null
+        : !againFitsSameProgram
+          ? "Again would be register 1 next turn"
+          : "Power Up + Again exceeds rolling two-turn card supply"
+    }
   };
 }
