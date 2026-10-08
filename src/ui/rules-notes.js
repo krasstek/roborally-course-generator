@@ -563,7 +563,7 @@ export function updateRulesNote(scenario) {
     notes.push(noDockText);
     if (scenario.startupSpinUp) {
       notes.push(appendRuleReference(
-        "Startup Spin-Up with No Docks: players may choose their robots' initial facing freely.",
+        "Startup Spin-Up: players may choose their robots' initial facing freely.",
         { source: "previous-editions", relation: "patterned" }
       ));
     }
@@ -742,7 +742,7 @@ export function updateRulesNote(scenario) {
       );
       notes.push(
         appendRuleReference(
-          `Startup Spin-Up with Virtual Bots: in priority order, players choose the initial facing of their Virtual Bots freely at the ${entryName}.`,
+          `Startup Spin-Up: in priority order, players choose the initial facing of their Virtual Bots freely at the ${entryName}.`,
           { source: "previous-editions", relation: "patterned" }
         )
       );
