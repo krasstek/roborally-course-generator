@@ -93,6 +93,7 @@ const VERSIONED_ASSETS = [
   "./src/generation/targets.js",
   "./src/generation/variant-availability.js",
   "./src/generation/virtual-bots.js",
+  "./src/ui/app.js",
   "./src/ui/board-audit.js",
   "./src/ui/build-info.js",
   "./src/ui/controls.js",
