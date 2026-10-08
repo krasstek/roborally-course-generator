@@ -56,6 +56,7 @@ import {
   runIterativeStartBalancing,
   summarizePostBalanceStartResiduals
 } from "./start-balance.js";
+import { normalizeRoutedFirstLeg, replayStartEnergyRescues } from "./route-field.js";
 import { applyPayToWinStartPricing } from "./start-pricing.js";
 import { GROSS_DIFFICULTY_ABORT_BANDS, GROSS_LENGTH_ABORT_BANDS } from "./targets.js";
 import { getRouteAnalysisVariantOptions } from "./variant-availability.js";
@@ -906,7 +907,9 @@ export function analyzeFlagSequence(tileMap, starts, flags, playerCount, options
   const fullCourseAnalyzer = typeof options.fullCourseAnalyzer === "function"
     ? options.fullCourseAnalyzer
     : analyzeFullCourse;
-  const analyzedFirstLeg = fullCourseAnalyzer(
+  // A finished course's final evaluation passes the start field generation has
+  // already routed instead of searching again (see src/generation/route-field.js).
+  const analyzedFirstLeg = options.routedFirstLeg ?? fullCourseAnalyzer(
     tileMap,
     prePruning.starts,
     flags,
@@ -1108,6 +1111,21 @@ export function analyzeFlagSequence(tileMap, starts, flags, playerCount, options
 
     return sum + (leg.analysis.summary.averageRouteActions || 0);
   }, 0);
+  // A saved course's evaluation depends on its routed field only: replay the
+  // energy rescues recorded with it, then rebuild every start from its route pool.
+  if (options.replayStartEnergyRescues?.length && !options.routedFirstLeg) {
+    firstLeg = replayStartEnergyRescues(tileMap, firstLeg, options.replayStartEnergyRescues, {
+      ...options,
+      movingTargetTimelines,
+      totalActions,
+      totalLength,
+      playerCount
+    });
+  }
+  if (options.normalizeRoutedField) {
+    firstLeg = normalizeRoutedFirstLeg(tileMap, firstLeg, playerCount, options);
+  }
+
   // Competitive uses the same route construction, programming realization,
   // Energy valuation and common-field traffic model as Normal. v49cq makes
   // completed effective RE authoritative for sequential strategic blocks and the

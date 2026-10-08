@@ -35,6 +35,7 @@ import { buildBoardRects } from "./layout-geometry.js";
 import { collectMovingTargetReentryMarkers } from "./moving-targets.js";
 import { normalizeOverlayMode } from "./preferences.js";
 import { placeHomeRebootTokens } from "./reboot-tokens.js";
+import { getAcceptedStartEnergyRescues } from "./route-field.js";
 import {
   GENERATION_COOPERATIVE_SEARCH_CHECK_POPS,
   GENERATION_COOPERATIVE_SEARCH_SLICE_MS,
@@ -1015,7 +1016,15 @@ export async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}
     // Legacy saves without a recorded Normal disposition retain the old replay.
     skipNormalStartBalancing: restoreSavedNormalDisposition,
     // Generation analyses every candidate with early exit enabled.
-    contextualEarlyExit: true
+    contextualEarlyExit: true,
+    // The course's numbers come from its routed field alone (route-field.js):
+    // generation's final evaluation passes the field it routed, a reload routes
+    // it again and replays the recorded energy rescues.
+    routedFirstLeg: control.routedFirstLeg ?? null,
+    replayStartEnergyRescues: startEnergyPricing
+      ? getAcceptedStartEnergyRescues(snapshot.payToWinPricing)
+      : [],
+    normalizeRoutedField: true
   }, hydrationVariantBundle));
   if (restoreSavedNormalDisposition) {
     sequence = restoreSavedNormalStartDispositionForHydration(
@@ -1318,11 +1327,13 @@ export const HYDRATION_ONLY_SCENARIO_FIELDS = [
 ];
 
 // Canonical evaluation of a finished course: save it exactly as the app would,
-// then reanalyse it through the reload path. Generation adopts this result as
-// the course's authoritative numbers, so a later reload (or the course editor)
-// reproduces them exactly instead of landing on history-dependent values from
-// the incremental generation passes. Returns null when the reanalysis cannot
-// rebuild a complete presentation; a reload of that course would fail too.
+// then evaluate it through the reload path, handing over the start field
+// generation has already routed instead of searching again. Generation adopts
+// this result as the course's authoritative numbers, so a later reload (or the
+// course editor) reproduces them exactly instead of landing on history-dependent
+// values from the incremental generation passes. Returns null when the
+// evaluation cannot rebuild a complete presentation; a reload of that course
+// would fail too.
 export async function evaluateCourseCanonically(assets, candidate, preferences, control = {}) {
   const snapshot = JSON.parse(JSON.stringify(serializeScenario(candidate)));
   // Mirror what the final save records for "Any" targets (see
@@ -1338,7 +1349,11 @@ export async function evaluateCourseCanonically(assets, candidate, preferences, 
     difficulty: preferences.targetGuidanceOnlyDifficulty ? "any" : concreteTarget.difficulty,
     length: preferences.targetGuidanceOnlyLength ? "any" : concreteTarget.length
   };
-  const canonical = await hydrateScenarioFromSnapshot(assets, snapshot, { ...control, keepAnalysisCaches: true });
+  const canonical = await hydrateScenarioFromSnapshot(assets, snapshot, {
+    ...control,
+    keepAnalysisCaches: true,
+    routedFirstLeg: candidate.sequence?.firstLeg ?? null
+  });
   if (!canonical || canonical.hydrationPresentationFallback || canonical.hydrationPresentationUnavailable) {
     return null;
   }
