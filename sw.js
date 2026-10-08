@@ -99,6 +99,7 @@ const VERSIONED_ASSETS = [
   "./src/ui/dev-view.js",
   "./src/ui/dialogs.js",
   "./src/ui/generation-overlay.js",
+  "./src/ui/map-view.js",
   "./src/ui/reports.js",
   "./src/ui/rules-notes.js",
   "./src/ui/setup-summary.js",
