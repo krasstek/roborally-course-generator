@@ -52,6 +52,7 @@ const VERSIONED_ASSETS = [
   "./src/analysis/traffic.js",
   "./src/generation/analysis-api.js",
   "./src/generation/config.js",
+  "./src/generation/environment.js",
   "./variants.js",
   "./data/30th-docking-bay-a.json",
   "./data/30th-docking-bay-b.json",

@@ -114,6 +114,26 @@ import {
   VIRTUAL_BOT_FACING_LOOKAHEAD,
   VIRTUAL_BOT_FORWARD_DANGER_PENALTY
 } from "./src/generation/config.js";
+import {
+  getAvailableConcretePreferenceValues,
+  isDevFastAlternatesEnabled,
+  isDevFastTrafficEnabled,
+  isDevRouteModelOverrideActive,
+  isDevViewEnabled,
+  registerGenerationEnvironment
+} from "./src/generation/environment.js";
+
+// The page answers generation's few questions about its controls (Dev View
+// switches, offered difficulty/length options); headless runs keep the defaults.
+if (typeof document !== "undefined") {
+  registerGenerationEnvironment({
+    isDevViewEnabled: pageIsDevViewEnabled,
+    isDevRouteModelOverrideActive: pageIsDevRouteModelOverrideActive,
+    isDevFastTrafficEnabled: pageIsDevFastTrafficEnabled,
+    isDevFastAlternatesEnabled: pageIsDevFastAlternatesEnabled,
+    getAvailableConcretePreferenceValues: pageGetAvailableConcretePreferenceValues
+  });
+}
 const MAIN_BUILD_ID = "v49fp-safari-dev-panel-tightening";
 // Mobile browsers may auto-detect number-like rule text and restyle it as a
 // tappable link even though the app emitted ordinary text. Keep rules/course
@@ -5036,7 +5056,7 @@ function getScenarioGenerationMaxAttempts(scenario) {
   return getGenerationModeProfile({ generationMode: getScenarioGenerationMode(scenario) }).maxAttempts;
 }
 
-function getAvailableConcretePreferenceValues(selectId) {
+function pageGetAvailableConcretePreferenceValues(selectId) {
   if (typeof document === "undefined") {
     // Headless runs (comparison harness) have no controls; use the full option
     // set a fresh page offers, so "Any" resolves exactly as it would there.
@@ -24102,7 +24122,7 @@ function closeAboutDialog() {
   dialog.close();
 }
 
-function isDevViewEnabled() {
+function pageIsDevViewEnabled() {
   // Browser Dev View is presentation/diagnostic state, not generation semantics.
   // Calibration imports Main directly in Node, where no DOM exists; headless runs
   // must therefore behave exactly like ordinary generation with Dev View disabled.
@@ -25387,17 +25407,17 @@ function ensureDevGenerationSeedControls() {
   updateDevGenerationSeedControls();
 }
 
-function isDevRouteModelOverrideActive() {
+function pageIsDevRouteModelOverrideActive() {
   if (typeof document === "undefined") return false;
   return Boolean(document.getElementById("dev-route-model-override-toggle")?.checked);
 }
 
-function isDevFastTrafficEnabled() {
+function pageIsDevFastTrafficEnabled() {
   if (typeof document === "undefined") return false;
   return Boolean(document.getElementById("dev-fast-traffic-toggle")?.checked);
 }
 
-function isDevFastAlternatesEnabled() {
+function pageIsDevFastAlternatesEnabled() {
   if (typeof document === "undefined") return false;
   return Boolean(document.getElementById("dev-fast-alternates-toggle")?.checked);
 }
