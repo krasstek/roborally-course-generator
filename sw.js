@@ -33,6 +33,7 @@ const VERSIONED_ASSETS = [
   "./src/analysis/damage-routing.js",
   "./src/analysis/energy-economy.js",
   "./src/analysis/flag-area.js",
+  "./src/analysis/full-course.js",
   "./src/analysis/math.js",
   "./src/analysis/movement.js",
   "./src/analysis/physical-cache.js",
