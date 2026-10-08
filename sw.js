@@ -93,6 +93,7 @@ const VERSIONED_ASSETS = [
   "./src/generation/targets.js",
   "./src/generation/variant-availability.js",
   "./src/generation/virtual-bots.js",
+  "./src/ui/state.js",
   "./variants.js",
   "./data/30th-docking-bay-a.json",
   "./data/30th-docking-bay-b.json",

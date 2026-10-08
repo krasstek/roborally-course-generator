@@ -519,6 +519,20 @@ export {
   reanalyzeCalibrationScenario,
   serializeScenarioForTesting
 } from "./src/generation/calibration-hooks.js";
+import {
+  currentScenario,
+  generationHasRetainableCandidate,
+  generationStopRequested,
+  isGenerating,
+  lastScenarioRenderTime,
+  mapFeatureHighlightEnabled,
+  setCurrentScenario,
+  setGenerationHasRetainableCandidate,
+  setGenerationStopRequested,
+  setIsGenerating,
+  setLastScenarioRenderTime,
+  setMapFeatureHighlightEnabled
+} from "./src/ui/state.js";
 
 // The page answers generation's few questions about its controls (Dev View
 // switches, offered difficulty/length options); headless runs keep the defaults.
@@ -625,12 +639,7 @@ const AUDIT_FEATURE_TYPES = [
   { id: "water", label: "Water" }
 ].sort((left, right) => left.label.localeCompare(right.label));
 
-let currentScenario = null;
 let scenarioAnimationFrameId = null;
-let lastScenarioRenderTime = 0;
-let isGenerating = false;
-let generationStopRequested = false;
-let generationHasRetainableCandidate = false;
 let boardAuditInitialized = false;
 let boardAuditState = {
   pieceId: null,
@@ -649,7 +658,6 @@ let routeInspectionState = {
 let traceSelectionState = {
   startIndices: new Set()
 };
-let mapFeatureHighlightEnabled = false;
 let lastRenderDiagnostics = {
   blankFallbackTriggered: false
 };
@@ -5199,14 +5207,14 @@ function setGenerationStopControlState(requested = false, hasRetainableCandidate
 function setGenerationRetainedCandidateProgress(found, target) {
   generationOverlayState.acceptableCandidatesFound = Math.max(0, Math.floor(Number(found) || 0));
   generationOverlayState.acceptableCandidateTarget = Math.max(1, Math.floor(Number(target) || 1));
-  generationHasRetainableCandidate = generationOverlayState.acceptableCandidatesFound > 0;
+  setGenerationHasRetainableCandidate(generationOverlayState.acceptableCandidatesFound > 0);
   setGenerationStopControlState(generationStopRequested);
   renderGeneratingOverlayState();
 }
 
 function requestGenerationStop() {
   if (!isGenerating || generationStopRequested) return;
-  generationStopRequested = true;
+  setGenerationStopRequested(true);
   setGenerationStopControlState(true);
 }
 
@@ -7404,7 +7412,7 @@ function ensureScenarioAnimationLoop() {
     if (now - lastScenarioRenderTime < SCENARIO_RENDER_INTERVAL_MS) {
       return;
     }
-    lastScenarioRenderTime = now;
+    setLastScenarioRenderTime(now);
     drawScenarioCanvas(currentScenario, { skipBlankCheck: true });
   };
 
@@ -7661,7 +7669,7 @@ async function runDiagnostics() {
     });
   }
 
-  currentScenario = previousScenario;
+  setCurrentScenario(previousScenario);
   if (currentScenario) {
     renderScenario(currentScenario);
   }
@@ -7699,10 +7707,10 @@ async function start() {
   const generationProfile = getGenerationModeProfile(preferences);
   const maxAttempts = generationProfile.maxAttempts;
   const generationUiStartedAt = generationNow();
-  generationStopRequested = false;
-  generationHasRetainableCandidate = false;
+  setGenerationStopRequested(false);
+  setGenerationHasRetainableCandidate(false);
   setGenerationStopControlState(false);
-  isGenerating = true;
+  setIsGenerating(true);
 
   try {
     resetAnalysisTelemetrySafe();
@@ -7792,7 +7800,7 @@ async function start() {
       return;
     }
 
-    currentScenario = generation.scenario;
+    setCurrentScenario(generation.scenario);
     selectDefaultTraceStarts(currentScenario);
     clearRouteInspection();
     await ensureScenarioImages(assets, currentScenario);
@@ -7809,12 +7817,12 @@ async function start() {
       buildScenarioDevOverview(currentScenario, getSelectedLegIndicesFromControl(currentScenario))
     );
     saveScenarioSnapshot(currentScenario);
-    lastScenarioRenderTime = performance.now();
+    setLastScenarioRenderTime(performance.now());
   } finally {
-    isGenerating = false;
+    setIsGenerating(false);
     setGeneratingOverlay(false);
-    generationStopRequested = false;
-    generationHasRetainableCandidate = false;
+    setGenerationStopRequested(false);
+    setGenerationHasRetainableCandidate(false);
     setGenerationStopControlState(false);
   }
 }
@@ -7977,7 +7985,7 @@ if (typeof document !== "undefined") {
 
   document.getElementById("map-feature-highlight")?.addEventListener("click", () => {
     if (!currentScenario) return;
-    mapFeatureHighlightEnabled = !mapFeatureHighlightEnabled;
+    setMapFeatureHighlightEnabled(!mapFeatureHighlightEnabled);
     renderScenario(currentScenario);
   });
 
@@ -8146,10 +8154,10 @@ if (typeof document !== "undefined") {
 
     if (snapshot) {
       applyPreferencesToControls(snapshot.preferences);
-      generationStopRequested = false;
-      generationHasRetainableCandidate = false;
+      setGenerationStopRequested(false);
+      setGenerationHasRetainableCandidate(false);
       setGenerationStopControlState(false);
-      isGenerating = true;
+      setIsGenerating(true);
       setGeneratingOverlay(true, "", {
         attempt: 1,
         maxAttempts: 1,
@@ -8163,7 +8171,7 @@ if (typeof document !== "undefined") {
 
       const savedShell = buildSavedScenarioPresentationShell(assets, snapshot, "pending");
       if (savedShell) {
-        currentScenario = savedShell;
+        setCurrentScenario(savedShell);
         await ensureScenarioImages(assets, currentScenario);
         pruneImageCache(assets, [
           ...getPlacementImagePieceIds(currentScenario.placements, currentScenario.pieceMap),
@@ -8209,10 +8217,10 @@ if (typeof document !== "undefined") {
           console.error("Saved-course reanalysis failed", error);
         }
       } finally {
-        isGenerating = false;
+        setIsGenerating(false);
         setGeneratingOverlay(false);
-        generationStopRequested = false;
-        generationHasRetainableCandidate = false;
+        setGenerationStopRequested(false);
+        setGenerationHasRetainableCandidate(false);
         setGenerationStopControlState(false);
       }
 
@@ -8226,7 +8234,7 @@ if (typeof document !== "undefined") {
         };
       }
       if (restoredScenario) {
-        currentScenario = restoredScenario;
+        setCurrentScenario(restoredScenario);
         selectDefaultTraceStarts(currentScenario);
         await ensureScenarioImages(assets, currentScenario);
         pruneImageCache(assets, [
