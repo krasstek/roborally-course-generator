@@ -111,3 +111,15 @@ export function deriveBoardProfile(piece) {
     }
   };
 }
+
+export function countFeatureTypeInTileMap(tileMap, featureType) {
+  if (!tileMap) {
+    return 0;
+  }
+
+  let total = 0;
+  for (const tile of tileMap.values()) {
+    total += (tile.features || []).filter((feature) => feature.type === featureType).length;
+  }
+  return total;
+}
