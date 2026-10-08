@@ -36,3 +36,9 @@ export function formatGenerationDuration(ms) {
   if (ms < 1000) return `${Math.max(0, Math.round(ms))}ms`;
   return `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)}s`;
 }
+
+export function makeGenerationStopRequestedError(message = "Generation stop requested at a safe boundary.") {
+  const error = new Error(message);
+  error.code = "ANALYSIS_STOP_REQUESTED";
+  return error;
+}
