@@ -823,3 +823,7 @@ export function getDockConfigurations(availableDockIds, pieceMap, preferences = 
     .filter((dockIds) => dockIds.length <= getMaximumDockCount(preferences, dockFaceGroups.length))
     .filter((dockIds) => getDockStartCapacity(dockIds, pieceMap) >= getRequiredDockStartCount(preferences));
 }
+
+export function isDynamicArchivingActive(preferences = {}) {
+  return preferences.recoveryRule === "dynamic_archiving";
+}

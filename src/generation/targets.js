@@ -164,3 +164,29 @@ export function formatGrossCourseMismatch(mismatch) {
   const comparison = mismatch.reason.endsWith("too-low") ? "<" : ">";
   return `${mismatch.metric} ${Number(mismatch.value).toFixed(1)} ${comparison} gross ${mismatch.requested} limit ${mismatch.limit}`;
 }
+
+export function computeActFastLengthLoad(preferences = {}, playerCount = 4) {
+  const safePlayerCount = playerCount || 4;
+  const mode = preferences.actFastMode;
+  const byMode = {
+    countdown_1m: -4.5,
+    countdown_30s: -7,
+    last_player_30s: safePlayerCount >= 5
+      ? -4
+      : safePlayerCount >= 4
+        ? -2.5
+        : 0
+  };
+
+  return byMode[mode] ?? 0;
+}
+
+export function bandDistance(value, band, thresholds) {
+  if (band === "any") {
+    return 0;
+  }
+  const [low, high] = thresholds[band];
+  if (value < low) return low - value;
+  if (value >= high) return value - high;
+  return 0;
+}
