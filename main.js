@@ -161,6 +161,48 @@ import {
   summarizeGenerationRejectionEvents,
   summarizeRouteSearchDelta
 } from "./src/generation/diagnostics.js";
+import {
+  GROSS_DIFFICULTY_ABORT_BANDS,
+  GROSS_LENGTH_ABORT_BANDS,
+  MIN_WALL_CLOCK_TURN_INDEX,
+  WALL_CLOCK_LENGTH_FIT_POINTS_PER_TURN,
+  formatGrossCourseMismatch,
+  getDifficultyThresholds,
+  getGrossCourseMismatch,
+  getLegacyDifficultyThresholds,
+  getLengthThresholds,
+  getProductionLengthThresholds
+} from "./src/generation/targets.js";
+import {
+  formatActualDifficultyLabel,
+  formatDifficultyLabel,
+  formatLegacyDifficultyLabel,
+  formatLengthLabel,
+  formatPresentedDifficultyLabel,
+  formatPresentedLengthLabel,
+  getEstimatedGameTurnsLabel,
+  getProductionLengthTurnIndex,
+  getScenarioPresentationMetrics,
+  presentationNumber,
+  titleCaseWords
+} from "./src/generation/labels.js";
+import {
+  ACT_FAST_CONTROL_CHOICES,
+  ACT_FAST_MODE_IDS,
+  BOARD_SPREAD_MODES,
+  OVERLAY_MODES,
+  OVERLAY_MODE_CYCLE,
+  formatActFastMode,
+  formatExpansionName,
+  formatOverlayMode,
+  getSelectedExpansionIds,
+  getTuningDifficulty,
+  isHardestDifficulty,
+  normalizeBoardSpread,
+  normalizeOverlayMode,
+  shouldUseBoardOverlays,
+  shouldUseMiniOverlays
+} from "./src/generation/preferences.js";
 
 // The page answers generation's few questions about its controls (Dev View
 // switches, offered difficulty/length options); headless runs keep the defaults.
@@ -1321,157 +1363,6 @@ function getGenerationConstraintHint(preferences = {}) {
   return "";
 }
 
-function titleCaseWords(value) {
-  return String(value)
-    .split(/[-_\s]+/)
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
-function formatLengthLabel(lengthPreference) {
-  if (lengthPreference === "any") {
-    return "any";
-  }
-  return lengthPreference === "moderate" ? "medium" : String(lengthPreference ?? "medium");
-}
-
-function formatDifficultyLabel(difficultyPreference) {
-  const labels = {
-    any: "any",
-    easy: "beginner",
-    moderate: "intermediate",
-    hard: "advanced",
-    brutal: "Robots. Must. Die."
-  };
-
-  return labels[difficultyPreference] ?? String(difficultyPreference ?? "intermediate");
-}
-
-function formatSummaryBandLabel(value) {
-  const text = String(value ?? "");
-  return text ? text.charAt(0).toUpperCase() + text.slice(1) : "Unknown";
-}
-
-function isValueInBand(value, band) {
-  return Array.isArray(band) && value >= band[0] && value < band[1];
-}
-
-function presentationNumber(value) {
-  if (value === null || value === undefined || value === "") return NaN;
-  const number = Number(value);
-  return Number.isFinite(number) ? number : NaN;
-}
-
-function formatActualDifficultyLabel(difficultyTurnRE) {
-  const value = presentationNumber(difficultyTurnRE);
-  if (!Number.isFinite(value)) return "Unknown";
-  const thresholds = getDifficultyThresholds();
-  if (isValueInBand(value, thresholds.brutal)) {
-    return formatSummaryBandLabel(formatDifficultyLabel("brutal"));
-  }
-  const match = ["easy", "moderate", "hard"]
-    .find((band) => isValueInBand(value, thresholds[band]));
-  if (match) return formatSummaryBandLabel(formatDifficultyLabel(match));
-  return value < thresholds.easy[0] ? "Beginner" : "Robots. Must. Die.";
-}
-
-function formatLegacyDifficultyLabel(difficultyRaw) {
-  const value = presentationNumber(difficultyRaw);
-  if (!Number.isFinite(value)) return "Unknown";
-  const thresholds = getLegacyDifficultyThresholds();
-  if (isValueInBand(value, thresholds.brutal)) {
-    return formatSummaryBandLabel(formatDifficultyLabel("brutal"));
-  }
-  const matches = ["easy", "moderate", "hard"]
-    .filter((band) => isValueInBand(value, thresholds[band]))
-    .map((band) => formatSummaryBandLabel(formatDifficultyLabel(band)));
-  if (matches.length) return matches.join("–");
-  return value < thresholds.easy[0] ? "Beginner" : "Advanced";
-}
-
-function formatPresentedDifficultyLabel(metrics = null) {
-  const turnDifficulty = presentationNumber(metrics?.difficultyTurnRE);
-  if (Number.isFinite(turnDifficulty)) return formatActualDifficultyLabel(turnDifficulty);
-  // Saved presentation snapshots from before the RE-turn production migration
-  // can still be shown while compatibility cleanup is pending. In that narrow
-  // fallback case, retain the label that belonged to the saved legacy scalar.
-  return formatLegacyDifficultyLabel(metrics?.difficultyRaw);
-}
-
-function formatLegacyLengthLabel(lengthRaw) {
-  const value = presentationNumber(lengthRaw);
-  if (!Number.isFinite(value)) return "Unknown";
-  const thresholds = getLengthThresholds();
-  const matches = ["short", "moderate", "long", "epic"]
-    .filter((band) => isValueInBand(value, thresholds[band]))
-    .map((band) => formatSummaryBandLabel(formatLengthLabel(band)));
-  if (matches.length) return matches.join("–");
-  return value < thresholds.short[0] ? "Short" : "Epic";
-}
-
-function formatActualLengthLabel(lengthWallClockTurnIndex) {
-  const value = presentationNumber(lengthWallClockTurnIndex);
-  if (!Number.isFinite(value)) return "Unknown";
-  const thresholds = getProductionLengthThresholds();
-  const match = ["short", "moderate", "long", "epic"]
-    .find((band) => isValueInBand(value, thresholds[band]));
-  if (match) return formatSummaryBandLabel(formatLengthLabel(match));
-  return value < thresholds.short[0] ? "Short" : "Epic";
-}
-
-function getProductionLengthTurnIndex(metrics = null) {
-  const direct = presentationNumber(metrics?.lengthWallClockTurnIndex);
-  if (Number.isFinite(direct)) return direct;
-  const nested = presentationNumber(
-    metrics?.lengthMetrics?.productionWallClockOwner?.effectiveWallClockTurnIndex
-  );
-  return Number.isFinite(nested) ? nested : NaN;
-}
-
-function formatPresentedLengthLabel(metrics = null) {
-  const wallClockTurnIndex = getProductionLengthTurnIndex(metrics);
-  if (Number.isFinite(wallClockTurnIndex)) {
-    return formatActualLengthLabel(wallClockTurnIndex);
-  }
-  return formatLegacyLengthLabel(metrics?.lengthFitRaw ?? metrics?.lengthRaw);
-}
-
-const GAME_TURN_APPROX_RECOVERY_SHARE_THRESHOLD = 0.20;
-const GAME_TURN_APPROX_RECOVERY_REGISTERS_THRESHOLD = 5;
-
-function getEstimatedGameTurnsLabel(scenario) {
-  const lengthMetrics = scenario?.metrics?.lengthMetrics;
-  const productionExtent = lengthMetrics?.productionExtentOwner ?? null;
-  const productionTurns = Number(
-    productionExtent?.expectedPlayProgrammingTurns
-      ?? lengthMetrics?.ownerObservationV49dl?.playTimeAmplification?.expectedPlayProgrammingTurns
-  );
-  if (Number.isFinite(productionTurns)) {
-    const rounded = Math.max(1, Math.ceil(productionTurns));
-    const nominalRegisters = Number(productionExtent?.nominalRegisters);
-    const recoveryRegisters = Number(productionExtent?.reNativeExpectedExtraRegisters);
-    const recoveryShare = Number.isFinite(nominalRegisters) && nominalRegisters > 0 && Number.isFinite(recoveryRegisters)
-      ? recoveryRegisters / nominalRegisters
-      : 0;
-    const materiallyApproximate = Boolean(
-      Number.isFinite(recoveryRegisters) &&
-      recoveryRegisters >= GAME_TURN_APPROX_RECOVERY_REGISTERS_THRESHOLD &&
-      recoveryShare >= GAME_TURN_APPROX_RECOVERY_SHARE_THRESHOLD
-    );
-    const prefix = materiallyApproximate ? "~" : "";
-    return `${prefix}${rounded}+ game turn${rounded === 1 ? "" : "s"}`;
-  }
-  const routeActions = Number(lengthMetrics?.inputs?.totalActionLoad);
-  if (!Number.isFinite(routeActions)) return null;
-  const recoveryActions = Number(lengthMetrics?.contributions?.forecastEquivalentActions);
-  const adjustedActions = routeActions + (Number.isFinite(recoveryActions) ? recoveryActions : 0);
-  const turns = Math.max(1, Math.ceil(adjustedActions / 5));
-  // Compatibility fallback lacks the full RE-native extent owner, so keep the
-  // approximation marker while still presenting the rounded-up floor.
-  return `~${turns}+ game turn${turns === 1 ? "" : "s"}`;
-}
-
 function updateCourseNotesTogglePresentation(toggleEl, visible) {
   if (!toggleEl) return;
   const expanded = Boolean(visible);
@@ -1479,277 +1370,6 @@ function updateCourseNotesTogglePresentation(toggleEl, visible) {
   toggleEl.textContent = expanded ? "Hide notes" : "Show notes";
   toggleEl.title = expanded ? "Hide Course Notes" : "Show Course Notes";
   toggleEl.setAttribute("aria-label", expanded ? "Hide Course Notes" : "Show Course Notes");
-}
-
-function getScenarioPresentationMetrics(scenario) {
-  if (scenario?.hydrationPresentationFallback && scenario?.savedPresentationMetrics) {
-    return scenario.savedPresentationMetrics;
-  }
-  return scenario?.metrics ?? null;
-}
-
-function getTuningDifficulty(difficultyPreference) {
-  return difficultyPreference === "brutal" ? "hard" : (difficultyPreference ?? "moderate");
-}
-
-function isHardestDifficulty(preferences = {}) {
-  return preferences.difficulty === "brutal";
-}
-
-const BOARD_SPREAD_MODES = Object.freeze({
-  random: "random",
-  tight: "tight"
-});
-
-function normalizeBoardSpread(value) {
-  return value === BOARD_SPREAD_MODES.tight
-    ? BOARD_SPREAD_MODES.tight
-    : BOARD_SPREAD_MODES.random;
-}
-
-const OVERLAY_MODES = {
-  no: "no",
-  tokens: "tokens",
-  boards: "boards",
-  yes: "yes"
-};
-
-const OVERLAY_MODE_CYCLE = [
-  OVERLAY_MODES.no,
-  OVERLAY_MODES.tokens,
-  OVERLAY_MODES.boards,
-  OVERLAY_MODES.yes
-];
-
-const ACT_FAST_CONTROL_CHOICES = [
-  { id: "off", variantState: "off", mode: null, shortLabel: "No", label: "Not allowed" },
-  { id: "allowed", variantState: "allowed", mode: null, shortLabel: "Yes", label: "Allowed; timer mode is chosen if Act Fast is used" },
-  { id: "forced_random", variantState: "forced", mode: null, shortLabel: "Must", label: "Always on; choose a timer mode randomly" },
-  { id: "countdown_3m", variantState: "forced", mode: "countdown_3m", shortLabel: "3 min", label: "Always on: 3-minute programming timer" },
-  { id: "countdown_2m", variantState: "forced", mode: "countdown_2m", shortLabel: "2 min", label: "Always on: 2-minute programming timer" },
-  { id: "countdown_1m", variantState: "forced", mode: "countdown_1m", shortLabel: "1 min", label: "Always on: 1-minute programming timer" },
-  { id: "countdown_30s", variantState: "forced", mode: "countdown_30s", shortLabel: "30 sec", label: "Always on: 30-second programming timer" },
-  { id: "last_player_30s", variantState: "forced", mode: "last_player_30s", shortLabel: "Last 30s", label: "Always on: last player has 30 seconds" }
-];
-const ACT_FAST_MODE_IDS = new Set(ACT_FAST_CONTROL_CHOICES.filter((choice) => choice.mode).map((choice) => choice.mode));
-
-function formatActFastMode(mode) {
-  return ({
-    countdown_3m: "3 min",
-    countdown_2m: "2 min",
-    countdown_1m: "1 min",
-    countdown_30s: "30 sec",
-    last_player_30s: "Last player 30 sec"
-  })[mode] ?? "Yes";
-}
-
-function normalizeOverlayMode(mode) {
-  return Object.prototype.hasOwnProperty.call(OVERLAY_MODES, mode) ? mode : OVERLAY_MODES.yes;
-}
-
-function formatOverlayMode(mode) {
-  return {
-    no: "No",
-    tokens: "Tokens",
-    boards: "Boards",
-    yes: "Both"
-  }[normalizeOverlayMode(mode)];
-}
-
-function shouldUseBoardOverlays(preferences = {}) {
-  const mode = normalizeOverlayMode(preferences.overlayMode);
-  return mode === OVERLAY_MODES.yes || mode === OVERLAY_MODES.boards;
-}
-
-function shouldUseMiniOverlays(preferences = {}) {
-  const mode = normalizeOverlayMode(preferences.overlayMode);
-  return mode === OVERLAY_MODES.yes || mode === OVERLAY_MODES.tokens;
-}
-
-function getSelectedExpansionIds(preferences = {}) {
-  const selected = preferences.selectedExpansions ?? { roborally: true };
-  return new Set(Object.entries(selected)
-    .filter(([, enabled]) => Boolean(enabled))
-    .map(([expansionId]) => expansionId));
-}
-
-function formatExpansionName(expansionId) {
-  const labels = {
-    roborally: "Robo Rally (2023)",
-    "30th-anniversary": "Robo Rally: 30th Anniversary",
-    "thrills-and-spills": "Thrills & Spills",
-    "master-builder": "Master Builder",
-    "wet-and-wild": "Wet & Wild",
-    "chaos-and-carnage": "Chaos & Carnage",
-    "contamination": "Contamination",
-    "rr-dice": "Robo Rally Dice"
-  };
-
-  return labels[expansionId] ?? titleCaseWords(expansionId);
-}
-
-// v49dp production difficulty owner. These are deliberately non-overlapping
-// bands on completed non-tempo RE per programming turn. Intermediate,
-// Advanced and R.M.D. retain the v49de calibration cuts. Beginner is now
-// deliberately stricter: browser/visual review showed courses near the old
-// 4.3 boundary could still carry distinctly non-beginner local RE burdens.
-// The 4.0 ceiling creates a semantic safety margin while remaining purely
-// RE-native; no legacy hazard/visual score participates in classification.
-function getDifficultyThresholds() {
-  return {
-    easy: [0, 4.0],
-    moderate: [4.0, 4.8],
-    hard: [4.8, 5.8],
-    brutal: [5.8, Infinity]
-  };
-}
-
-// Construction guidance and the cheap preflight models were trained against
-// the historical score-space difficulty scalar. They remain generation-speed
-// infrastructure until the later construction-calibration pass; they are not
-// semantic difficulty owners after v49de.
-function getLegacyDifficultyThresholds() {
-  return {
-    easy: [0, 95],
-    moderate: [90, 155],
-    hard: [150, Infinity],
-    brutal: [180, Infinity]
-  };
-}
-
-function getLengthThresholds() {
-  // Legacy raw-score envelopes retained for construction/preflight guidance
-  // and saved-presentation fallback only. Production semantic length no longer
-  // uses this score space after v49dv.
-  return {
-    short: [MIN_LENGTH_RAW, 150],
-    moderate: [145, 210],
-    long: [205, 270],
-    epic: [265, 400]
-  };
-}
-
-// v49dv production wall-clock bands. These use the final relative wall-clock
-// turn index (five wall-clock register-index units per reference turn), not the
-// transitional raw score. The cuts preserve the accepted v49dl 4-player
-// elapsed-play anchors while allowing player count, Act Fast and upgrade-economy
-// phase time to move the same physical course between semantic length bands.
-// Epic remains bounded for fit purposes so an extremely long course can still
-// be reported as "very long, even for Epic".
-const WALL_CLOCK_LENGTH_FIT_POINTS_PER_TURN = 20;
-const MIN_WALL_CLOCK_TURN_INDEX = MIN_LENGTH_RAW / WALL_CLOCK_LENGTH_FIT_POINTS_PER_TURN;
-function getProductionLengthThresholds() {
-  return {
-    short: [MIN_WALL_CLOCK_TURN_INDEX, 6.25],
-    moderate: [6.25, 9.5],
-    long: [9.5, 13],
-    epic: [13, 20]
-  };
-}
-
-// Gross-mismatch limits are intentionally much wider than the actual
-// acceptance bands. They are used only after one complete course analysis,
-// and only to avoid spending additional physical-pruning/reanalysis passes on
-// a candidate that is already implausibly far from the requested target.
-const GROSS_DIFFICULTY_ABORT_BANDS = {
-  easy: { max: 165 },
-  moderate: { min: 35, max: 225 },
-  hard: { min: 75 },
-  brutal: { min: 90 }
-};
-
-const GROSS_LENGTH_ABORT_BANDS = {
-  short: { max: 220 },
-  moderate: { min: 70, max: 285 },
-  long: { min: 90, max: 390 },
-  epic: { min: 140, max: 520 }
-};
-
-function getGrossCourseMismatch(metrics, preferences = {}) {
-  const difficultyBand = preferences.targetGuidanceOnlyDifficulty
-    ? null
-    : GROSS_DIFFICULTY_ABORT_BANDS[preferences.difficulty];
-  const lengthBand = preferences.targetGuidanceOnlyLength
-    ? null
-    : GROSS_LENGTH_ABORT_BANDS[preferences.length];
-
-  if (difficultyBand && Number.isFinite(metrics?.difficultyRaw)) {
-    if (
-      Number.isFinite(difficultyBand.min) &&
-      metrics.difficultyRaw < difficultyBand.min
-    ) {
-      return {
-        abort: true,
-        reason: "difficulty-too-low",
-        metric: "difficulty",
-        value: metrics.difficultyRaw,
-        limit: difficultyBand.min,
-        requested: preferences.difficulty
-      };
-    }
-
-    if (
-      Number.isFinite(difficultyBand.max) &&
-      metrics.difficultyRaw > difficultyBand.max
-    ) {
-      return {
-        abort: true,
-        reason: "difficulty-too-high",
-        metric: "difficulty",
-        value: metrics.difficultyRaw,
-        limit: difficultyBand.max,
-        requested: preferences.difficulty
-      };
-    }
-  }
-
-  if (lengthBand && Number.isFinite(metrics?.lengthFitRaw)) {
-    if (
-      Number.isFinite(lengthBand.min) &&
-      metrics.lengthFitRaw < lengthBand.min
-    ) {
-      return {
-        abort: true,
-        reason: "length-too-low",
-        metric: "length",
-        value: metrics.lengthFitRaw,
-        limit: lengthBand.min,
-        requested: preferences.length
-      };
-    }
-
-    if (
-      Number.isFinite(lengthBand.max) &&
-      metrics.lengthFitRaw > lengthBand.max
-    ) {
-      return {
-        abort: true,
-        reason: "length-too-high",
-        metric: "length",
-        value: metrics.lengthFitRaw,
-        limit: lengthBand.max,
-        requested: preferences.length
-      };
-    }
-  }
-
-  return {
-    abort: false,
-    reason: null,
-    metric: null,
-    value: null,
-    limit: null,
-    requested: null
-  };
-}
-
-function formatGrossCourseMismatch(mismatch) {
-  if (!mismatch?.abort) {
-    return "";
-  }
-
-  const comparison = mismatch.reason.endsWith("too-low") ? "<" : ">";
-  return `${mismatch.metric} ${Number(mismatch.value).toFixed(1)} ${comparison} gross ${mismatch.requested} limit ${mismatch.limit}`;
 }
 
 function getReverseSideName(pieceId, pieceMap) {
