@@ -18,7 +18,8 @@ import {
   SUBSIDIZED_STARTS_MAX_EXTRA_ENERGY
 } from "./config.js";
 import { getGenerationModeProfile } from "./generation-modes.js";
-import { averageValues, clamp, getCombinationCount } from "./math.js";
+import { average, clamp } from "../shared/math.js";
+import { getCombinationCount } from "./math.js";
 import { sample } from "./random.js";
 import {
   getEconomyEnergyActionableResidualBalanceSelectionPenalty,
@@ -1047,7 +1048,7 @@ export function averagePayToWinSelectorScores(
 
     scoreByIndex.set(
       item.index,
-      values.length ? averageValues(values) : fallback
+      values.length ? average(values) : fallback
     );
   }
 
@@ -1076,7 +1077,7 @@ export function averagePayToWinSelectorPaymentScores(
       )).filter(Number.isFinite);
       const fallbackValue = Number(fallback[payment]);
       return values.length
-        ? averageValues(values)
+        ? average(values)
         : (Number.isFinite(fallbackValue) ? fallbackValue : null);
     });
     result.set(item.index, averaged);
@@ -1096,7 +1097,7 @@ export function getPayToWinSelectorFitError(
       representativeState
     )
   ));
-  return Number(averageValues(distances).toFixed(4));
+  return Number(average(distances).toFixed(4));
 }
 
 export function getPayToWinAdaptiveSelectorSplit(
@@ -1674,7 +1675,7 @@ export function getPayToWinLateCostEntries(
           .filter(Number.isFinite);
         const fallback = Number(fallbackCurve[payment]);
         return values.length
-          ? averageValues(values)
+          ? average(values)
           : (Number.isFinite(fallback) ? fallback : null);
       });
       const fallbackRECurve = fallbackEffectiveRECurves.get(item.index) ?? [];
@@ -1686,7 +1687,7 @@ export function getPayToWinLateCostEntries(
             .filter(Number.isFinite);
           const fallback = Number(fallbackRECurve[payment]);
           return values.length
-            ? averageValues(values)
+            ? average(values)
             : (Number.isFinite(fallback) ? fallback : null);
         }
       );
@@ -1694,7 +1695,7 @@ export function getPayToWinLateCostEntries(
         item.index,
         {
           adjusted: scenarioScores.length
-            ? averageValues(scenarioScores)
+            ? average(scenarioScores)
             : item.adjustedScore,
           full: Number.isFinite(averagedCurve[0])
             ? averagedCurve[0]
@@ -1948,7 +1949,7 @@ export function choosePayToWinPruneEntry(entries, options = {}) {
     )[0];
   }
 
-  const meanScore = averageValues(entries.map((entry) => entry.fullScore));
+  const meanScore = average(entries.map((entry) => entry.fullScore));
   return [...entries].sort((left, right) => (
     Math.abs(right.fullScore - meanScore) - Math.abs(left.fullScore - meanScore) ||
     left.fullScore - right.fullScore ||
@@ -3226,7 +3227,7 @@ export function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, option
   )).length : 0;
 
   const activeScores = earlyCostState.entries.map((entry) => entry.postPaymentFullScore);
-  const meanScore = activeScores.length ? averageValues(activeScores) : 0;
+  const meanScore = activeScores.length ? average(activeScores) : 0;
   const prunedOutliers = pruned.map((item) => ({
     index: item.index,
     score: item.score,

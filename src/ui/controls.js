@@ -1,7 +1,6 @@
 // Robo Rally Course Randomizer - option controls: expansions, variant pickers and the optional rules dialog, preferences to and from controls, availability updates
 import { VARIANT_CONTROL_IDS, VARIANT_DEFINITIONS } from "../../variants.js";
 import { cachedAssets } from "../generation/assets.js";
-import { DIAGNOSTIC_DIFFICULTIES, DIAGNOSTIC_LENGTHS } from "../generation/config.js";
 import { normalizeGenerationMode } from "../generation/generation-modes.js";
 import { getAvailableOverlayIds } from "../generation/overlays.js";
 import {
@@ -690,14 +689,6 @@ export function cycleVariantControlState(variantId) {
 }
 
 export function pageGetAvailableConcretePreferenceValues(selectId) {
-  if (typeof document === "undefined") {
-    // Headless runs (comparison harness) have no controls; use the full option
-    // set a fresh page offers, so "Any" resolves exactly as it would there.
-    if (selectId === "difficulty") return [...DIAGNOSTIC_DIFFICULTIES];
-    if (selectId === "length") return [...DIAGNOSTIC_LENGTHS];
-    return [];
-  }
-
   const select = document.getElementById(selectId);
   if (!select) {
     return [];

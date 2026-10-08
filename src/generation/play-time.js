@@ -1,5 +1,5 @@
 // Robo Rally Course Randomizer - play time: wall-clock player multipliers, Act Fast timing and pressure, reference play-time bands
-import { clamp } from "./math.js";
+import { clamp } from "../shared/math.js";
 
 // v49dl provisional elapsed-play calibration. These coefficients are explicit
 // empirical anchors, not hidden semantic weights. They were chosen against the

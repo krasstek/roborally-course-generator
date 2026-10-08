@@ -4,7 +4,7 @@ import {
   GENERATION_MODE_LABELS,
   GENERATION_MODE_PROFILES
 } from "./config.js";
-import { clamp } from "./math.js";
+import { clamp } from "../shared/math.js";
 import { BOARD_SPREAD_MODES, normalizeBoardSpread } from "./preferences.js";
 
 export function normalizeGenerationMode(value) {

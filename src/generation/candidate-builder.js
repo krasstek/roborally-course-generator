@@ -1,16 +1,17 @@
 // Robo Rally Course Randomizer - candidate builder: one course candidate from layout to classified, routed result (createRandomCandidate), with inventory validation, retry and route-work budgets
-import { analyzeFullCourse, getCompletedRouteExpansions } from "../../analyze.js";
+import {
+  analyzeFullCourse,
+  analyzeFullCourseCooperative,
+  clearAnalysisCaches,
+  getAnalysisTelemetrySnapshot,
+  getCompletedRouteExpansions
+} from "../../analyze.js";
 import { buildResolvedMap } from "../../board.js";
 import {
   applyVariantAnalysisOptions,
   applyVariantGenerationOptions,
   applyVariantScenarioState
 } from "../../variants.js";
-import {
-  analyzeFullCourseCooperativeSafe,
-  clearAnalysisCachesSafe,
-  getAnalysisTelemetrySnapshotSafe
-} from "./analysis-api.js";
 import {
   analyzeFlagSequence,
   buildCoursePreflightSequence,
@@ -581,7 +582,7 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
   ];
   const boardRects = buildBoardRects(boardLayout.placements, pieceMap);
 
-  clearAnalysisCachesSafe();
+  clearAnalysisCaches();
   const { tileMap, starts } = buildResolvedMap(placements, pieceMap);
   const noDockSelection = effectiveNoDocks
     ? chooseNoDockStartingZones(
@@ -662,7 +663,7 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
   const recordRejectionEvent = (telemetryBefore, category, reason, details = null) => {
     const routeDelta = summarizeRouteSearchDelta(
       telemetryBefore,
-      getAnalysisTelemetrySnapshotSafe()
+      getAnalysisTelemetrySnapshot()
     );
     rejectionEvents.push({
       evaluation: evaluationsUsed,
@@ -711,7 +712,7 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
         : "Choosing checkpoints",
       evaluationsUsed
     );
-    const retryTelemetryBefore = getAnalysisTelemetrySnapshotSafe();
+    const retryTelemetryBefore = getAnalysisTelemetrySnapshot();
     const checkpointPreferences = {
       ...generationPreferences,
       hazardousFlags,
@@ -1152,7 +1153,7 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
             `Quick course preflight — ${virtualBots ? "shared entry" : `${preflightStarts.length} starts`}, no traffic`,
             evaluationsUsed
           );
-          const preflightTelemetryBefore = getAnalysisTelemetrySnapshotSafe();
+          const preflightTelemetryBefore = getAnalysisTelemetrySnapshot();
           coursePreflight = buildCoursePreflightSequence(
             goalTileMap,
             preflightStarts,
@@ -1170,7 +1171,7 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
           );
           coursePreflight.work = compactRouteWork(summarizeRouteSearchDelta(
             preflightTelemetryBefore,
-            getAnalysisTelemetrySnapshotSafe()
+            getAnalysisTelemetrySnapshot()
           ));
 
           if (!coursePreflight.valid && !estimateThenRealizeSharedCandidate && !competitiveMode && !startEnergyPricing) {
@@ -1323,7 +1324,7 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
           contextualFastCardState: true,
           contextualEstimatedEnergyGuidance: true,
           fullCourseAnalyzer: typeof shouldStopDuringAnalysis === "function"
-            ? analyzeFullCourseCooperativeSafe
+            ? analyzeFullCourseCooperative
             : analyzeFullCourse,
           cooperativeYield: typeof shouldStopDuringAnalysis === "function"
             ? async (progress) => {

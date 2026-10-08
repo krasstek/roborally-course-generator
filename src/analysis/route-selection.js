@@ -2,7 +2,7 @@
 import { REGISTER_TEMPO_COST } from "./constants.js";
 import { DAMAGE_ECONOMY_SHUTDOWN_REFERENCE_RE } from "./damage-economy.js";
 import { getDamageEconomyTrafficRoutingBreakdown } from "./damage-routing.js";
-import { average, clamp } from "./math.js";
+import { average, clamp } from "../shared/math.js";
 import { summarizeTrafficAwarenessMentalIncrement } from "./re-ledger.js";
 import {
   getExpectedTrafficBreakdown,

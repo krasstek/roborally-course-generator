@@ -17,7 +17,7 @@ import {
   REGISTER_COUNT,
   REGISTER_TEMPO_COST
 } from "./constants.js";
-import { clamp } from "./math.js";
+import { clamp } from "../shared/math.js";
 import {
   canMoveBetween,
   getFlamethrowerDamagePenalty,

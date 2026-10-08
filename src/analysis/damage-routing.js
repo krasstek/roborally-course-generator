@@ -6,7 +6,7 @@ import {
   DAMAGE_ECONOMY_SHUTDOWN_REFERENCE_RE,
   getDamageEconomyActiveFlamethrowerCount
 } from "./damage-economy.js";
-import { clamp } from "./math.js";
+import { clamp } from "../shared/math.js";
 import { getFlamethrowerDamagePenalty } from "./movement.js";
 import {
   getRebootDamagePenalty,

@@ -1,6 +1,9 @@
 // Robo Rally Course Randomizer - app start-up: page wiring, generation runs, saved course, diagnostics
+import {
+  clearAnalysisCaches,
+  resetAnalysisTelemetry
+} from "../../analyze.js";
 import { buildCourseNoteFacts } from "../../course-notes.js";
-import { clearAnalysisCachesSafe, resetAnalysisTelemetrySafe } from "../generation/analysis-api.js";
 import {
   ensureScenarioImages,
   getPlacementImagePieceIds,
@@ -103,23 +106,19 @@ import { showToast } from "./toast.js";
 
 // The page answers generation's few questions about its controls (Dev View
 // switches, offered difficulty/length options); headless runs keep the defaults.
-if (typeof document !== "undefined") {
-  registerGenerationEnvironment({
-    isDevViewEnabled: pageIsDevViewEnabled,
-    isDevRouteModelOverrideActive: pageIsDevRouteModelOverrideActive,
-    isDevFastTrafficEnabled: pageIsDevFastTrafficEnabled,
-    isDevFastAlternatesEnabled: pageIsDevFastAlternatesEnabled,
-    getAvailableConcretePreferenceValues: pageGetAvailableConcretePreferenceValues
-  });
-}
+registerGenerationEnvironment({
+  isDevViewEnabled: pageIsDevViewEnabled,
+  isDevRouteModelOverrideActive: pageIsDevRouteModelOverrideActive,
+  isDevFastTrafficEnabled: pageIsDevFastTrafficEnabled,
+  isDevFastAlternatesEnabled: pageIsDevFastAlternatesEnabled,
+  getAvailableConcretePreferenceValues: pageGetAvailableConcretePreferenceValues
+});
 
 // Mobile browsers may auto-detect number-like rule text and restyle it as a
 // tappable link even though the app emitted ordinary text. Keep rules/course
 // annotations visually plain; this is presentation-only and does not disable
 // any deliberate controls elsewhere in the UI.
 function installMobilePlainTextGuards() {
-  if (typeof document === "undefined") return;
-
   let formatMeta = document.querySelector('meta[name="format-detection"]');
   if (!formatMeta) {
     formatMeta = document.createElement("meta");
@@ -155,12 +154,10 @@ function installMobilePlainTextGuards() {
   }
 }
 
-if (typeof document !== "undefined") {
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", installMobilePlainTextGuards, { once: true });
-  } else {
-    installMobilePlainTextGuards();
-  }
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", installMobilePlainTextGuards, { once: true });
+} else {
+  installMobilePlainTextGuards();
 }
 
 const SAVED_SCENARIO_KEY = "roborally-course-generator:last-scenario";
@@ -227,7 +224,7 @@ async function runDiagnostics() {
       continue;
     }
 
-    clearAnalysisCachesSafe();
+    clearAnalysisCaches();
     const generation = await generateScenarioForPreferences(assets, testCase.preferences, {
       maxAttempts: DIAGNOSTIC_ATTEMPTS
     });
@@ -297,7 +294,7 @@ async function start() {
   setIsGenerating(true);
 
   try {
-    resetAnalysisTelemetrySafe();
+    resetAnalysisTelemetry();
     setGeneratingOverlay(
       true,
       "",
@@ -411,428 +408,426 @@ async function start() {
   }
 }
 
-if (typeof document !== "undefined") {
-  document.getElementById("reroll").addEventListener("click", () => {
-    start().catch(console.error);
+document.getElementById("reroll").addEventListener("click", () => {
+  start().catch(console.error);
+});
+
+document.getElementById("use-best-so-far")?.addEventListener("click", () => {
+  requestGenerationStop();
+});
+
+document.getElementById("about-button").addEventListener("click", () => {
+  openAboutDialog();
+});
+document.getElementById("canvas")?.addEventListener("click", (event) => {
+  if (!currentScenario || !isDevViewEnabled()) return;
+  const tile = getCanvasTileFromEvent(event);
+  applyRouteInspection(getInspectableAtTile(currentScenario, tile));
+  renderScenarioKeepingMapInPlace(currentScenario);
+});
+
+document.getElementById("canvas")?.addEventListener("dblclick", (event) => {
+  if (!currentScenario || !isDevViewEnabled()) return;
+  event.preventDefault();
+  const tile = getCanvasTileFromEvent(event);
+  const selectedLegIndices = getSelectedLegIndicesFromControl(currentScenario);
+  if (tileTouchesVisibleTrace(currentScenario, tile, selectedLegIndices)) {
+    selectAllTraceStarts(currentScenario);
+  } else {
+    clearTraceStarts();
+    clearRouteInspection();
+  }
+  renderScenarioKeepingMapInPlace(currentScenario);
+});
+
+
+
+document.getElementById("run-diagnostics").addEventListener("click", () => {
+  runDiagnostics().catch((error) => {
+    setCourseEvaluationReportText(`Diagnostics failed: ${error.message}`);
+    document.getElementById("run-diagnostics").disabled = false;
+    console.error(error);
   });
+});
 
-  document.getElementById("use-best-so-far")?.addEventListener("click", () => {
-    requestGenerationStop();
-  });
+async function copyTextToClipboard(text, button, idleLabel, errorContext = "text") {
+  if (!text?.trim()) {
+    return;
+  }
 
-  document.getElementById("about-button").addEventListener("click", () => {
-    openAboutDialog();
-  });
-  document.getElementById("canvas")?.addEventListener("click", (event) => {
-    if (!currentScenario || !isDevViewEnabled()) return;
-    const tile = getCanvasTileFromEvent(event);
-    applyRouteInspection(getInspectableAtTile(currentScenario, tile));
-    renderScenarioKeepingMapInPlace(currentScenario);
-  });
-
-  document.getElementById("canvas")?.addEventListener("dblclick", (event) => {
-    if (!currentScenario || !isDevViewEnabled()) return;
-    event.preventDefault();
-    const tile = getCanvasTileFromEvent(event);
-    const selectedLegIndices = getSelectedLegIndicesFromControl(currentScenario);
-    if (tileTouchesVisibleTrace(currentScenario, tile, selectedLegIndices)) {
-      selectAllTraceStarts(currentScenario);
-    } else {
-      clearTraceStarts();
-      clearRouteInspection();
-    }
-    renderScenarioKeepingMapInPlace(currentScenario);
-  });
-
-
-
-  document.getElementById("run-diagnostics").addEventListener("click", () => {
-    runDiagnostics().catch((error) => {
-      setCourseEvaluationReportText(`Diagnostics failed: ${error.message}`);
-      document.getElementById("run-diagnostics").disabled = false;
-      console.error(error);
-    });
-  });
-
-  async function copyTextToClipboard(text, button, idleLabel, errorContext = "text") {
-    if (!text?.trim()) {
-      return;
-    }
-
-    try {
-      let copied = false;
-      if (navigator.clipboard?.write && typeof ClipboardItem !== "undefined") {
-        try {
-          const plainText = new Blob([text], { type: "text/plain" });
-          await navigator.clipboard.write([
-            new ClipboardItem({ "text/plain": plainText })
-          ]);
-          copied = true;
-        } catch (error) {
-          console.debug("Explicit text/plain clipboard write unavailable; falling back", error);
-        }
-      }
-      if (!copied && navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(text);
+  try {
+    let copied = false;
+    if (navigator.clipboard?.write && typeof ClipboardItem !== "undefined") {
+      try {
+        const plainText = new Blob([text], { type: "text/plain" });
+        await navigator.clipboard.write([
+          new ClipboardItem({ "text/plain": plainText })
+        ]);
         copied = true;
+      } catch (error) {
+        console.debug("Explicit text/plain clipboard write unavailable; falling back", error);
       }
+    }
+    if (!copied && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      copied = true;
+    }
+    if (!copied) {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.setAttribute("readonly", "");
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      copied = document.execCommand("copy");
+      textarea.remove();
       if (!copied) {
-        const textarea = document.createElement("textarea");
-        textarea.value = text;
-        textarea.setAttribute("readonly", "");
-        textarea.style.position = "fixed";
-        textarea.style.opacity = "0";
-        document.body.appendChild(textarea);
-        textarea.select();
-        copied = document.execCommand("copy");
-        textarea.remove();
-        if (!copied) {
-          throw new Error("Copy command was not available");
-        }
-      }
-
-      if (button) {
-        button.textContent = "Copied";
-        window.setTimeout(() => {
-          button.textContent = idleLabel;
-        }, 1400);
-      }
-    } catch (error) {
-      console.warn(`Unable to copy ${errorContext}`, error);
-      if (button) {
-        button.textContent = "Copy failed";
-        window.setTimeout(() => {
-          button.textContent = idleLabel;
-        }, 1800);
+        throw new Error("Copy command was not available");
       }
     }
-  }
 
-  async function copyCourseEvaluationSummary() {
-    if (!currentScenario) {
-      return;
+    if (button) {
+      button.textContent = "Copied";
+      window.setTimeout(() => {
+        button.textContent = idleLabel;
+      }, 1400);
     }
-    const button = document.getElementById("copy-course-evaluation-summary");
-    const text = buildScenarioBenchmarkSummary(currentScenario);
-    await copyTextToClipboard(text, button, "Copy summary", "Course Evaluation summary");
+  } catch (error) {
+    console.warn(`Unable to copy ${errorContext}`, error);
+    if (button) {
+      button.textContent = "Copy failed";
+      window.setTimeout(() => {
+        button.textContent = idleLabel;
+      }, 1800);
+    }
+  }
+}
+
+async function copyCourseEvaluationSummary() {
+  if (!currentScenario) {
+    return;
+  }
+  const button = document.getElementById("copy-course-evaluation-summary");
+  const text = buildScenarioBenchmarkSummary(currentScenario);
+  await copyTextToClipboard(text, button, "Copy summary", "Course Evaluation summary");
+}
+
+async function copyCourseEvaluationAll() {
+  if (!currentScenario) return;
+  const button = document.getElementById("copy-course-evaluation-all");
+  if (button) button.textContent = "Building…";
+  await nextFrame();
+  const selectedLegIndices = getSelectedLegIndicesFromControl(currentScenario);
+  const text = buildScenarioReport(currentScenario, selectedLegIndices);
+  await copyTextToClipboard(text, button, "Copy all", "Course Evaluation");
+  // Refresh only the cheap overview so the newly measured deep-report timing is
+  // visible without leaving the expensive report resident in the DOM.
+  setCourseEvaluationReportText(buildScenarioDevOverview(currentScenario, selectedLegIndices));
+}
+
+document.getElementById("copy-course-evaluation-summary")?.addEventListener("click", () => {
+  copyCourseEvaluationSummary();
+});
+
+document.getElementById("copy-course-evaluation-all")?.addEventListener("click", () => {
+  copyCourseEvaluationAll();
+});
+
+document.getElementById("about-close-icon").addEventListener("click", () => {
+  closeAboutDialog();
+});
+
+document.getElementById("about-close-button").addEventListener("click", () => {
+  closeAboutDialog();
+});
+
+document.getElementById("about-dialog").addEventListener("click", (event) => {
+  const dialog = event.currentTarget;
+  if (event.target === dialog) {
+    closeAboutDialog();
+  }
+});
+
+document.getElementById("leg-select").addEventListener("change", (event) => {
+  const select = event.currentTarget;
+  if (select && ![...select.options].some((option) => option.selected)) {
+    [...select.options].forEach((option) => { option.selected = true; });
+  }
+  if (currentScenario) renderScenario(currentScenario);
+});
+
+document.getElementById("board-view-mode").addEventListener("change", () => {
+  if (currentScenario) {
+    renderScenario(currentScenario);
+  }
+});
+
+document.getElementById("map-feature-highlight")?.addEventListener("click", () => {
+  if (!currentScenario) return;
+  setMapFeatureHighlightEnabled(!mapFeatureHighlightEnabled);
+  renderScenario(currentScenario);
+});
+
+document.getElementById("course-explanation-toggle").addEventListener("click", () => {
+  if (!currentScenario) {
+    return;
   }
 
-  async function copyCourseEvaluationAll() {
-    if (!currentScenario) return;
-    const button = document.getElementById("copy-course-evaluation-all");
-    if (button) button.textContent = "Building…";
+  const presentationMetrics = getScenarioPresentationMetrics(currentScenario);
+  const presentationScenario = presentationMetrics === currentScenario.metrics
+    ? currentScenario
+    : { ...currentScenario, metrics: presentationMetrics };
+  const autoOpen = buildCourseNoteFacts(presentationScenario).autoOpenExplanation;
+  const currentlyVisible = Boolean(
+    courseExplanationState.userPinnedOpen ||
+    (
+      autoOpen &&
+      courseExplanationState.manualClosedScenarioRef !== currentScenario
+    )
+  );
+  if (currentlyVisible) {
+    // Closing an explicitly pinned panel ends the cross-generation preference.
+    // Closing an auto-opened panel only suppresses it for this scenario.
+    courseExplanationState.userPinnedOpen = false;
+    courseExplanationState.manualClosedScenarioRef = currentScenario;
+  } else {
+    // An explicit open is a session preference: keep Course Notes open for
+    // subsequent generated courses until the user closes the panel.
+    courseExplanationState.userPinnedOpen = true;
+    courseExplanationState.manualClosedScenarioRef = null;
+  }
+  renderScenario(currentScenario);
+});
+
+document.getElementById("dev-view").addEventListener("change", () => {
+  updateDevView();
+  if (currentScenario) {
+    renderScenario(currentScenario);
+  }
+});
+
+document.getElementById("board-audit-toggle").addEventListener("change", () => {
+  updateBoardAuditVisibility();
+});
+
+function handleOptionalRuleControlClick(event) {
+  const button = event.target.closest(".variant-state");
+  if (!button) {
+    return;
+  }
+
+  if (button.dataset.unavailableReason) {
+    showToast(button.dataset.unavailableReason);
+    return;
+  }
+
+  if (button.dataset.boardSpreadControl) {
+    cycleBoardSpreadControl();
+    return;
+  }
+
+  if (button.dataset.overlayControl) {
+    cycleOverlayModeControl();
+    return;
+  }
+
+  if (button.dataset.variantAction === "toggle-category") {
+    toggleVariantCategoryStates(button.dataset.variantCategory);
+    return;
+  }
+
+  if (button.dataset.variantId === "actFast") {
+    cycleActFastControlChoice();
+    return;
+  }
+
+  cycleVariantControlState(button.dataset.variantId);
+}
+
+document.querySelectorAll("[data-variant-menu]").forEach((menuEl) => {
+  menuEl.addEventListener("click", handleOptionalRuleControlClick);
+});
+
+document.getElementById("optional-rules-index-list")?.addEventListener("click", handleOptionalRuleControlClick);
+document.getElementById("optional-rules-title")?.addEventListener("click", openOptionalRulesDialog);
+document.getElementById("optional-rules-close-icon")?.addEventListener("click", closeOptionalRulesDialog);
+document.getElementById("optional-rules-close-button")?.addEventListener("click", closeOptionalRulesDialog);
+document.getElementById("optional-rules-search")?.addEventListener("input", (event) => {
+  filterOptionalRulesIndex(event.target.value);
+});
+document.getElementById("optional-rules-dialog")?.addEventListener("click", (event) => {
+  if (event.target === event.currentTarget) {
+    closeOptionalRulesDialog();
+  }
+});
+
+document.getElementById("player-count")?.addEventListener("change", () => {
+  updateVariantAvailability();
+});
+
+document.getElementById("expansion-roborally").addEventListener("change", () => {
+  updateExpansionSummary();
+});
+
+document.getElementById("expansion-30th-anniversary").addEventListener("change", () => {
+  updateExpansionSummary();
+});
+
+document.getElementById("expansion-rr-dice").addEventListener("change", () => {
+  updateExpansionSummary();
+});
+
+document.getElementById("expansion-master-builder").addEventListener("change", () => {
+  updateExpansionSummary();
+});
+
+document.getElementById("expansion-thrills-and-spills").addEventListener("change", () => {
+  updateExpansionSummary();
+});
+
+document.getElementById("expansion-chaos-and-carnage").addEventListener("change", () => {
+  updateExpansionSummary();
+});
+
+document.getElementById("expansion-wet-and-wild").addEventListener("change", () => {
+  updateExpansionSummary();
+});
+
+document.getElementById("expansion-contamination").addEventListener("change", () => {
+  updateExpansionSummary();
+});
+
+document.addEventListener("click", (event) => {
+  document.querySelectorAll(".variant-picker").forEach((picker) => {
+    if (!picker.contains(event.target)) {
+      picker.removeAttribute("open");
+    }
+  });
+});
+
+document.addEventListener("focusin", (event) => {
+  document.querySelectorAll(".variant-picker").forEach((picker) => {
+    if (!picker.contains(event.target)) {
+      picker.removeAttribute("open");
+    }
+  });
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    closeAboutDialog();
+    closeOptionalRulesDialog();
+    closeVariantPicker();
+  }
+});
+
+async function init() {
+  const assets = await loadAssets();
+  initializeBoardAudit(assets);
+  ensureScenarioAnimationLoop();
+  renderVariantControls();
+  updateExpansionSummary();
+  applyDevViewAvailability();
+  updateDevView();
+  const snapshot = loadScenarioSnapshot();
+
+  if (snapshot) {
+    applyPreferencesToControls(snapshot.preferences);
+    setGenerationStopRequested(false);
+    setGenerationHasRetainableCandidate(false);
+    setGenerationStopControlState(false);
+    setIsGenerating(true);
+    setGeneratingOverlay(true, "", {
+      attempt: 1,
+      maxAttempts: 1,
+      stage: "Reanalyzing saved course",
+      preferences: snapshot.preferences,
+      generationStartedAt: generationNow(),
+      acceptableCandidateTarget: 1,
+      acceptableCandidatesFound: 0
+    });
     await nextFrame();
-    const selectedLegIndices = getSelectedLegIndicesFromControl(currentScenario);
-    const text = buildScenarioReport(currentScenario, selectedLegIndices);
-    await copyTextToClipboard(text, button, "Copy all", "Course Evaluation");
-    // Refresh only the cheap overview so the newly measured deep-report timing is
-    // visible without leaving the expensive report resident in the DOM.
-    setCourseEvaluationReportText(buildScenarioDevOverview(currentScenario, selectedLegIndices));
-  }
 
-  document.getElementById("copy-course-evaluation-summary")?.addEventListener("click", () => {
-    copyCourseEvaluationSummary();
-  });
-
-  document.getElementById("copy-course-evaluation-all")?.addEventListener("click", () => {
-    copyCourseEvaluationAll();
-  });
-
-  document.getElementById("about-close-icon").addEventListener("click", () => {
-    closeAboutDialog();
-  });
-
-  document.getElementById("about-close-button").addEventListener("click", () => {
-    closeAboutDialog();
-  });
-
-  document.getElementById("about-dialog").addEventListener("click", (event) => {
-    const dialog = event.currentTarget;
-    if (event.target === dialog) {
-      closeAboutDialog();
-    }
-  });
-
-  document.getElementById("leg-select").addEventListener("change", (event) => {
-    const select = event.currentTarget;
-    if (select && ![...select.options].some((option) => option.selected)) {
-      [...select.options].forEach((option) => { option.selected = true; });
-    }
-    if (currentScenario) renderScenario(currentScenario);
-  });
-
-  document.getElementById("board-view-mode").addEventListener("change", () => {
-    if (currentScenario) {
-      renderScenario(currentScenario);
-    }
-  });
-
-  document.getElementById("map-feature-highlight")?.addEventListener("click", () => {
-    if (!currentScenario) return;
-    setMapFeatureHighlightEnabled(!mapFeatureHighlightEnabled);
-    renderScenario(currentScenario);
-  });
-
-  document.getElementById("course-explanation-toggle").addEventListener("click", () => {
-    if (!currentScenario) {
-      return;
-    }
-
-    const presentationMetrics = getScenarioPresentationMetrics(currentScenario);
-    const presentationScenario = presentationMetrics === currentScenario.metrics
-      ? currentScenario
-      : { ...currentScenario, metrics: presentationMetrics };
-    const autoOpen = buildCourseNoteFacts(presentationScenario).autoOpenExplanation;
-    const currentlyVisible = Boolean(
-      courseExplanationState.userPinnedOpen ||
-      (
-        autoOpen &&
-        courseExplanationState.manualClosedScenarioRef !== currentScenario
-      )
-    );
-    if (currentlyVisible) {
-      // Closing an explicitly pinned panel ends the cross-generation preference.
-      // Closing an auto-opened panel only suppresses it for this scenario.
-      courseExplanationState.userPinnedOpen = false;
-      courseExplanationState.manualClosedScenarioRef = currentScenario;
-    } else {
-      // An explicit open is a session preference: keep Course Notes open for
-      // subsequent generated courses until the user closes the panel.
-      courseExplanationState.userPinnedOpen = true;
-      courseExplanationState.manualClosedScenarioRef = null;
-    }
-    renderScenario(currentScenario);
-  });
-
-  document.getElementById("dev-view").addEventListener("change", () => {
-    updateDevView();
-    if (currentScenario) {
-      renderScenario(currentScenario);
-    }
-  });
-
-  document.getElementById("board-audit-toggle").addEventListener("change", () => {
-    updateBoardAuditVisibility();
-  });
-
-  function handleOptionalRuleControlClick(event) {
-    const button = event.target.closest(".variant-state");
-    if (!button) {
-      return;
-    }
-
-    if (button.dataset.unavailableReason) {
-      showToast(button.dataset.unavailableReason);
-      return;
-    }
-
-    if (button.dataset.boardSpreadControl) {
-      cycleBoardSpreadControl();
-      return;
-    }
-
-    if (button.dataset.overlayControl) {
-      cycleOverlayModeControl();
-      return;
-    }
-
-    if (button.dataset.variantAction === "toggle-category") {
-      toggleVariantCategoryStates(button.dataset.variantCategory);
-      return;
-    }
-
-    if (button.dataset.variantId === "actFast") {
-      cycleActFastControlChoice();
-      return;
-    }
-
-    cycleVariantControlState(button.dataset.variantId);
-  }
-
-  document.querySelectorAll("[data-variant-menu]").forEach((menuEl) => {
-    menuEl.addEventListener("click", handleOptionalRuleControlClick);
-  });
-
-  document.getElementById("optional-rules-index-list")?.addEventListener("click", handleOptionalRuleControlClick);
-  document.getElementById("optional-rules-title")?.addEventListener("click", openOptionalRulesDialog);
-  document.getElementById("optional-rules-close-icon")?.addEventListener("click", closeOptionalRulesDialog);
-  document.getElementById("optional-rules-close-button")?.addEventListener("click", closeOptionalRulesDialog);
-  document.getElementById("optional-rules-search")?.addEventListener("input", (event) => {
-    filterOptionalRulesIndex(event.target.value);
-  });
-  document.getElementById("optional-rules-dialog")?.addEventListener("click", (event) => {
-    if (event.target === event.currentTarget) {
-      closeOptionalRulesDialog();
-    }
-  });
-
-  document.getElementById("player-count")?.addEventListener("change", () => {
-    updateVariantAvailability();
-  });
-
-  document.getElementById("expansion-roborally").addEventListener("change", () => {
-    updateExpansionSummary();
-  });
-
-  document.getElementById("expansion-30th-anniversary").addEventListener("change", () => {
-    updateExpansionSummary();
-  });
-
-  document.getElementById("expansion-rr-dice").addEventListener("change", () => {
-    updateExpansionSummary();
-  });
-
-  document.getElementById("expansion-master-builder").addEventListener("change", () => {
-    updateExpansionSummary();
-  });
-
-  document.getElementById("expansion-thrills-and-spills").addEventListener("change", () => {
-    updateExpansionSummary();
-  });
-
-  document.getElementById("expansion-chaos-and-carnage").addEventListener("change", () => {
-    updateExpansionSummary();
-  });
-
-  document.getElementById("expansion-wet-and-wild").addEventListener("change", () => {
-    updateExpansionSummary();
-  });
-
-  document.getElementById("expansion-contamination").addEventListener("change", () => {
-    updateExpansionSummary();
-  });
-
-  document.addEventListener("click", (event) => {
-    document.querySelectorAll(".variant-picker").forEach((picker) => {
-      if (!picker.contains(event.target)) {
-        picker.removeAttribute("open");
+    const savedShell = buildSavedScenarioPresentationShell(assets, snapshot, "pending");
+    if (savedShell) {
+      setCurrentScenario(savedShell);
+      await ensureScenarioImages(assets, currentScenario);
+      pruneImageCache(assets, [
+        ...getPlacementImagePieceIds(currentScenario.placements, currentScenario.pieceMap),
+        boardAuditState.pieceId
+      ]);
+      try {
+        renderScenario(currentScenario);
+      } catch (error) {
+        console.warn("Saved-course presentation shell could not be rendered before reanalysis", error);
       }
-    });
-  });
-
-  document.addEventListener("focusin", (event) => {
-    document.querySelectorAll(".variant-picker").forEach((picker) => {
-      if (!picker.contains(event.target)) {
-        picker.removeAttribute("open");
-      }
-    });
-  });
-
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") {
-      closeAboutDialog();
-      closeOptionalRulesDialog();
-      closeVariantPicker();
     }
-  });
 
-  async function init() {
-    const assets = await loadAssets();
-    initializeBoardAudit(assets);
-    ensureScenarioAnimationLoop();
-    renderVariantControls();
-    updateExpansionSummary();
-    applyDevViewAvailability();
-    updateDevView();
-    const snapshot = loadScenarioSnapshot();
-
-    if (snapshot) {
-      applyPreferencesToControls(snapshot.preferences);
+    let restoredScenario = null;
+    let hydrationStopped = false;
+    let hydrationFailed = false;
+    try {
+      restoredScenario = await hydrateScenarioFromSnapshot(assets, snapshot, {
+        shouldStopRequested: () => generationStopRequested,
+        onStage: async (stage) => {
+          setGeneratingOverlay(true, "", {
+            attempt: 1,
+            maxAttempts: 1,
+            stage: `Reanalyzing saved course — ${stage}`,
+            preferences: snapshot.preferences
+          });
+          await nextEventLoopTurn();
+        },
+        onCooperativeProgress: async (progress) => {
+          setGeneratingOverlay(true, "", {
+            attempt: 1,
+            maxAttempts: 1,
+            stage: `Reanalyzing saved course — ${formatCooperativeRouteProgressStage(progress)}`,
+            preferences: snapshot.preferences
+          });
+          await nextEventLoopTurn();
+        }
+      });
+    } catch (error) {
+      if (error?.code === "ANALYSIS_STOP_REQUESTED") {
+        hydrationStopped = true;
+      } else {
+        hydrationFailed = true;
+        console.error("Saved-course reanalysis failed", error);
+      }
+    } finally {
+      setIsGenerating(false);
+      setGeneratingOverlay(false);
       setGenerationStopRequested(false);
       setGenerationHasRetainableCandidate(false);
       setGenerationStopControlState(false);
-      setIsGenerating(true);
-      setGeneratingOverlay(true, "", {
-        attempt: 1,
-        maxAttempts: 1,
-        stage: "Reanalyzing saved course",
-        preferences: snapshot.preferences,
-        generationStartedAt: generationNow(),
-        acceptableCandidateTarget: 1,
-        acceptableCandidatesFound: 0
-      });
-      await nextFrame();
-
-      const savedShell = buildSavedScenarioPresentationShell(assets, snapshot, "pending");
-      if (savedShell) {
-        setCurrentScenario(savedShell);
-        await ensureScenarioImages(assets, currentScenario);
-        pruneImageCache(assets, [
-          ...getPlacementImagePieceIds(currentScenario.placements, currentScenario.pieceMap),
-          boardAuditState.pieceId
-        ]);
-        try {
-          renderScenario(currentScenario);
-        } catch (error) {
-          console.warn("Saved-course presentation shell could not be rendered before reanalysis", error);
-        }
-      }
-
-      let restoredScenario = null;
-      let hydrationStopped = false;
-      let hydrationFailed = false;
-      try {
-        restoredScenario = await hydrateScenarioFromSnapshot(assets, snapshot, {
-          shouldStopRequested: () => generationStopRequested,
-          onStage: async (stage) => {
-            setGeneratingOverlay(true, "", {
-              attempt: 1,
-              maxAttempts: 1,
-              stage: `Reanalyzing saved course — ${stage}`,
-              preferences: snapshot.preferences
-            });
-            await nextEventLoopTurn();
-          },
-          onCooperativeProgress: async (progress) => {
-            setGeneratingOverlay(true, "", {
-              attempt: 1,
-              maxAttempts: 1,
-              stage: `Reanalyzing saved course — ${formatCooperativeRouteProgressStage(progress)}`,
-              preferences: snapshot.preferences
-            });
-            await nextEventLoopTurn();
-          }
-        });
-      } catch (error) {
-        if (error?.code === "ANALYSIS_STOP_REQUESTED") {
-          hydrationStopped = true;
-        } else {
-          hydrationFailed = true;
-          console.error("Saved-course reanalysis failed", error);
-        }
-      } finally {
-        setIsGenerating(false);
-        setGeneratingOverlay(false);
-        setGenerationStopRequested(false);
-        setGenerationHasRetainableCandidate(false);
-        setGenerationStopControlState(false);
-      }
-
-      if (!restoredScenario && savedShell) {
-        restoredScenario = {
-          ...savedShell,
-          hydrationPresentationStatusReason: hydrationStopped ? "reanalysis-stopped" : "reanalysis-failed",
-          hydrationReanalysisPending: false,
-          hydrationReanalysisStopped: hydrationStopped,
-          hydrationReanalysisFailed: hydrationFailed || !hydrationStopped
-        };
-      }
-      if (restoredScenario) {
-        setCurrentScenario(restoredScenario);
-        selectDefaultTraceStarts(currentScenario);
-        await ensureScenarioImages(assets, currentScenario);
-        pruneImageCache(assets, [
-          ...getPlacementImagePieceIds(currentScenario.placements, currentScenario.pieceMap),
-          boardAuditState.pieceId
-        ]);
-        renderScenario(currentScenario);
-        return;
-      }
     }
 
-    await start();
+    if (!restoredScenario && savedShell) {
+      restoredScenario = {
+        ...savedShell,
+        hydrationPresentationStatusReason: hydrationStopped ? "reanalysis-stopped" : "reanalysis-failed",
+        hydrationReanalysisPending: false,
+        hydrationReanalysisStopped: hydrationStopped,
+        hydrationReanalysisFailed: hydrationFailed || !hydrationStopped
+      };
+    }
+    if (restoredScenario) {
+      setCurrentScenario(restoredScenario);
+      selectDefaultTraceStarts(currentScenario);
+      await ensureScenarioImages(assets, currentScenario);
+      pruneImageCache(assets, [
+        ...getPlacementImagePieceIds(currentScenario.placements, currentScenario.pieceMap),
+        boardAuditState.pieceId
+      ]);
+      renderScenario(currentScenario);
+      return;
+    }
   }
 
-  init().catch(console.error);
-
+  await start();
 }
+
+init().catch(console.error);
+

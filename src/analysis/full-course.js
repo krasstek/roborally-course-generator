@@ -42,7 +42,7 @@ import {
   getCourseStartingEnergy,
   getInitialRouteEnergyShadowReserve
 } from "./energy-economy.js";
-import { average, clamp } from "./math.js";
+import { average, clamp } from "../shared/math.js";
 import {
   cloneEstimatedCardForecastFrontier,
   getCompactProgramCardStateFromHistory,

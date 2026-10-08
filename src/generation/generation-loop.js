@@ -1,10 +1,10 @@
 // Robo Rally Course Randomizer - generation loop: candidate attempts, acceptance and canonical selection, the production entry point, diagnostics cases
-import { buildCourseNotesHtml } from "../../course-notes.js";
 import {
-  analyzeBuildIdSafe,
-  clearAnalysisCachesSafe,
-  getAnalysisTelemetrySnapshotSafe
-} from "./analysis-api.js";
+  ANALYZE_BUILD_ID,
+  clearAnalysisCaches,
+  getAnalysisTelemetrySnapshot
+} from "../../analyze.js";
+import { buildCourseNotesHtml } from "../../course-notes.js";
 import { createRandomCandidate } from "./candidate-builder.js";
 import {
   chooseNearBestCandidate,
@@ -293,7 +293,7 @@ export async function generateScenarioForPreferences(assets, preferences, option
 
   const attachDiagnostics = (scenario) => {
     if (!scenario) return scenario;
-    const telemetry = getAnalysisTelemetrySnapshotSafe();
+    const telemetry = getAnalysisTelemetrySnapshot();
     generationDiagnostics.totalMs = Number((generationNow() - generationStartedAt).toFixed(2));
     generationDiagnostics.totalEvaluations = attempt;
     generationDiagnostics.emergencyActivated = emergencyActivated;
@@ -306,7 +306,7 @@ export async function generateScenarioForPreferences(assets, preferences, option
     generationDiagnostics.cappedRouteSearches = telemetry.cappedSearches ?? 0;
     generationDiagnostics.slowestRouteSearch = telemetry.slowestSearch ?? null;
     generationDiagnostics.routeSearchTotalsByKind = telemetry.totalsByKind ?? null;
-    generationDiagnostics.analyzeBuildId = analyzeBuildIdSafe;
+    generationDiagnostics.analyzeBuildId = ANALYZE_BUILD_ID;
     generationDiagnostics.physicalCacheTotals = telemetry.physicalCacheTotals ?? null;
     generationDiagnostics.dynamicArchivePhysicalCacheTotals =
       telemetry.dynamicArchivePhysicalCacheTotals ?? null;
@@ -387,7 +387,7 @@ export async function generateScenarioForPreferences(assets, preferences, option
     }
 
     const progressMaxAttempts = emergencyActivated ? effectiveMaxAttempts : maxAttempts;
-    const workSnapshot = getAnalysisTelemetrySnapshotSafe();
+    const workSnapshot = getAnalysisTelemetrySnapshot();
     // The minimum-attempt guard protects against settling for a poor fallback;
     // once an acceptable course exists, the work allowance alone decides.
     const softBudgetReached = (
@@ -403,7 +403,7 @@ export async function generateScenarioForPreferences(assets, preferences, option
     const remainingAttempts = progressMaxAttempts - attempt;
     const attemptLabel = attempt + 1;
     const candidateStartedAt = generationNow();
-    const telemetryBefore = getAnalysisTelemetrySnapshotSafe();
+    const telemetryBefore = getAnalysisTelemetrySnapshot();
     const stageTimings = [];
     let lastStage = emergencyActivated
       ? "Finding a fallback course — no playable candidate yet"
@@ -465,7 +465,7 @@ export async function generateScenarioForPreferences(assets, preferences, option
           if (!bestScenario && !isViableFallbackScenario(candidateBestScenario)) {
             return false;
           }
-          const work = getAnalysisTelemetrySnapshotSafe();
+          const work = getAnalysisTelemetrySnapshot();
           return (work.totalExpansions ?? 0) >= softExpansionBudget;
         },
         shouldStopRequested,
@@ -502,7 +502,7 @@ export async function generateScenarioForPreferences(assets, preferences, option
       if (emergencyActivated) {
         generationDiagnostics.emergencyAttemptsUsed = Math.max(0, attempt - maxAttempts);
       }
-      const telemetryAfter = getAnalysisTelemetrySnapshotSafe();
+      const telemetryAfter = getAnalysisTelemetrySnapshot();
       const routeDelta = summarizeRouteSearchDelta(telemetryBefore, telemetryAfter);
       generationDiagnostics.attempts.push({
         startAttempt: attemptLabel,
@@ -563,7 +563,7 @@ export async function generateScenarioForPreferences(assets, preferences, option
     const lastMeaningfulStage = lastStage;
     recordStageBoundary(scenario ? "Candidate complete" : "Candidate rejected");
 
-    const telemetryAfter = getAnalysisTelemetrySnapshotSafe();
+    const telemetryAfter = getAnalysisTelemetrySnapshot();
     const routeDelta = summarizeRouteSearchDelta(telemetryBefore, telemetryAfter);
     const attemptRecord = {
       startAttempt: attemptLabel,
@@ -814,7 +814,7 @@ export function buildDiagnosticsCases(basePreferences) {
 export async function runProductionGeneration(assets, preferences, options = {}) {
   const seed = Number.isInteger(options.seed) ? options.seed : null;
   const maxAttempts = options.maxAttempts ?? getGenerationModeProfile(preferences).maxAttempts;
-  clearAnalysisCachesSafe();
+  clearAnalysisCaches();
   let effectivePreferences = preferences;
   let anyTargetResolution = null;
   const runGeneration = () => {

@@ -17,7 +17,7 @@ import {
 import { isDevViewEnabled } from "./environment.js";
 import { formatActualDifficultyLabel, formatLegacyDifficultyLabel } from "./labels.js";
 import { buildBoardRects } from "./layout-geometry.js";
-import { clamp } from "./math.js";
+import { clamp } from "../shared/math.js";
 import { getActFastPressureWeight, getActFastREPressureMultiplier } from "./play-time.js";
 import { computeUsableStarts } from "./start-balance.js";
 

@@ -10,7 +10,7 @@ import {
   getConstructionGuidanceModePolicy
 } from "./generation-modes.js";
 import { isMiniOverlayPiece } from "./layout-geometry.js";
-import { clamp } from "./math.js";
+import { clamp } from "../shared/math.js";
 import { getSelectedExpansionIds, normalizeBoardSpread } from "./preferences.js";
 import { sample, sampleManyWeighted } from "./random.js";
 import {

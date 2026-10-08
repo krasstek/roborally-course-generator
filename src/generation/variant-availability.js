@@ -5,14 +5,14 @@ import {
   buildVariantBundle,
   getVariantAvailabilityRule,
   getVariantConstructionRequirement,
-  getVariantDefinition as getRegisteredVariantDefinition,
+  getVariantDefinition,
   getVariantExclusiveGroupConflict,
   getVariantRequirementIds
 } from "../../variants.js";
 import { cachedAssets } from "./assets.js";
 import { countFeatureTypeInTileMap } from "./board-profile.js";
 import { MAX_DOCK_COUNT } from "./config.js";
-import { clamp } from "./math.js";
+import { clamp } from "../shared/math.js";
 import { getMovingCheckpointTrace } from "./moving-targets.js";
 import {
   ACT_FAST_MODE_IDS,
@@ -35,10 +35,6 @@ export function isCheckpointActiveFeature(feature, options = {}) {
 
 export function getVariantDefinitionLabel(variantId) {
   return VARIANT_DEFINITIONS.find((variant) => variant.id === variantId)?.label ?? variantId;
-}
-
-export function getVariantDefinition(variantId) {
-  return getRegisteredVariantDefinition(variantId);
 }
 
 export function getVariantStateCopy(variantId, state) {

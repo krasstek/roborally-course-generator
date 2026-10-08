@@ -17,7 +17,7 @@ import {
 } from "./difficulty-metrics.js";
 import { isDevViewEnabled } from "./environment.js";
 import { formatPresentedLengthLabel, getProductionLengthTurnIndex } from "./labels.js";
-import { clamp } from "./math.js";
+import { clamp } from "../shared/math.js";
 import {
   ENERGY_ECONOMY_DRAW_EVENT_WALL_CLOCK_REGISTERS,
   ENERGY_ECONOMY_INSTALL_EVENT_WALL_CLOCK_REGISTERS,

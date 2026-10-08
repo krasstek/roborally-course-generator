@@ -8,7 +8,7 @@ import {
   getRouteEnergyEconomyConfig,
   getRouteUsefulCardUnitsPerDraw
 } from "./energy-economy.js";
-import { clamp } from "./math.js";
+import { clamp } from "../shared/math.js";
 import { summarizeRegisterEquivalentLedger } from "./route-evaluation.js";
 import { isRouteAwareBatteryScoringActive } from "./rule-options.js";
 

@@ -1,15 +1,13 @@
 // Robo Rally Course Randomizer - text reports: copy summary, benchmark summary, Course Evaluation report
 import {
-  ROUTE_ENERGY_ECONOMY_DEFAULTS,
+  ANALYZE_BUILD_ID,
   getDamageEconomyTelemetrySnapshot,
-  summarizeDamageEconomyFoundationForRoute
+  ROUTE_ENERGY_ECONOMY_DEFAULTS,
+  summarizeDamageEconomyFoundationForRoute,
+  summarizePathfinderObjectiveAudit,
+  summarizeTrafficOwnershipAudit
 } from "../../analyze.js";
 import { getCheckpointPlacementAdvisory } from "../../course-notes.js";
-import {
-  analyzeBuildIdSafe,
-  summarizePathfinderObjectiveAuditSafe,
-  summarizeTrafficOwnershipAuditSafe
-} from "../generation/analysis-api.js";
 import { getPlayableCheckpoints } from "../generation/checkpoints.js";
 import {
   DEFAULT_STARTING_ENERGY,
@@ -185,7 +183,7 @@ export function buildScenarioCopySummary(scenario) {
     if (diagnostics.routeSearchTotalsByKind) {
       lines.push(`Route kinds: ${formatRouteSearchKindBreakdown(diagnostics.routeSearchTotalsByKind)}`);
     }
-    const analyzerBuild = diagnostics.analyzeBuildId ?? analyzeBuildIdSafe;
+    const analyzerBuild = diagnostics.analyzeBuildId ?? ANALYZE_BUILD_ID;
     lines.push(`Analyzer build: ${analyzerBuild}`);
     if (diagnostics.cooperativeIteratorTotals) {
       const cooperative = diagnostics.cooperativeIteratorTotals;
@@ -1301,14 +1299,14 @@ export function buildScenarioReport(scenario, selectedLegIndices = null) {
     scenario.generationDiagnostics
       ? `Generation timing: total ${formatGenerationDuration(scenario.generationDiagnostics.totalMs)}, routeSearch ${formatGenerationDuration(scenario.generationDiagnostics.routeSearchMs)}, searches ${scenario.generationDiagnostics.routeSearches}, expansions ${scenario.generationDiagnostics.routeExpansions}, capped ${scenario.generationDiagnostics.cappedRouteSearches}, mode ${scenario.generationDiagnostics.generationModeLabel ?? formatGenerationModeLabel(getScenarioGenerationMode(scenario))}, softBudget ${scenario.generationDiagnostics.softExpansionBudget ?? getGenerationModeProfile({ generationMode: getScenarioGenerationMode(scenario) }).softExpansionBudget}`
       : "Generation timing: n/a",
-    `Analyzer build: ${scenario.generationDiagnostics?.analyzeBuildId ?? analyzeBuildIdSafe}`,
+    `Analyzer build: ${scenario.generationDiagnostics?.analyzeBuildId ?? ANALYZE_BUILD_ID}`,
     `UI build: ${MAIN_BUILD_ID}`,
     `Start balance: ${formatStartBalanceLabel(scenario.preferences?.startBalance)} (${normalizeStartBalance(scenario.preferences?.startBalance)})`,
     Number.isFinite(Number(scenario?.devPerformance?.generateClickToRenderMs))
       ? `Dev render timing: Generate click -> first rendered course ${formatDevMilliseconds(Number(scenario.devPerformance.generateClickToRenderMs))}; last Dev render ${formatDevMilliseconds(Number(scenario.devPerformance.lastRenderMs) || 0)}`
       : "Dev render timing: first-render measurement unavailable",
     (() => {
-      const audit = summarizePathfinderObjectiveAuditSafe();
+      const audit = summarizePathfinderObjectiveAudit();
       return audit
         ? `Pathfinder objective v49bf (unchanged through v49ch): programmed action tempo ${audit.registerTempoScore} score = 1 register for every card; action-type/reverse/heavy premiums OFF; conveyor/gear complexity premiums OFF; raw travelled-space premiums OFF (distance telemetry retained; Manhattan queue heuristic active); reboot skipped-register tempo ON, fixed discontinuity premium OFF; card plausibility, Energy and hazard guidance remain active.`
         : "Pathfinder objective v49bf (unchanged through v49ch): audit metadata unavailable.";
@@ -1320,7 +1318,7 @@ export function buildScenarioReport(scenario, selectedLegIndices = null) {
         const searchSlices = scenario.generationDiagnostics.cooperativeSearchTotals ?? {};
         return `Cooperative yielding v49o: max uninterrupted ${formatGenerationDuration(cooperative.maxSliceMs ?? 0)} (${cooperative.maxSlicePhase ?? "unknown"}${cooperative.maxSliceSearchKind ? `/${cooperative.maxSliceSearchKind}` : ""}), ${cooperative.browserYields ?? 0} browser yield(s) / ${formatGenerationDuration(cooperative.browserPausedMs ?? 0)} paused, ${cooperative.slices ?? 0} iterator slice(s); resumable physical search ${searchSlices.searches ?? 0} search(es)/${searchSlices.slices ?? 0} useful boundary(ies), ${cooperative.routeSearchBrowserYields ?? 0} route-slice handoff(s), ${formatGenerationDuration(searchSlices.pausedMs ?? 0)} suspended, max search work slice ${formatGenerationDuration(searchSlices.maxSliceWorkMs ?? 0)}.`;
       })()
-      : `Cooperative yielding v49o: telemetry unavailable from analyzer build ${scenario.generationDiagnostics?.analyzeBuildId ?? analyzeBuildIdSafe}.`,
+      : `Cooperative yielding v49o: telemetry unavailable from analyzer build ${scenario.generationDiagnostics?.analyzeBuildId ?? ANALYZE_BUILD_ID}.`,
     scenario.generationDiagnostics
       ? `Qualifying candidate pool: ${scenario.generationDiagnostics.acceptableCandidatesFound ?? 0}/${scenario.generationDiagnostics.acceptableCandidateTarget ?? 1}; scores ${(scenario.generationDiagnostics.acceptableCandidateScores ?? []).join(", ") || "none"}; near-best ${(scenario.generationDiagnostics.nearBestCandidateScores ?? []).join(", ") || "none"}; selected ${scenario.generationDiagnostics.selectedCandidateScore ?? "n/a"}; soft-fit limit ${scenario.generationDiagnostics.softCandidateRetentionLimit ?? SOFT_CANDIDATE_RETENTION_LIMIT}`
       : "Qualifying candidate pool: n/a",
@@ -1566,7 +1564,7 @@ export function buildScenarioReport(scenario, selectedLegIndices = null) {
       : "Traffic forecast confidence v49dm LIVE: n/a",
     currentNormalRouteModel
       ? (() => {
-        const audit = summarizeTrafficOwnershipAuditSafe();
+        const audit = summarizeTrafficOwnershipAudit();
         const own = summary.fullCourseTraffic?.ownershipAuditV49bk ?? null;
         return audit && own
           ? `Traffic ownership v49ce: avg effective ${summary.fullCourseTraffic?.averagePenalty ?? 0} score (mechanical traffic only); robot-laser damage ${own.averageRobotLaserDamageScore ?? 0} score = ${own.averageRobotLaserDamageRE ?? 0} RE via damage economy; legacy residual ranged threat ${own.averageLegacyResidualRangedThreatDiagnosticPenalty ?? 0} diagnostic-only / production 0; nearby turn-episode control AUTHORITATIVE ${own.averageNearbyPenalty ?? 0} score = ${own.averageAuthoritativeNearbyControlRE ?? 0} RE; simultaneous-reboot pile-up ${own.averageSimultaneousRebootPileupEventMass ?? 0} event mass / ${own.averageSimultaneousRebootPileupMaximumTurnProbability ?? 0} max-turn probability -> +${own.averageSimultaneousRebootPileupClogRE ?? 0}RE actual-clog consequence; traffic-awareness mental AUTHORITATIVE downstream ${own.averageTrafficAwarenessMentalRE ?? 0} RE from event mass ${own.averageTrafficAwarenessEventMass ?? 0} (laser ${own.averageTrafficAwarenessRobotLaserEventMass ?? 0} + non-laser ${own.averageTrafficAwarenessNonLaserEventMass ?? 0} + reboot-pileup ${own.averageTrafficAwarenessRebootPileupEventMass ?? 0}); non-laser episode probability mass ${own.averageNearbyTurnEpisodeEventMassCandidate ?? 0}, episode control load ${own.averageNearbyTurnEpisodeControlLoadCandidate ?? 0}; competition ${own.averageCompetitionPenalty ?? 0} (active ${audit.competitionActive ? "yes" : "no"}).`

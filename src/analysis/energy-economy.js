@@ -1,7 +1,7 @@
 // Robo Rally Course Randomizer - energy and upgrade economy: starting resources, route energy value and the flattened energy shadow
 import { tileKey } from "./board-geometry.js";
 import { REGISTER_COUNT } from "./constants.js";
-import { clamp } from "./math.js";
+import { clamp } from "../shared/math.js";
 import { isRouteAwareBatteryScoringActive } from "./rule-options.js";
 
 // Shared upgrade-economy defaults.  The legacy DP diagnostics and the v18

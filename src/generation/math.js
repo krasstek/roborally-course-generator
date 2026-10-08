@@ -1,18 +1,8 @@
 // Robo Rally Course Randomizer - small numeric helpers used by generation
-export function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value));
-}
+import { clamp } from "../shared/math.js";
 
 export function normalizeBias(raw) {
   return Number(clamp(1 + raw, 1, 3).toFixed(2));
-}
-
-export function averageValues(values = []) {
-  if (!values.length) {
-    return 0;
-  }
-
-  return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
 export function getCombinationCount(n, k, cap = 50001) {

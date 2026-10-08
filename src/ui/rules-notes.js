@@ -2,7 +2,7 @@
 import { buildResolvedMap } from "../../board.js";
 import {
   VARIANT_DEFINITIONS,
-  getVariantDefinition as getRegisteredVariantDefinition,
+  getVariantDefinition,
   getVariantGuidanceRules
 } from "../../variants.js";
 import { cachedAssets } from "../generation/assets.js";
@@ -65,11 +65,11 @@ export function getVariantImpactSummary(scenario) {
   const activeImpacts = [];
   const idleImpacts = [];
   const addImpact = (variantId, detail = "") => {
-    const label = getRegisteredVariantDefinition(variantId)?.label ?? variantId;
+    const label = getVariantDefinition(variantId)?.label ?? variantId;
     activeImpacts.push(detail ? `${label} (${detail})` : label);
   };
   const addIdle = (variantId, detail = "") => {
-    const label = getRegisteredVariantDefinition(variantId)?.label ?? variantId;
+    const label = getVariantDefinition(variantId)?.label ?? variantId;
     idleImpacts.push(detail ? `${label} (${detail})` : label);
   };
 
@@ -341,7 +341,7 @@ export function buildVariantRuleGuidanceNotes(scenario) {
         if (targetId && (targetActive || !variantGuidanceTargetIsLegal(targetId, scenario))) {
           continue;
         }
-        const target = targetId ? getRegisteredVariantDefinition(targetId) : null;
+        const target = targetId ? getVariantDefinition(targetId) : null;
         if (!target?.label) continue;
         if (!suggestionTargetsBySource.has(source.id)) {
           suggestionTargetsBySource.set(source.id, {

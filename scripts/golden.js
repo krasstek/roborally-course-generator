@@ -3,8 +3,8 @@
 // Robo Rally comparison harness ("golden master").
 //
 // Runs a fixed list of seeded course generations through the exact production
-// path (main.js runProductionGeneration) and compares the saved-course output
-// against a recorded baseline. Used as the safety net for refactoring: a purely
+// path (runProductionGeneration, via src/generation/calibration-hooks.js) and
+// compares the saved-course output against a recorded baseline. Used as the safety net for refactoring: a purely
 // mechanical change must reproduce every baseline byte for byte.
 //
 // Commands:
@@ -211,7 +211,7 @@ const RESTORE_FIELDS = [
 // Worker (runs inside a child process)
 
 async function loadApp() {
-  const main = await import(join(PROJECT_DIR, "main.js"));
+  const main = await import(join(PROJECT_DIR, "src/generation/calibration-hooks.js"));
   const { VARIANT_DEFINITIONS } = await import(join(PROJECT_DIR, "variants.js"));
   const assets = await main.loadCalibrationAssets();
   return { main, assets, variantDefinitions: VARIANT_DEFINITIONS };

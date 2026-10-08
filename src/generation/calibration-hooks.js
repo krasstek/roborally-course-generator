@@ -1,15 +1,21 @@
 // Robo Rally Course Randomizer - calibration and test entry points used by the calibration runner and the comparison harness
+//
+// The calibration harness deliberately reuses production construction and route
+// semantics, but it is not a second generator. Internal calibration preferences
+// only broaden sampling, force requested counts, preserve target misses as data,
+// and expose cheap construction evidence. Browser generation never emits them.
+// Missing calibration output therefore cannot affect correctness.
+import {
+  clearAnalysisCaches,
+  getAnalysisTelemetrySnapshot,
+  resetAnalysisTelemetry
+} from "../../analyze.js";
 import { buildResolvedMap } from "../../board.js";
 import {
   VARIANT_DEFINITIONS,
   applyVariantAnalysisOptions,
   buildVariantBundle
 } from "../../variants.js";
-import {
-  clearAnalysisCachesSafe,
-  getAnalysisTelemetrySnapshotSafe,
-  resetAnalysisTelemetrySafe
-} from "./analysis-api.js";
 import {
   analyzeFlagSequence,
   buildRouteAwareBatteryScoringOptions
@@ -195,7 +201,7 @@ export async function loadCalibrationAssets() {
 // Headless entry points for scripts/golden.js. They wrap the exact production
 // generate / save / reload paths without any DOM or storage access.
 export async function generateScenarioForTesting(assets, preferences, options = {}) {
-  resetAnalysisTelemetrySafe();
+  resetAnalysisTelemetry();
   return runProductionGeneration(assets, preferences, {
     seed: options.seed,
     // Optional Stop / progress hooks, as the Generate button passes them.
@@ -292,8 +298,8 @@ export async function generateCalibrationObservation(assets, options = {}) {
       : 1
   };
 
-  resetAnalysisTelemetrySafe();
-  clearAnalysisCachesSafe();
+  resetAnalysisTelemetry();
+  clearAnalysisCaches();
   const startedAt = generationNow();
   const seed = Number.isFinite(Number(options.seed)) ? (Math.floor(Number(options.seed)) >>> 0) : null;
 
@@ -304,7 +310,7 @@ export async function generateCalibrationObservation(assets, options = {}) {
   // many impossible setup requests.
   const inventoryError = validateSelectedInventory(assets, preferences);
   if (inventoryError) {
-    const telemetry = getAnalysisTelemetrySnapshotSafe();
+    const telemetry = getAnalysisTelemetrySnapshot();
     return {
       scenario: null,
       evaluationsUsed: 0,
@@ -339,7 +345,7 @@ export async function generateCalibrationObservation(assets, options = {}) {
     // an attempt failure and tries another construction. In calibration one attempt
     // is the observation, so this is evidence rather than a harness error.
     if (error?.message === "Unable to create a valid board layout") {
-      const telemetry = getAnalysisTelemetrySnapshotSafe();
+      const telemetry = getAnalysisTelemetrySnapshot();
       return {
         scenario: null,
         evaluationsUsed: 1,
@@ -359,7 +365,7 @@ export async function generateCalibrationObservation(assets, options = {}) {
     throw error;
   }
 
-  const telemetry = getAnalysisTelemetrySnapshotSafe();
+  const telemetry = getAnalysisTelemetrySnapshot();
   return {
     ...result,
     calibrationStatus: result?.scenario
@@ -461,8 +467,8 @@ export function analyzeCalibrationPlacements(assets, sourceScenario, placements,
     contextualRequiredStarts: playerCount
   };
 
-  resetAnalysisTelemetrySafe();
-  clearAnalysisCachesSafe();
+  resetAnalysisTelemetry();
+  clearAnalysisCaches();
   const startedAt = generationNow();
   const sequence = analyzeFlagSequence(goalTileMap, activeStarts, checkpoints, playerCount, analysisOptions);
   const metrics = classifyCandidate(sequence, {
@@ -483,7 +489,7 @@ export function analyzeCalibrationPlacements(assets, sourceScenario, placements,
     goalTileMap,
     rebootTokens
   });
-  const telemetry = getAnalysisTelemetrySnapshotSafe();
+  const telemetry = getAnalysisTelemetrySnapshot();
   const syntheticScenario = {
     ...sourceScenario,
     placements,

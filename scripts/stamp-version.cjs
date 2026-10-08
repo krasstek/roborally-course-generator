@@ -41,9 +41,9 @@ function createTimestampVersion() {
 
 // Versioned files are requested with ?v=<version>: every app module (root *.js
 // except the service worker, plus everything under src/) through the import map,
-// and every board data file and the calibration guidance through main.js
-// versionedPath. Unversioned files are the page shell and the icons that
-// index.html and the manifest reference. Board photos are left to the runtime cache.
+// and every board data file and the calibration guidance through versionedPath
+// in src/generation/assets.js. Unversioned files are the page shell and the icons
+// that index.html and the manifest reference. Board photos are left to the runtime cache.
 function buildPrecacheLists() {
   const modules = [
     ...fs.readdirSync(rootDir)

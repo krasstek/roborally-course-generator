@@ -20,7 +20,7 @@ import {
   getRouteEnergyEconomyConfig,
   getRouteEnergyShadowStep
 } from "./energy-economy.js";
-import { clamp, percentileNumber } from "./math.js";
+import { clamp, percentileNumber } from "../shared/math.js";
 import {
   DYNAMIC_ARCHIVE_CACHE_TELEMETRY,
   getAutoKillRecoveryProgressFromPoint,

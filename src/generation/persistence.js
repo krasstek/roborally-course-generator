@@ -1,9 +1,12 @@
 // Robo Rally Course Randomizer - saved courses: serialisation, presentation snapshot and shell, reload (hydrateScenarioFromSnapshot) and canonical evaluation
-import { recomputeFirstLegPressure } from "../../analyze.js";
+import {
+  analyzeFullCourseCooperative,
+  clearAnalysisCaches,
+  recomputeFirstLegPressure
+} from "../../analyze.js";
 import { buildResolvedMap } from "../../board.js";
 import { buildCourseNotesHtml } from "../../course-notes.js";
 import { VARIANT_DEFINITIONS, applyVariantAnalysisOptions } from "../../variants.js";
-import { analyzeFullCourseCooperativeSafe, clearAnalysisCachesSafe } from "./analysis-api.js";
 import {
   analyzeFlagSequence,
   buildRouteAwareBatteryScoringOptions
@@ -812,7 +815,7 @@ export async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}
   // Canonical evaluation during generation keeps the warm caches: they are pure
   // memos, and the comparison harness (leak + restore checks) verifies that the
   // result matches a cold page reload exactly.
-  if (!control.keepAnalysisCaches) clearAnalysisCachesSafe();
+  if (!control.keepAnalysisCaches) clearAnalysisCaches();
   const { tileMap, starts } = buildResolvedMap(placements, pieceMap);
   const rebootTokens = recoveryRule === "home_reboot"
     ? placeHomeRebootTokens(dockPlacements, pieceMap, starts, tileMap, checkpoints, {
@@ -942,7 +945,7 @@ export async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}
     // used the current Balanced budgets, so getScenarioGenerationMode() maps
     // those legacy snapshots to Balanced rather than silently using Standard.
     generationMode: hydrationGenerationMode,
-    fullCourseAnalyzer: analyzeFullCourseCooperativeSafe,
+    fullCourseAnalyzer: analyzeFullCourseCooperative,
     cooperativeYield: async (progress) => {
       if (onCooperativeProgress) {
         await onCooperativeProgress(progress);

@@ -4,7 +4,8 @@ import {
   BOARD_PROFILE_DENSITY_WEIGHT,
   getBoardProfileDelta
 } from "../../feature-weights.js";
-import { clamp, normalizeBias } from "./math.js";
+import { clamp } from "../shared/math.js";
+import { normalizeBias } from "./math.js";
 
 export const BOARD_PROFILE_HAZARD_DENSITY_THRESHOLD = 0.16;
 export const BOARD_PROFILE_HAZARD_DENSITY_WEIGHT = 2.4;

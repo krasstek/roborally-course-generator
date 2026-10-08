@@ -6,7 +6,7 @@ import {
   getDamageEconomyRealizedDamageForTransition,
   isDamageEconomyRepairStationTile
 } from "./damage-economy.js";
-import { clamp } from "./math.js";
+import { clamp } from "../shared/math.js";
 import {
   getRebootEndedAbsoluteActions,
   getRegisterPosition,

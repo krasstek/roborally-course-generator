@@ -4,7 +4,7 @@
 // answered (Dev View switches and the currently offered difficulty/length
 // options) go through this module. The defaults are the headless answers used by
 // the comparison harness and calibration; the browser page registers its own
-// implementations at start-up (see main.js), which read the controls exactly as
+// implementations at start-up (see src/ui/app.js), which read the controls exactly as
 // before.
 import { DIAGNOSTIC_DIFFICULTIES, DIAGNOSTIC_LENGTHS } from "./config.js";
 

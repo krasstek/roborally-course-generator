@@ -3,7 +3,7 @@
 //
 // Public entry point of the route analysis. The implementation lives in
 // src/analysis/ (one module per topic, low layers first); this file only
-// re-exports the analysis API used by main.js, the scripts and tools.
+// re-exports the analysis API used by src/generation/, src/ui/, the scripts and tools.
 
 export const ANALYZE_BUILD_ID = "v49fo-randomizer-hotpath-fix";
 

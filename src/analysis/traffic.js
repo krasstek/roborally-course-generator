@@ -21,7 +21,7 @@ import {
   getDamageEconomyHaywireEventProbability,
   getDamageEconomyProgrammingSummary
 } from "./damage-economy.js";
-import { average, clamp } from "./math.js";
+import { average, clamp } from "../shared/math.js";
 import { canMoveBetween, directionBetween, heuristic } from "./movement.js";
 import {
   getRebootEndedAbsoluteActions,

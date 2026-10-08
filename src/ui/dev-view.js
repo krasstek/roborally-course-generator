@@ -46,9 +46,7 @@ export let devFrozenGenerationSeed = null;
 
 export function pageIsDevViewEnabled() {
   // Browser Dev View is presentation/diagnostic state, not generation semantics.
-  // Calibration imports Main directly in Node, where no DOM exists; headless runs
-  // must therefore behave exactly like ordinary generation with Dev View disabled.
-  if (typeof document === "undefined") return false;
+  // Headless runs answer through the environment defaults (Dev View disabled).
   return document.getElementById("dev-view")?.checked ?? true;
 }
 
@@ -685,8 +683,6 @@ export function removeDevStartResidualTable() {
 }
 
 export function updateDevStartResidualTable(scenario) {
-  if (typeof document === "undefined") return;
-
   const residuals = scenario?.sequence?.firstLeg?.summary?.normalStartBalance?.startResiduals ?? null;
   const notableEntries = residuals?.active
     ? (residuals.entries ?? [])
@@ -1322,17 +1318,14 @@ export function ensureDevGenerationSeedControls() {
 }
 
 export function pageIsDevRouteModelOverrideActive() {
-  if (typeof document === "undefined") return false;
   return Boolean(document.getElementById("dev-route-model-override-toggle")?.checked);
 }
 
 export function pageIsDevFastTrafficEnabled() {
-  if (typeof document === "undefined") return false;
   return Boolean(document.getElementById("dev-fast-traffic-toggle")?.checked);
 }
 
 export function pageIsDevFastAlternatesEnabled() {
-  if (typeof document === "undefined") return false;
   return Boolean(document.getElementById("dev-fast-alternates-toggle")?.checked);
 }
 
@@ -1444,7 +1437,6 @@ export function ensureDevFastBaselineControls() {
 // the same either way, so the parameter unlocks nothing. Without it the checkbox
 // is forced off, because browsers can restore a ticked checkbox on reload.
 export function applyDevViewAvailability() {
-  if (typeof document === "undefined") return;
   const available = new URLSearchParams(location.search).has("dev");
   document.getElementById("dev-view-toggle-label")?.classList.toggle("hidden", !available);
   const checkbox = document.getElementById("dev-view");

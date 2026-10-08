@@ -3,7 +3,7 @@ import { buildPortalMap } from "./board-geometry.js";
 import { enumeratePhysicalTimingLegTemplates } from "./contextual-search.js";
 import { getInitialRouteEnergyShadowReserve } from "./energy-economy.js";
 import { scoreFlagArea } from "./flag-area.js";
-import { average, stdDev } from "./math.js";
+import { average, stdDev } from "../shared/math.js";
 import { getHomeRebootTokensForStart } from "./reboot-recovery.js";
 import { getExpectedTrafficBreakdown } from "./route-evaluation.js";
 import { enumerateRoutes } from "./route-search.js";

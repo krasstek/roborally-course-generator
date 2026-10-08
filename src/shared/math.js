@@ -1,4 +1,4 @@
-// Robo Rally Course Randomizer - small numeric helpers used across the analysis
+// Robo Rally Course Randomizer - small numeric helpers shared by analysis, generation and UI
 export function percentileNumber(values, fraction = 0.5) {
   const sorted = values.filter(Number.isFinite).sort((a, b) => a - b);
   if (!sorted.length) return null;
@@ -11,7 +11,7 @@ export function percentileNumber(values, fraction = 0.5) {
   return sorted[lower] * (1 - weight) + sorted[upper] * weight;
 }
 
-export function average(values) {
+export function average(values = []) {
   if (!values.length) return 0;
   return values.reduce((sum, value) => sum + value, 0) / values.length;
 }

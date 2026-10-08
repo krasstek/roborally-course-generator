@@ -663,7 +663,7 @@ async function runObservationInWorker(request) {
     generateCalibrationObservation,
     loadCalibrationAssets,
     reanalyzeCalibrationScenario
-  } = await import("../main.js");
+  } = await import("../src/generation/calibration-hooks.js");
 
   const assets = await loadCalibrationAssets();
   const { plan, config } = request;
@@ -972,7 +972,7 @@ async function main() {
   const {
     describeCalibrationInventory,
     loadCalibrationAssets
-  } = await import("../main.js");
+  } = await import("../src/generation/calibration-hooks.js");
 
   const outputPath = makeOutputPath(options);
   const exists = await fileExists(outputPath);

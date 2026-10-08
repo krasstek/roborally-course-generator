@@ -35,7 +35,7 @@ import {
   replayDamageEconomyShutdownEquivalentScore
 } from "./damage-economy.js";
 import { getInitialRouteEnergyShadowReserve, getRouteEnergyShadowStep } from "./energy-economy.js";
-import { average, clamp } from "./math.js";
+import { average, clamp } from "../shared/math.js";
 import {
   getProgramCardEffectivePreviousCode,
   scoreContextualCardSequence

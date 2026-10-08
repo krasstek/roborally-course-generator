@@ -16,7 +16,7 @@ import {
   NORMAL_REGISTER_RANGE_GUARDRAIL_MIN,
   NORMAL_START_FAIRNESS_STDDEV_LIMIT
 } from "./config.js";
-import { averageValues } from "./math.js";
+import { average } from "../shared/math.js";
 import { getRouteAnalysisVariantOptions } from "./variant-availability.js";
 
 // v49fj user-facing Start Balance policy. This changes how tightly starting
@@ -330,7 +330,7 @@ export function getNormalStartDispersion(entries, scoreKey = "adjustedScore") {
     return 0;
   }
 
-  const mean = averageValues(values);
+  const mean = average(values);
   return Math.sqrt(
     values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / values.length
   );
@@ -416,7 +416,7 @@ export function summarizePostBalanceStartResiduals(firstLeg, playerCount = 1) {
     return null;
   }
 
-  const scoreCenter = averageValues(
+  const scoreCenter = average(
     active.map((entry) => entry.normalFairnessEffectiveRE)
   );
   const scoreStdDev = getNormalStartDispersion(
@@ -424,7 +424,7 @@ export function summarizePostBalanceStartResiduals(firstLeg, playerCount = 1) {
     "normalFairnessEffectiveRE"
   );
   const actionValues = active.map((entry) => Number(entry.bestActions)).filter(Number.isFinite);
-  const actionCenter = actionValues.length ? averageValues(actionValues) : 0;
+  const actionCenter = actionValues.length ? average(actionValues) : 0;
 
   const componentSpecs = [
     {
@@ -460,7 +460,7 @@ export function summarizePostBalanceStartResiduals(firstLeg, playerCount = 1) {
   ];
   const componentStats = new Map(componentSpecs.map((spec) => {
     const values = active.map(spec.value).filter(Number.isFinite);
-    const center = values.length ? averageValues(values) : 0;
+    const center = values.length ? average(values) : 0;
     const stdDev = values.length >= 2
       ? Math.sqrt(values.reduce((sum, value) => sum + (value - center) ** 2, 0) / values.length)
       : 0;
@@ -1038,7 +1038,7 @@ export function chooseNormalStartFinalTailCleanup(entries, playerCount) {
     .filter(Number.isFinite);
   if (scoreValues.length !== entries.length) return null;
 
-  const center = averageValues(scoreValues);
+  const center = average(scoreValues);
   const currentStdDev = getNormalStartDispersion(entries, "balanceScore");
   if (!(currentStdDev > 1e-9)) return null;
   const minimumScoreDelta = Math.max(6, currentStdDev * 0.8, Math.abs(center) * 0.02);
@@ -1264,7 +1264,7 @@ export function adjustStartOutliersForCourseLength(firstLeg, totalLength, tileMa
     .map((entry) => entry.normalFairnessEffectiveRE)
     .filter(Number.isFinite);
   const meanScore = activeScores.length
-    ? averageValues(activeScores)
+    ? average(activeScores)
     : 0;
 
   const lateOutliers = pressureRemovals.map((removal) => ({
