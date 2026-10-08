@@ -41,6 +41,79 @@ import {
   buildVariantBundle
 } from "./variants.js";
 import { buildCourseNoteFacts, buildCourseNotesHtml, clearCourseNotesCache, getCheckpointPlacementAdvisory } from "./course-notes.js";
+import {
+  analyzeBuildIdSafe,
+  analyzeFullCourseCooperativeSafe,
+  clearAnalysisCachesSafe,
+  getAnalysisTelemetrySnapshotSafe,
+  resetAnalysisTelemetrySafe,
+  summarizePathfinderObjectiveAuditSafe,
+  summarizeTrafficOwnershipAuditSafe
+} from "./src/generation/analysis-api.js";
+import {
+  CARDINAL_DIRS,
+  COMPETITIVE_EFFECTIVE_RE_HARD_RANGE_MULTIPLIER,
+  COMPETITIVE_EFFECTIVE_RE_RANGE_MIN,
+  COMPETITIVE_EFFECTIVE_RE_RANGE_PER_TURN,
+  COURSE_PREFLIGHT_DIFFICULTY_MARGIN,
+  COURSE_PREFLIGHT_LATER_MAX_ACTIONS,
+  COURSE_PREFLIGHT_LENGTH_MARGIN,
+  COURSE_PREFLIGHT_OPENING_MAX_ACTIONS,
+  DEFAULT_GENERATION_MODE,
+  DEFAULT_STARTING_ENERGY,
+  DEFAULT_STARTING_UPGRADE_CARDS,
+  DIAGNOSTIC_ATTEMPTS,
+  DIAGNOSTIC_DIFFICULTIES,
+  DIAGNOSTIC_LENGTHS,
+  DIAGNOSTIC_PLAYER_COUNTS,
+  DOCK_BRIDGE_GAP,
+  DOCK_SIDES,
+  FACINGS,
+  FALLBACK_SOFT_FAILURE_PENALTIES,
+  FORCED_ECONOMY_NO_EFFECT_FIT_PENALTY,
+  FULL_START_OUTLIER_Z,
+  GENERATION_EMERGENCY_ATTEMPT_RESERVE,
+  GENERATION_MODE_LABELS,
+  GENERATION_MODE_PROFILES,
+  LASER_BUNDLE_DEFINITIONS,
+  LIGHT_START_MAX_ACTIONS,
+  LIGHT_START_MAX_EXPANSIONS,
+  LIGHT_START_SURPLUS,
+  MAX_DOCK_COUNT,
+  MIN_LENGTH_RAW,
+  MIN_SHARED_EDGE,
+  NEAR_BEST_MIN_BIN_WIDTH,
+  NORMAL_CONTEXTUAL_FULL_FORECAST_SHARE,
+  NORMAL_EFFECTIVE_RE_FAIRNESS_STDDEV_LIMIT,
+  NORMAL_EFFECTIVE_RE_MINIMUM_DELTA,
+  NORMAL_EFFECTIVE_RE_OUTLIER_Z,
+  NORMAL_EFFECTIVE_RE_RANGE_MIN,
+  NORMAL_EFFECTIVE_RE_RANGE_PER_TURN,
+  NORMAL_EFFECTIVE_RE_SCORE_PER_RE,
+  NORMAL_EFFECTIVE_RE_SOFT_OVERFLOW_FRACTION,
+  NORMAL_EFFECTIVE_RE_SOFT_OVERFLOW_MIN,
+  NORMAL_FINAL_TAIL_CLEANUP_Z,
+  NORMAL_FULL_COURSE_TRAFFIC_PASSES,
+  NORMAL_PRUNE_BATCH_SIZE,
+  NORMAL_REGISTER_RANGE_GUARDRAIL_FRACTION,
+  NORMAL_REGISTER_RANGE_GUARDRAIL_MIN,
+  NORMAL_START_FAIRNESS_STDDEV_LIMIT,
+  NORMAL_TRAFFIC_ALTERNATE_DEMAND_THRESHOLD,
+  NORMAL_TRAFFIC_ALTERNATE_MIN_GAIN,
+  NO_DOCK_START_EDGE_FEATURE_TYPES,
+  OPPOSITE_DIRS,
+  OVERLAY_UPDATE_INTERVAL,
+  ROTATIONS,
+  SOFT_CANDIDATE_RETENTION_LIMIT,
+  SUBSIDIZED_STARTS_MAX_EXTRA_ENERGY,
+  TARGET_STRONG_DIFFICULTY_FIT,
+  TARGET_STRONG_EASY_DIFFICULTY_FIT,
+  TARGET_STRONG_LENGTH_FIT,
+  VIRTUAL_BOT_AUTOKILL_FEATURE_TYPES,
+  VIRTUAL_BOT_EDGE_PROXIMITY_PENALTY,
+  VIRTUAL_BOT_FACING_LOOKAHEAD,
+  VIRTUAL_BOT_FORWARD_DANGER_PENALTY
+} from "./src/generation/config.js";
 const MAIN_BUILD_ID = "v49fp-safari-dev-panel-tightening";
 // Mobile browsers may auto-detect number-like rule text and restyle it as a
 // tappable link even though the app emitted ordinary text. Keep rules/course
@@ -102,383 +175,6 @@ const versionedPath = (path) => `${path}${VERSION_SUFFIX}`;
 // Versioned strings stored in diagnostic `method` fields are compatibility
 // identifiers, not ordinary comments. They may appear in saved/debug output and
 // should only be renamed alongside an explicit migration or schema decision.
-
-const analyzeBuildIdSafe = typeof ANALYZE_BUILD_ID === "string" && ANALYZE_BUILD_ID
-  ? ANALYZE_BUILD_ID
-  : "pre-v49m/unknown";
-
-// Cache clearing is a performance optimization, not a correctness requirement.
-// Keep startup/generation working if the browser temporarily resolves an older
-// analyze.js module that does not expose this helper.
-const clearAnalysisCachesSafe = typeof clearAnalysisCaches === "function"
-  ? clearAnalysisCaches
-  : () => {};
-
-const resetAnalysisTelemetrySafe = typeof resetAnalysisTelemetry === "function"
-  ? resetAnalysisTelemetry
-  : () => {};
-const analyzeFullCourseCooperativeSafe = typeof analyzeFullCourseCooperative === "function"
-  ? analyzeFullCourseCooperative
-  : async (...args) => analyzeFullCourse(...args);
-const summarizePathfinderObjectiveAuditSafe =
-  typeof summarizePathfinderObjectiveAudit === "function"
-    ? summarizePathfinderObjectiveAudit
-    : () => null;
-
-const summarizeTrafficOwnershipAuditSafe =
-  typeof summarizeTrafficOwnershipAudit === "function"
-    ? summarizeTrafficOwnershipAudit
-    : () => null;
-
-const getAnalysisTelemetrySnapshotSafe = typeof getAnalysisTelemetrySnapshot === "function"
-  ? getAnalysisTelemetrySnapshot
-  : () => ({
-    routeSearches: [],
-    routeSearchCount: 0,
-    totalExpansions: 0,
-    totalDurationMs: 0,
-    contextualProfileDurationMs: 0,
-    cappedSearches: 0,
-    slowestSearch: null,
-    totalsByKind: {},
-    cooperativeSearchTotals: { searches: 0, slices: 0, pausedMs: 0, maxSliceWorkMs: 0 },
-    cooperativeIteratorTotals: { slices: 0, workMs: 0, browserYields: 0, browserPausedMs: 0, maxSliceMs: 0 },
-    physicalCacheTotals: { hits: 0, misses: 0 },
-    dynamicArchivePhysicalCacheTotals: null,
-    cheapProgramAvailabilityTotals: null,
-    cheapProgramUnionAvailabilityTotals: null,
-    contextualProfileTotals: {
-      queueMs: 0,
-      currentKeyMs: 0,
-      goalCompletionMs: 0,
-      simulationMs: 0,
-      simulationHitMs: 0,
-      simulationMissMs: 0,
-      cardOptionsMs: 0,
-      actionScoringMs: 0,
-      energyMs: 0,
-      archiveContextMs: 0,
-      destinationBuildMs: 0,
-      routeNodeBuildMs: 0,
-      historyBuildMs: 0,
-      nextKeyMs: 0,
-      dominanceMs: 0,
-      actionCandidates: 0,
-      cardOptionCalls: 0,
-      simulationCalls: 0,
-      blockedTransitions: 0,
-      destinationCandidates: 0,
-      acceptedStates: 0,
-      dominatedStates: 0,
-      earlyDominanceEnergyBoundPrunes: 0,
-      completedGoals: 0,
-      searchesWithGoal: 0,
-      cappedZeroGoalSearches: 0,
-      cappedWithGoalSearches: 0,
-      firstGoalExpansionTotal: 0,
-      postFirstGoalExpansions: 0,
-      optionalCompletionSearches: 0,
-      optionalCompletionStops: 0,
-      optionalCompletionShortReturns: 0,
-      cappedZeroGoalExpansions: 0,
-      cappedWithGoalExpansions: 0,
-      exactContextualSearches: 0,
-      exactContextualExpansions: 0,
-      horizonSolidSearches: 0,
-      horizonUncertainSearches: 0,
-      horizonSpeculativeSearches: 0,
-      horizonFirstGoalUncertain: 0,
-      horizonFirstGoalSpeculative: 0,
-      horizonOptionalSuppressed: 0,
-      physicalCacheHits: 0,
-      physicalCacheMisses: 0,
-      dominanceKeysFull: 0,
-      dominanceKeysPhysical: 0,
-      dominanceKeysPhysicalPhase: 0,
-      dominanceKeysNoProgramDetail: 0,
-      dominanceKeysNoPrevious: 0,
-      dominanceKeysNoUsage: 0,
-      dominanceKeysNoAgain: 0,
-      dominanceKeysNoAbsolute: 0,
-      dominanceKeysNoEnergy: 0,
-      dominanceKeysNoCards: 0,
-      dominanceKeysNoEconomyShadow: 0,
-      dominanceKeysNoGoal: 0,
-      retainedDominanceStates: 0,
-      timingSampledNodes: 0,
-      timingPopulationNodes: 0,
-      dominanceUsageParetoStates: 0,
-      dominanceUsageParetoDominated: 0,
-      dominanceUsageParetoMultiStateGroups: 0,
-    }
-  });
-
-const ROTATIONS = [0, 90, 180, 270];
-const FACINGS = ["N", "E", "S", "W"];
-const DOCK_SIDES = ["left", "top", "right", "bottom"];
-const CARDINAL_DIRS = {
-  N: { dx: 0, dy: -1 },
-  E: { dx: 1, dy: 0 },
-  S: { dx: 0, dy: 1 },
-  W: { dx: -1, dy: 0 }
-};
-const LASER_BUNDLE_DEFINITIONS = [
-  {
-    startPhysicalId: "mb-tile-12",
-    midPhysicalId: "mb-tile-11",
-    endPhysicalId: "mb-tile-13",
-    startId: "mb-tile-12a",
-    midId: "mb-tile-11b",
-    endId: "mb-tile-13a"
-  },
-  {
-    startPhysicalId: "mb-tile-5",
-    midPhysicalId: "mb-tile-4",
-    endPhysicalId: "mb-tile-8",
-    startId: "mb-tile-5b",
-    midId: "mb-tile-4b",
-    endId: "mb-tile-8b"
-  }
-];
-const OPPOSITE_DIRS = {
-  N: "S",
-  E: "W",
-  S: "N",
-  W: "E"
-};
-const GENERATION_EMERGENCY_ATTEMPT_RESERVE = 3;
-const DEFAULT_GENERATION_MODE = "standard";
-const GENERATION_MODE_LABELS = Object.freeze({
-  fastest: "Fastest",
-  fast: "Fast",
-  standard: "Standard",
-  balanced: "Careful",
-  thorough: "Thorough"
-});
-// Generation modes change search effort and trust in guidance, never route
-// legality or course semantics. Calibration is proposal guidance: hidden Any
-// targets, predicted work and structural priors may reorder candidates, but only
-// explicit user targets may reject a finished course.
-const NORMAL_TRAFFIC_ALTERNATE_DEMAND_THRESHOLD = 3.2;
-const NORMAL_TRAFFIC_ALTERNATE_MIN_GAIN = 1.5;
-const NORMAL_FULL_COURSE_TRAFFIC_PASSES = 1;
-const NORMAL_PRUNE_BATCH_SIZE = 2;
-const NORMAL_CONTEXTUAL_FULL_FORECAST_SHARE = 0.65;
-
-// v49al generation-mode contract -----------------------------------------------
-// Modes never change route legality, reachability semantics, Energy valuation,
-// traffic scoring, or the definition of a hard-valid course. They change how
-// strongly construction guidance is trusted and how many broadly qualifying
-// course evaluations are collected before final ranking. Traffic-feedback route
-// judgement now uses one shared Standard-strength contract in every mode; the
-// universal six-search ceiling is a safety backstop, not a mode quality tier.
-// Primary-witness/preflight breadth remains mode-dependent for now and is a
-// separate follow-up boundary, so this patch does not silently rewrite the whole
-// construction/evaluation envelope at once.
-const COMMON_TRAFFIC_ROUTING_PROFILE = Object.freeze({
-  trafficEnabled: true,
-  trafficEpochs: 2,
-  trafficAlternateMaxNewSearchesPerEpoch: 6,
-  trafficAlternateMaxNewSearchesTotal: 6,
-  trafficAlternateExpansions: 320,
-  trafficAlternateMaxActions: 30,
-  trafficAlternateCachedProbeMargin: 0.75,
-  trafficAlternateCachedProbeMaxSimilarity: 0.84,
-  trafficAlternateLegsPerStart: 1,
-  trafficExplorationUncertaintyShare: 0,
-  trafficExplorationConfidenceFloor: 1,
-  trafficAlternateUncertaintyEffortFloor: 0.18,
-  trafficAlternateUncertaintyEffortExponent: 1.15
-});
-const GENERATION_MODE_PROFILES = Object.freeze({
-  fastest: Object.freeze({
-    maxAttempts: 5,
-    acceptableCandidateTarget: 1,
-    softExpansionBudget: 140000,
-    softBudgetMinAttempts: 3,
-    preflightOpeningExpansions: 800,
-    preflightLaterExpansions: 700,
-    lightStartExpansions: 4200,
-    fullCourseExpansions: 32000,
-    primaryWitnessRoutes: 1,
-    ...COMMON_TRAFFIC_ROUTING_PROFILE,
-  }),
-  fast: Object.freeze({
-    maxAttempts: 8,
-    acceptableCandidateTarget: 2,
-    softExpansionBudget: 240000,
-    softBudgetMinAttempts: 4,
-    preflightOpeningExpansions: 1000,
-    preflightLaterExpansions: 850,
-    lightStartExpansions: 5200,
-    fullCourseExpansions: 38000,
-    primaryWitnessRoutes: 2,
-    ...COMMON_TRAFFIC_ROUTING_PROFILE,
-  }),
-  standard: Object.freeze({
-    // v49j: three broadly qualifying candidates before near-best selection.
-    maxAttempts: 12,
-    acceptableCandidateTarget: 3,
-    softExpansionBudget: 360000,
-    softBudgetMinAttempts: 6,
-    preflightOpeningExpansions: 1200,
-    preflightLaterExpansions: 1000,
-    lightStartExpansions: 6000,
-    fullCourseExpansions: 44000,
-    primaryWitnessRoutes: 2,
-    ...COMMON_TRAFFIC_ROUTING_PROFILE,
-  }),
-  balanced: Object.freeze({
-    maxAttempts: 20,
-    acceptableCandidateTarget: 4,
-    softExpansionBudget: 500000,
-    softBudgetMinAttempts: 8,
-    preflightOpeningExpansions: 1400,
-    preflightLaterExpansions: 1200,
-    lightStartExpansions: 7000,
-    fullCourseExpansions: 52000,
-    primaryWitnessRoutes: 3,
-    ...COMMON_TRAFFIC_ROUTING_PROFILE,
-  }),
-  thorough: Object.freeze({
-    maxAttempts: 36,
-    acceptableCandidateTarget: 5,
-    softExpansionBudget: 850000,
-    softBudgetMinAttempts: 10,
-    preflightOpeningExpansions: 1800,
-    preflightLaterExpansions: 1600,
-    lightStartExpansions: 9500,
-    fullCourseExpansions: 68000,
-    primaryWitnessRoutes: 4,
-    ...COMMON_TRAFFIC_ROUTING_PROFILE,
-  })
-});
-const DIAGNOSTIC_ATTEMPTS = 24;
-const DIAGNOSTIC_PLAYER_COUNTS = [2, 4, 6];
-const DIAGNOSTIC_DIFFICULTIES = ["easy", "moderate", "hard", "brutal"];
-const DIAGNOSTIC_LENGTHS = ["short", "moderate", "long", "epic"];
-const MIN_LENGTH_RAW = 28;
-const MIN_SHARED_EDGE = 5;
-const DOCK_BRIDGE_GAP = 3;
-const MAX_DOCK_COUNT = 2;
-const DEFAULT_STARTING_ENERGY = ROUTE_ENERGY_ECONOMY_DEFAULTS.startingEnergy;
-const DEFAULT_STARTING_UPGRADE_CARDS = ROUTE_ENERGY_ECONOMY_DEFAULTS.startingUpgradeCards;
-const SUBSIDIZED_STARTS_MAX_EXTRA_ENERGY = 3;
-
-// Start-Energy balancing uses the v37 card-aware fixed-route pricing economy.
-// Route search itself stays on the shared flattened production scorer; pricing
-// replays already-discovered routes from startingEnergy±adjustment before the
-// opening Upgrade Phase and respects starting cards, future draw/install capacity,
-// the storage cap, and remaining race horizon. Moving baseline, one-at-a-time
-// endpoint pruning, selector breakpoint fit, and player-floor safeguards are
-// shared by Pay to Win and Subsidized Starts.
-// Passive border geometry that may coexist with a No-Docks starting square.
-// Active edge devices (lasers, push panels, flamethrowers) are deliberately
-// excluded even though they are encoded directionally on an edge: a player
-// should not be offered a start directly on an active emitter/pusher tile.
-const NO_DOCK_START_EDGE_FEATURE_TYPES = new Set([
-  "wall",
-  "redWall",
-  "greenWall",
-  "repulsor",
-  "ledge"
-]);
-// Virtual Bots use the same clear-floor concept as No Docks, but the shared
-// entry may be anywhere on the assembled course. Facing is a separate soft
-// preference: immediately nonsensical directions are excluded, while nearby
-// lethal floor features and exposed course edges only bias the random choice.
-const VIRTUAL_BOT_AUTOKILL_FEATURE_TYPES = new Set([
-  "pit",
-  "crusher",
-  "trapdoor"
-]);
-const VIRTUAL_BOT_FACING_LOOKAHEAD = 4;
-const VIRTUAL_BOT_FORWARD_DANGER_PENALTY = Object.freeze({
-  2: 3,
-  3: 1.5,
-  4: 0.6
-});
-const VIRTUAL_BOT_EDGE_PROXIMITY_PENALTY = Object.freeze({
-  1: 2.4,
-  2: 1.4,
-  3: 0.7,
-  4: 0.3
-});
-// v49j soft-fit collection. Hard validity is non-compensatory; ordinary target,
-// pacing, board-use and balance mismatches compete in one continuous fit score.
-// 45 is a modest tightening after the first empirical pass and remains exposed
-// in diagnostics so it can be tuned from real candidate distributions.
-const SOFT_CANDIDATE_RETENTION_LIMIT = 45;
-// v49ag: strong target-axis misses are non-compensatory for ordinary acceptance.
-// They remain eligible for clearly labelled closest-match fallback after the
-// search is exhausted; this is an acceptance gate, not a physical hard failure.
-// Keep these aligned with player-facing mismatch severity in course-notes.js.
-const TARGET_STRONG_DIFFICULTY_FIT = 42;
-const TARGET_STRONG_EASY_DIFFICULTY_FIT = 48;
-const TARGET_STRONG_LENGTH_FIT = 24;
-const NEAR_BEST_MIN_BIN_WIDTH = 2;
-
-// Extra Docks remains a special forced-request fallback until the later variant
-// policy audit. Ordinary quality mismatches no longer acquire fallback cliffs.
-const FALLBACK_SOFT_FAILURE_PENALTIES = new Map([
-  ["extra-docks", 100]
-]);
-const OVERLAY_UPDATE_INTERVAL = 4;
-const LIGHT_START_SURPLUS = 2;
-const LIGHT_START_MAX_EXPANSIONS = 7000;
-const LIGHT_START_MAX_ACTIONS = 18;
-// Universal cheap course preflight. These searches intentionally use a much
-// smaller budget than final contextual analysis: they are an audition, never a
-// proof of reachability. A capped or short-horizon route sketch is recorded as
-// incomplete and handed to the exact contextual pass instead of causing a retry.
-const COURSE_PREFLIGHT_OPENING_MAX_ACTIONS = 18;
-const COURSE_PREFLIGHT_LATER_MAX_ACTIONS = 20;
-// v12 design invariant: cheap pruning may reduce how many Normal/priced starts
-// receive rich follow-up, but it must use the same Energy-economy objective as
-// production whenever Energy/upgrades are active. Energy Crisis (lighterGame)
-// is currently the only rule that removes that economy entirely.
-//
-// This bounded coherent audition is therefore allowed to be *less exhaustive*,
-// not strategically different. Competitive never uses it: Competitive evaluates
-// every physical start because players themselves block spaces before selection.
-const COURSE_PREFLIGHT_DIFFICULTY_MARGIN = 35;
-const COURSE_PREFLIGHT_LENGTH_MARGIN = 40;
-const FULL_START_OUTLIER_Z = 2.25;
-const NORMAL_FINAL_TAIL_CLEANUP_Z = 2.0;
-const NORMAL_START_FAIRNESS_STDDEV_LIMIT = 14;
-// v49bo Normal RE-native fairness. v49cq also moves Competitive strategic
-// blocking/choice-set balance into completed effective RE; priced-start modes
-// already use their selector-aware completed-RE economy path.
-const NORMAL_EFFECTIVE_RE_OUTLIER_Z = 2.25;
-const NORMAL_EFFECTIVE_RE_MINIMUM_DELTA = 2.5;
-// v49dx: Normal/economy fairness is range-first. The tolerated best↔worst
-// completed-RE gap grows with full-course programming extent; SD/outlier z are
-// diagnostics and pruning-direction tie-breakers, not independent targets.
-const NORMAL_EFFECTIVE_RE_RANGE_MIN = 3.0;
-const NORMAL_EFFECTIVE_RE_RANGE_PER_TURN = 0.60;
-// v49dy: once the expected range is met, fairness contributes zero candidate-fit
-// pressure. A modest overflow may still be retained at the player-count floor
-// and compete as a soft penalty; larger overflow is closest-match territory.
-const NORMAL_EFFECTIVE_RE_SOFT_OVERFLOW_MIN = 0.75;
-const NORMAL_EFFECTIVE_RE_SOFT_OVERFLOW_FRACTION = 0.25;
-// A forced Pay to Win / Subsidized Starts course that produces no visible
-// starting-Energy change is mechanically legal but a weak realization of a
-// Must request. Penalize selection rather than inventing an unnecessary price.
-const FORCED_ECONOMY_NO_EFFECT_FIT_PENALTY = 12;
-const NORMAL_EFFECTIVE_RE_FAIRNESS_STDDEV_LIMIT = 3.5; // diagnostic/Competitive anchor only
-// Main owns the RE-to-score conversion used by the residual Normal scorer;
-// do not depend on a private analyzer constant.
-const NORMAL_EFFECTIVE_RE_SCORE_PER_RE = 6.4;
-const NORMAL_REGISTER_RANGE_GUARDRAIL_MIN = 12;
-const NORMAL_REGISTER_RANGE_GUARDRAIL_FRACTION = 0.45;
-// v49ec: Competitive fairness is range-first after the sequential player-block
-// simulation. Keep Competitive calibration separate from Normal even though the
-// provisional length response currently shares the same 3RE / 0.6RE-per-turn
-// shape. SD/z remain diagnostics only. The hard ceiling preserves the historical
-// 1.5x soft/hard separation while multi-course calibration is still pending.
-const COMPETITIVE_EFFECTIVE_RE_RANGE_MIN = 3.0;
-const COMPETITIVE_EFFECTIVE_RE_RANGE_PER_TURN = 0.60;
-const COMPETITIVE_EFFECTIVE_RE_HARD_RANGE_MULTIPLIER = 1.50;
 
 // v49fj user-facing Start Balance policy. This changes how tightly starting
 // choices must cluster in completed effective RE; it never removes traffic,
