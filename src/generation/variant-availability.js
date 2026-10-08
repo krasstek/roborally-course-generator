@@ -21,6 +21,7 @@ import {
   isHardestDifficulty
 } from "./preferences.js";
 import { generationRandom, sample, shuffle } from "./random.js";
+import { applyVariantAnalysisOptions } from "../../variants.js";
 
 export const DEFAULT_CHECKPOINT_ACTIVE_FEATURE_TYPES = new Set(["wall", "redWall", "greenWall", "laser"]);
 
@@ -826,4 +827,33 @@ export function getDockConfigurations(availableDockIds, pieceMap, preferences = 
 
 export function isDynamicArchivingActive(preferences = {}) {
   return preferences.recoveryRule === "dynamic_archiving";
+}
+
+export function getRouteAnalysisVariantOptions(options = {}) {
+  // v38: variants.js is the authoritative route-analysis projection. Main only
+  // layers non-variant route-economy tuning values and Act Fast's chosen mode on
+  // top of that projection. This prevents registry mechanics such as Set to Kill,
+  // Set to Stun, Repair Stations, or Less Foreshadowing from silently disappearing
+  // in a second hand-maintained option list.
+  const variantOptions = applyVariantAnalysisOptions({}, options);
+  return {
+    ...variantOptions,
+    actFastMode: options.actFastMode ?? null,
+    routeAwareBatteryScoring: options.routeAwareBatteryScoring,
+    routeEnergyHorizonTurns: options.routeEnergyHorizonTurns,
+    routeEnergyRegisterScore: options.routeEnergyRegisterScore,
+    routeEnergyReferenceReserve: options.routeEnergyReferenceReserve,
+    startingEnergy: options.startingEnergy ?? variantOptions.startingEnergy,
+    startingEnergyDelta: options.startingEnergyDelta ?? variantOptions.startingEnergyDelta,
+    startingUpgradeCards: options.startingUpgradeCards ?? variantOptions.startingUpgradeCards,
+    startingUpgradeCardDelta: options.startingUpgradeCardDelta ?? variantOptions.startingUpgradeCardDelta,
+    maxEnergy: options.maxEnergy ?? variantOptions.maxEnergy,
+    upgradeDrawsPerTurn: options.upgradeDrawsPerTurn ?? variantOptions.upgradeDrawsPerTurn,
+    upgradeInstallsPerTurn: options.upgradeInstallsPerTurn ?? variantOptions.upgradeInstallsPerTurn,
+    upgradeDrawEnergyCost: options.upgradeDrawEnergyCost ?? variantOptions.upgradeDrawEnergyCost,
+    upgradeUsefulCardRate: options.upgradeUsefulCardRate ?? variantOptions.upgradeUsefulCardRate,
+    upgradeUsefulEnergyPerInstall: options.upgradeUsefulEnergyPerInstall ?? variantOptions.upgradeUsefulEnergyPerInstall,
+    upgradePowerRegistersPerEnergy: options.upgradePowerRegistersPerEnergy ?? variantOptions.upgradePowerRegistersPerEnergy,
+    routeRegistersPerTurn: options.routeRegistersPerTurn ?? variantOptions.routeRegistersPerTurn
+  };
 }
