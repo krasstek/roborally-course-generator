@@ -95,6 +95,14 @@ export function resetRENativeTrafficConfidenceProfileCache() {
   RE_NATIVE_TRAFFIC_CONFIDENCE_PROFILE_CACHE = new WeakMap();
 }
 
+// Robot-shot profiles are pure in (board, route leg, other route leg): occupancy
+// weights are applied afterwards by the caller. Keyed by both legs.
+export let DAMAGE_ECONOMY_ROBOT_SHOT_PROFILE_CACHE = new WeakMap();
+
+export function resetDamageEconomyRobotShotProfileCache() {
+  DAMAGE_ECONOMY_ROBOT_SHOT_PROFILE_CACHE = new WeakMap();
+}
+
 export function getTrafficIntrinsicRELedger(tileMap, route, options = {}) {
   if (!route) return null;
   const cached = TRAFFIC_INTRINSIC_RE_LEDGER_CACHE.get(route);
@@ -118,6 +126,84 @@ export function getTrafficIntrinsicRELedger(tileMap, route, options = {}) {
 // before traffic; confidence-weighted robot-laser damage is translated only in the
 // later common-traffic comparison. Search legality, cheap physical discovery, card
 // legality and search budgets remain unchanged.
+// The per-step part of a route's damage foundation (realized damage, randomizer
+// and relief at every transition) depends only on the route, the board and the
+// rules, not on traffic. Callers that evaluate the same routes under many
+// occupancy samples pass a damageEconomyStepRecordCache (a WeakMap scoped to
+// one evaluation) so each route's records are built once; the records are only
+// read afterwards, never changed.
+function getDamageEconomyTransitionRecords(tileMap, route, legs, options) {
+  const cache = options.damageEconomyStepRecordCache;
+  const cached = cache?.get(route);
+  if (cached?.tileMap === tileMap) return cached.records;
+  const transitionRecords = [];
+  let previousAbsoluteAction = 0;
+  for (const [legIndex, leg] of legs.entries()) {
+    const transitions = Array.isArray(leg?.transitions) ? leg.transitions : [];
+    let elapsedAbsoluteActions = Math.max(
+      0,
+      Number(leg?.absoluteStartAction) || previousAbsoluteAction
+    );
+    for (const [legActionIndex, transition] of transitions.entries()) {
+      const absoluteAction = getTransitionAbsoluteAction(
+        transition,
+        elapsedAbsoluteActions + 1
+      );
+      const turn = Math.floor((absoluteAction - 1) / REGISTER_COUNT) + 1;
+      const register = getRegisterPosition(absoluteAction);
+      const realized = getDamageEconomyRealizedDamageForTransition(
+        tileMap,
+        transition,
+        options,
+        absoluteAction
+      );
+      const randomizerAtRegisterStart = isDamageEconomyRandomizerAtRegisterStart(
+        tileMap,
+        transition,
+        options,
+        absoluteAction
+      );
+      const reliefProfile = getDamageEconomyRegisterReliefProfile(
+        tileMap,
+        randomizerAtRegisterStart && !transition?.randomizerAtRegisterStart
+          ? { ...transition, randomizerAtRegisterStart: true }
+          : transition,
+        transition,
+        options,
+        absoluteAction
+      );
+      const finalTile = transition?.to
+        ? tileMap.get(tileKey(transition.to.x, transition.to.y))
+        : null;
+      const repairStationEligible = Boolean(
+        options.repairStations &&
+        register === REGISTER_COUNT &&
+        !transition?.rebooted &&
+        !transition?.crashed &&
+        isDamageEconomyRepairStationTile(finalTile)
+      );
+      transitionRecords.push({
+        legIndex,
+        legAction: legActionIndex + 1,
+        absoluteAction,
+        turn,
+        register,
+        transition,
+        realized,
+        reliefProfile,
+        randomizerAtRegisterStart,
+        repairStationEligible
+      });
+      elapsedAbsoluteActions = transition?.rebooted
+        ? getRebootEndedAbsoluteActions(absoluteAction)
+        : absoluteAction;
+      previousAbsoluteAction = Math.max(previousAbsoluteAction, elapsedAbsoluteActions);
+    }
+  }
+  cache?.set(route, { tileMap, records: transitionRecords });
+  return transitionRecords;
+}
+
 export function summarizeDamageEconomyFoundationForRoute(
   tileMap,
   route,
@@ -184,70 +270,7 @@ export function summarizeDamageEconomyFoundationForRoute(
     ? route.legRoutes
     : [route];
   const selectedProgramTurns = getDamageEconomySelectedProgramTurns(legs);
-  const transitionRecords = [];
-  let previousAbsoluteAction = 0;
-  for (const [legIndex, leg] of legs.entries()) {
-    const transitions = Array.isArray(leg?.transitions) ? leg.transitions : [];
-    let elapsedAbsoluteActions = Math.max(
-      0,
-      Number(leg?.absoluteStartAction) || previousAbsoluteAction
-    );
-    for (const [legActionIndex, transition] of transitions.entries()) {
-      const absoluteAction = getTransitionAbsoluteAction(
-        transition,
-        elapsedAbsoluteActions + 1
-      );
-      const turn = Math.floor((absoluteAction - 1) / REGISTER_COUNT) + 1;
-      const register = getRegisterPosition(absoluteAction);
-      const realized = getDamageEconomyRealizedDamageForTransition(
-        tileMap,
-        transition,
-        options,
-        absoluteAction
-      );
-      const randomizerAtRegisterStart = isDamageEconomyRandomizerAtRegisterStart(
-        tileMap,
-        transition,
-        options,
-        absoluteAction
-      );
-      const reliefProfile = getDamageEconomyRegisterReliefProfile(
-        tileMap,
-        randomizerAtRegisterStart && !transition?.randomizerAtRegisterStart
-          ? { ...transition, randomizerAtRegisterStart: true }
-          : transition,
-        transition,
-        options,
-        absoluteAction
-      );
-      const finalTile = transition?.to
-        ? tileMap.get(tileKey(transition.to.x, transition.to.y))
-        : null;
-      const repairStationEligible = Boolean(
-        options.repairStations &&
-        register === REGISTER_COUNT &&
-        !transition?.rebooted &&
-        !transition?.crashed &&
-        isDamageEconomyRepairStationTile(finalTile)
-      );
-      transitionRecords.push({
-        legIndex,
-        legAction: legActionIndex + 1,
-        absoluteAction,
-        turn,
-        register,
-        transition,
-        realized,
-        reliefProfile,
-        randomizerAtRegisterStart,
-        repairStationEligible
-      });
-      elapsedAbsoluteActions = transition?.rebooted
-        ? getRebootEndedAbsoluteActions(absoluteAction)
-        : absoluteAction;
-      previousAbsoluteAction = Math.max(previousAbsoluteAction, elapsedAbsoluteActions);
-    }
-  }
+  const transitionRecords = getDamageEconomyTransitionRecords(tileMap, route, legs, options);
 
   const recordsByTurn = new Map();
   transitionRecords.forEach((record) => {
@@ -1304,6 +1327,19 @@ export function summarizeRegisterEquivalentLedger(
 // cardinal-direction cap. This keeps optional damage-score multipliers and rear/
 // side persistence heuristics out of the physical damage-card input.
 export function getDamageEconomyRobotShotProfile(tileMap, route, otherRoute) {
+  let otherCache = DAMAGE_ECONOMY_ROBOT_SHOT_PROFILE_CACHE.get(route);
+  if (!otherCache) {
+    otherCache = new WeakMap();
+    DAMAGE_ECONOMY_ROBOT_SHOT_PROFILE_CACHE.set(route, otherCache);
+  }
+  const cached = otherCache.get(otherRoute);
+  if (cached?.tileMap === tileMap) return cached.profile;
+  const profile = buildDamageEconomyRobotShotProfile(tileMap, route, otherRoute);
+  otherCache.set(otherRoute, { tileMap, profile });
+  return profile;
+}
+
+function buildDamageEconomyRobotShotProfile(tileMap, route, otherRoute) {
   const timelineA = getRegisterTimeline(route);
   const timelineB = getRegisterTimeline(otherRoute);
   const byFacing = Object.fromEntries(

@@ -1585,7 +1585,10 @@ export function getPayToWinLateCostEntries(
 
   const pricingOptions = getPayToWinRouteEconomyPricingOptions(firstLeg, {
     ...options,
-    playerCount: config.playerCount
+    playerCount: config.playerCount,
+    // Every start's routes are priced under many occupancy samples below; the
+    // traffic-independent part of their damage economy is built once per route.
+    damageEconomyStepRecordCache: new WeakMap()
   });
 
   for (const item of activeStarts) {

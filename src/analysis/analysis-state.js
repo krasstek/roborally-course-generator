@@ -21,6 +21,7 @@ import {
   resetRollingProgramSignatureIds
 } from "./program-availability.js";
 import {
+  resetDamageEconomyRobotShotProfileCache,
   resetRENativeTrafficConfidenceProfileCache,
   resetTrafficIntrinsicRELedgerCache
 } from "./route-evaluation.js";
@@ -401,6 +402,7 @@ export function clearAnalysisCaches() {
   resetFixedRoutePricingRELedgerCache();
   resetTrafficIntrinsicRELedgerCache();
   resetRENativeTrafficConfidenceProfileCache();
+  resetDamageEconomyRobotShotProfileCache();
   PROGRAM_RESOURCE_SUMMARY_CACHE.clear();
   ROLLING_PROGRAM_CONTEXT_CACHE.clear();
   PROGRAM_ACTION_TRANSITION_CACHE.clear();
