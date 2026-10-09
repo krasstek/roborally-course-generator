@@ -18,14 +18,7 @@ import {
   REGISTER_TEMPO_COST
 } from "./constants.js";
 import { clamp } from "../shared/math.js";
-import {
-  canMoveBetween,
-  getFlamethrowerDamagePenalty,
-  getLedgePressurePenalty,
-  getPitPressurePenalty,
-  getTilePenalty,
-  hasFeatureType
-} from "./movement.js";
+import { canMoveBetween, hasFeatureType } from "./movement.js";
 import {
   PROGRAM_EXACT_HAND_SIZE,
   chooseSmall,
@@ -680,6 +673,12 @@ export const DAMAGE_ECONOMY_RELIEF_CONVEYOR_BONUS_MAX = 0.18;
 export const DAMAGE_ECONOMY_RELIEF_FORWARD_DISTANCE_WEIGHTS = Object.freeze([1, 0.60, 0.35]);
 export const DAMAGE_ECONOMY_RELIEF_WALL_BONUS_BY_DISTANCE = Object.freeze([0.32, 0.18, 0.08]);
 export const DAMAGE_ECONOMY_RELIEF_FORWARD_HAZARD_PENALTY_MAX = 0.55;
+// Forward-hazard scale in damage units: one damage card a random move would
+// cost lowers the relief opportunity by this much per forward step (the scale
+// the old one-damage laser tile had, 4 score / 25.6). A crash or crusher counts
+// as a reboot: the full penalty, recorded as this many damage-equivalents.
+export const DAMAGE_ECONOMY_RELIEF_FORWARD_DAMAGE_UNIT_PENALTY = 4 / 25.6;
+export const DAMAGE_ECONOMY_RELIEF_FORWARD_REBOOT_UNITS = 3;
 export const DAMAGE_ECONOMY_RELIEF_CONTINUITY_BONUS_MAX = 0.15;
 export const DAMAGE_ECONOMY_CLOG_RE_BY_COUNT = Object.freeze([0, 1, 2.2, 3.6, 5.4, 7.5]);
 
@@ -1208,7 +1207,7 @@ export function getDamageEconomyForwardReliefContext(
     const moveCheck = canMoveBetween(tileMap, from, to, dir, registerOptions);
     if (!moveCheck.ok) {
       if (moveCheck.crash) {
-        forwardHazardScore += REGISTER_TEMPO_COST * 2 * weight;
+        forwardHazardScore += DAMAGE_ECONOMY_RELIEF_FORWARD_REBOOT_UNITS * weight;
         forwardHazardPenalty += DAMAGE_ECONOMY_RELIEF_FORWARD_HAZARD_PENALTY_MAX * weight;
       }
       break;
@@ -1216,19 +1215,28 @@ export function getDamageEconomyForwardReliefContext(
     const tile = tileMap.get(tileKey(to.x, to.y));
     if (!tile) break;
 
-    let landingHazardScore = Math.max(0, getTilePenalty(tile, registerOptions));
-    landingHazardScore += Math.max(0, Number(moveCheck.ledgeDamage) || 0);
-    landingHazardScore += getPitPressurePenalty(tileMap, to, registerOptions, true);
-    landingHazardScore += getLedgePressurePenalty(tileMap, to, registerOptions);
-    landingHazardScore += getDamageEconomyActiveFlamethrowerCount(tile, registerOptions) *
-      Math.max(0, getFlamethrowerDamagePenalty(registerOptions));
+    // Landing hazards in the damage economy's own terms: an active crusher is a
+    // reboot like a crash; otherwise the damage cards a robot would take if a
+    // random card left it on this tile (lasers, flamers, oil, radiation, waste,
+    // ledges), with the variants the damage economy models (Cutting Floor, More
+    // Deadly, Flaming Oil). The route search's tile penalties and pressure
+    // terms stay out of it.
     if (hasActiveFeature(tile, "crusher", registerOptions)) {
-      landingHazardScore = Math.max(landingHazardScore, REGISTER_TEMPO_COST * 2);
+      forwardHazardScore += DAMAGE_ECONOMY_RELIEF_FORWARD_REBOOT_UNITS * weight;
+      forwardHazardPenalty += DAMAGE_ECONOMY_RELIEF_FORWARD_HAZARD_PENALTY_MAX * weight;
+      break;
     }
-    forwardHazardScore += landingHazardScore * weight;
+    const landing = getDamageEconomyRealizedDamageForTransition(
+      tileMap,
+      { from: { ...from, facing: dir }, to: { ...to, facing: dir }, traversed: [{ ...to }] },
+      options,
+      absoluteAction
+    );
+    const landingDamageUnits = Math.max(0, Number(landing?.totalDamageUnits) || 0);
+    forwardHazardScore += landingDamageUnits * weight;
     forwardHazardPenalty += Math.min(
       DAMAGE_ECONOMY_RELIEF_FORWARD_HAZARD_PENALTY_MAX * weight,
-      landingHazardScore / (REGISTER_TEMPO_COST * 4) * weight
+      landingDamageUnits * DAMAGE_ECONOMY_RELIEF_FORWARD_DAMAGE_UNIT_PENALTY * weight
     );
     from = to;
   }
