@@ -12,7 +12,28 @@ import { getRebootEndedAbsoluteActions } from "./reboot-recovery.js";
 import { analysisTelemetryNow } from "./telemetry.js";
 import { getTurnEndAfterActionIndexes } from "./reboot-recovery.js";
 
+// The card model depends on four values only and is asked for on every search
+// step, so each combination is built once. The cached profiles are frozen: they
+// are shared by every caller.
+const PROGRAM_CARD_MODEL_PROFILE_CACHE = new Map();
+const PROGRAM_CARD_MODEL_SIGNATURE_CACHE = new Map();
+
+function getProgramCardModelKey(options) {
+  const playerCount = Math.max(1, Math.floor(Number(options.playerCount) || 4));
+  return `${playerCount}|${options.lessForeshadowing ? 1 : 0}|${options.classicSharedDeck ? 1 : 0}|${options.factoryRejects ? 1 : 0}`;
+}
+
 export function getProgramCardModelProfile(options = {}) {
+  const key = getProgramCardModelKey(options);
+  let profile = PROGRAM_CARD_MODEL_PROFILE_CACHE.get(key);
+  if (!profile) {
+    profile = Object.freeze(buildProgramCardModelProfile(options));
+    PROGRAM_CARD_MODEL_PROFILE_CACHE.set(key, profile);
+  }
+  return profile;
+}
+
+function buildProgramCardModelProfile(options) {
   const playerCount = Math.max(1, Math.floor(Number(options.playerCount) || 4));
   const resetEachTurn = Boolean(options.lessForeshadowing);
   const sharedDeck = Boolean(options.classicSharedDeck);
@@ -35,6 +56,16 @@ export function getProgramCardModelProfile(options = {}) {
 }
 
 export function getProgramCardModelSignature(options = {}) {
+  const key = getProgramCardModelKey(options);
+  let signature = PROGRAM_CARD_MODEL_SIGNATURE_CACHE.get(key);
+  if (signature === undefined) {
+    signature = buildProgramCardModelSignature(options);
+    PROGRAM_CARD_MODEL_SIGNATURE_CACHE.set(key, signature);
+  }
+  return signature;
+}
+
+function buildProgramCardModelSignature(options) {
   const profile = getProgramCardModelProfile(options);
   return [
     `h${profile.handSize}`,
