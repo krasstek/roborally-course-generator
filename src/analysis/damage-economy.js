@@ -682,6 +682,130 @@ export const DAMAGE_ECONOMY_RELIEF_WALL_BONUS_BY_DISTANCE = Object.freeze([0.32,
 export const DAMAGE_ECONOMY_RELIEF_FORWARD_HAZARD_PENALTY_MAX = 0.55;
 export const DAMAGE_ECONOMY_RELIEF_CONTINUITY_BONUS_MAX = 0.15;
 export const DAMAGE_ECONOMY_CLOG_RE_BY_COUNT = Object.freeze([0, 1, 2.2, 3.6, 5.4, 7.5]);
+
+// v50 SPAM relief. A register's relief opportunity (0..1) ranks where a player
+// sheds SPAM: late registers, a wall ahead or a conveyor ride make a random card
+// less harmful; forced rotations, pushes and hazards ahead make it riskier.
+// When programming, a player puts SPAM into the turn's best registers and
+// accepts worse spots the more SPAM the robot carries. What a shed SPAM costs
+// has two parts:
+// - chaos for the rest of the turn: every later register of the turn is
+//   programmed against a position the random card has changed, so this part is
+//   full in register 1 and zero in register 5;
+// - displacement into the next turn: the robot ends off-plan, less so where the
+//   board forgives a random move (wall ahead, conveyor ride).
+// Together they span the full SPAM play weight (register 1, open floor) down to
+// a floor (register 5 facing a wall). Randomizer registers are already random,
+// so SPAM shed there adds no control loss of its own.
+export const DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT_HARMLESS = 0.5;
+export const DAMAGE_ECONOMY_SPAM_PLAY_DISPLACEMENT_WEIGHT = 1;
+// Board safety reaches 1 at this net bonus (e.g. an adjacent wall plus a
+// conveyor ride); hazards and forced motion pull it back to 0.
+export const DAMAGE_ECONOMY_SPAM_PLAY_FULL_BOARD_SAFETY = 0.5;
+
+export function getDamageEconomySpamPlayBoardSafety(reliefProfile) {
+  const netBonus =
+    (Number(reliefProfile?.wallBonus) || 0) +
+    (Number(reliefProfile?.conveyorMovementBonus) || 0) -
+    (Number(reliefProfile?.forcedRotationPenalty) || 0) -
+    (Number(reliefProfile?.forcedMovementPenalty) || 0) -
+    (Number(reliefProfile?.forwardHazardPenalty) || 0);
+  return clamp(netBonus / DAMAGE_ECONOMY_SPAM_PLAY_FULL_BOARD_SAFETY, 0, 1);
+}
+
+export function getDamageEconomySpamPlayClogWeight(register, reliefProfile) {
+  const laterRegisters = clamp(REGISTER_COUNT - (Number(register) || REGISTER_COUNT), 0, REGISTER_COUNT - 1);
+  const chaos =
+    (DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT - DAMAGE_ECONOMY_SPAM_PLAY_DISPLACEMENT_WEIGHT) *
+    laterRegisters / (REGISTER_COUNT - 1);
+  const displacement = DAMAGE_ECONOMY_SPAM_PLAY_DISPLACEMENT_WEIGHT -
+    (DAMAGE_ECONOMY_SPAM_PLAY_DISPLACEMENT_WEIGHT - DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT_HARMLESS) *
+    getDamageEconomySpamPlayBoardSafety(reliefProfile);
+  return chaos + displacement;
+}
+
+// Plans one turn's SPAM plays at programming time. Forced plays (too few
+// normal cards) take the most harmless registers first, Randomizer registers
+// before all others; elective plays take the next most harmless registers,
+// each with willingness opportunity^(1 / SPAM owned): with one SPAM the player
+// sheds only where it is safe, with several they accept worse spots. Returns
+// the planned elective amount per register and the average clog weight of the
+// forced and elective plays that cost control.
+export function planDamageEconomyTurnSpamRelief(
+  turnRecords,
+  reliefOpportunityByAbsoluteAction,
+  spamInHand,
+  forcedPlays,
+  spamOwned
+) {
+  const registers = (turnRecords || []).map((record, order) => ({
+    absoluteAction: record.absoluteAction,
+    order,
+    clogWeight: getDamageEconomySpamPlayClogWeight(record?.register, record?.reliefProfile),
+    randomizer: Boolean(record?.randomizerAtRegisterStart),
+    opportunity: Math.max(
+      0,
+      Number(reliefOpportunityByAbsoluteAction.get(record.absoluteAction)) || 0
+    )
+  }));
+  const ranked = [...registers].sort((left, right) => (
+    (Number(right.randomizer) - Number(left.randomizer)) ||
+    (right.opportunity - left.opportunity) ||
+    (left.order - right.order)
+  ));
+  const capacityByAbsoluteAction = new Map(
+    registers.map((register) => [register.absoluteAction, 1])
+  );
+
+  let forcedLeft = Math.max(0, Number(forcedPlays) || 0);
+  let forcedClogBearing = 0;
+  let forcedWeightedLoad = 0;
+  for (const register of ranked) {
+    if (forcedLeft <= 0.0005) break;
+    const take = Math.min(1, forcedLeft);
+    capacityByAbsoluteAction.set(register.absoluteAction, 1 - take);
+    forcedLeft -= take;
+    if (!register.randomizer) {
+      forcedClogBearing += take;
+      forcedWeightedLoad += take * register.clogWeight;
+    }
+  }
+
+  const urgency = Math.max(1, Number(spamOwned) || 0);
+  let electiveLeft = Math.max(
+    0,
+    (Number(spamInHand) || 0) - Math.max(0, Number(forcedPlays) || 0)
+  );
+  const electiveByAbsoluteAction = new Map();
+  let electiveClogBearing = 0;
+  let electiveWeightedLoad = 0;
+  for (const register of ranked) {
+    if (electiveLeft <= 0.0005) break;
+    const capacity = capacityByAbsoluteAction.get(register.absoluteAction) ?? 0;
+    if (capacity <= 0.0005 || register.opportunity <= 0.0005) continue;
+    const willingness = register.randomizer
+      ? 1
+      : Math.pow(register.opportunity, 1 / urgency);
+    const amount = Math.min(capacity, willingness, electiveLeft);
+    if (amount <= 0.0005) continue;
+    electiveByAbsoluteAction.set(register.absoluteAction, amount);
+    electiveLeft -= amount;
+    if (!register.randomizer) {
+      electiveClogBearing += amount;
+      electiveWeightedLoad += amount * register.clogWeight;
+    }
+  }
+
+  return {
+    electiveByAbsoluteAction,
+    forcedClogWeight: forcedClogBearing > 0.0005
+      ? forcedWeightedLoad / forcedClogBearing
+      : DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT,
+    electiveClogWeight: electiveClogBearing > 0.0005
+      ? electiveWeightedLoad / electiveClogBearing
+      : DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT
+  };
+}
 export const DAMAGE_ECONOMY_BASE_PROGRAM_WAYS_CACHE = new Map();
 export const DAMAGE_ECONOMY_BASE_PROGRAM_WAYS_CACHE_LIMIT = 12000;
 
@@ -763,7 +887,9 @@ export function getDamageEconomyAdjustedForcedSpamHaywireJointDistribution(
 export function getDamageEconomyCombinedClogSummary(
   forcedSpamHaywireJointDistribution = [],
   electiveSpamPlayDistribution = [1],
-  randomizerStartCount = 0
+  randomizerStartCount = 0,
+  forcedSpamClogWeight = DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT,
+  electiveSpamClogWeight = DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT
 ) {
   const joint = Array.isArray(forcedSpamHaywireJointDistribution) &&
     forcedSpamHaywireJointDistribution.length
@@ -782,6 +908,7 @@ export function getDamageEconomyCombinedClogSummary(
   const spamPlayCountDistribution = Array(REGISTER_COUNT + 1).fill(0);
   const controlClogLoadProbability = new Map();
   let expectedSpamPlayInitiations = 0;
+  let expectedSpamClogLoad = 0;
   let expectedForcedSpamRandomizerOverlap = 0;
   let expectedControlClogLoad = 0;
   let clogRegisterEquivalents = 0;
@@ -808,7 +935,10 @@ export function getDamageEconomyCombinedClogSummary(
           REGISTER_COUNT,
           clogBearingForcedSpamPlays + electiveSpamPlays
         );
-        const spamClogLoad = spamPlayCount * DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT;
+        const cappedForcedSpamPlays = Math.min(spamPlayCount, clogBearingForcedSpamPlays);
+        const spamClogLoad =
+          cappedForcedSpamPlays * forcedSpamClogWeight +
+          (spamPlayCount - cappedForcedSpamPlays) * electiveSpamClogWeight;
         const controlClogLoad = haywireCount + spamClogLoad + safeRandomizerClogLoad;
         spamPlayCountDistribution[spamPlayCount] += probability;
         const loadKey = Number(controlClogLoad.toFixed(6));
@@ -817,6 +947,7 @@ export function getDamageEconomyCombinedClogSummary(
           (controlClogLoadProbability.get(loadKey) || 0) + probability
         );
         expectedSpamPlayInitiations += probability * spamPlayCount;
+        expectedSpamClogLoad += probability * spamClogLoad;
         expectedForcedSpamRandomizerOverlap +=
           probability * forcedSpamRandomizerOverlap;
         expectedControlClogLoad += probability * controlClogLoad;
@@ -837,6 +968,7 @@ export function getDamageEconomyCombinedClogSummary(
       spamPlayCountDistribution[index] = probability / probabilityMass;
     });
     expectedSpamPlayInitiations /= probabilityMass;
+    expectedSpamClogLoad /= probabilityMass;
     expectedForcedSpamRandomizerOverlap /= probabilityMass;
     expectedControlClogLoad /= probabilityMass;
     clogRegisterEquivalents /= probabilityMass;
@@ -855,7 +987,7 @@ export function getDamageEconomyCombinedClogSummary(
     }));
 
   return {
-    spamClogLoad: expectedSpamPlayInitiations * DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT,
+    spamClogLoad: expectedSpamClogLoad,
     randomizerStartCount: safeRandomizerStartCount,
     randomizerClogLoad: safeRandomizerClogLoad,
     expectedForcedSpamRandomizerOverlap,
@@ -1579,10 +1711,7 @@ export function replayDamageEconomyShutdownEquivalentScore({
       spamInHandRemaining,
       Math.max(0, Number(programming.expectedForcedSpamReliefInitiations) || 0)
     );
-    let remainingRandomizerElectiveReliefCapacity = Math.max(
-      0,
-      turnRandomizerStarts - forcedSpamReliefInitiations
-    );
+    const spamTotalAtProgramming = state.spamTotal;
     if (forcedSpamReliefInitiations > 0.0005) {
       const forcedCirculatingSpam = Math.max(0, state.spamTotal - spamInHandRemaining);
       const forcedSpamChainYield = Math.max(
@@ -1600,6 +1729,13 @@ export function replayDamageEconomyShutdownEquivalentScore({
       );
     }
 
+    const reliefPlan = planDamageEconomyTurnSpamRelief(
+      turnRecords,
+      reliefOpportunityByAbsoluteAction,
+      spamHandAtProgramming,
+      forcedSpamReliefInitiations,
+      spamTotalAtProgramming
+    );
     const electiveClogInitiationProbabilities = [];
     for (const record of turnRecords) {
       const {
@@ -1610,20 +1746,10 @@ export function replayDamageEconomyShutdownEquivalentScore({
         randomizerAtRegisterStart,
         repairStationEligible
       } = record;
-      const reliefOpportunity = Math.max(
-        0,
-        Number(reliefOpportunityByAbsoluteAction.get(absoluteAction)) || 0
-      );
+      const plannedRelief = reliefPlan.electiveByAbsoluteAction.get(absoluteAction) ?? 0;
       let reliefInitiation = 0;
-      if (spamInHandRemaining > 0.0005 && reliefOpportunity > 0.0005) {
-        reliefInitiation = Math.min(
-          1,
-          reliefOpportunity,
-          spamInHandRemaining,
-          randomizerAtRegisterStart
-            ? remainingRandomizerElectiveReliefCapacity
-            : 1
-        );
+      if (spamInHandRemaining > 0.0005 && plannedRelief > 0.0005) {
+        reliefInitiation = Math.min(plannedRelief, spamInHandRemaining);
         const currentCirculatingSpam = Math.max(0, state.spamTotal - spamInHandRemaining);
         const chainYield = Math.max(
           1,
@@ -1646,12 +1772,6 @@ export function replayDamageEconomyShutdownEquivalentScore({
       electiveClogInitiationProbabilities.push(
         randomizerAtRegisterStart ? 0 : reliefInitiation
       );
-      if (randomizerAtRegisterStart) {
-        remainingRandomizerElectiveReliefCapacity = Math.max(
-          0,
-          remainingRandomizerElectiveReliefCapacity - reliefInitiation
-        );
-      }
 
       if (transition?.rebooted) {
         const rebootSpamDisposalCapacity = Math.max(0, REGISTER_COUNT - register);
@@ -1705,7 +1825,9 @@ export function replayDamageEconomyShutdownEquivalentScore({
     const combinedClog = getDamageEconomyCombinedClogSummary(
       forcedSpamHaywireJointDistribution,
       electiveSpamPlayDistribution,
-      turnRandomizerStarts
+      turnRandomizerStarts,
+      reliefPlan.forcedClogWeight,
+      reliefPlan.electiveClogWeight
     );
     const turnDamageEconomyRegisterEquivalents =
       programming.spamSupplyRegisterEquivalents + combinedClog.clogRegisterEquivalents;

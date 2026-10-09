@@ -8,6 +8,7 @@ import {
   DAMAGE_ECONOMY_ROUTE_SUMMARY_CACHE,
   DAMAGE_ECONOMY_SHUTDOWN_REFERENCE_RE,
   DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT,
+  DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT_HARMLESS,
   DAMAGE_ECONOMY_TELEMETRY,
   DAMAGE_ECONOMY_TRAFFIC_ROUTE_SUMMARY_CACHE,
   advanceDamageEconomyToTurn,
@@ -32,6 +33,7 @@ import {
   getDamageEconomyVariantProfile,
   isDamageEconomyRandomizerAtRegisterStart,
   isDamageEconomyRepairStationTile,
+  planDamageEconomyTurnSpamRelief,
   replayDamageEconomyShutdownEquivalentScore
 } from "./damage-economy.js";
 import { getInitialRouteEnergyShadowReserve, getRouteEnergyShadowStep } from "./energy-economy.js";
@@ -372,10 +374,6 @@ export function summarizeDamageEconomyFoundationForRoute(
       spamInHandRemaining,
       Math.max(0, Number(programming.expectedForcedSpamReliefInitiations) || 0)
     );
-    let remainingRandomizerElectiveReliefCapacity = Math.max(
-      0,
-      turnRandomizerStarts - forcedSpamReliefInitiations
-    );
     let forcedSpamChainYield = 0;
     let forcedSpamRemoved = 0;
     let forcedCriticalSpamReturnedToPending = 0;
@@ -398,6 +396,15 @@ export function summarizeDamageEconomyFoundationForRoute(
       forcedCriticalSpamReturnedToPending =
         forcedSpamOutcome.returnedToPending;
     }
+    // Where this turn's SPAM goes is decided at programming (see
+    // planDamageEconomyTurnSpamRelief); the register loop below applies it.
+    const reliefPlan = planDamageEconomyTurnSpamRelief(
+      turnRecords,
+      reliefOpportunityByAbsoluteAction,
+      spamHandAtProgramming,
+      forcedSpamReliefInitiations,
+      spamTotalAtProgramming
+    );
     let turnElectiveReliefInitiations = 0;
     let turnSpamRemoved = forcedSpamRemoved;
     let turnCriticalSpamReturnedToPending =
@@ -445,15 +452,9 @@ export function summarizeDamageEconomyFoundationForRoute(
       let chainYield = 0;
       let totalRemovedThisRegister = 0;
       let criticalSpamReturnedToPendingThisRegister = 0;
-      if (spamInHandRemaining > 0.0005 && reliefOpportunity > 0.0005) {
-        reliefInitiation = Math.min(
-          1,
-          reliefOpportunity,
-          spamInHandRemaining,
-          randomizerAtRegisterStart
-            ? remainingRandomizerElectiveReliefCapacity
-            : 1
-        );
+      const plannedRelief = reliefPlan.electiveByAbsoluteAction.get(absoluteAction) ?? 0;
+      if (spamInHandRemaining > 0.0005 && plannedRelief > 0.0005) {
+        reliefInitiation = Math.min(plannedRelief, spamInHandRemaining);
         const currentCirculatingSpam = Math.max(0, state.spamTotal - spamInHandRemaining);
         chainYield = Math.max(
           1,
@@ -485,10 +486,6 @@ export function summarizeDamageEconomyFoundationForRoute(
       );
       if (randomizerAtRegisterStart) {
         turnRandomizerReliefInitiations += reliefInitiation;
-        remainingRandomizerElectiveReliefCapacity = Math.max(
-          0,
-          remainingRandomizerElectiveReliefCapacity - reliefInitiation
-        );
       }
 
       let rebootSpamRemoved = 0;
@@ -684,7 +681,9 @@ export function summarizeDamageEconomyFoundationForRoute(
     const combinedClog = getDamageEconomyCombinedClogSummary(
       forcedSpamHaywireJointDistribution,
       electiveSpamPlayDistribution,
-      turnRandomizerStarts
+      turnRandomizerStarts,
+      reliefPlan.forcedClogWeight,
+      reliefPlan.electiveClogWeight
     );
     const randomizerClogLoad = combinedClog.randomizerClogLoad;
     const randomizerForcedSpamOverlap =
@@ -756,7 +755,12 @@ export function summarizeDamageEconomyFoundationForRoute(
       forcedSpamReliefInitiations: Number(forcedSpamReliefInitiations.toFixed(3)),
       electiveSpamReliefInitiations: Number(turnElectiveReliefInitiations.toFixed(3)),
       spamPlayInitiations: Number(turnSpamReliefInitiations.toFixed(3)),
-      spamPlayClogWeight: DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT,
+      // Effective clog load per SPAM play this turn (harm-weighted, v50).
+      spamPlayClogWeight: Number((
+        combinedClog.expectedSpamPlayInitiations > 0.0005
+          ? combinedClog.spamClogLoad / combinedClog.expectedSpamPlayInitiations
+          : DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT
+      ).toFixed(3)),
       randomizerStarts: turnRandomizerStarts,
       randomizerClogWeight: DAMAGE_ECONOMY_RANDOMIZER_CLOG_WEIGHT,
       randomizerClogLoad: Number(randomizerClogLoad.toFixed(3)),
@@ -894,6 +898,7 @@ export function summarizeDamageEconomyFoundationForRoute(
     randomizerClogWeight: DAMAGE_ECONOMY_RANDOMIZER_CLOG_WEIGHT,
     totalRandomizerClogLoad: Number(totalRandomizerClogLoad.toFixed(3)),
     spamPlayClogWeight: DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT,
+    spamPlayClogWeightHarmless: DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT_HARMLESS,
     totalSpamChainExtraRemoved: Number(totalSpamChainExtraRemoved.toFixed(3)),
     totalRebootSpamRemoved: Number(totalRebootSpamRemoved.toFixed(3)),
     totalRebootSpamDisposalCapacity: Number(totalRebootSpamDisposalCapacity.toFixed(3)),
