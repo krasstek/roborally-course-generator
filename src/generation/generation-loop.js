@@ -230,59 +230,38 @@ export async function generateScenarioForPreferences(assets, preferences, option
     }
   };
 
-  // Candidates are ranked on their generation-time numbers; only the one picked
-  // for the player is evaluated canonically (the numbers a reload reproduces).
-  // If that evaluation rejects it, it leaves the pool and the next pick is
-  // tried. Returns { choice, scenario } or null when no candidate survives.
-  // A stop request skips the canonical step so Stop stays prompt.
-  async function chooseCanonicalAcceptableCandidate() {
-    while (acceptableCandidates.length) {
-      const choice = chooseNearBestCandidate(acceptableCandidates);
-      const picked = choice.scenario ?? bestAcceptableScenario ?? acceptableCandidates[0];
-      if (picked.canonicallyEvaluated || shouldStopRequested()) return { choice, scenario: picked };
-      const startedAt = generationNow();
-      let canonical = null;
-      try {
-        canonical = await evaluateCourseCanonically(assets, picked, preferences, canonicalEvaluationControl);
-      } catch (error) {
-        if (error?.code === "ANALYSIS_STOP_REQUESTED" && shouldStopRequested()) {
-          return { choice, scenario: picked };
-        }
-        throw error;
-      }
-      generationDiagnostics.canonicalEvaluations.push({
-        attempt: picked.attempts ?? null,
-        complete: Boolean(canonical),
-        acceptable: Boolean(canonical?.metrics?.acceptable),
-        generationDifficultyTurnRE: picked.metrics?.difficultyTurnRE ?? null,
-        canonicalDifficultyTurnRE: canonical?.metrics?.difficultyTurnRE ?? null,
-        elapsedMs: Number((generationNow() - startedAt).toFixed(2))
-      });
-      if (canonical?.metrics?.acceptable) return { choice, scenario: canonical };
-
-      acceptableCandidates.splice(acceptableCandidates.indexOf(picked), 1);
-      bestAcceptableScenario = null;
-      bestAcceptableScore = Infinity;
-      for (const candidate of acceptableCandidates) {
-        const score = getAcceptableScenarioScore(candidate);
-        if (score < bestAcceptableScore) {
-          bestAcceptableScenario = candidate;
-          bestAcceptableScore = score;
-        }
-      }
-      generationDiagnostics.acceptableCandidatesFound = acceptableCandidates.length;
-      if (canonical) {
-        // Still a possible near-miss fallback, now with its reload-stable numbers.
-        if (bestScenario === picked) bestScenario = null;
-        const fallbackScore = getFallbackScenarioScore(canonical);
-        if (Number.isFinite(fallbackScore) && fallbackScore < getFallbackScenarioScore(bestScenario)) {
-          bestScenario = canonical;
-        }
-      } else if (bestScenario === picked) {
-        bestScenario = null;
-      }
+  // Every complete candidate is evaluated from its routed field before it is
+  // judged (the numbers a reload reproduces), so acceptance, ranking and the
+  // fallback all use the numbers the player will see. Returns the evaluated
+  // course, or null when its presentation cannot be rebuilt (a reload of it
+  // would fail too). A stop request skips the evaluation so Stop stays prompt;
+  // the candidate then keeps its generation-time numbers.
+  async function evaluateCandidateCanonically(candidate) {
+    if (shouldStopRequested()) return candidate;
+    const startedAt = generationNow();
+    let canonical = null;
+    try {
+      canonical = await evaluateCourseCanonically(assets, candidate, preferences, canonicalEvaluationControl);
+    } catch (error) {
+      if (error?.code === "ANALYSIS_STOP_REQUESTED" && shouldStopRequested()) return candidate;
+      throw error;
     }
-    return null;
+    generationDiagnostics.canonicalEvaluations.push({
+      attempt: candidate.attempts ?? null,
+      complete: Boolean(canonical),
+      acceptable: Boolean(canonical?.metrics?.acceptable),
+      generationDifficultyTurnRE: candidate.metrics?.difficultyTurnRE ?? null,
+      canonicalDifficultyTurnRE: canonical?.metrics?.difficultyTurnRE ?? null,
+      elapsedMs: Number((generationNow() - startedAt).toFixed(2))
+    });
+    return canonical;
+  }
+
+  // Picks the course for the player from the acceptable pool: { choice, scenario }.
+  function chooseAcceptableCandidate() {
+    if (!acceptableCandidates.length) return null;
+    const choice = chooseNearBestCandidate(acceptableCandidates);
+    return { choice, scenario: choice.scenario ?? bestAcceptableScenario ?? acceptableCandidates[0] };
   }
   let bestExtraDocksNearMissScenario = null;
   let crashedAttempts = 0;
@@ -551,7 +530,13 @@ export async function generateScenarioForPreferences(assets, preferences, option
         evaluation: attemptLabel + Math.max(0, (entry.evaluation ?? 1) - 1)
       })));
     }
-    const scenario = result.scenario;
+    let scenario = result.scenario;
+    const lastMeaningfulStage = lastStage;
+    if (scenario) {
+      scenario.attempts = attempt;
+      recordStageBoundary("Final evaluation");
+      scenario = await evaluateCandidateCanonically(scenario);
+    }
     const extraDocksNearMissScenario = result.extraDocksNearMissScenario ?? null;
     if (extraDocksNearMissScenario) {
       const nearMissScore = getFallbackScenarioScore(extraDocksNearMissScenario);
@@ -560,7 +545,6 @@ export async function generateScenarioForPreferences(assets, preferences, option
         bestExtraDocksNearMissScenario = extraDocksNearMissScenario;
       }
     }
-    const lastMeaningfulStage = lastStage;
     recordStageBoundary(scenario ? "Candidate complete" : "Candidate rejected");
 
     const telemetryAfter = getAnalysisTelemetrySnapshot();
@@ -573,7 +557,9 @@ export async function generateScenarioForPreferences(assets, preferences, option
       outcome: scenario?.metrics?.acceptable ? "accepted" : "rejected",
       reason: scenario?.metrics?.acceptable
         ? "accepted"
-        : describeGenerationRejection(scenario, lastMeaningfulStage),
+        : result.scenario && !scenario
+          ? "final evaluation could not rebuild the course"
+          : describeGenerationRejection(scenario, lastMeaningfulStage),
       stages: stageTimings,
       routeSearches: routeDelta.searches,
       routeExpansions: routeDelta.expansions,
@@ -630,7 +616,7 @@ export async function generateScenarioForPreferences(assets, preferences, option
     }
 
     const selection = acceptableCandidates.length >= acceptableCandidateTarget
-      ? await chooseCanonicalAcceptableCandidate()
+      ? chooseAcceptableCandidate()
       : null;
     if (selection) {
       terminationReason = "accepted";
@@ -686,7 +672,7 @@ export async function generateScenarioForPreferences(assets, preferences, option
   }
 
   const finalSelection = acceptableCandidates.length
-    ? await chooseCanonicalAcceptableCandidate()
+    ? chooseAcceptableCandidate()
     : null;
   if (finalSelection) {
     const nearBestChoice = finalSelection.choice;
@@ -709,18 +695,6 @@ export async function generateScenarioForPreferences(assets, preferences, option
 
   // v49er: forced Extra Docks is a hard gate. One-dock near misses remain
   // diagnostic candidates only and are never promoted to a returned course.
-
-  // A near-miss fallback shown to the player gets the same canonical numbers.
-  // A stop request skips this so Stop stays prompt; the fallback then keeps its
-  // generation-time values.
-  if (bestScenario && !bestScenario.canonicallyEvaluated && !shouldStopRequested()) {
-    try {
-      const canonical = await evaluateCourseCanonically(assets, bestScenario, preferences, canonicalEvaluationControl);
-      if (canonical) bestScenario = canonical;
-    } catch (error) {
-      if (error?.code !== "ANALYSIS_STOP_REQUESTED") throw error;
-    }
-  }
 
   if (bestScenario) {
     bestScenario.generationBestMatch = !Boolean(bestScenario.metrics?.acceptable);
