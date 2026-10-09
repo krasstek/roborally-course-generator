@@ -58,15 +58,10 @@ export { getProgramCardVariantModelSummary } from "./src/analysis/program-availa
 export { simulateAction } from "./src/analysis/movement.js";
 export {
   ROUTE_ENERGY_ECONOMY_DEFAULTS,
-  estimateInitialUpgradeOpportunitiesRemaining,
-  evaluateRouteUpgradePotential,
   getCourseMaxEnergy,
   getCourseStartingEnergy,
   getCourseStartingUpgradeCards,
-  getRouteEnergyEconomyConfig,
-  getRouteEnergyGainUtility,
-  getRouteMarginalEnergyUtility,
-  getRouteUpgradePotential
+  getRouteEnergyEconomyConfig
 } from "./src/analysis/energy-economy.js";
 export {
   DAMAGE_ECONOMY_MODEL_ID,
