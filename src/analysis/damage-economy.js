@@ -679,6 +679,9 @@ export const DAMAGE_ECONOMY_RELIEF_FORWARD_HAZARD_PENALTY_MAX = 0.55;
 // as a reboot: the full penalty, recorded as this many damage-equivalents.
 export const DAMAGE_ECONOMY_RELIEF_FORWARD_DAMAGE_UNIT_PENALTY = 4 / 25.6;
 export const DAMAGE_ECONOMY_RELIEF_FORWARD_REBOOT_UNITS = 3;
+// Starting on water or oil shortens move cards by one tile, so a random card
+// there is safer: between a wall two tiles ahead (0.18) and one ahead (0.32).
+export const DAMAGE_ECONOMY_RELIEF_SLOWED_START_BONUS = 0.2;
 export const DAMAGE_ECONOMY_RELIEF_CONTINUITY_BONUS_MAX = 0.15;
 export const DAMAGE_ECONOMY_CLOG_RE_BY_COUNT = Object.freeze([0, 1, 2.2, 3.6, 5.4, 7.5]);
 
@@ -692,7 +695,8 @@ export const DAMAGE_ECONOMY_CLOG_RE_BY_COUNT = Object.freeze([0, 1, 2.2, 3.6, 5.
 //   programmed against a position the random card has changed, so this part is
 //   full in register 1 and zero in register 5;
 // - displacement into the next turn: the robot ends off-plan, less so where the
-//   board forgives a random move (wall ahead, conveyor ride).
+//   board forgives a random move (wall ahead, conveyor ride, a water or oil
+//   start that shortens every move).
 // Together they span the full SPAM play weight (register 1, open floor) down to
 // a floor (register 5 facing a wall). Randomizer registers are already random,
 // so SPAM shed there adds no control loss of its own.
@@ -705,6 +709,7 @@ export const DAMAGE_ECONOMY_SPAM_PLAY_FULL_BOARD_SAFETY = 0.5;
 export function getDamageEconomySpamPlayBoardSafety(reliefProfile) {
   const netBonus =
     (Number(reliefProfile?.wallBonus) || 0) +
+    (Number(reliefProfile?.slowedStartBonus) || 0) +
     (Number(reliefProfile?.conveyorMovementBonus) || 0) -
     (Number(reliefProfile?.forcedRotationPenalty) || 0) -
     (Number(reliefProfile?.forcedMovementPenalty) || 0) -
@@ -1177,7 +1182,8 @@ export function getDamageEconomyForwardReliefContext(
       wallBonus: 0,
       wallDistance: null,
       forwardHazardPenalty: 0,
-      forwardHazardScore: 0
+      forwardHazardScore: 0,
+      slowedStartBonus: 0
     };
   }
   const registerOptions = {
@@ -1190,10 +1196,17 @@ export function getDamageEconomyForwardReliefContext(
   let forwardHazardPenalty = 0;
   let forwardHazardScore = 0;
   let from = { x: start.x, y: start.y };
+  // Starting a register on water or oil shortens every move card by one tile:
+  // Move 1 and Back Up do nothing, Move 2 reaches only the first tile ahead and
+  // Move 3 the second. A random card there displaces the robot less.
+  const startTile = tileMap.get(tileKey(start.x, start.y));
+  const slowedStart = isWater(startTile) || isOil(startTile);
+  const weightShift = slowedStart ? 1 : 0;
 
   for (let index = 0; index < DAMAGE_ECONOMY_RELIEF_FORWARD_DISTANCE_WEIGHTS.length; index += 1) {
     const distance = index + 1;
-    const weight = DAMAGE_ECONOMY_RELIEF_FORWARD_DISTANCE_WEIGHTS[index];
+    const weight = DAMAGE_ECONOMY_RELIEF_FORWARD_DISTANCE_WEIGHTS[index + weightShift] ?? 0;
+    if (weight <= 0) break;
     const to = {
       x: from.x + DIRS[dir].dx,
       y: from.y + DIRS[dir].dy
@@ -1215,20 +1228,38 @@ export function getDamageEconomyForwardReliefContext(
     const tile = tileMap.get(tileKey(to.x, to.y));
     if (!tile) break;
 
+    // A move that ends on oil slides on in the same direction until the robot
+    // leaves the oil, stops at a wall or crashes; judge where it really stops.
+    const slidePath = [{ ...to }];
+    let landingPoint = to;
+    let slideCrashed = false;
+    while (isOil(tileMap.get(tileKey(landingPoint.x, landingPoint.y))) && slidePath.length <= 24) {
+      const next = { x: landingPoint.x + DIRS[dir].dx, y: landingPoint.y + DIRS[dir].dy };
+      if (isBoundaryBlockedByWalls(tileMap, landingPoint, next, dir)) break;
+      const slideCheck = canMoveBetween(tileMap, landingPoint, next, dir, registerOptions);
+      if (!slideCheck.ok) {
+        slideCrashed = Boolean(slideCheck.crash);
+        break;
+      }
+      slidePath.push({ ...next });
+      landingPoint = next;
+    }
+    const landingTile = tileMap.get(tileKey(landingPoint.x, landingPoint.y));
+
     // Landing hazards in the damage economy's own terms: an active crusher is a
     // reboot like a crash; otherwise the damage cards a robot would take if a
     // random card left it on this tile (lasers, flamers, oil, radiation, waste,
     // ledges), with the variants the damage economy models (Cutting Floor, More
     // Deadly, Flaming Oil). The route search's tile penalties and pressure
     // terms stay out of it.
-    if (hasActiveFeature(tile, "crusher", registerOptions)) {
+    if (slideCrashed || hasActiveFeature(landingTile, "crusher", registerOptions)) {
       forwardHazardScore += DAMAGE_ECONOMY_RELIEF_FORWARD_REBOOT_UNITS * weight;
       forwardHazardPenalty += DAMAGE_ECONOMY_RELIEF_FORWARD_HAZARD_PENALTY_MAX * weight;
       break;
     }
     const landing = getDamageEconomyRealizedDamageForTransition(
       tileMap,
-      { from: { ...from, facing: dir }, to: { ...to, facing: dir }, traversed: [{ ...to }] },
+      { from: { ...from, facing: dir }, to: { ...landingPoint, facing: dir }, traversed: slidePath },
       options,
       absoluteAction
     );
@@ -1248,7 +1279,8 @@ export function getDamageEconomyForwardReliefContext(
       DAMAGE_ECONOMY_RELIEF_FORWARD_HAZARD_PENALTY_MAX,
       forwardHazardPenalty
     ).toFixed(4)),
-    forwardHazardScore: Number(forwardHazardScore.toFixed(3))
+    forwardHazardScore: Number(forwardHazardScore.toFixed(3)),
+    slowedStartBonus: slowedStart ? DAMAGE_ECONOMY_RELIEF_SLOWED_START_BONUS : 0
   };
 }
 
@@ -1333,7 +1365,8 @@ export function getDamageEconomyRegisterReliefProfile(
   const boardOpportunity = clamp(
     timingAllowance +
       conveyorMovementBonus +
-      forwardContext.wallBonus -
+      forwardContext.wallBonus +
+      forwardContext.slowedStartBonus -
       forcedRotationPenalty -
       forcedMovementPenalty -
       forwardContext.forwardHazardPenalty,
@@ -1349,6 +1382,7 @@ export function getDamageEconomyRegisterReliefProfile(
     forcedMovementPenalty: Number(forcedMovementPenalty.toFixed(4)),
     wallBonus: forwardContext.wallBonus,
     wallDistance: forwardContext.wallDistance,
+    slowedStartBonus: forwardContext.slowedStartBonus,
     forwardHazardPenalty: forwardContext.forwardHazardPenalty,
     forwardHazardScore: forwardContext.forwardHazardScore,
     conveyorTurns,
