@@ -1,4 +1,4 @@
-// Robo Rally Course Randomizer - generation loop: candidate attempts, acceptance and canonical selection, the production entry point, diagnostics cases
+// Robo Rally Course Randomizer - generation loop: candidate attempts, acceptance and selection, the production entry point, diagnostics cases
 import {
   ANALYZE_BUILD_ID,
   clearAnalysisCaches,
@@ -43,7 +43,7 @@ import {
   getGenerationModeProfile,
   normalizeGenerationMode
 } from "./generation-modes.js";
-import { evaluateCourseCanonically } from "./persistence.js";
+import { evaluateFinishedCourse } from "./persistence.js";
 import { resolveAnyPreferencesForGeneration } from "./preferences.js";
 import { withGenerationRandomSeed } from "./random.js";
 import {
@@ -196,33 +196,33 @@ export async function generateScenarioForPreferences(assets, preferences, option
   let bestAcceptableScenario = null;
   let bestAcceptableScore = Infinity;
   let bestScenario = null;
-  generationDiagnostics.canonicalEvaluations = [];
-  // Canonical evaluation reports progress like any other generation stage, which
+  generationDiagnostics.finalEvaluations = [];
+  // The final evaluation reports progress like any other generation stage, which
   // also gives the page regular turns while the chosen course is re-analysed.
   // Overlay updates are throttled exactly like generation's own route progress:
   // on phones every DOM update and repaint is costly, and the search yields many
   // times per second.
-  let lastCanonicalProgressDisplayAt = 0;
-  let canonicalProgressTickerStep = 0;
-  const canonicalEvaluationControl = {
+  let lastFinalEvaluationProgressAt = 0;
+  let finalEvaluationTickerStep = 0;
+  const finalEvaluationControl = {
     shouldStopRequested,
     onStage: async (stage) => {
-      if (onProgress) await onProgress(attempt, maxAttempts, `Verifying the chosen course — ${stage}`);
+      if (onProgress) await onProgress(attempt, maxAttempts, `Final evaluation — ${stage}`);
       else await nextEventLoopTurn();
     },
     onCooperativeProgress: async (progress) => {
       const now = generationNow();
       if (
         onCooperativeProgress &&
-        now - lastCanonicalProgressDisplayAt >= GENERATION_ROUTE_PROGRESS_DISPLAY_INTERVAL_MS
+        now - lastFinalEvaluationProgressAt >= GENERATION_ROUTE_PROGRESS_DISPLAY_INTERVAL_MS
       ) {
-        lastCanonicalProgressDisplayAt = now;
+        lastFinalEvaluationProgressAt = now;
         onCooperativeProgress(
           attempt,
           maxAttempts,
-          `Verifying the chosen course — ${formatCooperativeRouteProgressStage(progress, canonicalProgressTickerStep)}`
+          `Final evaluation — ${formatCooperativeRouteProgressStage(progress, finalEvaluationTickerStep)}`
         );
-        canonicalProgressTickerStep += 1;
+        finalEvaluationTickerStep += 1;
         await nextFrame();
       } else {
         await nextEventLoopTurn();
@@ -236,25 +236,25 @@ export async function generateScenarioForPreferences(assets, preferences, option
   // course, or null when its presentation cannot be rebuilt (a reload of it
   // would fail too). A stop request skips the evaluation so Stop stays prompt;
   // the candidate then keeps its generation-time numbers.
-  async function evaluateCandidateCanonically(candidate) {
+  async function evaluateCandidate(candidate) {
     if (shouldStopRequested()) return candidate;
     const startedAt = generationNow();
-    let canonical = null;
+    let evaluated = null;
     try {
-      canonical = await evaluateCourseCanonically(assets, candidate, preferences, canonicalEvaluationControl);
+      evaluated = await evaluateFinishedCourse(assets, candidate, preferences, finalEvaluationControl);
     } catch (error) {
       if (error?.code === "ANALYSIS_STOP_REQUESTED" && shouldStopRequested()) return candidate;
       throw error;
     }
-    generationDiagnostics.canonicalEvaluations.push({
+    generationDiagnostics.finalEvaluations.push({
       attempt: candidate.attempts ?? null,
-      complete: Boolean(canonical),
-      acceptable: Boolean(canonical?.metrics?.acceptable),
+      complete: Boolean(evaluated),
+      acceptable: Boolean(evaluated?.metrics?.acceptable),
       generationDifficultyTurnRE: candidate.metrics?.difficultyTurnRE ?? null,
-      canonicalDifficultyTurnRE: canonical?.metrics?.difficultyTurnRE ?? null,
+      finalDifficultyTurnRE: evaluated?.metrics?.difficultyTurnRE ?? null,
       elapsedMs: Number((generationNow() - startedAt).toFixed(2))
     });
-    return canonical;
+    return evaluated;
   }
 
   // Picks the course for the player from the acceptable pool: { choice, scenario }.
@@ -535,7 +535,7 @@ export async function generateScenarioForPreferences(assets, preferences, option
     if (scenario) {
       scenario.attempts = attempt;
       recordStageBoundary("Final evaluation");
-      scenario = await evaluateCandidateCanonically(scenario);
+      scenario = await evaluateCandidate(scenario);
     }
     const extraDocksNearMissScenario = result.extraDocksNearMissScenario ?? null;
     if (extraDocksNearMissScenario) {

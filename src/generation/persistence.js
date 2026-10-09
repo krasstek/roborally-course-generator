@@ -1,4 +1,4 @@
-// Robo Rally Course Randomizer - saved courses: serialisation, presentation snapshot and shell, reload (hydrateScenarioFromSnapshot) and canonical evaluation
+// Robo Rally Course Randomizer - saved courses: serialisation, presentation snapshot and shell, reload (hydrateScenarioFromSnapshot) and the final evaluation of a finished course
 import {
   analyzeFullCourseCooperative,
   clearAnalysisCaches,
@@ -813,7 +813,7 @@ export async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}
     return null;
   }
 
-  // Canonical evaluation during generation keeps the warm caches: they are pure
+  // The final evaluation during generation keeps the warm caches: they are pure
   // memos, and the comparison harness (leak + restore checks) verifies that the
   // result matches a cold page reload exactly.
   if (!control.keepAnalysisCaches) clearAnalysisCaches();
@@ -1326,7 +1326,7 @@ export const HYDRATION_ONLY_SCENARIO_FIELDS = [
   "hydrationStartDispositionRestored"
 ];
 
-// Canonical evaluation of a finished course: save it exactly as the app would,
+// Final evaluation of a finished course: save it exactly as the app would,
 // then evaluate it through the reload path, handing over the start field
 // generation has already routed instead of searching again. Generation adopts
 // this result as the course's authoritative numbers, so a later reload (or the
@@ -1334,7 +1334,7 @@ export const HYDRATION_ONLY_SCENARIO_FIELDS = [
 // values from the incremental generation passes. Returns null when the
 // evaluation cannot rebuild a complete presentation; a reload of that course
 // would fail too.
-export async function evaluateCourseCanonically(assets, candidate, preferences, control = {}) {
+export async function evaluateFinishedCourse(assets, candidate, preferences, control = {}) {
   const snapshot = JSON.parse(JSON.stringify(serializeScenario(candidate)));
   // Mirror what the final save records for "Any" targets (see
   // runProductionGeneration): the concrete target stays in
@@ -1349,19 +1349,18 @@ export async function evaluateCourseCanonically(assets, candidate, preferences, 
     difficulty: preferences.targetGuidanceOnlyDifficulty ? "any" : concreteTarget.difficulty,
     length: preferences.targetGuidanceOnlyLength ? "any" : concreteTarget.length
   };
-  const canonical = await hydrateScenarioFromSnapshot(assets, snapshot, {
+  const evaluated = await hydrateScenarioFromSnapshot(assets, snapshot, {
     ...control,
     keepAnalysisCaches: true,
     routedFirstLeg: candidate.sequence?.firstLeg ?? null
   });
-  if (!canonical || canonical.hydrationPresentationFallback || canonical.hydrationPresentationUnavailable) {
+  if (!evaluated || evaluated.hydrationPresentationFallback || evaluated.hydrationPresentationUnavailable) {
     return null;
   }
-  for (const field of HYDRATION_ONLY_SCENARIO_FIELDS) delete canonical[field];
+  for (const field of HYDRATION_ONLY_SCENARIO_FIELDS) delete evaluated[field];
   // The final save overwrites these again once the run ends.
-  canonical.preferences = { ...candidate.preferences, ...canonical.preferences, ...concreteTarget };
-  delete canonical.effectiveTargetPreferences;
-  canonical.attempts = candidate.attempts;
-  canonical.canonicallyEvaluated = true;
-  return canonical;
+  evaluated.preferences = { ...candidate.preferences, ...evaluated.preferences, ...concreteTarget };
+  delete evaluated.effectiveTargetPreferences;
+  evaluated.attempts = candidate.attempts;
+  return evaluated;
 }
