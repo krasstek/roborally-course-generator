@@ -1249,9 +1249,6 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
         // Normal, Competitive, and priced starts never consume preflight outliers
         // as eligibility. Competitive must preserve every physical start for blocking;
         // priced starts must preserve the full field until downstream pricing.
-        const openingSeedAnalyses = (coursePreflight?.opening?.starts ?? []).filter((entry) => (
-          entry.reachable && entry.selectedRoute
-        ));
         const routeAwareBatteryScoringOptions = buildRouteAwareBatteryScoringOptions(
           coursePreflight,
           { ...baseAnalysisOptions, ...effectiveVariantBundle }
@@ -1635,7 +1632,10 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
               ? productionAnalysisOptions
               : {
                 ...productionAnalysisOptions,
-                contextualOpeningSeedAnalyses: openingSeedAnalyses,
+                // Preflight remains an audition only, as in the branches above: a
+                // seeded opening cannot be reproduced when the course is reloaded,
+                // so the opening is searched fresh here too.
+                contextualOpeningSeedAnalyses: null,
                 contextualRequiredStarts: competitiveMode
                   ? analysisStarts.length
                   : preferences.playerCount
