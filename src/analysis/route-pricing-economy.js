@@ -6,8 +6,15 @@ import {
   getRouteEconomyFullHorizonActions,
   getRouteEconomyPhaseChoices,
   getRouteEnergyEconomyConfig,
+  getRouteEnergyShadowStep,
   getRouteUsefulCardUnitsPerDraw
 } from "./energy-economy.js";
+import {
+  ENERGY_VALUE_TABLE_MAX_ENERGY,
+  ENERGY_VALUE_TABLE_MAX_TURNS,
+  UPGRADE_VALUE_BY_STARTING_ENERGY
+} from "./energy-value-table.js";
+import { getRebootEndedAbsoluteActions, getTransitionAbsoluteAction } from "./reboot-recovery.js";
 import { clamp } from "../shared/math.js";
 import { summarizeRegisterEquivalentLedger } from "./route-evaluation.js";
 import { isRouteAwareBatteryScoringActive } from "./rule-options.js";
@@ -246,6 +253,65 @@ export function getFixedRoutePricingEconomySignature(options = {}) {
   ].join(":");
 }
 
+// The upgrade value a start's route is worth in register-equivalents, from the
+// simulated upgrade economy (energy-value-table.js): the race's upgrade value
+// with this starting Energy, plus the route's Energy and card gains valued with
+// the same tables the route scorer uses, counting Energy received from the
+// starting Energy on. Priced starts compare it at the reference and the priced
+// starting Energy.
+export function evaluateRouteStartingEconomyPotentialR(tileMap, route, options = {}) {
+  if (!route || !Array.isArray(route.transitions) || !isRouteAwareBatteryScoringActive(options)) {
+    return 0;
+  }
+  const signature = `potential:${getFixedRoutePricingEconomySignature(options)}`;
+  let routeCache = FIXED_ROUTE_PRICING_ECONOMY_CACHE.get(route);
+  if (!routeCache) {
+    routeCache = new Map();
+    FIXED_ROUTE_PRICING_ECONOMY_CACHE.set(route, routeCache);
+  }
+  if (routeCache.has(signature)) return routeCache.get(signature);
+
+  const config = getRouteEnergyEconomyConfig(options);
+  const raceTurns = clamp(
+    Math.round(Number(options.routeEnergyHorizonTurns) || 0),
+    0,
+    ENERGY_VALUE_TABLE_MAX_TURNS
+  );
+  if (!raceTurns) {
+    routeCache.set(signature, 0);
+    return 0;
+  }
+  const startingEnergy = clamp(Math.floor(config.startingEnergy), 0, config.maxEnergy);
+  let potential = UPGRADE_VALUE_BY_STARTING_ENERGY[raceTurns][
+    Math.min(startingEnergy, ENERGY_VALUE_TABLE_MAX_ENERGY)
+  ];
+  let reserve = startingEnergy;
+  let elapsed = Math.max(0, Number(route.absoluteStartAction) || 0);
+  for (const transition of route.transitions) {
+    const absoluteAction = getTransitionAbsoluteAction(transition, elapsed + 1);
+    if (transition?.to && transition?.action) {
+      const step = getRouteEnergyShadowStep(
+        tileMap,
+        transition.to,
+        transition.action,
+        absoluteAction,
+        reserve,
+        0,
+        options,
+        transition
+      );
+      potential += Math.max(0, Number(step.rewardRegisterEquivalents) || 0);
+      reserve = step.reserveAfter;
+    }
+    elapsed = transition?.rebooted
+      ? getRebootEndedAbsoluteActions(absoluteAction)
+      : absoluteAction;
+  }
+  const result = Number(potential.toFixed(6));
+  routeCache.set(signature, result);
+  return result;
+}
+
 export function evaluateFixedRoutePricingEconomyUtilityR(tileMap, route, options = {}) {
   if (!route || !Array.isArray(route.transitions) || !isRouteAwareBatteryScoringActive(options)) {
     return 0;
@@ -416,7 +482,7 @@ export function rescoreFixedRouteUpgradeEconomy(tileMap, route, options = {}) {
     ? clamp(Math.floor(Number(options.routeEconomyReferenceStartingEnergy)), 0, config.maxEnergy)
     : currentStartingEnergy;
   const registerScore = Math.max(0, Number(options.routeEnergyRegisterScore) || 0);
-  const currentEconomyPotentialR = evaluateFixedRoutePricingEconomyUtilityR(
+  const currentEconomyPotentialR = evaluateRouteStartingEconomyPotentialR(
     tileMap,
     route,
     options
@@ -426,7 +492,7 @@ export function rescoreFixedRouteUpgradeEconomy(tileMap, route, options = {}) {
     : { ...options, startingEnergy: referenceStartingEnergy };
   const referenceEconomyPotentialR = referenceStartingEnergy === currentStartingEnergy
     ? currentEconomyPotentialR
-    : evaluateFixedRoutePricingEconomyUtilityR(
+    : evaluateRouteStartingEconomyPotentialR(
       tileMap,
       route,
       referenceOptions
@@ -444,7 +510,7 @@ export function rescoreFixedRouteUpgradeEconomy(tileMap, route, options = {}) {
     startingEconomyBenefitScore: Number(Math.max(0, -startingEconomyAdjustmentScore).toFixed(2)),
     startingEconomyPotentialR: Number(currentEconomyPotentialR.toFixed(3)),
     referenceStartingEconomyPotentialR: Number(referenceEconomyPotentialR.toFixed(3)),
-    pricingEconomyMethod: "card-aware-fixed-route-expected-economy-v37",
+    pricingEconomyMethod: "simulated-upgrade-economy-table-v50",
     pricingStartingUpgradeCards: config.startingUpgradeCards,
     pricingUsefulUpgradeCardRate: config.usefulUpgradeCardRate,
     pricingDrawsPerTurn: config.drawsPerTurn,

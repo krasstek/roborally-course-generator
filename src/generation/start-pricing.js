@@ -3446,7 +3446,7 @@ export function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, option
         active: true,
         mode: isSubsidizedStartsPricing(options) ? "subsidy" : "payment",
         subsidizedStarts: isSubsidizedStartsPricing(options),
-        pricingEconomyMethod: "card-aware-fixed-route-expected-economy-v37",
+        pricingEconomyMethod: "simulated-upgrade-economy-table-v50",
         pruningPolicy: "pre-control-energy-economy-v49dz + one-shot-final-start-balance-v49fn",
         compensationFirst: true,
         routeReselectionPolicy: "completed-effective-re-existing-candidates-then-prune-gated-direction-aware-energy-rescue-v49dw",
