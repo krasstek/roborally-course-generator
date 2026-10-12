@@ -685,7 +685,7 @@ export function buildScenarioCopySummary(scenario) {
           );
         }
         lines.push(
-          "Traffic route-switch objective: intentional legacy pathfinder route.score + traffic.total (+4% raw-gap stability) for switching among already-discovered candidates; route-family occupancy attractiveness remains completed effective RE."
+          "Traffic route-switch objective: completed effective RE, both for accepting a new traffic alternate into a start's pool (minimum gain in RE) and for switching among discovered candidates; route-family occupancy attractiveness is the same effective RE."
         );
         if (routeFamilyDivergence) {
           const legSummary = (routeFamilyDivergence.perLeg ?? [])

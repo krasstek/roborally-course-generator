@@ -82,6 +82,7 @@ import {
   applyNormalFullCourseEffectiveREFairnessScores,
   buildExpectedLegAnalysesFromFullRoutes,
   buildStartAnalysisForSelectedFullRoute,
+  getTrafficRouteMixtureEffectiveREQuality,
   prepareFullCourseCandidate,
   selectCorridorDiverseFullCourseRoutes,
   selectFullCourseRoutesForStarts
@@ -2775,10 +2776,12 @@ export function* analyzeFullCourseContextualSteps(
         0,
         Number(options.contextualTrafficAlternateDemandThreshold) || 0
       );
+      // Alternates are judged in completed effective RE, the same quantity route
+      // selection uses; the configured gain and probe margin are in score units.
       const trafficMinimumGain = Math.max(
         0,
         Number(options.contextualTrafficAlternateMinGain) || 0
-      );
+      ) / REGISTER_TEMPO_COST;
       const trafficLegsPerStart = Math.max(
         1,
         Math.floor(Number(options.contextualTrafficAlternateLegsPerStart) || 1)
@@ -2802,7 +2805,7 @@ export function* analyzeFullCourseContextualSteps(
       const trafficCachedProbeMargin = Math.max(
         0,
         Number(options.contextualTrafficAlternateCachedProbeMargin) || 0
-      );
+      ) / REGISTER_TEMPO_COST;
       const trafficCachedProbeMaxSimilarity = clamp(
         Number(options.contextualTrafficAlternateCachedProbeMaxSimilarity) || 0.84,
         0,
@@ -3637,6 +3640,7 @@ export function* analyzeFullCourseContextualSteps(
               trafficAlternateExploratoryDemandLegs += 1;
             } else if (entry.demandKind === "pressure") {
               trafficAlternatePressureDemandLegs += 1;
+
             } else {
               trafficAlternateEffectiveDemandLegs += 1;
             }
@@ -3659,6 +3663,15 @@ export function* analyzeFullCourseContextualSteps(
           const evidenceGainByLeg = new Map();
           const evidenceReplacementIdsByLeg = new Map();
 
+          // An alternate's gain is how much it lowers the start's completed
+          // effective RE (cards, damage, energy, planning load and traffic), so
+          // any kind of unattractiveness it avoids counts, not only traffic.
+          const baselineEffectiveRE = getTrafficRouteMixtureEffectiveREQuality(
+            tileMap,
+            baselineRoute,
+            baselineRoutingTraffic,
+            options
+          );
           const scoreRealizedTrafficCandidate = (realized) => {
             if (!realized?.route) return null;
             const candidateTrafficLegacy = getExpectedTrafficBreakdown(
@@ -3681,11 +3694,13 @@ export function* analyzeFullCourseContextualSteps(
                 trafficRouteMixtureByIndex: frozenRouteMixtureByIndex
               }
             );
-            return (
-              baselineRoute.score + baselineRoutingTraffic.total
-            ) - (
-              realized.route.score + candidateTraffic.total
+            const candidateEffectiveRE = getTrafficRouteMixtureEffectiveREQuality(
+              tileMap,
+              realized.route,
+              candidateTraffic,
+              options
             );
+            return baselineEffectiveRE - candidateEffectiveRE;
           };
 
           const rememberEvidenceCandidate = (realized, legIndex, replacementId) => {
