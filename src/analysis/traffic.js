@@ -2840,6 +2840,8 @@ export function getExplicitOccupancyWeight(occupancyByIndex, index) {
     : 0;
 }
 
+export const OCCUPANCY_TEMPERATURE_FLOOR_SCORE = 6;
+
 export function getOccupancyQualityOverride(options, index) {
   const source = options?.occupancyQualityScoreByIndex;
   if (!source) return null;
@@ -2890,9 +2892,19 @@ export function getCommonOccupancyAttractiveness(
   // start changes only normalization/certain occupancy below. Keeping this one
   // shared temperature prevents an extreme focus start from changing the relative
   // attractiveness of every other pair of starts.
+  // Qualities come either from route/balance scores (score units, 6.4 per
+  // register) or from an explicit occupancyQualityScoreByIndex override, which
+  // every caller fills with completed effective RE (priced starts, Competitive,
+  // Dev replay). The temperature floor is about one register in score units, so
+  // in RE it is divided by the 6.4 score per register; using 6 there would make
+  // occupancy nearly uniform.
+  const qualityInRE = Boolean(options?.occupancyQualityScoreByIndex);
+  const temperatureFloor = qualityInRE
+    ? OCCUPANCY_TEMPERATURE_FLOOR_SCORE / REGISTER_TEMPO_COST
+    : OCCUPANCY_TEMPERATURE_FLOOR_SCORE;
   const minScore = Math.min(...finiteScores);
   const maxScore = Math.max(...finiteScores);
-  const temperature = Math.max(6, (maxScore - minScore) / 3);
+  const temperature = Math.max(temperatureFloor, (maxScore - minScore) / 3);
   const weightByIndex = new Map(scored.map((entry) => [
     entry.analysis.index,
     Number.isFinite(entry.score)
