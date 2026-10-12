@@ -15,6 +15,9 @@ import {
   NORMAL_CONTEXTUAL_FULL_FORECAST_SHARE,
   NORMAL_EFFECTIVE_RE_FAIRNESS_STDDEV_LIMIT,
   NORMAL_EFFECTIVE_RE_OUTLIER_Z,
+  PRICED_START_DEAD_BAND_RANGE_FRACTION,
+  PRICED_START_OUTLIER_MIN_GAP_RE,
+  PRICED_START_OUTLIER_ROBUST_Z,
   SUBSIDIZED_STARTS_MAX_EXTRA_ENERGY
 } from "./config.js";
 import { getGenerationModeProfile } from "./generation-modes.js";
@@ -628,7 +631,25 @@ export function summarizeEconomyCompensationObjective(entries = [], adjustmentBy
   };
 }
 
-export function chooseEconomyStartAdjustmentClosestToTarget(entry, targetEffectiveRE, options = {}) {
+// The dead band for one priced field: a share of the effective-RE range that
+// Normal start balance accepts as fair for this course.
+export function getPricedStartDeadBandRE(entries = [], options = {}) {
+  const rangeTarget = getNormalEffectiveRERangeTarget(
+    (entries || []).map((entry) => entry?.startAnalysis ?? entry),
+    options
+  );
+  const rangeLimit = Number(rangeTarget?.rangeLimit);
+  return Number.isFinite(rangeLimit) && rangeLimit > 0
+    ? rangeLimit * PRICED_START_DEAD_BAND_RANGE_FRACTION
+    : 0;
+}
+
+export function chooseEconomyStartAdjustmentClosestToTarget(
+  entry,
+  targetEffectiveRE,
+  options = {},
+  deadBandRE = 0
+) {
   const subsidizedStarts = isSubsidizedStartsPricing(options);
   const epsilon = 1e-9;
   const rawRE = Number(entry?.fullScore);
@@ -637,10 +658,13 @@ export function chooseEconomyStartAdjustmentClosestToTarget(entry, targetEffecti
     Math.max(0, (entry?.paymentScores?.length ?? 1) - 1)
   );
   const rawDelta = rawRE - targetEffectiveRE;
+  // Gaps within the dead band are not priced: they are within the model's own
+  // uncertainty, and pricing them makes near-identical starts differ in Energy.
+  const deadBand = Math.max(0, Number(deadBandRE) || 0);
   const compensable = Number.isFinite(rawRE) && Number.isFinite(targetEffectiveRE) && (
     subsidizedStarts
-      ? rawDelta > epsilon
-      : rawDelta < -epsilon
+      ? rawDelta > deadBand
+      : rawDelta < -deadBand
   );
 
   if (!compensable || maxAdjustment <= 0) {
@@ -724,6 +748,7 @@ export function optimizeEconomyStartingEnergyAdjustments(entries = [], options =
     ? (subsidizedStarts ? Math.min(...finiteRaw) : Math.max(...finiteRaw))
     : 0;
   const fieldMedianEffectiveRE = finiteRaw.length ? medianValue(finiteRaw) : 0;
+  const deadBandRE = getPricedStartDeadBandRE(entries, options);
   const adjustmentByIndex = new Map();
   const choiceByIndex = new Map();
 
@@ -731,8 +756,10 @@ export function optimizeEconomyStartingEnergyAdjustments(entries = [], options =
     const choice = chooseEconomyStartAdjustmentClosestToTarget(
       entry,
       targetEffectiveRE,
-      options
+      options,
+      deadBandRE
     );
+    choice.deadBandRE = deadBandRE;
     adjustmentByIndex.set(entry.index, choice.adjustment);
     choiceByIndex.set(entry.index, choice);
   }
@@ -867,6 +894,7 @@ export function buildPayToWinEffectiveREPricingState(
       targetEffectiveRE: Number.isFinite(targetRE) ? Number(targetRE.toFixed(3)) : null,
       rawTargetGap: Number.isFinite(choice?.rawGap) ? Number(choice.rawGap.toFixed(3)) : null,
       residualTargetGap: Number.isFinite(choice?.residualGap) ? Number(choice.residualGap.toFixed(3)) : null,
+      deadBandRE: Number.isFinite(choice?.deadBandRE) ? Number(choice.deadBandRE.toFixed(3)) : 0,
       capLimited: Boolean(choice?.capLimited),
       crossedTarget: Boolean(choice?.crossedTarget),
       paymentScores: entry.paymentScores.map((value) => (
@@ -2043,6 +2071,54 @@ export function summarizeEconomyPricedREPhase(entries = [], costKey = "energyCos
   };
 }
 
+// Before pricing, only a genuine effective-RE outlier is pruned: a start at
+// either end of the field that is at least PRICED_START_OUTLIER_MIN_GAP_RE from
+// the next start and at least PRICED_START_OUTLIER_ROBUST_Z robust standard
+// deviations (1.4826 x median absolute deviation) from the field median. Left in,
+// such a start becomes the pricing anchor (or sits at the cap) and distorts every
+// other price.
+export function findPricedStartPrePricingOutlier(entries = [], playerCount = 1) {
+  const field = (entries || [])
+    .filter((entry) => Number.isFinite(Number(entry?.fullScore)))
+    .sort((left, right) => left.fullScore - right.fullScore || left.index - right.index);
+  if (field.length <= Math.max(1, playerCount || 1) || field.length < 3) return null;
+  const values = field.map((entry) => Number(entry.fullScore));
+  const middle = Math.floor(values.length / 2);
+  const median = values.length % 2 ? values[middle] : (values[middle - 1] + values[middle]) / 2;
+  const deviations = values.map((value) => Math.abs(value - median)).sort((left, right) => left - right);
+  const mad = deviations.length % 2
+    ? deviations[middle]
+    : (deviations[middle - 1] + deviations[middle]) / 2;
+  const robustSpread = 1.4826 * mad;
+  const ends = [
+    { entry: field[0], gap: values[1] - values[0] },
+    { entry: field[field.length - 1], gap: values[values.length - 1] - values[values.length - 2] }
+  ].map((end) => ({
+    ...end,
+    robustZ: robustSpread > 1e-9
+      ? Math.abs(Number(end.entry.fullScore) - median) / robustSpread
+      : Infinity
+  })).filter((end) => (
+    end.gap >= PRICED_START_OUTLIER_MIN_GAP_RE &&
+    end.robustZ >= PRICED_START_OUTLIER_ROBUST_Z
+  )).sort((left, right) => right.gap - left.gap || left.entry.index - right.entry.index);
+  if (!ends.length) return null;
+  const { entry, gap, robustZ } = ends[0];
+  return {
+    index: entry.index,
+    score: Number(entry.fullScore),
+    fullScore: Number(entry.fullScore),
+    energyCost: 0,
+    lateEnergyCost: 0,
+    prePricingOutlierPruned: true,
+    effectiveREPruned: true,
+    balanceDispersionPruned: false,
+    reason:
+      `genuine effective-RE outlier before pricing: ${Number(gap.toFixed(3))} RE from ` +
+      `the next start, robust z ${Number.isFinite(robustZ) ? Number(robustZ.toFixed(2)) : "inf"}`
+  };
+}
+
 export function chooseEconomyCompensatedStartRemoval(
   earlyEntries = [],
   lateEntries = [],
@@ -2063,9 +2139,47 @@ export function chooseEconomyCompensatedStartRemoval(
     earlyCurrent.residualPenalty,
     lateCurrent.residualPenalty
   );
+  const lateByIndex = new Map((lateEntries || []).map((entry) => [entry.index, entry]));
+
+  // A start that no legal Energy amount brings within the dead band of the
+  // anchor (the cap is not enough, or Energy is worth too little on its route)
+  // is not offerable at a meaningful price: prune the furthest such start first
+  // (early or late selector phase).
+  const beyondRange = earlyEntries.map((entry) => {
+    const lateEntry = lateByIndex.get(entry.index) ?? null;
+    const earlyGap = Number(entry.residualTargetGap) || 0;
+    const lateGap = latePricingActive
+      ? Number(lateEntry?.residualTargetGap) || 0
+      : 0;
+    const deadBand = Math.max(
+      Number(entry.deadBandRE) || 0,
+      Number(lateEntry?.deadBandRE) || 0
+    );
+    return { entry, lateEntry, gap: Math.max(earlyGap, lateGap), deadBand };
+  }).filter((item) => item.gap > item.deadBand)
+    .sort((left, right) => right.gap - left.gap || left.entry.index - right.entry.index);
+  if (beyondRange.length) {
+    const { entry, lateEntry, gap, deadBand } = beyondRange[0];
+    return {
+      index: entry.index,
+      score: Number(entry.postPaymentFullScore),
+      fullScore: Number(entry.fullScore),
+      energyCost: entry.energyCost,
+      lateEnergyCost: lateEntry?.lateEnergyCost ?? entry.energyCost,
+      registerEquivalent: entry.registerEquivalent,
+      lateRegisterEquivalent: lateEntry?.lateRegisterEquivalent ?? entry.registerEquivalent,
+      beyondEnergyRangePruned: true,
+      effectiveREPruned: false,
+      balanceDispersionPruned: false,
+      residualPenaltyBefore: Number(currentWorstPenalty.toFixed(3)),
+      reason:
+        `the full Energy range leaves this start ${Number(gap.toFixed(3))} RE from the ` +
+        `pricing anchor (dead band ${Number(deadBand.toFixed(3))} RE)`
+    };
+  }
+
   if (!(currentWorstPenalty > 1e-9)) return null;
 
-  const lateByIndex = new Map((lateEntries || []).map((entry) => [entry.index, entry]));
   const candidates = earlyEntries.map((entry) => {
     const earlyRetained = earlyEntries.filter((item) => item.index !== entry.index);
     if (earlyRetained.length < minimumStarts) return null;
@@ -2917,6 +3031,8 @@ export function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, option
       pricingOptions
     );
     if (costState.entries.length <= playerCount) return null;
+    const prePricingOutlier = findPricedStartPrePricingOutlier(costState.entries, playerCount);
+    if (prePricingOutlier) return prePricingOutlier;
 
     let currentEconomy = evaluatePayToWinSelectorAwarePricingState(
       currentFirstLeg,
@@ -3284,7 +3400,8 @@ export function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, option
       rawTargetGap: entry.rawTargetGap ?? null,
       residualTargetGap: entry.residualTargetGap ?? null,
       capLimited: Boolean(entry.capLimited),
-      lateCapLimited: Boolean(lateEntry?.capLimited)
+      lateCapLimited: Boolean(lateEntry?.capLimited),
+      deadBandRE: entry.deadBandRE ?? null
     };
   });
   const meaningfulEnergyAdjustmentCount = pricingEntries.filter((entry) => (

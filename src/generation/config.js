@@ -253,6 +253,20 @@ export const NORMAL_EFFECTIVE_RE_SOFT_OVERFLOW_FRACTION = 0.25;
 // starting-Energy change is mechanically legal but a weak realization of a
 // Must request. Penalize selection rather than inventing an unnecessary price.
 export const FORCED_ECONOMY_NO_EFFECT_FIT_PENALTY = 12;
+// Priced starts (Pay to Win / Subsidized Starts), 2026-10-12:
+// - before pricing, only genuine effective-RE outliers are pruned, more loosely
+//   than Normal start balance: a start at either end of the field, at least this
+//   far from the next start and this many robust standard deviations (median
+//   absolute deviation) from the field median;
+// - a start whose gap to the pricing anchor is within the dead band is not
+//   priced (the gap is within the model's own uncertainty). The band is a share
+//   of the effective-RE range Normal start balance accepts as fair for this
+//   course (it grows with course length and follows the Start Balance setting);
+// - after pricing, a start that the full Energy range cannot bring within the
+//   dead band of the anchor is pruned (one at a time, never below the player count).
+export const PRICED_START_OUTLIER_MIN_GAP_RE = 2.5;
+export const PRICED_START_OUTLIER_ROBUST_Z = 3;
+export const PRICED_START_DEAD_BAND_RANGE_FRACTION = 0.25;
 export const NORMAL_EFFECTIVE_RE_FAIRNESS_STDDEV_LIMIT = 3.5; // diagnostic/Competitive anchor only
 // Main owns the RE-to-score conversion used by the residual Normal scorer;
 // do not depend on a private analyzer constant.
