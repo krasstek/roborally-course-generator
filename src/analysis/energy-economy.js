@@ -2,6 +2,14 @@
 import { tileKey } from "./board-geometry.js";
 import { REGISTER_COUNT } from "./constants.js";
 import { clamp } from "../shared/math.js";
+import {
+  ENERGY_GAIN_VALUE,
+  ENERGY_VALUE_TABLE_MAXIMA,
+  ENERGY_VALUE_TABLE_MAX_ENERGY,
+  ENERGY_VALUE_TABLE_MAX_TURNS,
+  FREE_UPGRADE_INSTALL_VALUE,
+  UPGRADE_CARD_GAIN_VALUE
+} from "./energy-value-table.js";
 import { isRouteAwareBatteryScoringActive } from "./rule-options.js";
 
 // Shared upgrade-economy defaults.  The legacy DP diagnostics and the v18
@@ -231,38 +239,38 @@ export function getRouteEconomyNextBoundaryAction(absoluteActionCount, config) {
   return phase === 0 ? count : count + (config.registersPerTurn - phase);
 }
 
+// Route energy values come from the simulated upgrade economy in
+// energy-value-table.js (built by scripts/build-energy-value-table.mjs): what one
+// more Energy, one more blind upgrade card, or a free random install is worth,
+// by the race turn whose Upgrade Phase can first use it, the race length, and the
+// Energy the robot has received so far (starting Energy plus route gains; the
+// table already accounts for spending it on upgrades).
+function getEnergyValueTableRaceTurns(options) {
+  const turns = Number(options?.routeEnergyHorizonTurns);
+  if (!(turns > 0)) return 0;
+  return clamp(Math.round(turns), 1, ENERGY_VALUE_TABLE_MAX_TURNS);
+}
+
+function getEnergyValueTableUpgradeTurn(absoluteActionCount, config) {
+  return Math.floor(getRouteEconomyNextBoundaryAction(absoluteActionCount, config) / config.registersPerTurn) + 1;
+}
+
+function getEnergyValueTableEnergyIndex(energy) {
+  return clamp(Math.floor(Number(energy) || 0), 0, ENERGY_VALUE_TABLE_MAX_ENERGY);
+}
+
 export function getFlattenedRouteEnergyMarginalValueR(
   energy,
   absoluteActionCount,
   options = {}
 ) {
   const config = getRouteEnergyEconomyConfig(options);
-  const fullHorizonActions = getRouteEconomyFullHorizonActions(options);
+  const raceTurns = getEnergyValueTableRaceTurns(options);
   const reserve = clamp(Math.floor(Number(energy) || 0), 0, config.maxEnergy);
-  if (!(fullHorizonActions > 0) || reserve >= config.maxEnergy) return 0;
-
-  const nextBoundary = getRouteEconomyNextBoundaryAction(
-    absoluteActionCount,
-    config
-  );
-  if (nextBoundary >= fullHorizonActions) return 0;
-
-  // usefulEnergyPerInstall is already the existing model's coarse amount of
-  // Energy one useful upgrade opportunity can absorb (default 2E).  Every full
-  // tranche already held in reserve pushes the marginal cube to the next
-  // install slot.  With one install per turn this produces the smooth surface
-  // discussed in the design notes: roughly 1.00R, .86R, .71R... through a
-  // seven-turn race, with higher reserves shifted one or more slots later.
-  const tranche = Math.max(1, config.usefulEnergyPerInstall);
-  const occupiedSlots = Math.floor(reserve / tranche);
-  const installStride = config.installsPerTurn > 0
-    ? config.registersPerTurn / config.installsPerTurn
-    : fullHorizonActions;
-  const effectiveBoundary = nextBoundary + occupiedSlots * installStride;
-  return Number((
-    config.powerRegistersPerEnergy *
-    getRouteEconomyInstallExposure(effectiveBoundary, fullHorizonActions)
-  ).toFixed(6));
+  if (!raceTurns || reserve >= config.maxEnergy) return 0;
+  const turn = getEnergyValueTableUpgradeTurn(absoluteActionCount, config);
+  if (turn > raceTurns) return 0;
+  return ENERGY_GAIN_VALUE[raceTurns][turn][getEnergyValueTableEnergyIndex(reserve)];
 }
 
 export function getFlattenedUnknownUpgradeCardValueR(
@@ -271,32 +279,11 @@ export function getFlattenedUnknownUpgradeCardValueR(
   options = {}
 ) {
   const config = getRouteEnergyEconomyConfig(options);
-  const fullHorizonActions = getRouteEconomyFullHorizonActions(options);
-  if (!(fullHorizonActions > 0) || !(config.usefulUpgradeCardRate > 0)) return 0;
-
-  const nextBoundary = getRouteEconomyNextBoundaryAction(
-    absoluteActionCount,
-    config
-  );
-  const exposure = getRouteEconomyInstallExposure(
-    nextBoundary,
-    fullHorizonActions
-  );
-  // An unknown card is not carried through the search.  Give it its expected
-  // usefulness now, limited by how much Energy the current reserve could
-  // productively invest in one upgrade opportunity.  This is intentionally a
-  // smooth expectation rather than a simulated future hand.
-  const reserve = clamp(Math.floor(Number(energy) || 0), 0, config.maxEnergy);
-  const usefulInvestment = Math.min(
-    reserve,
-    Math.max(1, config.usefulEnergyPerInstall)
-  );
-  return Number((
-    config.usefulUpgradeCardRate *
-    usefulInvestment *
-    config.powerRegistersPerEnergy *
-    exposure
-  ).toFixed(6));
+  const raceTurns = getEnergyValueTableRaceTurns(options);
+  if (!raceTurns) return 0;
+  const turn = getEnergyValueTableUpgradeTurn(absoluteActionCount, config);
+  if (turn > raceTurns) return 0;
+  return UPGRADE_CARD_GAIN_VALUE[raceTurns][turn][getEnergyValueTableEnergyIndex(energy)];
 }
 
 export function getFlattenedFreeRandomUpgradeInstallValueR(
@@ -304,66 +291,24 @@ export function getFlattenedFreeRandomUpgradeInstallValueR(
   options = {}
 ) {
   const config = getRouteEnergyEconomyConfig(options);
-  const fullHorizonActions = getRouteEconomyFullHorizonActions(options);
-  if (
-    !(fullHorizonActions > 0) ||
-    !(config.usefulUpgradeCardRate > 0)
-  ) {
-    return 0;
-  }
-
-  // The Waste benefit installs immediately at this register boundary rather
-  // than waiting for the next normal Upgrade Phase, so its useful lifetime
-  // starts after the current register.
-  const exposure = getRouteEconomyInstallExposure(
-    Math.max(0, Number(absoluteActionCount) || 0),
-    fullHorizonActions
-  );
-
-  // Radioactive Waste installs a random upgrade for free. Reverse-engineer
-  // its expected value from the existing upgrade-economy assumptions:
-  // expected useful-card rate × one full useful-install investment × remaining
-  // exposure. Unlike a normal unknown card, this branch does not require the
-  // player to hold/spend Energy before the upgrade becomes useful.
-  return Number((
-    config.usefulUpgradeCardRate *
-    Math.max(1, config.usefulEnergyPerInstall) *
-    config.powerRegistersPerEnergy *
-    exposure
-  ).toFixed(6));
+  const raceTurns = getEnergyValueTableRaceTurns(options);
+  if (!raceTurns) return 0;
+  // Radioactive Waste installs at once, during the current turn.
+  const turn = Math.floor(Math.max(0, Number(absoluteActionCount) || 0) / config.registersPerTurn) + 1;
+  if (turn > raceTurns) return 0;
+  return FREE_UPGRADE_INSTALL_VALUE[raceTurns][turn];
 }
 
+// The route's energy shadow counts Energy received so far, starting with the
+// starting Energy; spending it on upgrades is part of the value table.
 export function getFlattenedOpeningEconomyState(options = {}) {
   const config = getRouteEnergyEconomyConfig(options);
-  const startingEnergy = clamp(config.startingEnergy, 0, config.maxEnergy);
-  if (!isRouteAwareBatteryScoringActive(options)) {
-    return {
-      energy: startingEnergy,
-      usefulCardUnits: 0,
-      normalDraws: 0,
-      installs: 0,
-      energySpent: 0
-    };
-  }
-
-  const expectedUsefulStartingCards = (
-    config.startingUpgradeCards * config.usefulUpgradeCardRate
-  );
-  const canInstall = (
-    config.installsPerTurn > 0 &&
-    expectedUsefulStartingCards >= 1 - 1e-9 &&
-    startingEnergy > 0
-  );
-  const openingInvestment = canInstall
-    ? Math.min(startingEnergy, Math.max(1, config.usefulEnergyPerInstall))
-    : 0;
-
   return {
-    energy: startingEnergy - openingInvestment,
+    energy: clamp(config.startingEnergy, 0, config.maxEnergy),
     usefulCardUnits: 0,
     normalDraws: 0,
-    installs: openingInvestment > 0 ? 1 : 0,
-    energySpent: openingInvestment
+    installs: 0,
+    energySpent: 0
   };
 }
 
@@ -423,27 +368,17 @@ export function getRouteEnergyDominanceBoundConfig(options = {}) {
   if (!Number.isFinite(registerScore)) {
     return { active: true, unbounded: true, energyCubeScore: Infinity, unknownCardScore: Infinity, upgradeWorld: Boolean(options.upgradeWorld) };
   }
-  const config = getRouteEnergyEconomyConfig(options);
   const nonnegativeRegisterScore = Math.max(0, registerScore);
-  const energyCubeScore = (
-    config.powerRegistersPerEnergy *
-    nonnegativeRegisterScore
-  );
-  const maxUsefulInvestment = Math.min(
-    config.maxEnergy,
-    Math.max(1, config.usefulEnergyPerInstall)
-  );
-  const unknownCardScore = (
-    config.usefulUpgradeCardRate *
-    maxUsefulInvestment *
-    config.powerRegistersPerEnergy *
-    nonnegativeRegisterScore
-  );
+  // The largest values in the energy value table bound every single gain.
+  const energyCubeScore = ENERGY_VALUE_TABLE_MAXIMA.energy * nonnegativeRegisterScore;
+  const unknownCardScore = ENERGY_VALUE_TABLE_MAXIMA.card * nonnegativeRegisterScore;
+  const freeInstallScore = ENERGY_VALUE_TABLE_MAXIMA.install * nonnegativeRegisterScore;
   return {
     active: true,
     unbounded: false,
     energyCubeScore,
     unknownCardScore,
+    freeInstallScore,
     // Each flattened marginal/card value is rounded to 1e-6 before the final
     // register-score conversion. A single action can accumulate at most six
     // such rounded terms (Battery + card, WAIT, Chop Shop's two-card option, Waste).
@@ -483,10 +418,8 @@ export function getRouteEnergyDominanceRewardUpperBound(
     rewardUpperBound += Math.max(energyOption, cardOption);
   }
   if (onRadioactiveWaste) {
-    // The real step chooses the better of +1 Energy and a free random upgrade.
-    // cardScore is already the conservative full-investment random-upgrade
-    // ceiling, so max(cube, card) remains a valid one-step bound.
-    rewardUpperBound += Math.max(cubeScore, cardScore);
+    // The real step chooses the better of +1 Energy and a free random install.
+    rewardUpperBound += Math.max(cubeScore, boundConfig.freeInstallScore ?? cardScore);
   }
 
   // Include both the intermediate 1e-6 rounding ceiling and the final 0.001
