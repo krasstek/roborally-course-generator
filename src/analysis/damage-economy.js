@@ -679,6 +679,9 @@ export const DAMAGE_ECONOMY_RELIEF_FORWARD_HAZARD_PENALTY_MAX = 0.55;
 // as a reboot: the full penalty, recorded as this many damage-equivalents.
 export const DAMAGE_ECONOMY_RELIEF_FORWARD_DAMAGE_UNIT_PENALTY = 4 / 25.6;
 export const DAMAGE_ECONOMY_RELIEF_FORWARD_REBOOT_UNITS = 3;
+// A random move ending on oil may slide the robot off in an unplanned direction:
+// it counts as this many damage cards in the forward hazard check.
+export const DAMAGE_ECONOMY_RELIEF_OIL_LANDING_UNITS = 1;
 // Starting on water or oil shortens move cards by one tile, so a random card
 // there is safer: between a wall two tiles ahead (0.18) and one ahead (0.32).
 export const DAMAGE_ECONOMY_RELIEF_SLOWED_START_BONUS = 0.2;
@@ -1228,42 +1231,28 @@ export function getDamageEconomyForwardReliefContext(
     const tile = tileMap.get(tileKey(to.x, to.y));
     if (!tile) break;
 
-    // A move that ends on oil slides on in the same direction until the robot
-    // leaves the oil, stops at a wall or crashes; judge where it really stops.
-    const slidePath = [{ ...to }];
-    let landingPoint = to;
-    let slideCrashed = false;
-    while (isOil(tileMap.get(tileKey(landingPoint.x, landingPoint.y))) && slidePath.length <= 24) {
-      const next = { x: landingPoint.x + DIRS[dir].dx, y: landingPoint.y + DIRS[dir].dy };
-      if (isBoundaryBlockedByWalls(tileMap, landingPoint, next, dir)) break;
-      const slideCheck = canMoveBetween(tileMap, landingPoint, next, dir, registerOptions);
-      if (!slideCheck.ok) {
-        slideCrashed = Boolean(slideCheck.crash);
-        break;
-      }
-      slidePath.push({ ...next });
-      landingPoint = next;
-    }
-    const landingTile = tileMap.get(tileKey(landingPoint.x, landingPoint.y));
-
     // Landing hazards in the damage economy's own terms: an active crusher is a
     // reboot like a crash; otherwise the damage cards a robot would take if a
     // random card left it on this tile (lasers, flamers, oil, radiation, waste,
     // ledges), with the variants the damage economy models (Cutting Floor, More
     // Deadly, Flaming Oil). The route search's tile penalties and pressure
     // terms stay out of it.
-    if (slideCrashed || hasActiveFeature(landingTile, "crusher", registerOptions)) {
+    if (hasActiveFeature(tile, "crusher", registerOptions)) {
       forwardHazardScore += DAMAGE_ECONOMY_RELIEF_FORWARD_REBOOT_UNITS * weight;
       forwardHazardPenalty += DAMAGE_ECONOMY_RELIEF_FORWARD_HAZARD_PENALTY_MAX * weight;
       break;
     }
     const landing = getDamageEconomyRealizedDamageForTransition(
       tileMap,
-      { from: { ...from, facing: dir }, to: { ...landingPoint, facing: dir }, traversed: slidePath },
+      { from: { ...from, facing: dir }, to: { ...to, facing: dir }, traversed: [{ ...to }] },
       options,
       absoluteAction
     );
-    const landingDamageUnits = Math.max(0, Number(landing?.totalDamageUnits) || 0);
+    // Random moves are not simulated, so a move that ends on oil is not
+    // followed down its slide; the chance of sliding off in an unplanned
+    // direction simply makes this a worse place for a random card.
+    const landingDamageUnits = Math.max(0, Number(landing?.totalDamageUnits) || 0) +
+      (isOil(tile) ? DAMAGE_ECONOMY_RELIEF_OIL_LANDING_UNITS : 0);
     forwardHazardScore += landingDamageUnits * weight;
     forwardHazardPenalty += Math.min(
       DAMAGE_ECONOMY_RELIEF_FORWARD_HAZARD_PENALTY_MAX * weight,
