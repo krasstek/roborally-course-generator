@@ -262,8 +262,10 @@ export const FORCED_ECONOMY_NO_EFFECT_FIT_PENALTY = 12;
 //   priced (the gap is within the model's own uncertainty). The band is a share
 //   of the effective-RE range Normal start balance accepts as fair for this
 //   course (it grows with course length and follows the Start Balance setting);
-// - after pricing, a start that the full Energy range cannot bring within the
-//   dead band of the anchor is pruned (one at a time, never below the player count).
+// - after pricing, a start that no legal Energy amount brings within the fair
+//   range of the anchor is pruned (one at a time, never below the player count);
+//   closer starts stay unless the residual balance check needs to remove them,
+//   so a priced field may keep more starts than players.
 export const PRICED_START_OUTLIER_MIN_GAP_RE = 2.5;
 export const PRICED_START_OUTLIER_ROBUST_Z = 3;
 export const PRICED_START_DEAD_BAND_RANGE_FRACTION = 0.25;
