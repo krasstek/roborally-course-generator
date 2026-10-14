@@ -49,7 +49,9 @@ import { withGenerationRandomSeed } from "./random.js";
 import { placeRebootTokens } from "./reboot-tokens.js";
 import { generationNow } from "./scheduling.js";
 import {
+  chooseActFastMode,
   getCourseConflictingVariantIds,
+  getMissingRequiredVariantIds,
   getVariantCourseUnavailabilityReason,
   getAvailableDockIds,
   getAvailableMainBoardIds,
@@ -667,8 +669,9 @@ const RECOVERY_RULE_BY_VARIANT = { dynamicArchiving: "dynamic_archiving", homeRe
 
 // The first variant of `order` that can be switched on this course: switching off
 // an active one is always possible; switching one on must not conflict with the
-// active set or be inert on this course, and a recovery rule is only switched on
-// from reboot tokens (the snapshot has no tokens to fall back to otherwise).
+// active set, lack a variant it requires, or be inert on this course, and a
+// recovery rule is only switched on from reboot tokens (the snapshot has no
+// tokens to fall back to otherwise).
 export function chooseCalibrationVariantToggle(scenario, order = CALIBRATION_TOGGLE_VARIANT_IDS) {
   const active = new Set(getCalibrationActiveVariantIds(scenario));
   let courseContext = null;
@@ -687,6 +690,8 @@ export function chooseCalibrationVariantToggle(scenario, order = CALIBRATION_TOG
       return { variantId, on: false };
     }
     if (getCourseConflictingVariantIds(variantId).some((id) => active.has(id))) continue;
+    const activeMap = Object.fromEntries([...active].map((id) => [id, true]));
+    if (getMissingRequiredVariantIds(variantId, {}, activeMap, { selfState: "allowed" }).length) continue;
     if (RECOVERY_RULE_BY_VARIANT[variantId] && (scenario.recoveryRule ?? "reboot_tokens") !== "reboot_tokens") continue;
     if (!canMatter(variantId)) continue;
     return { variantId, on: true };
@@ -708,6 +713,9 @@ export async function evaluateCalibrationVariantToggle(assets, scenario, toggle)
   const snapshot = JSON.parse(JSON.stringify(serializeScenario(scenario)));
   const toggled = JSON.parse(JSON.stringify(snapshot));
   toggled[toggle.variantId] = Boolean(toggle.on);
+  if (toggle.variantId === "actFast") {
+    toggled.actFastMode = toggle.on ? chooseActFastMode(scenario.preferences ?? {}) : null;
+  }
   const recoveryRule = RECOVERY_RULE_BY_VARIANT[toggle.variantId];
   if (recoveryRule) {
     for (const id of Object.keys(RECOVERY_RULE_BY_VARIANT)) toggled[id] = id === toggle.variantId && toggle.on;
