@@ -8,8 +8,10 @@
 import {
   clearAnalysisCaches,
   getAnalysisTelemetrySnapshot,
-  resetAnalysisTelemetry
+  resetAnalysisTelemetry,
+  summarizeRegisterEquivalentLedger
 } from "../../analyze.js";
+import { setCalibrationLegCandidateSink } from "../analysis/full-course.js";
 import { buildResolvedMap } from "../../board.js";
 import { tileKey } from "../analysis/board-geometry.js";
 import {
@@ -328,6 +330,40 @@ export function describeCalibrationInventory(assets, requestedExpansionIds = nul
   };
 }
 
+const LEG_CHOICE_LIMIT = 150;
+
+// Collects the estimated leg searches' candidate lists (ranked as the search ranks
+// them, chosen first) and prices each candidate with the RE ledger, using the
+// tile map and options that search ran with.
+function createLegChoiceCollector() {
+  const choices = [];
+  const seen = new Set();
+  const sink = ({ legIndex, searchPurpose, ranked, tileMap, options }) => {
+    if (!Array.isArray(ranked) || ranked.length < 2 || choices.length >= LEG_CHOICE_LIMIT) return;
+    const key = `${legIndex}|${ranked.map((route) => `${route.absoluteStartAction}:${route.score}`).join(",")}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    choices.push({
+      legIndex,
+      purpose: searchPurpose,
+      candidates: ranked.map((route) => {
+        const ledger = summarizeRegisterEquivalentLedger(tileMap, route, options, null);
+        return {
+          score: roundedOrNull(route.score, 2),
+          actions: route.actions ?? null,
+          hazard: roundedOrNull(route.hazard, 2),
+          re: roundedOrNull(ledger?.observationalSubtotalWithMentalRE),
+          cardRE: roundedOrNull(ledger?.cleanCardPlausibilityRE),
+          damageRE: roundedOrNull((Number(ledger?.damageCardSupplyRE) || 0) + (Number(ledger?.clogRE) || 0)),
+          energyRE: roundedOrNull(ledger?.energyRE),
+          mentalRE: roundedOrNull(ledger?.mentalRegisterEquivalents)
+        };
+      })
+    });
+  };
+  return { sink, choices };
+}
+
 export async function generateCalibrationObservation(assets, options = {}) {
   const inventory = describeCalibrationInventory(assets, options.expansionIds);
   if (!inventory.expansionIds.length) throw new Error("No supported expansion data selected for calibration.");
@@ -399,6 +435,8 @@ export async function generateCalibrationObservation(assets, options = {}) {
   }
 
   let result;
+  const legChoices = createLegChoiceCollector();
+  setCalibrationLegCandidateSink(legChoices.sink);
   try {
     result = await withGenerationRandomSeed(seed, () => createRandomCandidate(
       assets,
@@ -410,6 +448,7 @@ export async function generateCalibrationObservation(assets, options = {}) {
       null
     ));
   } catch (error) {
+    setCalibrationLegCandidateSink(null);
     // createRandomCandidate historically throws when the sampled board faces and
     // dock cannot form a legal physical layout. Browser generation treats that as
     // an attempt failure and tries another construction. In calibration one attempt
@@ -434,8 +473,15 @@ export async function generateCalibrationObservation(assets, options = {}) {
     }
     throw error;
   }
+  setCalibrationLegCandidateSink(null);
 
   const telemetry = getAnalysisTelemetrySnapshot();
+  const evidence = result?.scenario
+    ? summarizeCalibrationScenario(assets, result.scenario)
+    : (result?.calibrationConstructionSnapshot
+      ? { construction: result.calibrationConstructionSnapshot, outcome: null }
+      : null);
+  if (evidence) evidence.legChoices = legChoices.choices;
   return {
     ...result,
     calibrationStatus: result?.scenario
@@ -445,11 +491,7 @@ export async function generateCalibrationObservation(assets, options = {}) {
     inventory,
     elapsedMs: Number((generationNow() - startedAt).toFixed(2)),
     telemetrySummary: summarizeCalibrationTelemetry(telemetry),
-    evidence: result?.scenario
-      ? summarizeCalibrationScenario(assets, result.scenario)
-      : (result?.calibrationConstructionSnapshot
-        ? { construction: result.calibrationConstructionSnapshot, outcome: null }
-        : null)
+    evidence
   };
 }
 

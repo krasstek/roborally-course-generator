@@ -121,6 +121,13 @@ export const CONTEXTUAL_OPENING_EXPANSIONS = 7000;
 export const CONTEXTUAL_TEMPLATE_POOL = 6;
 export const CONTEXTUAL_TEMPLATE_CARD_DELTA_LIMIT = 14;
 
+// Calibration hook: when set, receives every estimated leg search's candidate
+// routes and the one chosen. Null in production.
+let calibrationLegCandidateSink = null;
+export function setCalibrationLegCandidateSink(sink) {
+  calibrationLegCandidateSink = typeof sink === "function" ? sink : null;
+}
+
 export function cloneContextualFullRouteForReuse(route) {
   if (!route) return route;
   return {
@@ -844,13 +851,14 @@ export function* analyzeFullCourseContextualSteps(
       : 1;
 
     const excluded = new Set(excludedPathKeys);
-    const chooseBestCachedEstimate = (routes) => (
+    const rankCachedEstimates = (routes) => (
       (Array.isArray(routes) ? routes : [routes])
         .filter(Boolean)
         .map((candidate) => rebaseEstimatedRouteSoftGuidance(candidate, context))
         .filter((candidate) => !excluded.has(getEstimatedRouteIdentity(candidate)))
-        .sort(compareScoredRouteLike)[0] ?? null
+        .sort(compareScoredRouteLike)
     );
+    const chooseBestCachedEstimate = (routes) => rankCachedEstimates(routes)[0] ?? null;
 
     if (estimatedLegCache.has(cacheKey)) {
       const cachedEstimate = chooseBestCachedEstimate(estimatedLegCache.get(cacheKey));
@@ -1034,6 +1042,15 @@ export function* analyzeFullCourseContextualSteps(
       searchMeta = routes.contextualSearchMeta ?? searchMeta;
     }
 
+    if (calibrationLegCandidateSink) {
+      calibrationLegCandidateSink({
+        legIndex,
+        searchPurpose,
+        ranked: rankCachedEstimates(routes),
+        tileMap,
+        options: baseRouteOptions
+      });
+    }
     const retainedRoutes = (Array.isArray(routes) ? routes : [])
       .filter(Boolean)
       .slice(0, requestedRoutes);
