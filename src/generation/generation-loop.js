@@ -573,6 +573,8 @@ export async function generateScenarioForPreferences(assets, preferences, option
         : result.scenario && !scenario
           ? "final evaluation could not rebuild the course"
           : describeGenerationRejection(scenario, lastMeaningfulStage),
+      difficultyTurnRE: scenario?.metrics?.difficultyTurnRE ?? null,
+      lengthWallClockTurnIndex: scenario?.metrics?.lengthWallClockTurnIndex ?? null,
       stages: stageTimings,
       routeSearches: routeDelta.searches,
       routeExpansions: routeDelta.expansions,

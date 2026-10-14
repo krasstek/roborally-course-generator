@@ -107,6 +107,15 @@ async function run() {
       difficultyHit: inBand(metrics.difficultyTurnRE, getDifficultyThresholds(), testCase.difficulty),
       lengthHit: inBand(metrics.lengthWallClockTurnIndex, getProductionLengthThresholds(), testCase.length),
       variants: scenario ? VARIANT_DEFINITIONS.map((variant) => variant.id).filter((id) => scenario[id] === true) : [],
+      acceptableFound: scenario?.generationDiagnostics?.acceptableCandidatesFound ?? null,
+      candidates: (scenario?.generationDiagnostics?.attempts ?? generation?.generationDiagnostics?.attempts ?? [])
+        .filter((entry) => Number.isFinite(entry.difficultyTurnRE))
+        .map((entry) => ({
+          difficultyHit: inBand(entry.difficultyTurnRE, getDifficultyThresholds(), testCase.difficulty),
+          lengthHit: inBand(entry.lengthWallClockTurnIndex, getProductionLengthThresholds(), testCase.length)
+        })),
+      rejections: (scenario?.generationDiagnostics?.rejectionEvents ?? generation?.generationDiagnostics?.rejectionEvents ?? [])
+        .reduce((counts, event) => ({ ...counts, [event.category ?? "other"]: (counts[event.category ?? "other"] ?? 0) + 1 }), {}),
       error
     };
     appendFileSync(out, `${JSON.stringify(record)}\n`);
@@ -123,8 +132,16 @@ function summarize(files) {
       const both = subset.filter((row) => row.difficultyHit && row.lengthHit).length;
       console.log(`${label.padEnd(18)} n ${String(subset.length).padStart(3)} | time mean ${(mean(subset.map((row) => row.ms)) / 1000).toFixed(1)} s, median ${(median(subset.map((row) => row.ms)) / 1000).toFixed(1)} s | attempts mean ${mean(subset.map((row) => row.attempts ?? 0)).toFixed(1)} | both bands ${(100 * both / Math.max(1, subset.length)).toFixed(0)}% (difficulty ${(100 * subset.filter((row) => row.difficultyHit).length / Math.max(1, subset.length)).toFixed(0)}%, length ${(100 * subset.filter((row) => row.lengthHit).length / Math.max(1, subset.length)).toFixed(0)}%) | no course ${subset.filter((row) => !row.ok).length}`);
     };
+    const candidates = (subset) => subset.flatMap((row) => row.candidates ?? []);
+    const candidateLine = (label, subset) => {
+      const list = candidates(subset);
+      if (!list.length) return;
+      const pct = (filter) => (100 * list.filter(filter).length / list.length).toFixed(0);
+      console.log(`${"".padEnd(18)} analysed candidates ${list.length}: both bands ${pct((c) => c.difficultyHit && c.lengthHit)}% (difficulty ${pct((c) => c.difficultyHit)}%, length ${pct((c) => c.lengthHit)}%)`);
+    };
     console.log(`\n${file}`);
     line("all", rows);
+    candidateLine("all", rows);
     for (const setup of SETUPS) line(setup.name, rows.filter((row) => row.case.startsWith(setup.name)));
     for (const difficulty of DIFFICULTIES) line(difficulty, rows.filter((row) => row.case.includes(`-${difficulty}-`)));
   }
