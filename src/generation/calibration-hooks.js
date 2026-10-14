@@ -11,6 +11,7 @@ import {
   resetAnalysisTelemetry
 } from "../../analyze.js";
 import { buildResolvedMap } from "../../board.js";
+import { tileKey } from "../analysis/board-geometry.js";
 import {
   VARIANT_DEFINITIONS,
   applyVariantAnalysisOptions,
@@ -88,6 +89,74 @@ export function summarizeCalibrationTelemetry(telemetry = null) {
   };
 }
 
+const roundedOrNull = (value, digits = 4) => (
+  Number.isFinite(Number(value)) ? Number(Number(value).toFixed(digits)) : null
+);
+
+function countInto(counts, key, amount = 1) {
+  counts[key] = (counts[key] || 0) + amount;
+}
+
+// One record per analysed start: what the cheap search charged for its full-course
+// route (score units) beside what the RE model says the same route costs, plus the
+// feature encounters along it. Calibration fits the search weights from these pairs.
+function summarizeCalibrationRoutes(tileMap, scenario) {
+  const starts = scenario.sequence?.firstLeg?.starts ?? [];
+  return starts.map((start) => {
+    const route = start?.fullCourseRoute;
+    if (!route) return { index: start?.index ?? null, reachable: Boolean(start?.reachable), route: null };
+    const cards = {};
+    const endFeatures = {};
+    const boardEvents = {};
+    let rebooted = 0;
+    let crashed = 0;
+    for (const transition of route.transitions ?? []) {
+      countInto(cards, transition.programCard ?? transition.action ?? "unknown");
+      if (transition.rebooted) rebooted += 1;
+      if (transition.crashed) crashed += 1;
+      for (const event of transition.boardEvents ?? []) countInto(boardEvents, event?.type ?? "unknown");
+      const to = transition.to;
+      const tile = to ? tileMap.get(tileKey(to.x, to.y)) : null;
+      for (const feature of tile?.features ?? []) {
+        const key = feature.type === "laser" ? `laser${Math.max(1, Number(feature.damage) || 1)}` : feature.type;
+        countInto(endFeatures, key);
+      }
+    }
+    return {
+      index: start.index,
+      reachable: Boolean(start.reachable),
+      search: {
+        score: roundedOrNull(route.score, 2),
+        actions: route.actions ?? null,
+        distance: route.distance ?? null,
+        forcedDistance: route.forcedDistance ?? null,
+        hazard: roundedOrNull(route.hazard, 2),
+        rebootPenalty: roundedOrNull(route.rebootPenalty, 2),
+        cardAvailabilityPenalty: roundedOrNull(route.cardAvailabilityPenalty, 2),
+        programPlausibilityPenalty: roundedOrNull(route.programPlausibilityPenalty, 2),
+        rebootCount: route.rebootCount ?? rebooted,
+        crashed,
+        courseEstimateScore: roundedOrNull(start.courseEstimate?.totalScore, 2),
+        trafficPenalty: roundedOrNull(start.trafficPenalty, 2)
+      },
+      re: {
+        effective: roundedOrNull(start.normalFairnessEffectiveRE),
+        intrinsic: roundedOrNull(route.normalFairnessIntrinsicRE ?? start.normalFairnessIntrinsicRE),
+        registers: start.normalFairnessRegisterCount ?? null,
+        intrinsicComponents: route.normalFairnessIntrinsicREComponents
+          ? Object.fromEntries(Object.entries(route.normalFairnessIntrinsicREComponents)
+            .map(([key, value]) => [key, roundedOrNull(value)]))
+          : null,
+        components: start.normalFairnessComponents
+          ? Object.fromEntries(Object.entries(start.normalFairnessComponents)
+            .map(([key, value]) => [key, typeof value === "number" ? roundedOrNull(value) : value]))
+          : null
+      },
+      encounters: { cards, endFeatures, boardEvents }
+    };
+  });
+}
+
 export function summarizeCalibrationScenario(assets, scenario) {
   if (!scenario) return null;
   const { pieceMap } = assets;
@@ -113,6 +182,7 @@ export function summarizeCalibrationScenario(assets, scenario) {
   const contextualCache = scenario.sequence?.firstLeg?.summary?.contextualLegCache ?? null;
   return {
     construction,
+    routes: summarizeCalibrationRoutes(tileMap, scenario),
     outcome: {
       acceptable: Boolean(metrics.acceptable),
       exactTargetMatch: Boolean(metrics.exactTargetMatch),
