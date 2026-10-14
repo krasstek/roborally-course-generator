@@ -49,6 +49,8 @@ import { withGenerationRandomSeed } from "./random.js";
 import { placeRebootTokens } from "./reboot-tokens.js";
 import { generationNow } from "./scheduling.js";
 import {
+  getCourseConflictingVariantIds,
+  getVariantCourseUnavailabilityReason,
   getAvailableDockIds,
   getAvailableMainBoardIds,
   getRouteAnalysisVariantOptions
@@ -159,6 +161,12 @@ function summarizeCalibrationRoutes(tileMap, scenario) {
   });
 }
 
+// The variant rules active on a generated (or reanalysed) course.
+export function getCalibrationActiveVariantIds(scenario) {
+  if (!scenario) return [];
+  return VARIANT_DEFINITIONS.map((variant) => variant.id).filter((id) => scenario[id] === true);
+}
+
 export function summarizeCalibrationScenario(assets, scenario) {
   if (!scenario) return null;
   const { pieceMap } = assets;
@@ -184,6 +192,7 @@ export function summarizeCalibrationScenario(assets, scenario) {
   const contextualCache = scenario.sequence?.firstLeg?.summary?.contextualLegCache ?? null;
   return {
     construction,
+    variants: getCalibrationActiveVariantIds(scenario),
     routes: summarizeCalibrationRoutes(tileMap, scenario),
     outcome: {
       acceptable: Boolean(metrics.acceptable),
@@ -506,7 +515,9 @@ export function analyzeCalibrationPlacements(assets, sourceScenario, placements,
   const length = DIAGNOSTIC_LENGTHS.includes(sourceScenario.preferences?.length)
     ? sourceScenario.preferences.length
     : "moderate";
-  const forcedVariantIds = options.dynamicArchiving ? ["dynamicArchiving"] : [];
+  const forcedVariantIds = Array.isArray(options.variantIds)
+    ? options.variantIds
+    : (options.dynamicArchiving ? ["dynamicArchiving"] : []);
   const variantBundle = buildVariantBundle(
     Object.fromEntries(VARIANT_DEFINITIONS.map((variant) => [variant.id, forcedVariantIds.includes(variant.id)])),
     { pieceMap }
@@ -604,6 +615,7 @@ export function analyzeCalibrationPlacements(assets, sourceScenario, placements,
   const telemetry = getAnalysisTelemetrySnapshot();
   const syntheticScenario = {
     ...sourceScenario,
+    ...variantBundle,
     placements,
     overlayPlacements: placements.filter((placement) => placement.overlay),
     dockPlacements,
@@ -639,6 +651,90 @@ export function reanalyzeCalibrationScenario(assets, sourceScenario, options = {
   return analyzeCalibrationPlacements(assets, sourceScenario, placements, options);
 }
 
+
+// Variants that change rules on an unchanged layout, so one built course can be
+// reloaded with and without them. Layout variants (docks, staggering, Virtual
+// Bots, Moving Targets) are compared between courses instead.
+export const CALIBRATION_TOGGLE_VARIANT_IDS = Object.freeze([
+  "actFast", "lighterGame", "upgradeWorld", "lessSpammyGame", "criticalSpam",
+  "criticalHaywire", "permanentShutdown", "lessDeadlyGame", "moreDeadlyGame",
+  "cuttingFloor", "flamingOil", "repulsorOverdrive", "setToKill", "setToStun",
+  "dynamicArchiving", "homeReboot", "hazardousFlags", "repairStations",
+  "factoryRejects", "startupSpinUp", "lessForeshadowing", "classicSharedDeck",
+  "competitiveMode", "payToWin", "subsidizedStarts"
+]);
+const RECOVERY_RULE_BY_VARIANT = { dynamicArchiving: "dynamic_archiving", homeReboot: "home_reboot" };
+
+// The first variant of `order` that can be switched on this course: switching off
+// an active one is always possible; switching one on must not conflict with the
+// active set or be inert on this course, and a recovery rule is only switched on
+// from reboot tokens (the snapshot has no tokens to fall back to otherwise).
+export function chooseCalibrationVariantToggle(scenario, order = CALIBRATION_TOGGLE_VARIANT_IDS) {
+  const active = new Set(getCalibrationActiveVariantIds(scenario));
+  let courseContext = null;
+  const canMatter = (variantId) => {
+    courseContext ??= {
+      rawTileMap: buildResolvedMap(scenario.placements, scenario.pieceMap).tileMap,
+      checkpoints: getPlayableCheckpoints(scenario.checkpoints ?? [], scenario.virtualBots),
+      movingTargets: Boolean(scenario.movingTargets)
+    };
+    return !getVariantCourseUnavailabilityReason(variantId, scenario.goalTileMap, courseContext);
+  };
+  for (const variantId of order) {
+    if (!CALIBRATION_TOGGLE_VARIANT_IDS.includes(variantId)) continue;
+    if (active.has(variantId)) {
+      if (RECOVERY_RULE_BY_VARIANT[variantId]) continue;
+      return { variantId, on: false };
+    }
+    if (getCourseConflictingVariantIds(variantId).some((id) => active.has(id))) continue;
+    if (RECOVERY_RULE_BY_VARIANT[variantId] && (scenario.recoveryRule ?? "reboot_tokens") !== "reboot_tokens") continue;
+    if (!canMatter(variantId)) continue;
+    return { variantId, on: true };
+  }
+  return null;
+}
+
+function summarizeCalibrationReload(assets, scenario) {
+  if (!scenario || scenario.hydrationPresentationFallback || scenario.hydrationPresentationUnavailable) return null;
+  const summary = summarizeCalibrationScenario(assets, scenario);
+  return { variants: summary.variants, outcome: summary.outcome };
+}
+
+// Reloads a built course twice through the production reload path: as built, and
+// with one variant switched. Both sides take the same path, so their difference
+// is the variant's effect on this course.
+export async function evaluateCalibrationVariantToggle(assets, scenario, toggle) {
+  if (!scenario || !toggle?.variantId) return null;
+  const snapshot = JSON.parse(JSON.stringify(serializeScenario(scenario)));
+  const toggled = JSON.parse(JSON.stringify(snapshot));
+  toggled[toggle.variantId] = Boolean(toggle.on);
+  const recoveryRule = RECOVERY_RULE_BY_VARIANT[toggle.variantId];
+  if (recoveryRule) {
+    for (const id of Object.keys(RECOVERY_RULE_BY_VARIANT)) toggled[id] = id === toggle.variantId && toggle.on;
+    toggled.recoveryRule = toggle.on ? recoveryRule : "reboot_tokens";
+  }
+  const startedAt = generationNow();
+  const baseline = await hydrateScenarioFromSnapshot(assets, snapshot);
+  const baselineMs = generationNow() - startedAt;
+  let treated = null;
+  let treatedFailure = null;
+  try {
+    treated = await hydrateScenarioFromSnapshot(assets, toggled);
+  } catch (error) {
+    // The switched rule can leave the course without enough routable starts;
+    // that is an outcome, not a harness error.
+    treatedFailure = error?.message ?? String(error);
+  }
+  return {
+    variantId: toggle.variantId,
+    on: Boolean(toggle.on),
+    baselineMs: Number(baselineMs.toFixed(2)),
+    treatedMs: Number((generationNow() - startedAt - baselineMs).toFixed(2)),
+    baseline: summarizeCalibrationReload(assets, baseline),
+    treated: summarizeCalibrationReload(assets, treated),
+    treatedFailure
+  };
+}
 
 // v49ce: automatic v49cd targeted card-pressure diagnostic retired.
 // The analyzer implementation remains dormant for explicit future experiments.
