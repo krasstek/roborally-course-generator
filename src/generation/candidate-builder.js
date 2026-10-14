@@ -231,7 +231,7 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
   let calibrationConstructionSnapshot = null;
   const expansionIds = getSelectedExpansionIds(preferences);
   const availableDockIds = getEligibleDockIds(pieceMap, expansionIds);
-  const variantBundle = chooseVariantBundle(preferences, { pieceMap });
+  const variantBundle = chooseVariantBundle(preferences, { pieceMap, calibration: assets.constructionGuidance });
   const {
     actFast,
     competitiveMode,
@@ -2298,6 +2298,8 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
         factoryRejects,
         flagCount,
         virtualBots,
+        // Run-local construction feedback; not part of the saved course.
+        generationGuidanceFeedback: undefined,
         classicSharedDeck,
         criticalSpam,
         criticalHaywire,

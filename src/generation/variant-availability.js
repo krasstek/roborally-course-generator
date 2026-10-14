@@ -12,13 +12,13 @@ import {
 import { cachedAssets } from "./assets.js";
 import { countFeatureTypeInTileMap } from "./board-profile.js";
 import { MAX_DOCK_COUNT } from "./config.js";
+import { getConstructionGuidanceVariantTilts } from "./construction-guidance.js";
 import { clamp } from "../shared/math.js";
 import { getMovingCheckpointTrace } from "./moving-targets.js";
 import {
   ACT_FAST_MODE_IDS,
   getSelectedExpansionIds,
-  getTuningDifficulty,
-  isHardestDifficulty
+  getTuningDifficulty
 } from "./preferences.js";
 import { generationRandom, sample, shuffle } from "./random.js";
 import { applyVariantAnalysisOptions } from "../../variants.js";
@@ -338,88 +338,45 @@ export function sampleVariantComplexityBudget(preferences = {}) {
   return sample(budgets[difficulty] || budgets.moderate);
 }
 
-export function getVariantBaseChance(variantId, preferences = {}) {
-  const hardestBlockedVariants = new Set([
-    "lighterGame",
-    "lessSpammyGame",
-    "lessDeadlyGame",
-    "setToStun",
-    "startupSpinUp"
-  ]);
-  if (
-    isHardestDifficulty(preferences) &&
-    hardestBlockedVariants.has(variantId) &&
-    getVariantPreferenceState(preferences, variantId) !== "forced"
-  ) {
-    return 0;
-  }
+// How often each optional variant is drawn when calibration has no opinion: the
+// old per-difficulty chances averaged over Beginner..R.M.D. Which way a course
+// should lean is left to the calibrated tilt in chooseVariantBundle.
+const NEUTRAL_VARIANT_CHANCE = Object.freeze({
+  actFast: 0.15,
+  lighterGame: 0.29,
+  lessSpammyGame: 0.23,
+  criticalSpam: 0.16,
+  criticalHaywire: 0.15,
+  permanentShutdown: 0.07,
+  lessDeadlyGame: 0.21,
+  moreDeadlyGame: 0.15,
+  cuttingFloor: 0.12,
+  flamingOil: 0.11,
+  repulsorOverdrive: 0.03,
+  setToKill: 0.14,
+  setToStun: 0.11,
+  upgradeWorld: 0.13,
+  classicSharedDeck: 0.09,
+  competitiveMode: 0.15,
+  payToWin: 0.16,
+  subsidizedStarts: 0.16,
+  dynamicArchiving: 0.33,
+  extraDocks: 0.18,
+  factoryRejects: 0.14,
+  startupSpinUp: 0.11,
+  hazardousFlags: 0.16,
+  repairStations: 0.15,
+  movingTargets: 0.14,
+  homeReboot: 0.12,
+  lessForeshadowing: 0.16,
+  staggeredBoards: 0.37,
+  virtualBots: 0.13,
+  noDocks: 0.15,
+  sandwichedDock: 0.04
+});
 
-  const difficulty = getTuningDifficulty(preferences.difficulty);
-  const byVariant = {
-    actFast: { easy: 0.08, moderate: 0.16, hard: 0.2 },
-    lighterGame: { easy: 0.42, moderate: 0.28, hard: 0.18 },
-    lessSpammyGame: { easy: 0.32, moderate: 0.22, hard: 0.14 },
-    criticalSpam: { easy: 0.08, moderate: 0.15, hard: 0.24 },
-    criticalHaywire: { easy: 0.08, moderate: 0.14, hard: 0.22 },
-    permanentShutdown: { easy: 0.02, moderate: 0.06, hard: 0.12 },
-    lessDeadlyGame: { easy: 0.3, moderate: 0.2, hard: 0.14 },
-    moreDeadlyGame: { easy: 0.05, moderate: 0.14, hard: 0.26 },
-    cuttingFloor: { easy: 0.04, moderate: 0.12, hard: 0.2 },
-    flamingOil: { easy: 0.04, moderate: 0.1, hard: 0.18 },
-    repulsorOverdrive: { easy: 0.01, moderate: 0.03, hard: 0.06 },
-    setToKill: { easy: 0.05, moderate: 0.14, hard: 0.22 },
-    setToStun: { easy: 0.12, moderate: 0.14, hard: 0.08 },
-    upgradeWorld: { easy: 0.08, moderate: 0.14, hard: 0.18 },
-    classicSharedDeck: { easy: 0.01, moderate: 0.07, hard: 0.2 },
-    competitiveMode: { easy: 0.08, moderate: 0.16, hard: 0.22 },
-    payToWin: { easy: 0.1, moderate: 0.18, hard: 0.2 },
-    subsidizedStarts: { easy: 0.1, moderate: 0.18, hard: 0.2 },
-    dynamicArchiving: { easy: 0.24, moderate: 0.4, hard: 0.34 },
-    extraDocks: { easy: 0.08, moderate: 0.2, hard: 0.26 },
-    factoryRejects: { easy: 0.06, moderate: 0.14, hard: 0.22 },
-    startupSpinUp: { easy: 0.08, moderate: 0.14, hard: 0.1 },
-    hazardousFlags: { easy: 0.08, moderate: 0.16, hard: 0.24 },
-    repairStations: { easy: 0.2, moderate: 0.15, hard: 0.1 },
-    movingTargets: { easy: 0.06, moderate: 0.14, hard: 0.22 },
-    homeReboot: { easy: 0.06, moderate: 0.12, hard: 0.18 },
-    lessForeshadowing: { easy: 0.07, moderate: 0.16, hard: 0.24 },
-    staggeredBoards: { easy: 0.18, moderate: 0.42, hard: 0.5 },
-    virtualBots: { easy: 0.06, moderate: 0.14, hard: 0.2 },
-    noDocks: { easy: 0.07, moderate: 0.16, hard: 0.22 },
-    sandwichedDock: { easy: 0.04, moderate: 0.04, hard: 0.04 }
-  };
-
-  return byVariant[variantId]?.[difficulty] ?? 0.2;
-}
-
-export function getLateEasyVariantRescueBonus(variantId, preferences = {}) {
-  const attempt = preferences.generationAttempt ?? 1;
-  const difficulty = getTuningDifficulty(preferences.difficulty);
-
-  if (difficulty !== "easy" || attempt < 28) {
-    return 0;
-  }
-
-  const latePhase = attempt >= 36 ? 2 : 1;
-  const easingVariants = {
-    lighterGame: latePhase === 2 ? 0.34 : 0.18,
-    lessSpammyGame: latePhase === 2 ? 0.28 : 0.14,
-    lessDeadlyGame: latePhase === 2 ? 0.24 : 0.12
-  };
-  const hardeningVariants = {
-    actFast: -0.06,
-    moreDeadlyGame: -0.12,
-    classicSharedDeck: -0.08,
-    competitiveMode: -0.05,
-    payToWin: -0.04,
-    subsidizedStarts: -0.04,
-    factoryRejects: -0.08,
-    hazardousFlags: -0.08,
-    movingTargets: -0.1,
-    lessForeshadowing: -0.08
-  };
-
-  return easingVariants[variantId] ?? hardeningVariants[variantId] ?? 0;
+export function getVariantBaseChance(variantId) {
+  return NEUTRAL_VARIANT_CHANCE[variantId] ?? 0.2;
 }
 
 export function chooseVariantBundle(preferences = {}, options = {}) {
@@ -448,16 +405,20 @@ export function chooseVariantBundle(preferences = {}, options = {}) {
 
   const sampledBudget = sampleVariantComplexityBudget(normalizedPreferences);
   const budget = sampledBudget;
-  const allowedEntries = collectionAvailableEntries
-    .filter((entry) => getVariantPreferenceState(normalizedPreferences, entry.id) === "allowed")
-    .map((entry) => ({
-      ...entry,
-      chance: clamp(
-        getVariantBaseChance(entry.id, normalizedPreferences) + getLateEasyVariantRescueBonus(entry.id, normalizedPreferences),
-        0,
-        0.95
-      )
-    }));
+  const allowedCandidates = collectionAvailableEntries
+    .filter((entry) => getVariantPreferenceState(normalizedPreferences, entry.id) === "allowed");
+  // Calibrated tilt toward the requested bands, judged with the Must variants
+  // already in place; it grows with the misses of this Generate run.
+  const tilts = getConstructionGuidanceVariantTilts(
+    options.calibration ?? cachedAssets?.constructionGuidance ?? null,
+    { ...normalizedPreferences, ...buildVariantBundle(active) },
+    allowedCandidates.map((entry) => entry.id),
+    pieceMap ?? {}
+  );
+  const allowedEntries = allowedCandidates.map((entry) => ({
+    ...entry,
+    chance: clamp(getVariantBaseChance(entry.id) * (tilts?.[entry.id] ?? 1), 0, 0.95)
+  }));
   const orderedEntries = weightedOrder(
     allowedEntries,
     (entry) => Math.max(0.01, entry.chance + generationRandom() * 0.08)

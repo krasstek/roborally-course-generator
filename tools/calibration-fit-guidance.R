@@ -3,28 +3,31 @@
 # Reads guidance-study calibration runs (tools/calibration-runner.js, default
 # study) and fits what construction guidance predicts at each construction
 # stage, in the units production accepts on:
-#   difficulty = completed RE per programming turn (difficultyTurnRE)
-#   length     = wall-clock turn index (lengthWallClockTurnIndex)
+#   difficulty = completed RE per programming turn (difficultyTurnRE), log scale
+#   length     = wall-clock turn index (lengthWallClockTurnIndex), log scale
 #   work       = route expansions (log scale)
 #   success    = the built course survived to a finished scenario
 #
+# Difficulty and length are fitted on a log scale: variant and board effects are
+# roughly proportional (Factory Rejects adds far more on an already hard course).
+#
 # Variant effects come from two places:
 #   - rule variants: switched on and off on the same built course (paired
-#     reloads), so their effect is measured directly and enters the models as a
-#     fixed offset;
+#     reloads), so their effect is measured directly, as a log ratio, and enters
+#     the models as a fixed offset;
 #   - layout variants (docks, staggering, Virtual Bots, Moving Targets): fitted
 #     between courses as model terms.
 #
 # Run interactively (edit input_dirs below) or from the shell:
 #   Rscript tools/calibration-fit-guidance.R <run dir or .jsonl> [...]
-# Writes calibration/construction-guidance-v3.json and prints a short report.
+# Writes calibration/construction-guidance.json (replacing the old v2 file) and prints a short report.
 #
 # R dependency: jsonlite only.
 
 input_dirs <- c(
   "calibration-output/full-2026-10-14"
 )
-output_file <- "calibration/construction-guidance-v3.json"
+output_file <- "calibration/construction-guidance.json"
 folds <- 5
 
 args <- commandArgs(trailingOnly = TRUE)
@@ -132,6 +135,8 @@ toggles <- do.call(rbind, lapply(observations, function(record) {
       failed = !is.null(pair$treatedFailure) || is.null(pair$treated),
       difficulty_effect = sign * (num(pair$treated$outcome$difficultyTurnRE) - num(pair$baseline$outcome$difficultyTurnRE)),
       length_effect = sign * (num(pair$treated$outcome$lengthWallClockTurnIndex) - num(pair$baseline$outcome$lengthWallClockTurnIndex)),
+      difficulty_log = sign * (log(num(pair$treated$outcome$difficultyTurnRE)) - log(num(pair$baseline$outcome$difficultyTurnRE))),
+      length_log = sign * (log(num(pair$treated$outcome$lengthWallClockTurnIndex)) - log(num(pair$baseline$outcome$lengthWallClockTurnIndex))),
       stringsAsFactors = FALSE
     )
   }))
@@ -153,16 +158,18 @@ variant_effects <- lapply(setNames(toggle_ids, toggle_ids), function(id) {
   list(
     difficulty = summarize_effect(subset$difficulty_effect[!subset$failed]),
     length = summarize_effect(subset$length_effect[!subset$failed]),
+    difficultyLog = summarize_effect(subset$difficulty_log[!subset$failed]),
+    lengthLog = summarize_effect(subset$length_log[!subset$failed]),
     toggles = nrow(subset),
     failureRateWhenSwitchedOn = if (nrow(switched_on)) mean(switched_on$failed) else NA_real_
   )
 })
 
-# Offsets: the paired mean effects of the rule variants active on each course.
+# Offsets: the paired mean log effects of the rule variants active on each course.
 offset_for <- function(frame, target) {
   total <- numeric(nrow(frame))
   for (id in toggle_ids) {
-    effect <- variant_effects[[id]][[target]]
+    effect <- variant_effects[[id]][[paste0(target, "Log")]]
     if (effect$n >= 5) total <- total + frame[[paste0("v_", id)]] * effect$mean
   }
   total
@@ -188,7 +195,7 @@ fit_stage_model <- function(frame, terms, target, transform = "identity", family
   frame <- frame[is.finite(frame[[target]]), , drop = FALSE]
   terms <- usable_terms(frame, terms)
   frame <- frame[stats::complete.cases(frame[, terms, drop = FALSE]), , drop = FALSE]
-  response <- if (transform == "log1p") log1p(frame[[target]]) else frame[[target]]
+  response <- switch(transform, log1p = log1p(frame[[target]]), log = log(frame[[target]]), frame[[target]])
   offset <- if (target %in% c("difficulty", "length")) offset_for(frame, target) else numeric(nrow(frame))
   frame$.y <- response - offset
   formula <- stats::as.formula(paste(".y ~", paste(terms, collapse = " + ")))
@@ -218,7 +225,7 @@ fit_stage_model <- function(frame, terms, target, transform = "identity", family
   )
   if (target %in% c("difficulty", "length")) {
     cuts <- if (target == "difficulty") difficulty_bands else length_bands
-    evidence$heldOutBandHitRate <- mean(band_of(predicted[ok] + offset[ok], cuts) == band_of(frame[[target]][ok], cuts))
+    evidence$heldOutBandHitRate <- mean(band_of(exp(predicted[ok] + offset[ok]), cuts) == band_of(frame[[target]][ok], cuts))
   }
   list(model = model, terms = terms, transform = transform, evidence = evidence)
 }
@@ -258,8 +265,8 @@ report <- list()
 stage_export <- list()
 for (stage in names(stages)) {
   terms <- stages[[stage]]
-  difficulty_fit <- fit_stage_model(finished, terms, "difficulty")
-  length_fit <- fit_stage_model(finished, terms, "length")
+  difficulty_fit <- fit_stage_model(finished, terms, "difficulty", transform = "log")
+  length_fit <- fit_stage_model(finished, terms, "length", transform = "log")
   work_fit <- fit_stage_model(finished, terms, "work", transform = "log1p")
   stage_export[[stage]] <- list(
     difficulty = export_model(difficulty_fit),
@@ -283,10 +290,12 @@ for (line in report) cat(line, "\n")
 effect_table <- do.call(rbind, lapply(toggle_ids, function(id) {
   effect <- variant_effects[[id]]
   data.frame(variant = id, n = effect$difficulty$n,
-    difficulty = round(effect$difficulty$mean, 2), difficulty_sd = round(effect$difficulty$sd, 2),
-    length = round(effect$length$mean, 2), fails_on = round(effect$failureRateWhenSwitchedOn, 2))
+    difficulty = round(effect$difficulty$mean, 2), difficulty_pct = round(100 * (exp(effect$difficultyLog$mean) - 1)),
+    difficulty_sd = round(effect$difficulty$sd, 2),
+    length = round(effect$length$mean, 2), length_pct = round(100 * (exp(effect$lengthLog$mean) - 1)),
+    fails_on = round(effect$failureRateWhenSwitchedOn, 2))
 }))
-cat("\nRule variants, paired effect when switched on (RE per turn; wall-clock turns):\n")
+cat("\nRule variants, paired mean effect when switched on (difficulty in RE per turn, length in wall-clock turns, and as %):\n")
 print(effect_table[order(-effect_table$difficulty), ], row.names = FALSE)
 
 # ---- Export ----------------------------------------------------------------------
@@ -295,7 +304,7 @@ output <- list(
   calibration = "robo-rally-construction-guidance-v3",
   source = list(
     generatedAt = format(Sys.time(), tz = "UTC", usetz = TRUE),
-    runs = vapply(headers, function(header) header$runId %||% "", character(1)),
+    runs = unique(vapply(headers, function(header) header$runId %||% "", character(1))),
     observations = nrow(data),
     finishedCourses = nrow(finished),
     variantToggles = nrow(toggles %||% data.frame())
