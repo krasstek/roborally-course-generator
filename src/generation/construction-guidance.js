@@ -503,9 +503,14 @@ export function getConstructionGuidanceIntervalMismatch(outcomePrediction, prefe
   return null;
 }
 
-// A checkpoint proposal whose whole 5-95% interval misses a requested band.
+// A checkpoint proposal whose whole 5-95% interval misses a requested band. The
+// gate only saves routing work once this run has a finished course to fall back
+// on: when every construction for a setup is predicted off-target (Beginner with
+// many players and sets), rejecting them all would leave no course at all.
 export function getConstructionGuidanceGrossMismatch(prediction, preferences = {}) {
-  if (!prediction) return { abort: false, mismatches: [] };
+  if (!prediction || !(preferences.generationGuidanceFeedback?.observations > 0)) {
+    return { abort: false, mismatches: [] };
+  }
   const mismatches = Object.entries(OUTCOMES).map(([outcome, thresholds]) => (
     getConstructionGuidanceIntervalMismatch(prediction[outcome], targetPreference(preferences, outcome), thresholds(), outcome)
   )).filter(Boolean);
