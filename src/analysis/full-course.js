@@ -2575,7 +2575,7 @@ export function* analyzeFullCourseContextualSteps(
           const fullRoute = realized?.legs?.length === flags.length
             ? stitchContextualLegs(realized.legs, flags)
             : null;
-          const validation = fullRoute ? summarizeRouteAgainUsage(fullRoute) : null;
+          const validation = fullRoute ? summarizeRouteAgainUsage(fullRoute, baseRouteOptions) : null;
           if (
             fullRoute &&
             validation?.literalProgramViolations === 0 &&
@@ -2943,7 +2943,7 @@ export function* analyzeFullCourseContextualSteps(
         const fullRoute = stitchedFullRoute
           ? applyIntrinsicDamageEconomyRoutingScore(tileMap, stitchedFullRoute, baseRouteOptions)
           : null;
-        const validation = fullRoute ? summarizeRouteAgainUsage(fullRoute) : null;
+        const validation = fullRoute ? summarizeRouteAgainUsage(fullRoute, baseRouteOptions) : null;
         if (
           !fullRoute ||
           validation?.literalProgramViolations !== 0 ||
@@ -4497,7 +4497,7 @@ export function* analyzeFullCourseContextualSteps(
         // after all exact leg stitches are concatenated. This should normally be
         // redundant; a failure indicates a stitching/cache bug, so never expose it
         // as a reachable route.
-        const validation = summarizeRouteAgainUsage(route);
+        const validation = summarizeRouteAgainUsage(route, baseRouteOptions);
         const legal = (
           validation.literalProgramViolations === 0 &&
           validation.rollingWindowViolations === 0
