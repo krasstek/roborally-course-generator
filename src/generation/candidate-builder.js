@@ -1756,7 +1756,13 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
         });
         const grossMismatch = getGrossCourseMismatch(provisionalMetrics, generationPreferences);
 
-        if (grossMismatch.abort && !generationPreferences.calibrationObserveTargetMisses) {
+        // Emergency attempts run only when no course exists yet; they finish
+        // the analysis so a setup that always lands off-target still yields one.
+        if (
+          grossMismatch.abort &&
+          !generationPreferences.calibrationObserveTargetMisses &&
+          !generationPreferences.generationEmergencyAttempt
+        ) {
           const mismatchText = formatGrossCourseMismatch(grossMismatch);
           console.debug(`Early course abort: ${mismatchText}`);
           await reportStage(`Rejecting gross mismatch — ${mismatchText}`, evaluationsUsed);
@@ -2300,6 +2306,7 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
         virtualBots,
         // Run-local construction feedback; not part of the saved course.
         generationGuidanceFeedback: undefined,
+        generationEmergencyAttempt: undefined,
         classicSharedDeck,
         criticalSpam,
         criticalHaywire,
