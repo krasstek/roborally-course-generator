@@ -413,7 +413,13 @@ export async function generateScenarioForPreferences(assets, preferences, option
     try {
       result = await createRandomCandidate(
         assets,
-        guidanceFeedback ? { ...preferences, generationGuidanceFeedback: guidanceFeedback } : preferences,
+        guidanceFeedback || emergencyActivated
+          ? {
+            ...preferences,
+            ...(guidanceFeedback ? { generationGuidanceFeedback: guidanceFeedback } : {}),
+            ...(emergencyActivated ? { generationEmergencyAttempt: true } : {})
+          }
+          : preferences,
         attemptLabel,
         remainingAttempts,
         async (localEvaluations) => {
