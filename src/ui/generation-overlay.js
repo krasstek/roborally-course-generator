@@ -39,13 +39,13 @@ export const GENERATION_SLOW_STAGE_MS = Object.freeze({
   general: 4200
 });
 
-// Coarse player-facing route-work wording from the closed v47 calibration.
-// The checkpoint-known route-work diagnostics observed about 9.5k expansions at
-// the median and 34.9k at p90. These bands are presentation only: they never
-// change search budgets, proposal ranking, legality, acceptance, or timing.
-export const V47_ROUTE_WORK_DISPLAY_BANDS = Object.freeze({
-  medianExpansions: 9502,
-  p90Expansions: 34912
+// Coarse player-facing route-work wording. The 2026-10-15 calibration run
+// observed about 7.9k route expansions per finished course at the median and
+// 31.6k at p90. These bands are presentation only: they never change search
+// budgets, proposal ranking, legality, acceptance, or timing.
+export const ROUTE_WORK_DISPLAY_BANDS = Object.freeze({
+  medianExpansions: 7859,
+  p90Expansions: 31605
 });
 
 export function getCalibratedRouteWorkOverlayHint(stage = "") {
@@ -54,10 +54,10 @@ export function getCalibratedRouteWorkOverlayHint(stage = "") {
   const predictedExpansions = Number(match[1].replaceAll(",", ""));
   if (!Number.isFinite(predictedExpansions)) return "";
 
-  if (predictedExpansions < V47_ROUTE_WORK_DISPLAY_BANDS.medianExpansions) {
+  if (predictedExpansions < ROUTE_WORK_DISPLAY_BANDS.medianExpansions) {
     return "This layout looks fairly straightforward to check.";
   }
-  if (predictedExpansions <= V47_ROUTE_WORK_DISPLAY_BANDS.p90Expansions) {
+  if (predictedExpansions <= ROUTE_WORK_DISPLAY_BANDS.p90Expansions) {
     return "";
   }
   return "This layout may take longer than usual to check.";
@@ -91,6 +91,9 @@ export function classifyGenerationStage(stage = "", stageContext = null) {
 }
 
 export function getGenerationSlowHint(key, stageContext = null) {
+  if (stageContext?.extraDocks && (key === "routes" || key === "balance")) {
+    return "Extra docks give this layout many opening choices to compare.";
+  }
   if (stageContext?.movingTargets && (key === "movingTargets" || key === "routes" || key === "alternatives")) {
     return "Moving checkpoints give this layout a few more possibilities to check.";
   }
@@ -100,10 +103,13 @@ export function getGenerationSlowHint(key, stageContext = null) {
   if ((stageContext?.payToWin || stageContext?.subsidizedStarts) && (key === "economy" || key === "balance" || key === "routes")) {
     return "The starting choices are taking a little longer to balance.";
   }
+  if (stageContext?.recoveryRule === "home_reboot" && key === "routes") {
+    return "Rebooting at each robot's own start gives this layout more recovery routes to check.";
+  }
   if (stageContext?.recoveryRule === "dynamic_archiving" && key === "routes") {
     return "Flexible reboot choices give this layout a little more to check.";
   }
-  if ((stageContext?.extraDocks || stageContext?.sandwichedDock) && (key === "routes" || key === "balance")) {
+  if (stageContext?.sandwichedDock && (key === "routes" || key === "balance")) {
     return "Multiple starting areas give this layout more opening choices to compare.";
   }
   if (key === "rehydrate") return "The saved layout is being checked with the current routing model. You can stop and keep its last-saved presentation.";
@@ -312,7 +318,7 @@ export function renderGeneratingOverlayState() {
   }
   updateGeneratingOverlayText(activityEl, userState.activity);
   if (hintEl) {
-    const hint = userState.calibratedWorkHint || userState.slowHint || getGenerationConstraintHint(generationOverlayState.preferences ?? {});
+    const hint = userState.calibratedWorkHint || userState.slowHint || getGenerationConstraintHint(generationOverlayState.preferences ?? {}, generationOverlayState.stageContext);
     updateGeneratingOverlayText(hintEl, hint);
     hintEl.classList.toggle("hidden", !hint);
   }

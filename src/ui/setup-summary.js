@@ -23,25 +23,49 @@ export let courseExplanationState = {
   manualClosedScenarioRef: null
 };
 
-export function getGenerationConstraintHint(preferences = {}) {
+// The general waiting hint names the setting most likely to slow this attempt,
+// ordered by the time per finished course measured in the 2026-10-15
+// calibration run: Extra Docks about x2.4, Pay to Win / Subsidized Starts
+// x2.1-2.3, Home Reboot x1.9, six boards about 3x one board (boards follow the
+// requested length), 7-8 players finish fewer attempts. stageContext holds the
+// variants actually chosen for the current attempt.
+export function getGenerationConstraintHint(preferences = {}, stageContext = null) {
   const mode = normalizeGenerationMode(preferences.generationMode);
   const length = preferences.length ?? "any";
   const playerCount = Number(preferences.playerCount) || 4;
 
-  if (length === "epic") {
-    return "Epic courses can take substantially longer to check.";
+  if (stageContext?.extraDocks) {
+    return "Extra docks give many opening choices to compare; this usually takes longer.";
   }
-  if (mode === "fastest" || mode === "fast") {
-    return "This mode is usually quicker.";
+  if (stageContext?.payToWin || stageContext?.subsidizedStarts) {
+    return "Priced starting spaces take longer to balance.";
+  }
+  if (stageContext?.recoveryRule === "home_reboot") {
+    return "Home Reboot gives each robot its own recovery routes; this usually takes longer.";
+  }
+  if (length === "epic") {
+    return "Epic courses use more boards and can take substantially longer to check.";
+  }
+  if (playerCount >= 7) {
+    return "With 7 or 8 players, finding a fair course can take a few tries.";
+  }
+  if (length === "long") {
+    return "Long courses use more boards and can take longer to check.";
   }
   if (mode === "balanced" || mode === "thorough") {
     return "This mode usually takes a little longer.";
   }
-  if (length === "long") {
-    return "Long courses can take longer to check.";
-  }
   if (playerCount >= 6) {
     return "More players can make some layouts take longer to check.";
+  }
+  if (stageContext?.virtualBots) {
+    return "Virtual robots make this setup quicker to check.";
+  }
+  if (preferences.difficulty === "easy") {
+    return "Easy courses can take a few tries to match.";
+  }
+  if (mode === "fastest" || mode === "fast") {
+    return "This mode is usually quicker.";
   }
   if (preferences.difficulty !== "any" || preferences.length !== "any") {
     return "A specific difficulty or length can take a few tries.";
