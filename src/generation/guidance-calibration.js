@@ -1,205 +1,106 @@
 // Robo Rally Course Randomizer - normalising the loaded construction-guidance calibration file
-export function normalizeConstructionGuidanceResidualSpread(spread = null) {
-  if (!spread || typeof spread !== "object") return null;
-  const normalized = {};
-  for (const key of ["absoluteP50", "absoluteP80", "absoluteP90", "absoluteP95", "signedP05", "signedP95"]) {
-    const value = Number(spread[key]);
-    if (Number.isFinite(value)) normalized[key] = value;
-  }
-  return Object.keys(normalized).length ? normalized : null;
-}
+//
+// Schema 3 (tools/calibration-fit-guidance.R): per construction stage, linear
+// models for difficulty (RE per turn, log scale), length (wall-clock turns, log
+// scale) and route work (log1p expansions), a logistic structural-success model
+// at countsKnown, and the paired same-course effects of the rule variants.
+export const CONSTRUCTION_GUIDANCE_STAGES = Object.freeze(["countsKnown", "boardsKnown", "checkpointsKnown"]);
 
-export function normalizeConstructionGuidanceEvidence(evidence = null) {
-  if (!evidence || typeof evidence !== "object") return {};
+const finite = (value) => {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+};
+
+function normalizeEvidence(evidence = null) {
   const normalized = {};
-  for (const key of [
-    "sampleSize",
-    "heldOutRmse",
-    "heldOutMae",
-    "heldOutRSquared",
-    "actualRate",
-    "predictedRate",
-    "heldOutBrier",
-    "baselineBrier"
-  ]) {
-    const value = Number(evidence[key]);
-    if (Number.isFinite(value)) normalized[key] = value;
-  }
-  const spread = normalizeConstructionGuidanceResidualSpread(evidence.outOfFoldResidualSpread);
-  if (spread) normalized.outOfFoldResidualSpread = spread;
-  if (evidence.predictedRange && typeof evidence.predictedRange === "object") {
-    normalized.predictedRange = Object.fromEntries(
-      Object.entries(evidence.predictedRange)
-        .map(([key, value]) => [key, Number(value)])
-        .filter(([, value]) => Number.isFinite(value))
-    );
-  }
-  if (Array.isArray(evidence.calibrationBins)) {
-    normalized.calibrationBins = evidence.calibrationBins.map((row) => ({
-      bin: String(row?.bin ?? ""),
-      n: Number(row?.n) || 0,
-      predictedMean: Number.isFinite(Number(row?.predictedMean)) ? Number(row.predictedMean) : null,
-      actualRate: Number.isFinite(Number(row?.actualRate)) ? Number(row.actualRate) : null
-    }));
+  for (const key of ["n", "heldOutRmse", "heldOutRSquared", "signedP05", "signedP95", "heldOutBandHitRate"]) {
+    const value = finite(evidence?.[key]);
+    if (value !== null) normalized[key] = value;
   }
   return normalized;
 }
 
-export function normalizeConstructionGuidanceModel(model, expectedType = null) {
-  if (!model || typeof model !== "object") return null;
-  const type = String(model.type ?? "");
-  if (!["linear", "logistic"].includes(type) || (expectedType && type !== expectedType)) {
-    return null;
+export function normalizeConstructionGuidanceModel(model, expectedType = "linear") {
+  if (!model || typeof model !== "object" || model.type !== expectedType) return null;
+  const intercept = finite(model.intercept);
+  if (intercept === null) return null;
+  const targetTransform = expectedType === "logistic" ? "logit" : String(model.targetTransform ?? "identity");
+  if (!["identity", "log", "log1p", "logit"].includes(targetTransform)) return null;
+
+  const factors = {};
+  for (const [name, factor] of Object.entries(model.factors ?? {})) {
+    const levels = Array.isArray(factor?.levels) ? factor.levels.map(String) : [];
+    const coefficients = Array.isArray(factor?.coefficients) ? factor.coefficients.map((value) => finite(value) ?? 0) : [];
+    if (!levels.length || levels.length !== coefficients.length) return null;
+    factors[name] = { levels, coefficients };
   }
-
-  const coefficients = Object.fromEntries(
-    Object.entries(model.coefficients ?? {})
-      .map(([key, value]) => [String(key), Number(value)])
-      .filter(([, value]) => Number.isFinite(value))
-  );
-  if (!Number.isFinite(coefficients["(Intercept)"])) return null;
-
-  const factorLevels = Object.fromEntries(
-    Object.entries(model.factorLevels ?? {})
-      .map(([key, levels]) => [
-        String(key),
-        Array.isArray(levels) ? levels.map((level) => String(level)) : []
-      ])
-      .filter(([, levels]) => levels.length > 0)
-  );
-  if (!Object.keys(factorLevels).length) return null;
-
-  const targetTransform = type === "linear"
-    ? String(model.targetTransform ?? "identity")
-    : "logit";
-  if (type === "linear" && !["identity", "log1p"].includes(targetTransform)) {
-    return null;
+  const numeric = {};
+  for (const [name, value] of Object.entries(model.numeric ?? {})) {
+    numeric[name] = finite(value) ?? 0;
   }
+  const evidence = normalizeEvidence(model.evidence);
+  if (expectedType === "linear" && !(evidence.heldOutRmse > 0)) return null;
+  return { type: expectedType, targetTransform, intercept, factors, numeric, evidence };
+}
 
+function normalizeEffect(effect = null) {
   return {
-    type,
-    targetTransform,
-    formula: String(model.formula ?? ""),
-    coefficients,
-    factorLevels,
-    evidence: normalizeConstructionGuidanceEvidence(model.evidence)
+    n: finite(effect?.n) ?? 0,
+    mean: finite(effect?.mean) ?? 0,
+    sd: finite(effect?.sd)
   };
 }
 
 export function normalizeConstructionGuidanceCalibration(calibration) {
   if (
-    Number(calibration?.schemaVersion) !== 2 ||
-    calibration?.calibration !== "robo-rally-construction-guidance-production-v2" ||
-    calibration?.policy?.guidanceOnly !== true ||
-    calibration?.policy?.routeLegalityAuthority !== false ||
-    calibration?.policy?.bandAuthority !== false
+    Number(calibration?.schemaVersion) !== 3 ||
+    calibration?.calibration !== "robo-rally-construction-guidance-v3"
   ) {
     return null;
   }
 
-  const normalLandscape = {};
-  for (const stage of ["countsKnown", "boardsKnown", "checkpointsKnown"]) {
-    const source = calibration?.normalLandscape?.[stage];
-    const length = normalizeConstructionGuidanceModel(source?.length, "linear");
-    const difficulty = normalizeConstructionGuidanceModel(source?.difficulty, "linear");
-    const routeCost = normalizeConstructionGuidanceModel(source?.routeCost, "linear");
-    if (!length || !difficulty || !routeCost) return null;
-    normalLandscape[stage] = { length, difficulty, routeCost };
+  const stages = {};
+  for (const stage of CONSTRUCTION_GUIDANCE_STAGES) {
+    const source = calibration.stages?.[stage];
+    const difficulty = normalizeConstructionGuidanceModel(source?.difficulty);
+    const length = normalizeConstructionGuidanceModel(source?.length);
+    const routeCost = normalizeConstructionGuidanceModel(source?.routeCost);
+    if (!difficulty || !length || !routeCost) return null;
+    if (difficulty.targetTransform !== "log" || length.targetTransform !== "log" || routeCost.targetTransform !== "log1p") {
+      return null;
+    }
+    stages[stage] = {
+      difficulty,
+      length,
+      routeCost,
+      structuralSuccess: normalizeConstructionGuidanceModel(source?.structuralSuccess, "logistic")
+    };
   }
 
-  const structuralSuccessPrior = normalizeConstructionGuidanceModel(
-    calibration?.structuralSuccessPrior,
-    "logistic"
-  );
-
-  const normalizeStringArray = (values) => Array.isArray(values)
-    ? values.map((value) => String(value))
-    : [];
-  const normalizeNumberArray = (values) => Array.isArray(values)
-    ? values.map(Number).filter(Number.isFinite)
-    : [];
-
-  const dynamicArchiving = calibration?.treatments?.dynamicArchiving ?? {};
-  const structuralBoardOverlay = calibration?.treatments?.structuralBoardOverlay ?? {};
-  const overlayWorkPrior = structuralBoardOverlay?.analysisWorkPrior ?? {};
-
-  const dynamicArchivingContextual = dynamicArchiving.contextualModelEnabled === true;
-  const dynamicArchivingLengthContextModel = dynamicArchivingContextual
-    ? normalizeConstructionGuidanceModel(dynamicArchiving.lengthContextModel, "linear")
-    : null;
-  if (
-    dynamicArchivingContextual &&
-    (
-      String(dynamicArchiving.lengthContextStage ?? "") !== "checkpointsKnown" ||
-      !dynamicArchivingLengthContextModel
-    )
-  ) {
-    return null;
+  const ruleVariantEffects = {};
+  for (const [variantId, effect] of Object.entries(calibration.ruleVariantEffects ?? {})) {
+    ruleVariantEffects[variantId] = {
+      difficultyLog: normalizeEffect(effect?.difficultyLog),
+      lengthLog: normalizeEffect(effect?.lengthLog),
+      failureRateWhenSwitchedOn: finite(effect?.failureRateWhenSwitchedOn)
+    };
   }
 
-  const overlayWorkContextual = overlayWorkPrior.contextualModelEnabled === true;
-  const overlayWorkLogRatioContextModel = overlayWorkContextual
-    ? normalizeConstructionGuidanceModel(overlayWorkPrior.logRatioContextModel, "linear")
-    : null;
-  if (
-    structuralBoardOverlay.lengthDifficultyOffsetEnabled === true ||
-    overlayWorkPrior.overlayCountSpecificEnabled === true ||
-    overlayWorkPrior.pieceIdentityEnabled === true ||
-    (
-      overlayWorkContextual &&
-      (
-        String(overlayWorkPrior.contextualStage ?? "") !== "checkpointsKnown" ||
-        !overlayWorkLogRatioContextModel
-      )
-    )
-  ) {
-    return null;
-  }
-
+  const numbers = (values) => (Array.isArray(values) ? values.map(Number).filter(Number.isFinite) : []);
+  const strings = (values) => (Array.isArray(values) ? values.map(String) : []);
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     calibration: calibration.calibration,
     source: calibration.source ?? null,
-    policy: calibration.policy ?? null,
     domain: {
-      players: normalizeNumberArray(calibration?.domain?.players),
-      requestedBoardCounts: normalizeNumberArray(calibration?.domain?.requestedBoardCounts),
-      requestedFlagCounts: normalizeNumberArray(calibration?.domain?.requestedFlagCounts),
-      difficulties: normalizeStringArray(calibration?.domain?.difficulties),
-      lengths: normalizeStringArray(calibration?.domain?.lengths),
-      boardSpreads: normalizeStringArray(calibration?.domain?.boardSpreads),
-      inventoryPresets: normalizeStringArray(calibration?.domain?.inventoryPresets)
+      players: numbers(calibration.domain?.players),
+      boardCounts: numbers(calibration.domain?.boardCounts),
+      flagCounts: numbers(calibration.domain?.flagCounts),
+      boardSpreads: strings(calibration.domain?.boardSpreads),
+      inventoryPresets: strings(calibration.domain?.inventoryPresets)
     },
-    normalLandscape,
-    structuralSuccessPrior,
-    treatments: {
-      dynamicArchiving: {
-        lengthEffectMean: Number(dynamicArchiving.lengthEffectMean),
-        lengthEffectMedian: Number(dynamicArchiving.lengthEffectMedian),
-        lengthEffectP10: Number(dynamicArchiving.lengthEffectP10),
-        lengthEffectP90: Number(dynamicArchiving.lengthEffectP90),
-        difficultyEffectMean: Number(dynamicArchiving.difficultyEffectMean),
-        difficultyEffectMedian: Number(dynamicArchiving.difficultyEffectMedian),
-        difficultyEffectP10: Number(dynamicArchiving.difficultyEffectP10),
-        difficultyEffectP90: Number(dynamicArchiving.difficultyEffectP90),
-        contextualModelEnabled: dynamicArchivingContextual,
-        lengthContextStage: dynamicArchivingContextual ? "checkpointsKnown" : null,
-        lengthContextModel: dynamicArchivingLengthContextModel
-      },
-      structuralBoardOverlay: {
-        lengthDifficultyOffsetEnabled: Boolean(structuralBoardOverlay.lengthDifficultyOffsetEnabled),
-        analysisWorkPrior: {
-          medianExpansionIncrease: Number(overlayWorkPrior.medianExpansionIncrease),
-          medianExpansionRatio: Number(overlayWorkPrior.medianExpansionRatio),
-          p90ExpansionRatio: Number(overlayWorkPrior.p90ExpansionRatio),
-          contextualModelEnabled: overlayWorkContextual,
-          contextualStage: overlayWorkContextual ? "checkpointsKnown" : null,
-          logRatioContextModel: overlayWorkLogRatioContextModel,
-          overlayCountSpecificEnabled: Boolean(overlayWorkPrior.overlayCountSpecificEnabled),
-          pieceIdentityEnabled: Boolean(overlayWorkPrior.pieceIdentityEnabled)
-        }
-      }
-    },
-    uncertaintyNotes: calibration.uncertaintyNotes ?? null
+    layoutVariants: strings(calibration.layoutVariants),
+    ruleVariantEffects,
+    stages
   };
 }

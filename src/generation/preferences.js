@@ -7,10 +7,6 @@ export function getTuningDifficulty(difficultyPreference) {
   return difficultyPreference === "brutal" ? "hard" : (difficultyPreference ?? "moderate");
 }
 
-export function isHardestDifficulty(preferences = {}) {
-  return preferences.difficulty === "brutal";
-}
-
 export const BOARD_SPREAD_MODES = Object.freeze({
   random: "random",
   tight: "tight"

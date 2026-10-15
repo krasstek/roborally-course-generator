@@ -1,6 +1,9 @@
 // Robo Rally Course Randomizer - Competitive mode: difficulty calibration, effective-RE range target and strategic blocking
 import { recomputeFirstLegPressure } from "../../analyze.js";
 import {
+  COMPETITIVE_DECISION_BASE_UNCERTAINTY_RE,
+  COMPETITIVE_DECISION_DRAFTS,
+  COMPETITIVE_DECISION_TRAFFIC_UNCERTAINTY_SHARE,
   COMPETITIVE_EFFECTIVE_RE_HARD_RANGE_MULTIPLIER,
   COMPETITIVE_EFFECTIVE_RE_RANGE_MIN,
   COMPETITIVE_EFFECTIVE_RE_RANGE_PER_TURN,
@@ -208,47 +211,115 @@ export function getCompetitiveBalanceProfile(
   };
 }
 
-export function getCompetitiveStrategicDifficulty(
-  blockSequence = [],
-  selectedRangeRE = 0,
-  balanceRangeLimit = COMPETITIVE_EFFECTIVE_RE_RANGE_MIN
-) {
-  const challenges = (blockSequence || [])
-    .map((entry) => Number(entry?.strategicChallenge))
-    .filter(Number.isFinite);
-  const meanBlockChallenge = challenges.length
-    ? challenges.reduce((sum, value) => sum + value, 0) / challenges.length
-    : 0.5;
-  const selectionAmbiguity = Math.max(
-    0,
-    Math.min(
-      1,
-      1 - (Number(selectedRangeRE) || 0) /
-        Math.max(0.001, Number(balanceRangeLimit) || COMPETITIVE_EFFECTIVE_RE_RANGE_MIN)
-    )
-  );
+// Traffic part of a start's effective RE: the part players can hardly read
+// before the game.
+function getCompetitiveStartTrafficRE(entry) {
+  const components = entry?.normalFairnessComponents ?? {};
+  return Math.max(0, [
+    "robotLaserDamageRE",
+    "nearbyControlRE",
+    "residualRangedThreatRE",
+    "trafficMentalRE",
+    "competitionRE"
+  ].reduce((sum, key) => sum + (Number(components[key]) || 0), 0));
+}
 
-  // Keep the existing bounded Competitive strategic/setup burden, but derive it
-  // entirely from completed-RE block ambiguity and the closeness of the final
-  // best-P field. Legacy score-space readability is no longer consulted.
-  const difficulty = Math.max(
-    1.2,
-    Math.min(
-      2.4,
-      1.8 + (meanBlockChallenge - 0.5) * 0.9 + (selectionAmbiguity - 0.5) * 0.3
-    )
-  );
-  return {
-    difficulty: Number(difficulty.toFixed(2)),
-    meanBlockChallenge: Number(meanBlockChallenge.toFixed(3)),
-    selectionAmbiguity: Number(selectionAmbiguity.toFixed(3)),
-    calibrationCenter: 1.8,
-    calibrationRange: [1.2, 2.4],
-    evidenceOwner: "completed-effective-re-only",
-    provisional: true
+export function snapshotCompetitiveField(entries = []) {
+  return (entries || [])
+    .filter((entry) => Number.isFinite(entry?.normalFairnessEffectiveRE))
+    .map((entry) => ({
+      index: entry.index,
+      effectiveRE: Number(entry.normalFairnessEffectiveRE),
+      trafficRE: getCompetitiveStartTrafficRE(entry)
+    }));
+}
+
+function mulberry32(seed) {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6D2B79F5) >>> 0;
+    let value = state;
+    value = Math.imul(value ^ (value >>> 15), value | 1);
+    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
   };
 }
 
+// Competitive decision difficulty: how much the draft's outcome suffers because
+// players judge starts by what they can see. Players block, then pick, by
+// perceived RE (true effective RE plus a normal error whose spread grows with the
+// start's traffic RE); the cost is how far behind the leading chosen start the
+// players end up, on average, beyond the perfectly informed draft. Clearly
+// different starts are rarely misjudged and near-equal ones barely matter, so the
+// cost is high only where choices both matter and are hard to read.
+//
+// Traffic is recomputed after every real block; the draft uses the field as
+// recorded at that step (a start no longer in it keeps its last recorded value).
+export function simulateCompetitiveDecisionCost(blockFields = [], finalField = [], playerCount = 4, options = {}) {
+  const count = Math.max(1, Math.floor(Number(playerCount) || 1));
+  const baseUncertainty = options.baseUncertaintyRE ?? COMPETITIVE_DECISION_BASE_UNCERTAINTY_RE;
+  const trafficShare = options.trafficUncertaintyShare ?? COMPETITIVE_DECISION_TRAFFIC_UNCERTAINTY_SHARE;
+  const draws = options.draws ?? COMPETITIVE_DECISION_DRAFTS;
+  const fields = [...blockFields, finalField].filter((field) => field?.length);
+  if (!fields.length) return null;
+
+  const lastKnown = new Map();
+  const fieldValues = fields.map((field) => {
+    for (const entry of field) lastKnown.set(entry.index, entry);
+    return new Map(lastKnown);
+  });
+  const allIndices = [...lastKnown.keys()];
+  const behindLeader = (chosen, step) => {
+    const values = chosen.map((index) => fieldValues[step].get(index).effectiveRE);
+    const leader = Math.min(...values);
+    return values.reduce((sum, value) => sum + (value - leader), 0) / values.length;
+  };
+
+  const runDraft = (perceive) => {
+    const available = new Set(allIndices);
+    const blockSteps = Math.min(count, blockFields.length);
+    for (let step = 0; step < blockSteps && available.size > count; step += 1) {
+      let best = null;
+      for (const index of available) {
+        const value = perceive(fieldValues[step].get(index));
+        if (!best || value < best.value) best = { index, value };
+      }
+      available.delete(best.index);
+    }
+    const finalStep = fieldValues.length - 1;
+    const chosen = [];
+    while (chosen.length < count && available.size) {
+      let best = null;
+      for (const index of available) {
+        const value = perceive(fieldValues[finalStep].get(index));
+        if (!best || value < best.value) best = { index, value };
+      }
+      available.delete(best.index);
+      chosen.push(best.index);
+    }
+    return behindLeader(chosen, finalStep);
+  };
+
+  const informed = runDraft((entry) => entry.effectiveRE);
+  const random = mulberry32(options.seed ?? 20261015);
+  const gaussian = () => {
+    const u = Math.max(1e-12, random());
+    return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * random());
+  };
+  let total = 0;
+  for (let draw = 0; draw < draws; draw += 1) {
+    total += runDraft((entry) => entry.effectiveRE + gaussian() * (baseUncertainty + trafficShare * entry.trafficRE));
+  }
+  const decisionCostRE = Math.max(0, total / draws - informed);
+  return {
+    decisionCostRE: Number(decisionCostRE.toFixed(3)),
+    informedBehindLeaderRE: Number(informed.toFixed(3)),
+    draws,
+    baseUncertaintyRE: baseUncertainty,
+    trafficUncertaintyShare: trafficShare,
+    model: "competitive-decision-cost-v1"
+  };
+}
 
 export function getCompetitiveIntendedChoiceSetCount(playerCount = 4) {
   // v49cp corrected observational ownership target: after n_players strategic
@@ -444,9 +515,11 @@ export function applyCompetitiveStrategicBlocking(
   // Authoritative Competitive simulation: players block the currently best
   // completed-RE start ONE AT A TIME. After each block, traffic/occupancy is
   // recomputed before the next player decides which start is now best.
+  const blockFields = [];
   for (let blockIndex = 0; blockIndex < desiredBlockCount; blockIndex += 1) {
     const activeStarts = getActivePruningStarts(currentFirstLeg, excludedIndices);
     if (activeStarts.length <= count) break;
+    blockFields.push(snapshotCompetitiveField(activeStarts));
     const block = chooseCompetitiveCompletedREBlock(activeStarts);
     if (!block || excludedIndices.has(block.index)) break;
 
@@ -510,17 +583,26 @@ export function applyCompetitiveStrategicBlocking(
   const competitiveSoftRangeLimit = Number(profile.softRangeLimit) || 0;
   const competitiveHardRangeLimit = Number(profile.hardRangeLimit) || 0;
   const competitiveStartBalanceProfile = getStartBalanceProfile(options);
-  // Start Balance changes only final-subset acceptance. Competitive strategic
-  // difficulty keeps its existing difficulty-calibrated reference so choosing
-  // Strict/Relaxed/Off cannot itself make the same course easier or harder.
+  // Start Balance changes only final-subset acceptance. With balance not
+  // enforced, the fairness score keeps the difficulty-calibrated reference so
+  // choosing Strict/Relaxed/Off cannot itself make the same course look fairer.
   const competitiveDifficultyReferenceRangeLimit =
     Number(profile.rangePolicy?.difficultySoftRangeLimit) ||
     competitiveSoftRangeLimit;
-  const strategicDifficulty = getCompetitiveStrategicDifficulty(
-    blockSequence,
-    selectedRangeRE,
-    competitiveDifficultyReferenceRangeLimit
+  // Decision difficulty in RE per programming turn: the expected misjudging cost
+  // of the draft, spread over the chosen starts' typical race.
+  const decisionCost = simulateCompetitiveDecisionCost(
+    blockFields,
+    snapshotCompetitiveField(remainingStarts),
+    count
   );
+  const decisionTurns = Math.max(1, Number(profile.medianTurns) || 1);
+  const strategicDifficulty = {
+    difficulty: decisionCost ? Number((decisionCost.decisionCostRE / decisionTurns).toFixed(3)) : 0,
+    unit: "RE per programming turn",
+    programmingTurns: decisionTurns,
+    ...(decisionCost ?? {})
+  };
   const sufficientPhysicalField = (
     sourceStartCount >= requiredOfferedStarts &&
     routedStarts.length >= requiredOfferedStarts &&

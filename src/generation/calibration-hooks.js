@@ -8,9 +8,12 @@
 import {
   clearAnalysisCaches,
   getAnalysisTelemetrySnapshot,
-  resetAnalysisTelemetry
+  resetAnalysisTelemetry,
+  summarizeRegisterEquivalentLedger
 } from "../../analyze.js";
+import { setCalibrationLegCandidateSink } from "../analysis/full-course.js";
 import { buildResolvedMap } from "../../board.js";
+import { tileKey } from "../analysis/board-geometry.js";
 import {
   VARIANT_DEFINITIONS,
   applyVariantAnalysisOptions,
@@ -46,6 +49,10 @@ import { withGenerationRandomSeed } from "./random.js";
 import { placeRebootTokens } from "./reboot-tokens.js";
 import { generationNow } from "./scheduling.js";
 import {
+  chooseActFastMode,
+  getCourseConflictingVariantIds,
+  getMissingRequiredVariantIds,
+  getVariantCourseUnavailabilityReason,
   getAvailableDockIds,
   getAvailableMainBoardIds,
   getRouteAnalysisVariantOptions
@@ -88,6 +95,80 @@ export function summarizeCalibrationTelemetry(telemetry = null) {
   };
 }
 
+const roundedOrNull = (value, digits = 4) => (
+  Number.isFinite(Number(value)) ? Number(Number(value).toFixed(digits)) : null
+);
+
+function countInto(counts, key, amount = 1) {
+  counts[key] = (counts[key] || 0) + amount;
+}
+
+// One record per analysed start: what the cheap search charged for its full-course
+// route (score units) beside what the RE model says the same route costs, plus the
+// feature encounters along it. Calibration fits the search weights from these pairs.
+function summarizeCalibrationRoutes(tileMap, scenario) {
+  const starts = scenario.sequence?.firstLeg?.starts ?? [];
+  return starts.map((start) => {
+    const route = start?.fullCourseRoute;
+    if (!route) return { index: start?.index ?? null, reachable: Boolean(start?.reachable), route: null };
+    const cards = {};
+    const endFeatures = {};
+    const boardEvents = {};
+    let rebooted = 0;
+    let crashed = 0;
+    for (const transition of route.transitions ?? []) {
+      countInto(cards, transition.programCard ?? transition.action ?? "unknown");
+      if (transition.rebooted) rebooted += 1;
+      if (transition.crashed) crashed += 1;
+      for (const event of transition.boardEvents ?? []) countInto(boardEvents, event?.type ?? "unknown");
+      const to = transition.to;
+      const tile = to ? tileMap.get(tileKey(to.x, to.y)) : null;
+      for (const feature of tile?.features ?? []) {
+        const key = feature.type === "laser" ? `laser${Math.max(1, Number(feature.damage) || 1)}` : feature.type;
+        countInto(endFeatures, key);
+      }
+    }
+    return {
+      index: start.index,
+      reachable: Boolean(start.reachable),
+      search: {
+        score: roundedOrNull(route.score, 2),
+        actions: route.actions ?? null,
+        distance: route.distance ?? null,
+        forcedDistance: route.forcedDistance ?? null,
+        hazard: roundedOrNull(route.hazard, 2),
+        rebootPenalty: roundedOrNull(route.rebootPenalty, 2),
+        cardAvailabilityPenalty: roundedOrNull(route.cardAvailabilityPenalty, 2),
+        programPlausibilityPenalty: roundedOrNull(route.programPlausibilityPenalty, 2),
+        rebootCount: route.rebootCount ?? rebooted,
+        crashed,
+        courseEstimateScore: roundedOrNull(start.courseEstimate?.totalScore, 2),
+        trafficPenalty: roundedOrNull(start.trafficPenalty, 2)
+      },
+      re: {
+        effective: roundedOrNull(start.normalFairnessEffectiveRE),
+        intrinsic: roundedOrNull(route.normalFairnessIntrinsicRE ?? start.normalFairnessIntrinsicRE),
+        registers: start.normalFairnessRegisterCount ?? null,
+        intrinsicComponents: route.normalFairnessIntrinsicREComponents
+          ? Object.fromEntries(Object.entries(route.normalFairnessIntrinsicREComponents)
+            .map(([key, value]) => [key, roundedOrNull(value)]))
+          : null,
+        components: start.normalFairnessComponents
+          ? Object.fromEntries(Object.entries(start.normalFairnessComponents)
+            .map(([key, value]) => [key, typeof value === "number" ? roundedOrNull(value) : value]))
+          : null
+      },
+      encounters: { cards, endFeatures, boardEvents }
+    };
+  });
+}
+
+// The variant rules active on a generated (or reanalysed) course.
+export function getCalibrationActiveVariantIds(scenario) {
+  if (!scenario) return [];
+  return VARIANT_DEFINITIONS.map((variant) => variant.id).filter((id) => scenario[id] === true);
+}
+
 export function summarizeCalibrationScenario(assets, scenario) {
   if (!scenario) return null;
   const { pieceMap } = assets;
@@ -113,6 +194,8 @@ export function summarizeCalibrationScenario(assets, scenario) {
   const contextualCache = scenario.sequence?.firstLeg?.summary?.contextualLegCache ?? null;
   return {
     construction,
+    variants: getCalibrationActiveVariantIds(scenario),
+    routes: summarizeCalibrationRoutes(tileMap, scenario),
     outcome: {
       acceptable: Boolean(metrics.acceptable),
       exactTargetMatch: Boolean(metrics.exactTargetMatch),
@@ -258,6 +341,40 @@ export function describeCalibrationInventory(assets, requestedExpansionIds = nul
   };
 }
 
+const LEG_CHOICE_LIMIT = 150;
+
+// Collects the estimated leg searches' candidate lists (ranked as the search ranks
+// them, chosen first) and prices each candidate with the RE ledger, using the
+// tile map and options that search ran with.
+function createLegChoiceCollector() {
+  const choices = [];
+  const seen = new Set();
+  const sink = ({ legIndex, searchPurpose, ranked, tileMap, options }) => {
+    if (!Array.isArray(ranked) || ranked.length < 2 || choices.length >= LEG_CHOICE_LIMIT) return;
+    const key = `${legIndex}|${ranked.map((route) => `${route.absoluteStartAction}:${route.score}`).join(",")}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    choices.push({
+      legIndex,
+      purpose: searchPurpose,
+      candidates: ranked.map((route) => {
+        const ledger = summarizeRegisterEquivalentLedger(tileMap, route, options, null);
+        return {
+          score: roundedOrNull(route.score, 2),
+          actions: route.actions ?? null,
+          hazard: roundedOrNull(route.hazard, 2),
+          re: roundedOrNull(ledger?.observationalSubtotalWithMentalRE),
+          cardRE: roundedOrNull(ledger?.cleanCardPlausibilityRE),
+          damageRE: roundedOrNull((Number(ledger?.damageCardSupplyRE) || 0) + (Number(ledger?.clogRE) || 0)),
+          energyRE: roundedOrNull(ledger?.energyRE),
+          mentalRE: roundedOrNull(ledger?.mentalRegisterEquivalents)
+        };
+      })
+    });
+  };
+  return { sink, choices };
+}
+
 export async function generateCalibrationObservation(assets, options = {}) {
   const inventory = describeCalibrationInventory(assets, options.expansionIds);
   if (!inventory.expansionIds.length) throw new Error("No supported expansion data selected for calibration.");
@@ -329,6 +446,8 @@ export async function generateCalibrationObservation(assets, options = {}) {
   }
 
   let result;
+  const legChoices = createLegChoiceCollector();
+  setCalibrationLegCandidateSink(legChoices.sink);
   try {
     result = await withGenerationRandomSeed(seed, () => createRandomCandidate(
       assets,
@@ -340,6 +459,7 @@ export async function generateCalibrationObservation(assets, options = {}) {
       null
     ));
   } catch (error) {
+    setCalibrationLegCandidateSink(null);
     // createRandomCandidate historically throws when the sampled board faces and
     // dock cannot form a legal physical layout. Browser generation treats that as
     // an attempt failure and tries another construction. In calibration one attempt
@@ -364,8 +484,15 @@ export async function generateCalibrationObservation(assets, options = {}) {
     }
     throw error;
   }
+  setCalibrationLegCandidateSink(null);
 
   const telemetry = getAnalysisTelemetrySnapshot();
+  const evidence = result?.scenario
+    ? summarizeCalibrationScenario(assets, result.scenario)
+    : (result?.calibrationConstructionSnapshot
+      ? { construction: result.calibrationConstructionSnapshot, outcome: null }
+      : null);
+  if (evidence) evidence.legChoices = legChoices.choices;
   return {
     ...result,
     calibrationStatus: result?.scenario
@@ -375,11 +502,7 @@ export async function generateCalibrationObservation(assets, options = {}) {
     inventory,
     elapsedMs: Number((generationNow() - startedAt).toFixed(2)),
     telemetrySummary: summarizeCalibrationTelemetry(telemetry),
-    evidence: result?.scenario
-      ? summarizeCalibrationScenario(assets, result.scenario)
-      : (result?.calibrationConstructionSnapshot
-        ? { construction: result.calibrationConstructionSnapshot, outcome: null }
-        : null)
+    evidence
   };
 }
 
@@ -394,7 +517,9 @@ export function analyzeCalibrationPlacements(assets, sourceScenario, placements,
   const length = DIAGNOSTIC_LENGTHS.includes(sourceScenario.preferences?.length)
     ? sourceScenario.preferences.length
     : "moderate";
-  const forcedVariantIds = options.dynamicArchiving ? ["dynamicArchiving"] : [];
+  const forcedVariantIds = Array.isArray(options.variantIds)
+    ? options.variantIds
+    : (options.dynamicArchiving ? ["dynamicArchiving"] : []);
   const variantBundle = buildVariantBundle(
     Object.fromEntries(VARIANT_DEFINITIONS.map((variant) => [variant.id, forcedVariantIds.includes(variant.id)])),
     { pieceMap }
@@ -492,6 +617,7 @@ export function analyzeCalibrationPlacements(assets, sourceScenario, placements,
   const telemetry = getAnalysisTelemetrySnapshot();
   const syntheticScenario = {
     ...sourceScenario,
+    ...variantBundle,
     placements,
     overlayPlacements: placements.filter((placement) => placement.overlay),
     dockPlacements,
@@ -527,6 +653,98 @@ export function reanalyzeCalibrationScenario(assets, sourceScenario, options = {
   return analyzeCalibrationPlacements(assets, sourceScenario, placements, options);
 }
 
+
+// Variants that change rules on an unchanged layout, so one built course can be
+// reloaded with and without them. Layout variants (docks, staggering, Virtual
+// Bots, Moving Targets) are compared between courses instead, and so is
+// Competitive: it needs a course built with enough starts for n blocks plus n
+// picks, and switched on elsewhere it falls back to judging every start.
+export const CALIBRATION_TOGGLE_VARIANT_IDS = Object.freeze([
+  "actFast", "lighterGame", "upgradeWorld", "lessSpammyGame", "criticalSpam",
+  "criticalHaywire", "permanentShutdown", "lessDeadlyGame", "moreDeadlyGame",
+  "cuttingFloor", "flamingOil", "repulsorOverdrive", "setToKill", "setToStun",
+  "dynamicArchiving", "homeReboot", "hazardousFlags", "repairStations",
+  "factoryRejects", "startupSpinUp", "lessForeshadowing", "classicSharedDeck",
+  "payToWin", "subsidizedStarts"
+]);
+const RECOVERY_RULE_BY_VARIANT = { dynamicArchiving: "dynamic_archiving", homeReboot: "home_reboot" };
+
+// The first variant of `order` that can be switched on this course: switching off
+// an active one is always possible; switching one on must not conflict with the
+// active set, lack a variant it requires, or be inert on this course, and a
+// recovery rule is only switched on from reboot tokens (the snapshot has no
+// tokens to fall back to otherwise).
+export function chooseCalibrationVariantToggle(scenario, order = CALIBRATION_TOGGLE_VARIANT_IDS) {
+  const active = new Set(getCalibrationActiveVariantIds(scenario));
+  let courseContext = null;
+  const canMatter = (variantId) => {
+    courseContext ??= {
+      rawTileMap: buildResolvedMap(scenario.placements, scenario.pieceMap).tileMap,
+      checkpoints: getPlayableCheckpoints(scenario.checkpoints ?? [], scenario.virtualBots),
+      movingTargets: Boolean(scenario.movingTargets)
+    };
+    return !getVariantCourseUnavailabilityReason(variantId, scenario.goalTileMap, courseContext);
+  };
+  for (const variantId of order) {
+    if (!CALIBRATION_TOGGLE_VARIANT_IDS.includes(variantId)) continue;
+    if (active.has(variantId)) {
+      if (RECOVERY_RULE_BY_VARIANT[variantId]) continue;
+      return { variantId, on: false };
+    }
+    if (getCourseConflictingVariantIds(variantId).some((id) => active.has(id))) continue;
+    const activeMap = Object.fromEntries([...active].map((id) => [id, true]));
+    if (getMissingRequiredVariantIds(variantId, {}, activeMap, { selfState: "allowed" }).length) continue;
+    if (RECOVERY_RULE_BY_VARIANT[variantId] && (scenario.recoveryRule ?? "reboot_tokens") !== "reboot_tokens") continue;
+    if (!canMatter(variantId)) continue;
+    return { variantId, on: true };
+  }
+  return null;
+}
+
+function summarizeCalibrationReload(assets, scenario) {
+  if (!scenario || scenario.hydrationPresentationFallback || scenario.hydrationPresentationUnavailable) return null;
+  const summary = summarizeCalibrationScenario(assets, scenario);
+  return { variants: summary.variants, outcome: summary.outcome };
+}
+
+// Reloads a built course twice through the production reload path: as built, and
+// with one variant switched. Both sides take the same path, so their difference
+// is the variant's effect on this course.
+export async function evaluateCalibrationVariantToggle(assets, scenario, toggle) {
+  if (!scenario || !toggle?.variantId) return null;
+  const snapshot = JSON.parse(JSON.stringify(serializeScenario(scenario)));
+  const toggled = JSON.parse(JSON.stringify(snapshot));
+  toggled[toggle.variantId] = Boolean(toggle.on);
+  if (toggle.variantId === "actFast") {
+    toggled.actFastMode = toggle.on ? chooseActFastMode(scenario.preferences ?? {}) : null;
+  }
+  const recoveryRule = RECOVERY_RULE_BY_VARIANT[toggle.variantId];
+  if (recoveryRule) {
+    for (const id of Object.keys(RECOVERY_RULE_BY_VARIANT)) toggled[id] = id === toggle.variantId && toggle.on;
+    toggled.recoveryRule = toggle.on ? recoveryRule : "reboot_tokens";
+  }
+  const startedAt = generationNow();
+  const baseline = await hydrateScenarioFromSnapshot(assets, snapshot);
+  const baselineMs = generationNow() - startedAt;
+  let treated = null;
+  let treatedFailure = null;
+  try {
+    treated = await hydrateScenarioFromSnapshot(assets, toggled);
+  } catch (error) {
+    // The switched rule can leave the course without enough routable starts;
+    // that is an outcome, not a harness error.
+    treatedFailure = error?.message ?? String(error);
+  }
+  return {
+    variantId: toggle.variantId,
+    on: Boolean(toggle.on),
+    baselineMs: Number(baselineMs.toFixed(2)),
+    treatedMs: Number((generationNow() - startedAt - baselineMs).toFixed(2)),
+    baseline: summarizeCalibrationReload(assets, baseline),
+    treated: summarizeCalibrationReload(assets, treated),
+    treatedFailure
+  };
+}
 
 // v49ce: automatic v49cd targeted card-pressure diagnostic retired.
 // The analyzer implementation remains dormant for explicit future experiments.

@@ -16,7 +16,7 @@ const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const PROJECT_DIR = dirname(SCRIPT_DIR);
 
 const DEFAULTS = Object.freeze({
-  count: 3840,
+  count: 6400,
   seed: Date.now() >>> 0,
   analysisMode: "balanced",
   pairedRecoveryRate: 0.25,
@@ -26,7 +26,7 @@ const DEFAULTS = Object.freeze({
   pilot: false,
   expansionIds: null,
   timeoutSeconds: 120,
-  study: "general",
+  study: "guidance",
   overlayCount: null,
   overlayPlacementRetries: 12
 });
@@ -59,6 +59,14 @@ const STRUCTURAL_VARIANTS = Object.freeze([
   "sandwichedDock"
 ]);
 const MODE_PAIR_CHOICES = Object.freeze(["fastest", "fast", "standard", "thorough"]);
+
+// Guidance study (default): every observation draws its settings independently,
+// with the variants a user could allow, so the models can learn each variant's
+// effect between courses; rule variants are also switched on one built course.
+const GUIDANCE_PLAYERS = Object.freeze([2, 3, 4, 5, 6, 7, 8]);
+const GUIDANCE_VARIANT_COUNTS = Object.freeze([0, 0, 1, 1, 2, 2, 3, 4]);
+const GUIDANCE_OVERLAY_MODES = Object.freeze(["no", "no", "tokens", "boards", "yes"]);
+const STUDIES = Object.freeze(["guidance", "general", "overlay"]);
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
@@ -105,6 +113,11 @@ function parseArgs(argv) {
       }
       options.overlayPlacementRetries = value;
       options.overlayPlacementRetriesProvided = true;
+    } else if (arg === "--study") {
+      const value = String(next() || "").trim().toLowerCase();
+      if (!STUDIES.includes(value)) throw new Error(`--study must be one of ${STUDIES.join(", ")}.`);
+      options.study = value;
+      options.studyProvided = true;
     } else if (arg === "--seed") {
       const value = Number(next());
       if (!Number.isFinite(value)) throw new Error("--seed requires an integer.");
@@ -141,7 +154,7 @@ function parseArgs(argv) {
 }
 
 function printHelp() {
-  console.log(`Robo Rally calibration runner\n\nUsage:\n  node tools/calibration-runner.js [options]\n\nOptions:\n  --count N                  Total observations to collect (default ${DEFAULTS.count}; 320 = one full general-design block)\n  --pilot                    Convenience smoke test: 80 observations unless --count is supplied\n  --overlay-study            Targeted structural-overlay study; defaults to 500 observations\n  --overlay-count N          In overlay study, force exactly N structural overlay boards; defaults to 300 observations\n  --overlay-placement-retries N  Cheap construction proposals per forced-overlay observation (default ${DEFAULTS.overlayPlacementRetries})\n  --seed N                   Deterministic master seed\n  --analysis-mode MODE       Reference route effort: fastest|fast|standard|balanced|thorough\n  --paired-recovery-rate P   Normal/DA constructions receiving same-course recovery counterfactual (default ${DEFAULTS.pairedRecoveryRate})\n  --mode-pair-rate P         Eligible courses receiving one extra route-effort counterfactual (default ${DEFAULTS.modePairRate})\n  --sets all|id,id            Restrict every observation to these expansion IDs\n  --output PATH              JSONL output path (default calibration-output/calibration-raw-<timestamp>.jsonl)\n  --timeout-seconds N        Hard wall-clock ceiling per observation (default ${DEFAULTS.timeoutSeconds}s)\n  --resume                   Continue an existing JSONL file; schedule/seed come from its header\n  --help                     Show this message\n\nThe runner uses only Node built-ins and local project files. Network access is explicitly blocked. Each primary observation runs in its own child process so pathological synchronous route searches can be terminated safely. A timeout is recorded as calibration data, not as route impossibility or a harness error. In --overlay-study mode every proposal requests a real structural board overlay (80% one overlay, 20% two unless --overlay-count is supplied) and every successful scenario receives a same-course no-overlay counterfactual. Structural overlay-board studies exclude small-board-only presets because overlay boards are not physically stacked on those layouts. When a fixed overlay count is requested, cheap construction failures are resampled up to the configured proposal limit; analyzed route failures, timeouts, and errors are never resampled. The final observation records how many construction proposals were needed. General-study scheduling is factorial in players × difficulty × length × flag count (320 observations per complete block); repeated target cells alternate Random/Tight board spread, board count advances across repeated spread pairs, and inventory remains independently scheduled. The ordinary general run also includes both one- and two-board-overlay cases, so a separate overlay run is optional rather than required. Normal console output is one updating progress line; only unexpected actionable errors are printed separately.`);
+  console.log(`Robo Rally calibration runner\n\nUsage:\n  node tools/calibration-runner.js [options]\n\nOptions:\n  --count N                  Total observations to collect (default ${DEFAULTS.count})\n  --study NAME               guidance (default): independent draws of players 2-8, targets, counts, overlays and 0-4 variants, plus one same-course variant toggle per built course; general / overlay: the older designs\n  --pilot                    Convenience smoke test: 80 observations unless --count is supplied\n  --overlay-study            Targeted structural-overlay study; defaults to 500 observations\n  --overlay-count N          In overlay study, force exactly N structural overlay boards; defaults to 300 observations\n  --overlay-placement-retries N  Cheap construction proposals per forced-overlay observation (default ${DEFAULTS.overlayPlacementRetries})\n  --seed N                   Deterministic master seed\n  --analysis-mode MODE       Reference route effort: fastest|fast|standard|balanced|thorough\n  --paired-recovery-rate P   Normal/DA constructions receiving same-course recovery counterfactual (default ${DEFAULTS.pairedRecoveryRate})\n  --mode-pair-rate P         Eligible courses receiving one extra route-effort counterfactual (default ${DEFAULTS.modePairRate})\n  --sets all|id,id            Restrict every observation to these expansion IDs\n  --output PATH              JSONL output path (default calibration-output/calibration-raw-<timestamp>.jsonl)\n  --timeout-seconds N        Hard wall-clock ceiling per observation (default ${DEFAULTS.timeoutSeconds}s)\n  --resume                   Continue an existing JSONL file; schedule/seed come from its header\n  --help                     Show this message\n\nThe runner uses only Node built-ins and local project files. Network access is explicitly blocked. Each primary observation runs in its own child process so pathological synchronous route searches can be terminated safely. A timeout is recorded as calibration data, not as route impossibility or a harness error. In --overlay-study mode every proposal requests a real structural board overlay (80% one overlay, 20% two unless --overlay-count is supplied) and every successful scenario receives a same-course no-overlay counterfactual. Structural overlay-board studies exclude small-board-only presets because overlay boards are not physically stacked on those layouts. When a fixed overlay count is requested, cheap construction failures are resampled up to the configured proposal limit; analyzed route failures, timeouts, and errors are never resampled. The final observation records how many construction proposals were needed. General-study scheduling is factorial in players × difficulty × length × flag count (320 observations per complete block); repeated target cells alternate Random/Tight board spread, board count advances across repeated spread pairs, and inventory remains independently scheduled. The ordinary general run also includes both one- and two-board-overlay cases, so a separate overlay run is optional rather than required. Normal console output is one updating progress line; only unexpected actionable errors are printed separately.`);
 }
 
 function timestampId() {
@@ -465,9 +478,80 @@ function buildOverlayStudyPlan(index, config, presets) {
   };
 }
 
+function shuffled(items, random) {
+  const copy = [...items];
+  for (let index = copy.length - 1; index > 0; index -= 1) {
+    const swap = Math.floor(random() * (index + 1));
+    [copy[index], copy[swap]] = [copy[swap], copy[index]];
+  }
+  return copy;
+}
+
+function buildGuidanceStudyPlan(index, config, presets) {
+  const random = mulberry32(hash32(config.seed, "guidance-plan", index));
+  const playerCount = choose(GUIDANCE_PLAYERS, random);
+  const difficulty = choose(DIFFICULTIES, random);
+  const length = choose(LENGTHS, random);
+  const flagCount = choose(FLAG_COUNTS, random);
+  // Production never puts board overlays on Easy.
+  const overlayModes = difficulty === "easy"
+    ? GUIDANCE_OVERLAY_MODES.filter((mode) => mode === "no" || mode === "tokens")
+    : GUIDANCE_OVERLAY_MODES;
+  let overlayMode = choose(overlayModes, random);
+  const boardOverlays = overlayMode === "boards" || overlayMode === "yes";
+  const overlayPresets = boardOverlays ? overlayCapablePresets(presets, playerCount) : [];
+  if (boardOverlays && !overlayPresets.length) overlayMode = "tokens";
+  const preset = overlayMode === "boards" || overlayMode === "yes"
+    ? choose(overlayPresets, random)
+    : pickPreset(presets, "normal", random, playerCount);
+  // Production decides how many board overlays fit; the record keeps what it placed.
+  const forcedBoardOverlayCount = null;
+  const maxBoardCount = getTargetAwareMaxBoardCount(preset, length);
+  const boardCount = 1 + Math.floor(random() * maxBoardCount);
+  const variantCount = choose(GUIDANCE_VARIANT_COUNTS, random);
+  const forcedVariantIds = shuffled(config.variantIds, random).slice(0, variantCount);
+  return {
+    index,
+    blockIndex: 0,
+    slotIndex: index,
+    stratum: forcedVariantIds.length ? "variants" : "plain",
+    study: "guidance",
+    observationSeed: hash32(config.seed, "observation", index),
+    playerCount,
+    difficulty,
+    length,
+    boardSpread: choose(BOARD_SPREADS, random),
+    boardCount,
+    flagCount,
+    checkpointSamplingRegime: choose(CHECKPOINT_SAMPLING_REGIMES, random),
+    inventoryPreset: preset.id,
+    expansionIds: preset.expansionIds,
+    maxBoardCount,
+    overlayMode,
+    forcedBoardOverlayCount,
+    forcedVariantIds,
+    guidanceStrength: 1,
+    pairedRecovery: false,
+    pairedMode: null,
+    toggleOrder: shuffled(config.toggleVariantIds, random)
+  };
+}
+
+// A variant set the chosen collection cannot set up (e.g. Extra Docks with one
+// dock) is one production would refuse up front, so it is redrawn rather than
+// recorded.
+function redrawGuidanceVariants(plan, config, attempt) {
+  const random = mulberry32(hash32(config.seed, "guidance-variant-redraw", plan.index, attempt));
+  const forcedVariantIds = shuffled(config.variantIds, random).slice(0, plan.forcedVariantIds.length);
+  return { ...plan, forcedVariantIds, stratum: forcedVariantIds.length ? "variants" : "plain" };
+}
+
 function buildObservationPlan(index, config, presets) {
   if (config.study === "overlay") {
     return buildOverlayStudyPlan(index, config, presets);
+  }
+  if (config.study === "guidance") {
+    return buildGuidanceStudyPlan(index, config, presets);
   }
 
   const blockIndex = Math.floor(index / BLOCK_STRATA.length);
@@ -574,13 +658,20 @@ function makeRunHeader(config, presets) {
   return {
     recordType: "run",
     schemaVersion: 1,
-    harness: "construction-guidance-v2",
+    harness: config.study === "guidance" ? "construction-guidance-v3" : "construction-guidance-v2",
     runId: config.runId,
     createdAt: new Date().toISOString(),
     seed: config.seed,
     config: {
       count: config.count,
       study: config.study,
+      guidanceDesign: config.study === "guidance" ? {
+        players: GUIDANCE_PLAYERS,
+        variantCounts: GUIDANCE_VARIANT_COUNTS,
+        overlayModes: GUIDANCE_OVERLAY_MODES,
+        variantIds: config.variantIds,
+        toggleVariantIds: config.toggleVariantIds
+      } : null,
       overlayCount: Number.isInteger(config.overlayCount) ? config.overlayCount : null,
       overlayPlacementRetries: config.overlayPlacementRetries,
       analysisMode: config.analysisMode,
@@ -660,6 +751,8 @@ function installOfflineGuard() {
 async function runObservationInWorker(request) {
   installOfflineGuard();
   const {
+    chooseCalibrationVariantToggle,
+    evaluateCalibrationVariantToggle,
     generateCalibrationObservation,
     loadCalibrationAssets,
     reanalyzeCalibrationScenario
@@ -689,6 +782,25 @@ async function runObservationInWorker(request) {
 
   const counterfactuals = [];
   const sourceScenario = generated?.scenario ?? null;
+
+  if (sourceScenario && plan.toggleOrder?.length) {
+    const toggle = chooseCalibrationVariantToggle(sourceScenario, plan.toggleOrder);
+    if (toggle) {
+      try {
+        const paired = await withQuietGeneratorConsole(() => evaluateCalibrationVariantToggle(assets, sourceScenario, toggle));
+        if (paired) {
+          counterfactuals.push({
+            kind: "variant-toggle",
+            treatment: `${toggle.variantId}:${toggle.on ? "on" : "off"}`,
+            elapsedMs: rounded(paired.baselineMs + paired.treatedMs, 2),
+            ...paired
+          });
+        }
+      } catch (error) {
+        counterfactuals.push({ kind: "variant-toggle", status: "error", treatment: toggle.variantId, error: error?.message ?? String(error) });
+      }
+    }
+  }
 
   if (sourceScenario && plan.pairedRecovery) {
     const sourceIsDynamic = plan.forcedVariantIds.includes("dynamicArchiving");
@@ -970,9 +1082,11 @@ async function main() {
   installOfflineGuard();
 
   const {
+    CALIBRATION_TOGGLE_VARIANT_IDS,
     describeCalibrationInventory,
     loadCalibrationAssets
   } = await import("../src/generation/calibration-hooks.js");
+  const { VARIANT_DEFINITIONS } = await import("../variants.js");
 
   const outputPath = makeOutputPath(options);
   const exists = await fileExists(outputPath);
@@ -1019,6 +1133,8 @@ async function main() {
     };
   }
 
+  config.variantIds = header?.config?.guidanceDesign?.variantIds ?? VARIANT_DEFINITIONS.map((variant) => variant.id);
+  config.toggleVariantIds = header?.config?.guidanceDesign?.toggleVariantIds ?? [...CALIBRATION_TOGGLE_VARIANT_IDS];
   await mkdir(dirname(outputPath), { recursive: true });
   const assets = await loadCalibrationAssets();
   const allInventory = describeCalibrationInventory(assets, config.expansionIds);
@@ -1054,9 +1170,10 @@ async function main() {
 
   for (let index = completed; index < config.count; index += 1) {
     const basePlan = buildObservationPlan(index, config, presets);
+    const guidanceStudy = config.study === "guidance";
     const proposalLimit = (config.study === "overlay" && Number.isInteger(config.overlayCount))
       ? Math.max(1, config.overlayPlacementRetries)
-      : 1;
+      : guidanceStudy ? 5 : 1;
     let plan = basePlan;
     let workerResult = null;
     let discardedConstructionRejections = 0;
@@ -1065,9 +1182,12 @@ async function main() {
 
     for (let proposalAttempt = 0; proposalAttempt < proposalLimit; proposalAttempt += 1) {
       proposalAttempts = proposalAttempt + 1;
+      const proposalBase = guidanceStudy && proposalAttempt > 0
+        ? redrawGuidanceVariants(basePlan, config, proposalAttempt)
+        : basePlan;
       plan = {
-        ...basePlan,
-        observationSeed: proposalAttempt === 0
+        ...proposalBase,
+        observationSeed: proposalAttempt === 0 || guidanceStudy
           ? basePlan.observationSeed
           : hash32(config.seed, "overlay-construction-retry", index, proposalAttempt),
         samplingProposalAttempts: proposalAttempts,
@@ -1089,7 +1209,8 @@ async function main() {
       }
 
       if (workerResult.kind !== "result") break;
-      if (workerResult.payload?.generationStatus !== "construction-rejection") break;
+      const retryStatus = guidanceStudy ? "setup-invalid" : "construction-rejection";
+      if (workerResult.payload?.generationStatus !== retryStatus) break;
       if (proposalAttempt + 1 >= proposalLimit) break;
       discardedConstructionRejections += 1;
     }

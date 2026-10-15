@@ -96,6 +96,10 @@ export const CONSTRUCTION_GUIDANCE_MODE_POLICIES = Object.freeze({
   })
 });
 
+// Each missed course multiplies the exploration tail by this (and divides the
+// target exponent by it, up to 2.5x the mode's base).
+const GUIDANCE_TIGHTENING_PER_MISS = 0.85;
+
 export function isCalibrationHarnessGeneration(preferences = {}) {
   return Boolean(
     preferences.calibrationObserveTargetMisses ||
@@ -129,34 +133,26 @@ export function getConstructionGuidanceModePolicy(preferences = {}) {
     };
   }
 
-  // If early preferred proposals fail, progressively flatten the learned order
-  // rather than hard-pruning the expensive tail. This keeps "slow result" as a
-  // fallback while making early attempts materially speed-aware.
+  // Target guidance starts at the mode's trust and leans harder after each
+  // analysed course that missed the requested bands (the misses also teach the
+  // predictions which way they are off; see construction-guidance.js). Route-work
+  // pressure still flattens as attempts run out, so an expensive proposal remains
+  // a late fallback.
   const profile = getGenerationModeProfile(preferences);
   const attempt = Math.max(1, Number(preferences.generationAttempt) || 1);
   const maxAttempts = Math.max(1, Number(profile.maxAttempts) || 1);
   const progress = maxAttempts > 1
     ? clamp((attempt - 1) / (maxAttempts - 1), 0, 1)
     : 0;
+  const misses = Math.max(0, Number(preferences.generationGuidanceFeedback?.misses) || 0);
+  const tightening = Math.pow(GUIDANCE_TIGHTENING_PER_MISS, misses);
   return {
     ...base,
-    // Every mode flattens after failed attempts. The older interpolation toward
-    // 1 accidentally strengthened target pressure for Balanced/Thorough because
-    // their base exponent is below 1. Decrease the exponent itself instead.
-    calibrationStrength: Math.max(0.35, base.calibrationStrength * (1 - progress * 0.55)),
+    calibrationStrength: Math.min(base.calibrationStrength * 2.5, base.calibrationStrength / tightening),
     routeWorkPressure: base.routeWorkPressure * (1 - progress * 0.7),
     routeWorkTailRiskPressure: base.routeWorkTailRiskPressure * (1 - progress * 0.78),
-    explorationFloor: clamp(
-      base.explorationFloor + (0.68 - base.explorationFloor) * progress * 0.75,
-      0,
-      0.8
-    ),
-    grossMismatchExplorationRate: clamp(
-      base.grossMismatchExplorationRate +
-        (0.72 - base.grossMismatchExplorationRate) * progress * 0.65,
-      0,
-      0.85
-    )
+    explorationFloor: Math.max(0.04, base.explorationFloor * tightening),
+    grossMismatchExplorationRate: Math.max(0.02, base.grossMismatchExplorationRate * tightening)
   };
 }
 

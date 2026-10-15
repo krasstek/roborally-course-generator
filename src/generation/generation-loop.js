@@ -6,6 +6,7 @@ import {
 } from "../../analyze.js";
 import { buildCourseNotesHtml } from "../../course-notes.js";
 import { createRandomCandidate } from "./candidate-builder.js";
+import { updateConstructionGuidanceFeedback } from "./construction-guidance.js";
 import {
   chooseNearBestCandidate,
   getAcceptableScenarioScore,
@@ -267,6 +268,9 @@ export async function generateScenarioForPreferences(assets, preferences, option
   let crashedAttempts = 0;
   let lastAttemptError = null;
   let attempt = 0;
+  // What this run's analysed courses taught construction guidance (see
+  // updateConstructionGuidanceFeedback); passed to every later attempt.
+  let guidanceFeedback = null;
   let terminationReason = null;
   let emergencyActivated = false;
 
@@ -409,7 +413,7 @@ export async function generateScenarioForPreferences(assets, preferences, option
     try {
       result = await createRandomCandidate(
         assets,
-        preferences,
+        guidanceFeedback ? { ...preferences, generationGuidanceFeedback: guidanceFeedback } : preferences,
         attemptLabel,
         remainingAttempts,
         async (localEvaluations) => {
@@ -534,8 +538,17 @@ export async function generateScenarioForPreferences(assets, preferences, option
     const lastMeaningfulStage = lastStage;
     if (scenario) {
       scenario.attempts = attempt;
+      const checkpointsKnownPrediction = scenario.constructionGuidanceStages?.checkpointsKnown ?? null;
       recordStageBoundary("Final evaluation");
       scenario = await evaluateCandidate(scenario);
+      if (scenario) {
+        guidanceFeedback = updateConstructionGuidanceFeedback(
+          guidanceFeedback,
+          checkpointsKnownPrediction,
+          scenario.metrics,
+          preferences
+        );
+      }
     }
     const extraDocksNearMissScenario = result.extraDocksNearMissScenario ?? null;
     if (extraDocksNearMissScenario) {
@@ -560,6 +573,8 @@ export async function generateScenarioForPreferences(assets, preferences, option
         : result.scenario && !scenario
           ? "final evaluation could not rebuild the course"
           : describeGenerationRejection(scenario, lastMeaningfulStage),
+      difficultyTurnRE: scenario?.metrics?.difficultyTurnRE ?? null,
+      lengthWallClockTurnIndex: scenario?.metrics?.lengthWallClockTurnIndex ?? null,
       stages: stageTimings,
       routeSearches: routeDelta.searches,
       routeExpansions: routeDelta.expansions,
