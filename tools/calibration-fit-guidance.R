@@ -64,7 +64,10 @@ for (file in input_files) {
 design <- headers[[1]]$config$guidanceDesign
 if (is.null(design)) stop("These runs are not guidance-study runs (no guidanceDesign in the header).")
 variant_ids <- unlist(design$variantIds)
-toggle_ids <- unlist(design$toggleVariantIds)
+# Competitive cannot be switched on a built course (it needs enough starts for
+# n blocks plus n picks); runs before 2026-10-15 toggled it anyway, so its
+# toggles are ignored and it is fitted between courses like a layout variant.
+toggle_ids <- setdiff(unlist(design$toggleVariantIds), "competitiveMode")
 layout_variant_ids <- setdiff(variant_ids, toggle_ids)
 cat(sprintf("Read %d observations from %d file(s).\n", length(observations), length(input_files)))
 

@@ -656,14 +656,16 @@ export function reanalyzeCalibrationScenario(assets, sourceScenario, options = {
 
 // Variants that change rules on an unchanged layout, so one built course can be
 // reloaded with and without them. Layout variants (docks, staggering, Virtual
-// Bots, Moving Targets) are compared between courses instead.
+// Bots, Moving Targets) are compared between courses instead, and so is
+// Competitive: it needs a course built with enough starts for n blocks plus n
+// picks, and switched on elsewhere it falls back to judging every start.
 export const CALIBRATION_TOGGLE_VARIANT_IDS = Object.freeze([
   "actFast", "lighterGame", "upgradeWorld", "lessSpammyGame", "criticalSpam",
   "criticalHaywire", "permanentShutdown", "lessDeadlyGame", "moreDeadlyGame",
   "cuttingFloor", "flamingOil", "repulsorOverdrive", "setToKill", "setToStun",
   "dynamicArchiving", "homeReboot", "hazardousFlags", "repairStations",
   "factoryRejects", "startupSpinUp", "lessForeshadowing", "classicSharedDeck",
-  "competitiveMode", "payToWin", "subsidizedStarts"
+  "payToWin", "subsidizedStarts"
 ]);
 const RECOVERY_RULE_BY_VARIANT = { dynamicArchiving: "dynamic_archiving", homeReboot: "home_reboot" };
 
