@@ -295,22 +295,14 @@ export function computeRETurnDifficulty(scenario, options = {}) {
     return { active: false, reason: "no-usable-completed-re-starts" };
   }
 
-  const pricingEntries = firstLeg.summary?.payToWin?.pricingEntries ?? [];
-  const occupancyQualityScoreByIndex =
-    (scenario.payToWin || scenario.subsidizedStarts) && pricingEntries.length
-      ? new Map(pricingEntries.map((entry) => {
-        const early = Number(entry.postPaymentFullScore);
-        const late = Number(entry.latePostPaymentFullScore);
-        const score = Number.isFinite(early) && Number.isFinite(late)
-          ? (early + late) / 2
-          : Number.isFinite(early)
-            ? early
-            : Number.isFinite(late)
-              ? late
-              : Number(entry.fullScore);
-        return [entry.index, score];
-      }))
-      : null;
+  // Which starts players are expected to take is judged from what they can see
+  // and count: each start's route length in registers. Weighting by completed RE
+  // made difficulty non-monotone: a rule that makes every start harder shifted
+  // weight off the hardest starts and could make the course read easier.
+  const occupancyQualityScoreByIndex = new Map(usableStarts.map((entry) => [
+    entry.index,
+    Number(entry.normalFairnessRegisterCount ?? entry.fullCourseRoute?.actions)
+  ]));
   const occupancyByIndex = buildStartOccupancyMap(
     usableStarts,
     playerCount,
