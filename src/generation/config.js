@@ -283,3 +283,13 @@ export const NORMAL_REGISTER_RANGE_GUARDRAIL_FRACTION = 0.45;
 export const COMPETITIVE_EFFECTIVE_RE_RANGE_MIN = 3.0;
 export const COMPETITIVE_EFFECTIVE_RE_RANGE_PER_TURN = 0.60;
 export const COMPETITIVE_EFFECTIVE_RE_HARD_RANGE_MULTIPLIER = 1.50;
+
+// Competitive decision difficulty: players draft (block, then pick) by what they
+// perceive, a start's effective RE plus an estimation error with standard
+// deviation BASE + TRAFFIC_SHARE x its traffic RE. Traffic (robot lasers,
+// blocking, crowding) is hard to read before the game. Hand-picked 2026-10-15;
+// to be set from play experience (manual calibration).
+export const COMPETITIVE_DECISION_BASE_UNCERTAINTY_RE = 0.5;
+export const COMPETITIVE_DECISION_TRAFFIC_UNCERTAINTY_SHARE = 0.5;
+// Simulated drafts per course (deterministic seed).
+export const COMPETITIVE_DECISION_DRAFTS = 200;

@@ -646,8 +646,23 @@ export function computeRETurnVariantDifficultyAccounting(rawTurnRE, preferences 
   if (preferences.competitiveMode) {
     mechanical(
       "competitiveMode",
-      "sequential completed-RE blocking + post-block best-P range ownership; no generic per-turn setup residual"
+      "sequential completed-RE blocking + post-block best-P range ownership"
     );
+    // Decision difficulty: the draft's expected misjudging cost, already in RE
+    // per programming turn (simulateCompetitiveDecisionCost). Drafting happens
+    // before the game, so the Act Fast timer does not scale it.
+    const decisionTurnRE = Number(preferences.competitiveStrategicDifficulty);
+    if (Number.isFinite(decisionTurnRE) && decisionTurnRE > 0) {
+      const before = adjusted;
+      adjusted += decisionTurnRE;
+      contributions.push({
+        id: "competitiveDecision",
+        kind: "decision",
+        delta: Number((adjusted - before).toFixed(4)),
+        multiplier: null,
+        evidence: { decisionTurnRE }
+      });
+    }
   }
   if (preferences.payToWin || preferences.subsidizedStarts) {
     mechanical(
