@@ -90,7 +90,7 @@ import {
   renderScenarioKeepingMapInPlace
 } from "./map-view.js";
 import { buildScenarioBenchmarkSummary, buildScenarioReport } from "./reports.js";
-import { courseExplanationState } from "./setup-summary.js";
+import { courseExplanationState, getGenerationTimeExpectation } from "./setup-summary.js";
 import {
   currentScenario,
   generationStopRequested,
@@ -722,6 +722,28 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
+// The expected-time hint under Generate follows every settings change. Settings
+// change through many separate controls (selects, checkboxes, rule buttons in
+// the page and the Optional Rules dialog), so one delegated listener refreshes it.
+function refreshGenerationTimeHint() {
+  const hintEl = document.getElementById("generation-time-hint");
+  if (!hintEl) return;
+  const text = getGenerationTimeExpectation(getPreferencesFromControls());
+  hintEl.textContent = text;
+  hintEl.classList.toggle("hidden", !text);
+}
+
+let generationTimeHintFrame = null;
+function scheduleGenerationTimeHintRefresh() {
+  if (generationTimeHintFrame !== null) return;
+  generationTimeHintFrame = requestAnimationFrame(() => {
+    generationTimeHintFrame = null;
+    refreshGenerationTimeHint();
+  });
+}
+document.addEventListener("change", scheduleGenerationTimeHintRefresh);
+document.addEventListener("click", scheduleGenerationTimeHintRefresh);
+
 async function init() {
   const assets = await loadAssets();
   initializeBoardAudit(assets);
@@ -734,6 +756,7 @@ async function init() {
 
   if (snapshot) {
     applyPreferencesToControls(snapshot.preferences);
+    refreshGenerationTimeHint();
     setGenerationStopRequested(false);
     setGenerationHasRetainableCandidate(false);
     setGenerationStopControlState(false);
@@ -826,6 +849,7 @@ async function init() {
     }
   }
 
+  refreshGenerationTimeHint();
   await start();
 }
 

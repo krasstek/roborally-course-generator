@@ -23,50 +23,93 @@ export let courseExplanationState = {
   manualClosedScenarioRef: null
 };
 
-// The general waiting hint names the setting most likely to slow this attempt,
-// ordered by the time per finished course measured in the 2026-10-15
-// calibration run: Extra Docks about x2.4, Pay to Win / Subsidized Starts
-// x2.1-2.3, Home Reboot x1.9, six boards about 3x one board (boards follow the
-// requested length), 7-8 players finish fewer attempts. stageContext holds the
-// variants actually chosen for the current attempt.
-export function getGenerationConstraintHint(preferences = {}, stageContext = null) {
-  const mode = normalizeGenerationMode(preferences.generationMode);
-  const length = preferences.length ?? "any";
-  const playerCount = Number(preferences.playerCount) || 4;
+// Generation time factors: time per finished course relative to an ordinary
+// setup, measured in the 2026-10-15 calibration run (6,408 attempts) except the
+// mode factors, which follow the modes' attempt and work budgets. Shared by the
+// hint under Generate (settings fixed in advance) and the waiting-screen hint
+// (the variants actually chosen for the current attempt), so they agree.
+// `waiting` is the waiting-screen wording; null leaves it to the stage hints.
+const GENERATION_TIME_FACTORS = Object.freeze({
+  epic: { factor: 2.5, cause: "an Epic length", waiting: "Epic courses use more boards and can take substantially longer to check." },
+  thorough: { factor: 2.5, cause: "the Thorough mode", waiting: "This mode usually takes a little longer." },
+  extraDocks: { factor: 2.4, cause: "Extra Docks", waiting: "Extra docks give many opening choices to compare; this usually takes longer." },
+  subsidizedStarts: { factor: 2.2, cause: "Subsidized Starts", waiting: "Priced starting spaces take longer to balance." },
+  payToWin: { factor: 2.1, cause: "Pay to Win", waiting: "Priced starting spaces take longer to balance." },
+  homeReboot: { factor: 1.9, cause: "Home Reboot", waiting: "Home Reboot gives each robot its own recovery routes; this usually takes longer." },
+  competitiveMode: { factor: 1.55, cause: "Competitive Mode", waiting: null },
+  balanced: { factor: 1.5, cause: "the Careful mode", waiting: "This mode usually takes a little longer." },
+  long: { factor: 1.5, cause: "a Long length", waiting: "Long courses use more boards and can take longer to check." },
+  sandwichedDock: { factor: 1.4, cause: "Sandwiched Dock", waiting: null },
+  movingTargets: { factor: 1.4, cause: "Moving Targets", waiting: null },
+  factoryRejects: { factor: 1.35, cause: "Factory Rejects", waiting: null },
+  manyPlayers: { factor: 1.2, cause: "7 or 8 players", waiting: "With 7 or 8 players, finding a fair course can take a few tries." },
+  short: { factor: 0.8, cause: "a Short length", waiting: null },
+  fast: { factor: 0.7, cause: "the Fast mode", waiting: "This mode is usually quicker." },
+  fastest: { factor: 0.5, cause: "the Fastest mode", waiting: "This mode is usually quicker." },
+  virtualBots: { factor: 0.35, cause: "Virtual Bots", waiting: "Virtual robots make this setup quicker to check." }
+});
 
-  if (stageContext?.extraDocks) {
-    return "Extra docks give many opening choices to compare; this usually takes longer.";
+const TIME_FACTOR_VARIANT_IDS = [
+  "extraDocks", "subsidizedStarts", "payToWin", "homeReboot", "competitiveMode",
+  "sandwichedDock", "movingTargets", "factoryRejects", "virtualBots"
+];
+
+// Factor ids that apply. With stageContext, variants are the ones chosen for
+// the attempt; otherwise only variants set to "Always on" count, since allowed
+// ones are drawn at random.
+function getGenerationTimeFactorIds(preferences = {}, stageContext = null) {
+  const ids = [];
+  const mode = normalizeGenerationMode(preferences.generationMode);
+  if (["fastest", "fast", "balanced", "thorough"].includes(mode)) ids.push(mode);
+  if (["short", "long", "epic"].includes(preferences.length)) ids.push(preferences.length);
+  if ((Number(preferences.playerCount) || 4) >= 7) ids.push("manyPlayers");
+  for (const variantId of TIME_FACTOR_VARIANT_IDS) {
+    const active = stageContext
+      ? (variantId === "homeReboot" ? stageContext.recoveryRule === "home_reboot" : Boolean(stageContext[variantId]))
+      : preferences.allowedVariantRules?.[variantId] === "forced";
+    if (active) ids.push(variantId);
   }
-  if (stageContext?.payToWin || stageContext?.subsidizedStarts) {
-    return "Priced starting spaces take longer to balance.";
+  return ids;
+}
+
+const joinCauses = (causes) => causes.length > 1 ? `${causes[0]} and ${causes[1]}` : causes[0];
+
+// Shown under Generate before a run. Silent for ordinary settings; device speed
+// varies too much for seconds, so the wording stays qualitative.
+export function getGenerationTimeExpectation(preferences = {}) {
+  const ids = getGenerationTimeFactorIds(preferences);
+  const factor = ids.reduce((product, id) => product * GENERATION_TIME_FACTORS[id].factor, 1);
+  const slowCauses = ids
+    .filter((id) => GENERATION_TIME_FACTORS[id].factor > 1)
+    .sort((a, b) => GENERATION_TIME_FACTORS[b].factor - GENERATION_TIME_FACTORS[a].factor)
+    .map((id) => GENERATION_TIME_FACTORS[id].cause);
+  if (factor >= 2 && slowCauses.length) {
+    return `These settings usually take noticeably longer to generate (mainly ${joinCauses(slowCauses)}).`;
   }
-  if (stageContext?.recoveryRule === "home_reboot") {
-    return "Home Reboot gives each robot its own recovery routes; this usually takes longer.";
+  if (factor >= 1.4 && slowCauses.length) {
+    return `These settings usually take a little longer to generate (mainly ${joinCauses(slowCauses)}).`;
   }
-  if (length === "epic") {
-    return "Epic courses use more boards and can take substantially longer to check.";
-  }
-  if (playerCount >= 7) {
-    return "With 7 or 8 players, finding a fair course can take a few tries.";
-  }
-  if (length === "long") {
-    return "Long courses use more boards and can take longer to check.";
-  }
-  if (mode === "balanced" || mode === "thorough") {
-    return "This mode usually takes a little longer.";
-  }
-  if (playerCount >= 6) {
+  if (factor <= 0.6) return "These settings are usually quick to generate.";
+  return "";
+}
+
+// The general waiting hint names the setting most likely to slow this attempt
+// (largest factor with its own wording), then falls back to softer causes.
+export function getGenerationConstraintHint(preferences = {}, stageContext = null) {
+  const ids = getGenerationTimeFactorIds(preferences, stageContext)
+    .filter((id) => GENERATION_TIME_FACTORS[id].waiting)
+    .sort((a, b) => GENERATION_TIME_FACTORS[b].factor - GENERATION_TIME_FACTORS[a].factor);
+  const slowest = ids.find((id) => GENERATION_TIME_FACTORS[id].factor > 1);
+  if (slowest) return GENERATION_TIME_FACTORS[slowest].waiting;
+  if ((Number(preferences.playerCount) || 4) >= 6) {
     return "More players can make some layouts take longer to check.";
   }
-  if (stageContext?.virtualBots) {
-    return "Virtual robots make this setup quicker to check.";
-  }
+  const quickest = ids[ids.length - 1];
+  if (quickest === "virtualBots") return GENERATION_TIME_FACTORS.virtualBots.waiting;
   if (preferences.difficulty === "easy") {
     return "Easy courses can take a few tries to match.";
   }
-  if (mode === "fastest" || mode === "fast") {
-    return "This mode is usually quicker.";
-  }
+  if (quickest) return GENERATION_TIME_FACTORS[quickest].waiting;
   if (preferences.difficulty !== "any" || preferences.length !== "any") {
     return "A specific difficulty or length can take a few tries.";
   }
