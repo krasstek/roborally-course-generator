@@ -31,7 +31,12 @@ import {
   getProductionLengthTurnIndex,
   presentationNumber
 } from "./labels.js";
-import { buildBoardRects } from "./layout-geometry.js";
+import { overlayFitsWithinBoards } from "./construction-cleanup.js";
+import {
+  compareWholeCourseBoardAblationStates,
+  summarizeWholeCourseBoardAblationState
+} from "./fingerprints.js";
+import { buildBoardRects, getDockTileKeys, pointOnRect } from "./layout-geometry.js";
 import { collectMovingTargetReentryMarkers } from "./moving-targets.js";
 import { normalizeOverlayMode } from "./preferences.js";
 import { placeHomeRebootTokens } from "./reboot-tokens.js";
@@ -1334,6 +1339,65 @@ export const HYDRATION_ONLY_SCENARIO_FIELDS = [
 // values from the incremental generation passes. Returns null when the
 // evaluation cannot rebuild a complete presentation; a reload of that course
 // would fail too.
+// Boards the evaluated course does not use at all: no route enters them, no
+// checkpoint, no structural role (Sandwiched Dock), and no modeled effect on the
+// routes (pushes toward them, line of sight). Generation's board cleanup tests
+// boards against the routes it found; the final evaluation re-routes the course,
+// which can leave such a board behind. A dock that touches only this board keeps
+// it, so starts are never left floating.
+export function getUnusedBoardIndices(evaluated, snapshot, pieceMap) {
+  const boards = evaluated?.metrics?.boardGameplayRelevance?.boards ?? [];
+  const unused = boards
+    .filter((board) => (
+      !board.directRouteUse &&
+      !(board.checkpointIndices?.length) &&
+      !board.structuralProtected &&
+      (board.relevanceStatus === "no-current-evidence" || board.relevanceStatus === "ablation-clear")
+    ))
+    .map((board) => board.boardIndex);
+  if (!unused.length) return [];
+  const boardPlacements = snapshot.placements.filter((placement) => (
+    pieceMap[placement.pieceId]?.kind !== "dock" && !placement.overlay
+  ));
+  const rects = buildBoardRects(boardPlacements, pieceMap);
+  const touches = (key, rect) => {
+    const [x, y] = key.split(",").map(Number);
+    return [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => pointOnRect({ x: x + dx, y: y + dy }, rect));
+  };
+  const dockKeySets = getDockPlacementsFromScenarioPlacements(snapshot.placements, pieceMap)
+    .map((dock) => [...getDockTileKeys(dock, pieceMap)]);
+  return unused.filter((boardIndex) => {
+    const rect = rects[boardIndex];
+    if (!rect) return false;
+    return !dockKeySets.some((keys) => (
+      keys.some((key) => touches(key, rect)) &&
+      !rects.some((other, index) => index !== boardIndex && !unused.includes(index) && keys.some((key) => touches(key, other)))
+    ));
+  });
+}
+
+export function removeBoardsFromSnapshot(snapshot, boardIndices, pieceMap) {
+  const boardPlacements = snapshot.placements.filter((placement) => (
+    pieceMap[placement.pieceId]?.kind !== "dock" && !placement.overlay
+  ));
+  const removed = new Set(boardIndices.map((index) => boardPlacements[index]).filter(Boolean));
+  const keptBoards = boardPlacements.filter((placement) => !removed.has(placement));
+  if (!keptBoards.length || !removed.size) return null;
+  const shift = (index) => index - boardIndices.filter((removedIndex) => removedIndex < index).length;
+  return {
+    ...snapshot,
+    placements: snapshot.placements.filter((placement) => (
+      !removed.has(placement) &&
+      (!placement.overlay || overlayFitsWithinBoards(placement, keptBoards, pieceMap))
+    )),
+    rebootTokens: Array.isArray(snapshot.rebootTokens)
+      ? snapshot.rebootTokens
+        .filter((token) => !boardIndices.includes(token.boardIndex))
+        .map((token) => (Number.isInteger(token.boardIndex) ? { ...token, boardIndex: shift(token.boardIndex) } : token))
+      : snapshot.rebootTokens
+  };
+}
+
 export async function evaluateFinishedCourse(assets, candidate, preferences, control = {}) {
   const snapshot = JSON.parse(JSON.stringify(serializeScenario(candidate)));
   // Mirror what the final save records for "Any" targets (see
@@ -1349,18 +1413,41 @@ export async function evaluateFinishedCourse(assets, candidate, preferences, con
     difficulty: preferences.targetGuidanceOnlyDifficulty ? "any" : concreteTarget.difficulty,
     length: preferences.targetGuidanceOnlyLength ? "any" : concreteTarget.length
   };
-  const evaluated = await hydrateScenarioFromSnapshot(assets, snapshot, {
-    ...control,
-    keepAnalysisCaches: true,
-    routedFirstLeg: candidate.sequence?.firstLeg ?? null
-  });
-  if (!evaluated || evaluated.hydrationPresentationFallback || evaluated.hydrationPresentationUnavailable) {
-    return null;
-  }
-  for (const field of HYDRATION_ONLY_SCENARIO_FIELDS) delete evaluated[field];
-  // The final save overwrites these again once the run ends.
-  evaluated.preferences = { ...candidate.preferences, ...evaluated.preferences, ...concreteTarget };
-  delete evaluated.effectiveTargetPreferences;
-  evaluated.attempts = candidate.attempts;
-  return evaluated;
+  const evaluate = async (courseSnapshot, routedFirstLeg) => {
+    const evaluated = await hydrateScenarioFromSnapshot(assets, courseSnapshot, {
+      ...control,
+      keepAnalysisCaches: true,
+      routedFirstLeg
+    });
+    if (!evaluated || evaluated.hydrationPresentationFallback || evaluated.hydrationPresentationUnavailable) {
+      return null;
+    }
+    for (const field of HYDRATION_ONLY_SCENARIO_FIELDS) delete evaluated[field];
+    // The final save overwrites these again once the run ends.
+    evaluated.preferences = { ...candidate.preferences, ...evaluated.preferences, ...concreteTarget };
+    delete evaluated.effectiveTargetPreferences;
+    evaluated.attempts = candidate.attempts;
+    return evaluated;
+  };
+  const evaluated = await evaluate(snapshot, candidate.sequence?.firstLeg ?? null);
+  if (!evaluated) return null;
+
+  // A board the course does not use at all is dropped silently. The reduced
+  // course is evaluated once more and kept only when it matches the original by
+  // the same test generation's board cleanup uses (routes, starts, failures,
+  // difficulty, length, fairness, traffic); otherwise the board does affect the
+  // course after all, and stays.
+  const unusedBoardIndices = getUnusedBoardIndices(evaluated, snapshot, assets.pieceMap);
+  const reducedSnapshot = unusedBoardIndices.length
+    ? removeBoardsFromSnapshot(snapshot, unusedBoardIndices, assets.pieceMap)
+    : null;
+  if (!reducedSnapshot) return evaluated;
+  const reduced = await evaluate(reducedSnapshot, null);
+  if (!reduced) return evaluated;
+  const comparison = compareWholeCourseBoardAblationStates(
+    summarizeWholeCourseBoardAblationState(evaluated.sequence, evaluated.metrics),
+    summarizeWholeCourseBoardAblationState(reduced.sequence, reduced.metrics)
+  );
+  if (comparison.materialDifference) return evaluated;
+  return reduced;
 }

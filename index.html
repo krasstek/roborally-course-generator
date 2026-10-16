@@ -739,6 +739,18 @@
       display: none !important;
     }
 
+    .generation-time-hint {
+      margin: -4px 0 10px;
+      font-size: 12.5px;
+      line-height: 1.4;
+      color: var(--muted, #5f6b76);
+      text-align: right;
+    }
+
+    .generation-time-hint.hidden {
+      display: none !important;
+    }
+
     .fit-note {
       margin: 0 0 12px;
       padding: 12px 14px;
@@ -1830,6 +1842,7 @@
         <button id="about-button" class="secondary-button" type="button">About</button>
         <button id="reroll" type="button">Generate Course</button>
       </div>
+      <p id="generation-time-hint" class="generation-time-hint hidden" aria-live="polite"></p>
       <p id="fit-note" class="fit-note hidden"></p>
       <div id="setup-summary" class="setup-summary hidden">
         <div class="setup-row">

@@ -150,6 +150,9 @@ export function buildCourseNoteFacts(scenario) {
   const sandwichedMissingBoardIndices = new Set(
     metrics.sandwichedDockUse?.missingSideBoardIndices ?? []
   );
+  // Boards no route enters. The final evaluation drops a board whose removal
+  // leaves the course unchanged, so one that remains affects the routes beside
+  // it (or carries the only dock).
   const zeroRouteInfluenceCount = scenario?.sandwichedDock
     ? 0
     : boardUseBoards.filter((board) => (
@@ -374,6 +377,46 @@ export function buildCourseNoteEvidence(scenario, fitNotes = []) {
     .filter(Number.isFinite));
   const burdenCoverage = ownedRoutes.filter((route) => route?.normalFairnessIntrinsicREComponents).length;
 
+  // Offered starts' route lengths and what evens them out. Traffic is the gap
+  // between effective and intrinsic RE; a route's own cost is intrinsic RE
+  // beyond its programmed registers (card, damage, planning).
+  const pricedStarts = usableStartAnalyses
+    .map((item) => {
+      const registers = Number(item.normalFairnessRegisterCount);
+      const effective = Number(item.normalFairnessEffectiveRE);
+      const intrinsic = Number(item.normalFairnessIntrinsicRE);
+      const components = item.fullCourseRoute?.normalFairnessIntrinsicREComponents ?? {};
+      const part = (key) => Number(components[key]) || 0;
+      return {
+        registers,
+        effective,
+        traffic: effective - intrinsic,
+        own: intrinsic - (Number(components.programmedRegisterRE) || registers),
+        card: part("cleanCardPlausibilityRE"),
+        damage: part("damageCardSupplyRE") + part("clogRE"),
+        mental: part("mentalRE")
+      };
+    })
+    .filter((item) => item.registers > 0 && Number.isFinite(item.effective) && Number.isFinite(item.traffic));
+  const startLengths = (() => {
+    if (pricedStarts.length < 2) return null;
+    const sorted = [...pricedStarts].sort((a, b) => a.registers - b.registers);
+    const shortest = sorted[0];
+    const longest = sorted[sorted.length - 1];
+    const medianRegisters = sorted[Math.floor((sorted.length - 1) / 2)].registers;
+    const extra = (key) => shortest[key] - longest[key];
+    const ownCause = ["damage", "card", "mental"].sort((a, b) => extra(b) - extra(a))[0];
+    return {
+      spread: longest.registers - shortest.registers,
+      relativeSpread: (longest.registers - shortest.registers) / medianRegisters,
+      balancedBy: extra("traffic") >= extra("own") ? "traffic" : ownCause
+    };
+  })();
+  const totalEffective = pricedStarts.reduce((sum, item) => sum + item.effective, 0);
+  const trafficShare = totalEffective > 0
+    ? pricedStarts.reduce((sum, item) => sum + item.traffic, 0) / totalEffective
+    : null;
+
   const facts = buildCourseNoteFacts(scenario);
   const checkpointPlacement = facts.checkpointPlacement;
   const {
@@ -421,6 +464,7 @@ export function buildCourseNoteEvidence(scenario, fitNotes = []) {
     attempts: scenario?.attempts ?? 0,
     requestedDifficulty: scenario?.preferences?.difficulty ?? "any",
     requestedLength: scenario?.preferences?.length ?? "any",
+    playerCount: Number(scenario?.preferences?.playerCount ?? scenario?.playerCount) || null,
     generationMode: scenario?.generationDiagnostics?.generationMode ?? scenario?.preferences?.generationMode ?? "standard",
     generationModeLabel: scenario?.generationDiagnostics?.generationModeLabel ?? formatGenerationModeForNotes(scenario?.preferences?.generationMode),
     generationModeProfile: scenario?.generationDiagnostics?.searchProfile ?? null,
@@ -440,11 +484,13 @@ export function buildCourseNoteEvidence(scenario, fitNotes = []) {
       enabled: Boolean(contextualProfile?.trafficEnabled),
       confidenceWeighted: Boolean(fullTraffic?.confidenceWeighted),
       averageEffective: fullTraffic?.averagePenalty ?? first.averageTrafficPenalty ?? 0,
+      shareOfRE: trafficShare,
       byLeg: trafficByLeg,
       routeSwitches: fullTraffic?.routeSwitches ?? 0,
       startsWithAlternatives: trafficCandidates.filter((item) => (item?.candidateCount ?? 0) > 1).length,
       alternateCandidatesAdded: fullTraffic?.alternateCandidatesAdded ?? 0
     },
+    startLengths,
     competitiveBalance: competitiveBalance?.active
       ? {
         active: true,
@@ -521,49 +567,80 @@ export function buildCourseNoteConcepts(evidence) {
     ));
   }
 
-  const limitedFootprintCount = Number(evidence.boardUse?.limitedFootprintCount) || 0;
-  const zeroRouteInfluenceCount = Number(evidence.boardUse?.zeroRouteInfluenceCount) || 0;
-  if (limitedFootprintCount > 0) {
+  // BOARD FOOTPRINT: a board the routes cross only a little, and a board no
+  // route enters but that still affects the routes beside it, are different
+  // situations and get different wording (one note, so they share one slot).
+  const lightlyUsedCount = Number(evidence.boardUse?.weakTraversedCount) || 0;
+  const notEnteredCount = Number(evidence.boardUse?.zeroRouteInfluenceCount) || 0;
+  if (lightlyUsedCount > 0 || notEnteredCount > 0) {
+    const parts = [];
+    if (notEnteredCount > 0) {
+      parts.push(notEnteredCount === 1
+        ? "Robots are not expected to drive across one board, but it still affects the race beside it: its edges, hazards and walls matter when a robot is pushed off line."
+        : "Robots are not expected to drive across some boards, but they still affect the race beside them: their edges, hazards and walls matter when a robot is pushed off line.");
+    }
+    if (lightlyUsedCount > 0) {
+      parts.push(lightlyUsedCount === 1
+        ? "One board is used only as a narrow corridor or edge section."
+        : "Several boards are used only as narrow corridors or edge sections.");
+    }
+    parts.push("That is intentional; keep the full layout.");
     concepts.push(concept(
       "limited-board-footprint",
-      4.6 + Math.min(0.4, Math.max(0, limitedFootprintCount - 1) * 0.15),
+      (notEnteredCount > 0 ? 5 : 4.6) + Math.min(0.4, Math.max(0, lightlyUsedCount + notEnteredCount - 1) * 0.15),
       "Board Footprint",
-      limitedFootprintCount === 1
-        ? (
-          zeroRouteInfluenceCount > 0
-            ? "One board has little direct race footprint. It is still part of the generated setup; the course simply uses a narrow part of the available table space."
-            : "One board is used mainly as a narrow corridor or edge section. That is intentional; the race does not need to fill every part of every board."
-        )
-        : "Several boards are used mainly as narrow corridors or edge sections. That is intentional; the race does not need to fill every part of every board."
+      parts.join(" ")
     ));
   }
 
-  // TRAFFIC / ALTERNATE LINES: completed-RE traffic owns the interaction forecast.
-  // Alternate-line advice is folded into the same note so one traffic feature does
-  // not consume two of the three player-facing Course Notes slots.
-  if (trafficModel.enabled && trafficModel.confidenceWeighted) {
-    const effective = Number(trafficModel.averageEffective) || 0;
-    const hasAlternatives = trafficModel.startsWithAlternatives > 0 || trafficModel.alternateCandidatesAdded > 0;
-    const trafficScore = Math.max(
-      effective / 8,
-      trafficModel.routeSwitches > 0 ? 7.4 : 0,
-      hasAlternatives ? 5.4 : 0
-    );
-    if (trafficScore >= 3.5) {
-      const firstLegTraffic = trafficModel.byLeg?.[0] || null;
-      const strongestLeg = [...(trafficModel.byLeg || [])]
-        .sort((a, b) => (b?.effective ?? 0) - (a?.effective ?? 0))[0] || null;
-      const buildsLater = (strongestLeg?.effective ?? 0) > (firstLegTraffic?.effective ?? 0) * 1.4;
-      let text = buildsLater
-        ? "Robot interaction is likely to build after the opening. Shared lanes can make a clean line more useful than the shortest-looking one."
-        : "The main racing lines are likely to be busy. Leave room for other robots and be ready to change plans when several players want the same spaces.";
-      if (trafficModel.routeSwitches > 0) {
-        text += " At least one busy section has a worthwhile alternate line when the obvious route is crowded.";
-      } else if (hasAlternatives) {
-        text += " Some busy sections also have useful alternate lines worth keeping in mind.";
-      }
-      concepts.push(concept("traffic", trafficScore, "Traffic", text));
+  // TRAFFIC: nearly every course has some, so the note appears only when
+  // traffic is an unusually large share of the offered starts' real cost for
+  // this player count: about the top quarter of generated courses (2026-10-16
+  // sample: 26% of effective RE at 4 players, 31% at 6; typical 22% / 27%).
+  // The alternate-line sentence needs traffic to have actually switched a route.
+  const trafficShareThreshold = 0.16 + 0.025 * (Number(evidence.playerCount) || 4);
+  if (
+    trafficModel.enabled && trafficModel.confidenceWeighted &&
+    Number(trafficModel.shareOfRE) >= trafficShareThreshold
+  ) {
+    const share = Number(trafficModel.shareOfRE);
+    const trafficScore = 5 + Math.min(2.5, (share - trafficShareThreshold) * 20);
+    const firstLegTraffic = trafficModel.byLeg?.[0] || null;
+    const strongestLeg = [...(trafficModel.byLeg || [])]
+      .sort((a, b) => (b?.effective ?? 0) - (a?.effective ?? 0))[0] || null;
+    const buildsLater = (strongestLeg?.effective ?? 0) > (firstLegTraffic?.effective ?? 0) * 1.4;
+    let text = buildsLater
+      ? "Robot interaction is likely to build after the opening. Shared lanes can make a clean line more useful than the shortest-looking one."
+      : "The main racing lines are likely to be busy. Leave room for other robots and be ready to change plans when several players want the same spaces.";
+    if (trafficModel.routeSwitches > 0) {
+      text += " At least one busy section has a worthwhile alternate line when the obvious route is crowded.";
     }
+    concepts.push(concept("traffic", trafficScore, "Traffic", text));
+  }
+
+  // START LENGTHS: when the offered starts' routes differ a lot in length,
+  // players may read the shorter ones as simply better. Explain what evens them
+  // out. Threshold: about the top fifth of generated courses' offered starts
+  // (2026-10-16 sample: spread 25%+ of the median route; typical 15%) and at
+  // least one full turn. Competitive has its own start notes.
+  const startLengths = evidence.startLengths;
+  if (
+    startLengths && !evidence.variants?.competitiveMode &&
+    startLengths.spread >= 5 && startLengths.relativeSpread >= 0.25
+  ) {
+    const ownCost = {
+      damage: "more damage",
+      card: "awkward card sequences",
+      mental: "tricky timing"
+    }[startLengths.balancedBy];
+    concepts.push(concept(
+      "start-lengths",
+      5.4 + Math.min(1.4, (startLengths.relativeSpread - 0.25) * 4),
+      "Start Routes",
+      startLengths.balancedBy === "traffic"
+        ? "Some starting spaces have noticeably shorter routes, but they run through the busiest parts of the course; the longer routes are quieter. Overall the starts are balanced."
+        : `Some starting spaces have noticeably shorter routes, but those routes cost more along the way (${ownCost}). Overall the starts are balanced.`
+    ));
   }
 
   // STARTING SPACES: ordinary in-range fairness is silent. Only a meaningful
