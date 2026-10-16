@@ -347,25 +347,25 @@ export function updateSetupSummary(scenario) {
     ? ` ${checkpointPlacementAdvisory.bannerText}`
     : "";
   const sandwichedMissingSideCount = courseNoteFacts.boardUse.sandwichedMissingSideCount;
-  const limitedFootprintBoardCount = Number(
-    courseNoteFacts.boardUse.limitedFootprintCount ??
-    (
-      (courseNoteFacts.boardUse.zeroRouteInfluenceCount ?? 0) +
-      (courseNoteFacts.boardUse.weakTraversedCount ?? 0)
-    )
-  ) || 0;
-  const weakBoardCount = limitedFootprintBoardCount + sandwichedMissingSideCount;
+  const lightlyUsedBoardCount = Number(courseNoteFacts.boardUse.weakTraversedCount) || 0;
+  const notEnteredBoardCount = Number(courseNoteFacts.boardUse.zeroRouteInfluenceCount) || 0;
+  const weakBoardCount = lightlyUsedBoardCount + notEnteredBoardCount + sandwichedMissingSideCount;
   const sandwichedUseSentence = sandwichedMissingSideCount > 0
     ? ` ${sandwichedMissingSideCount === 1
       ? "One side of the Sandwiched Dock uses only a small part of its board area. It is kept to preserve the intended sandwich."
       : "The Sandwiched Dock sides use only a small part of their board area. They are kept to preserve the intended sandwich."}`
     : "";
-  const limitedFootprintSentence = limitedFootprintBoardCount > 0
-    ? ` ${limitedFootprintBoardCount === 1
+  const notEnteredSentence = notEnteredBoardCount > 0
+    ? ` ${notEnteredBoardCount === 1
+      ? "One board is not driven across but still affects the routes beside it."
+      : "Some boards are not driven across but still affect the routes beside them."}`
+    : "";
+  const limitedFootprintSentence = lightlyUsedBoardCount > 0
+    ? ` ${lightlyUsedBoardCount === 1
       ? "One board sees only a small part of its area used by the race."
       : "Some boards see only a small part of their area used by the race."}`
     : "";
-  const boardUseSentence = `${sandwichedUseSentence}${limitedFootprintSentence}`;
+  const boardUseSentence = `${sandwichedUseSentence}${notEnteredSentence}${limitedFootprintSentence}`;
   const extraDocksRequestMismatch = courseNoteFacts.extraDocksRequestMismatch;
   const competitiveSoftMismatch = courseNoteFacts.competitiveSoftMismatch;
   const competitiveMismatchSentence = competitiveSoftMismatch

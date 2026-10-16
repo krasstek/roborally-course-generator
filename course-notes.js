@@ -150,6 +150,9 @@ export function buildCourseNoteFacts(scenario) {
   const sandwichedMissingBoardIndices = new Set(
     metrics.sandwichedDockUse?.missingSideBoardIndices ?? []
   );
+  // Boards no route enters. The final evaluation drops a board whose removal
+  // leaves the course unchanged, so one that remains affects the routes beside
+  // it (or carries the only dock).
   const zeroRouteInfluenceCount = scenario?.sandwichedDock
     ? 0
     : boardUseBoards.filter((board) => (
@@ -564,20 +567,29 @@ export function buildCourseNoteConcepts(evidence) {
     ));
   }
 
-  const limitedFootprintCount = Number(evidence.boardUse?.limitedFootprintCount) || 0;
-  const zeroRouteInfluenceCount = Number(evidence.boardUse?.zeroRouteInfluenceCount) || 0;
-  if (limitedFootprintCount > 0) {
+  // BOARD FOOTPRINT: a board the routes cross only a little, and a board no
+  // route enters but that still affects the routes beside it, are different
+  // situations and get different wording (one note, so they share one slot).
+  const lightlyUsedCount = Number(evidence.boardUse?.weakTraversedCount) || 0;
+  const notEnteredCount = Number(evidence.boardUse?.zeroRouteInfluenceCount) || 0;
+  if (lightlyUsedCount > 0 || notEnteredCount > 0) {
+    const parts = [];
+    if (notEnteredCount > 0) {
+      parts.push(notEnteredCount === 1
+        ? "Robots are not expected to drive across one board, but it still affects the race beside it: its edges, hazards and walls matter when a robot is pushed off line."
+        : "Robots are not expected to drive across some boards, but they still affect the race beside them: their edges, hazards and walls matter when a robot is pushed off line.");
+    }
+    if (lightlyUsedCount > 0) {
+      parts.push(lightlyUsedCount === 1
+        ? "One board is used only as a narrow corridor or edge section."
+        : "Several boards are used only as narrow corridors or edge sections.");
+    }
+    parts.push("That is intentional; keep the full layout.");
     concepts.push(concept(
       "limited-board-footprint",
-      4.6 + Math.min(0.4, Math.max(0, limitedFootprintCount - 1) * 0.15),
+      (notEnteredCount > 0 ? 5 : 4.6) + Math.min(0.4, Math.max(0, lightlyUsedCount + notEnteredCount - 1) * 0.15),
       "Board Footprint",
-      limitedFootprintCount === 1
-        ? (
-          zeroRouteInfluenceCount > 0
-            ? "One board has little direct race footprint. It is still part of the generated setup; the course simply uses a narrow part of the available table space."
-            : "One board is used mainly as a narrow corridor or edge section. That is intentional; the race does not need to fill every part of every board."
-        )
-        : "Several boards are used mainly as narrow corridors or edge sections. That is intentional; the race does not need to fill every part of every board."
+      parts.join(" ")
     ));
   }
 
