@@ -714,7 +714,7 @@ export function buildCourseNoteConcepts(evidence) {
     const energy = evidence.energy;
     const dominant = [
       { label: "Battery spaces", value: energy.averageBatteryReward },
-      { label: "Power Up spaces", value: energy.averagePowerUpReward },
+      { label: "Energy gain spaces", value: energy.averagePowerUpReward },
       { label: "Chop Shops", value: energy.averageChopShopReward }
     ].sort((a, b) => b.value - a.value)[0];
     const text = dominant?.value >= 2

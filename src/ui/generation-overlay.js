@@ -104,10 +104,10 @@ export function getGenerationSlowHint(key, stageContext = null) {
     return "The starting choices are taking a little longer to balance.";
   }
   if (stageContext?.recoveryRule === "home_reboot" && key === "routes") {
-    return "Rebooting at each robot's own start gives this layout more recovery routes to check.";
+    return "Rebooting at home dock gives this layout more recovery routes to check.";
   }
   if (stageContext?.recoveryRule === "dynamic_archiving" && key === "routes") {
-    return "Flexible reboot choices give this layout a little more to check.";
+    return "Dynamic archiving choices give this layout a little more to check.";
   }
   if (stageContext?.sandwichedDock && (key === "routes" || key === "balance")) {
     return "Multiple starting areas give this layout more opening choices to compare.";

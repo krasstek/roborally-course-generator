@@ -35,7 +35,7 @@ const GENERATION_TIME_FACTORS = Object.freeze({
   extraDocks: { factor: 2.4, cause: "Extra Docks", waiting: "Extra docks give many opening choices to compare; this usually takes longer." },
   subsidizedStarts: { factor: 2.2, cause: "Subsidized Starts", waiting: "Priced starting spaces take longer to balance." },
   payToWin: { factor: 2.1, cause: "Pay to Win", waiting: "Priced starting spaces take longer to balance." },
-  homeReboot: { factor: 1.9, cause: "Home Reboot", waiting: "Home Reboot gives each robot its own recovery routes; this usually takes longer." },
+  homeReboot: { factor: 1.9, cause: "Home Reboot", waiting: "Home Reboot usually takes longer to evaluate." },
   competitiveMode: { factor: 1.55, cause: "Competitive Mode", waiting: null },
   balanced: { factor: 1.5, cause: "the Careful mode", waiting: "This mode usually takes a little longer." },
   long: { factor: 1.5, cause: "a Long length", waiting: "Long courses use more boards and can take longer to check." },
