@@ -50,6 +50,7 @@ export const CONSTRUCTION_GUIDANCE_STAGE_POLICIES = Object.freeze({
 
 export const CONSTRUCTION_GUIDANCE_MODE_POLICIES = Object.freeze({
   fastest: Object.freeze({
+    slowVariantPenalty: 1,
     calibrationStrength: 1.5,
     routeWorkPressure: 0.9,
     routeWorkTailRiskPressure: 0.80,
@@ -59,6 +60,7 @@ export const CONSTRUCTION_GUIDANCE_MODE_POLICIES = Object.freeze({
     grossMismatchExplorationRate: 0.08
   }),
   fast: Object.freeze({
+    slowVariantPenalty: 0.5,
     calibrationStrength: 1.32,
     routeWorkPressure: 0.72,
     routeWorkTailRiskPressure: 0.62,
@@ -68,6 +70,7 @@ export const CONSTRUCTION_GUIDANCE_MODE_POLICIES = Object.freeze({
     grossMismatchExplorationRate: 0.12
   }),
   standard: Object.freeze({
+    slowVariantPenalty: 0,
     calibrationStrength: 1.12,
     routeWorkPressure: 0.48,
     routeWorkTailRiskPressure: 0.38,
@@ -77,6 +80,7 @@ export const CONSTRUCTION_GUIDANCE_MODE_POLICIES = Object.freeze({
     grossMismatchExplorationRate: 0.2
   }),
   balanced: Object.freeze({
+    slowVariantPenalty: 0,
     calibrationStrength: 0.92,
     routeWorkPressure: 0.24,
     routeWorkTailRiskPressure: 0.18,
@@ -86,6 +90,7 @@ export const CONSTRUCTION_GUIDANCE_MODE_POLICIES = Object.freeze({
     grossMismatchExplorationRate: 0.35
   }),
   thorough: Object.freeze({
+    slowVariantPenalty: 0,
     calibrationStrength: 0.72,
     routeWorkPressure: 0.08,
     routeWorkTailRiskPressure: 0.06,
@@ -95,6 +100,28 @@ export const CONSTRUCTION_GUIDANCE_MODE_POLICIES = Object.freeze({
     grossMismatchExplorationRate: 0.55
   })
 });
+
+// How much each variant multiplies generation time, from the 2026-10-15
+// calibration run (also shown as the expected-time hint). Fast and Fastest draw an
+// allowed slow variant less often: its chance is divided by factor^slowVariantPenalty.
+// Forced variants and variants that speed generation up are left alone.
+export const VARIANT_GENERATION_TIME_FACTORS = Object.freeze({
+  extraDocks: 2.4,
+  subsidizedStarts: 2.2,
+  payToWin: 2.1,
+  homeReboot: 1.9,
+  competitiveMode: 1.55,
+  sandwichedDock: 1.4,
+  movingTargets: 1.4,
+  factoryRejects: 1.35,
+  virtualBots: 0.35
+});
+
+export function getSlowVariantChanceMultiplier(preferences = {}, variantId) {
+  const factor = VARIANT_GENERATION_TIME_FACTORS[variantId] ?? 1;
+  const penalty = getConstructionGuidanceModePolicy(preferences).slowVariantPenalty ?? 0;
+  return factor > 1 && penalty > 0 ? Math.pow(factor, -penalty) : 1;
+}
 
 // Each missed course multiplies the exploration tail by this (and divides the
 // target exponent by it, up to 2.5x the mode's base).
@@ -129,7 +156,8 @@ export function getConstructionGuidanceModePolicy(preferences = {}) {
       // from which to choose the smallest board bounding box.
       boardProposalCount: normalizeBoardSpread(preferences.boardSpread) === BOARD_SPREAD_MODES.tight ? 6 : 1,
       checkpointProposalCount: 1,
-      grossMismatchExplorationRate: 1
+      grossMismatchExplorationRate: 1,
+      slowVariantPenalty: 0
     };
   }
 

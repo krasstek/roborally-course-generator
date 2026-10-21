@@ -4,7 +4,7 @@ import {
   buildCourseNotesHtml,
   clearCourseNotesCache
 } from "../../course-notes.js";
-import { normalizeGenerationMode } from "../generation/generation-modes.js";
+import { normalizeGenerationMode, VARIANT_GENERATION_TIME_FACTORS as VARIANT_FACTORS } from "../generation/generation-modes.js";
 import {
   formatPresentedDifficultyLabel,
   formatPresentedLengthLabel,
@@ -32,21 +32,21 @@ export let courseExplanationState = {
 const GENERATION_TIME_FACTORS = Object.freeze({
   epic: { factor: 2.5, cause: "an Epic length", waiting: "Epic courses use more boards and can take substantially longer to check." },
   thorough: { factor: 2.5, cause: "the Thorough mode", waiting: "This mode usually takes a little longer." },
-  extraDocks: { factor: 2.4, cause: "Extra Docks", waiting: "Extra docks give many opening choices to compare; this usually takes longer." },
-  subsidizedStarts: { factor: 2.2, cause: "Subsidized Starts", waiting: "Priced starting spaces take longer to balance." },
-  payToWin: { factor: 2.1, cause: "Pay to Win", waiting: "Priced starting spaces take longer to balance." },
-  homeReboot: { factor: 1.9, cause: "Home Reboot", waiting: "Home Reboot usually takes longer to evaluate." },
-  competitiveMode: { factor: 1.55, cause: "Competitive Mode", waiting: null },
+  extraDocks: { factor: VARIANT_FACTORS.extraDocks, cause: "Extra Docks", waiting: "Extra docks give many opening choices to compare; this usually takes longer." },
+  subsidizedStarts: { factor: VARIANT_FACTORS.subsidizedStarts, cause: "Subsidized Starts", waiting: "Priced starting spaces take longer to balance." },
+  payToWin: { factor: VARIANT_FACTORS.payToWin, cause: "Pay to Win", waiting: "Priced starting spaces take longer to balance." },
+  homeReboot: { factor: VARIANT_FACTORS.homeReboot, cause: "Home Reboot", waiting: "Home Reboot usually takes longer to evaluate." },
+  competitiveMode: { factor: VARIANT_FACTORS.competitiveMode, cause: "Competitive Mode", waiting: null },
   balanced: { factor: 1.5, cause: "the Careful mode", waiting: "This mode usually takes a little longer." },
   long: { factor: 1.5, cause: "a Long length", waiting: "Long courses use more boards and can take longer to check." },
-  sandwichedDock: { factor: 1.4, cause: "Sandwiched Dock", waiting: null },
-  movingTargets: { factor: 1.4, cause: "Moving Targets", waiting: null },
-  factoryRejects: { factor: 1.35, cause: "Factory Rejects", waiting: null },
+  sandwichedDock: { factor: VARIANT_FACTORS.sandwichedDock, cause: "Sandwiched Dock", waiting: null },
+  movingTargets: { factor: VARIANT_FACTORS.movingTargets, cause: "Moving Targets", waiting: null },
+  factoryRejects: { factor: VARIANT_FACTORS.factoryRejects, cause: "Factory Rejects", waiting: null },
   manyPlayers: { factor: 1.2, cause: "7 or 8 players", waiting: "With 7 or 8 players, finding a fair course can take a few tries." },
   short: { factor: 0.8, cause: "a Short length", waiting: null },
   fast: { factor: 0.7, cause: "the Fast mode", waiting: "This mode is usually quicker." },
   fastest: { factor: 0.5, cause: "the Fastest mode", waiting: "This mode is usually quicker." },
-  virtualBots: { factor: 0.35, cause: "Virtual Bots", waiting: "Virtual robots make this setup quicker to check." }
+  virtualBots: { factor: VARIANT_FACTORS.virtualBots, cause: "Virtual Bots", waiting: "Virtual robots make this setup quicker to check." }
 });
 
 const TIME_FACTOR_VARIANT_IDS = [
