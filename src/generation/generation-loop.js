@@ -47,7 +47,7 @@ import {
 } from "./generation-modes.js";
 import { evaluateFinishedCourse, evaluateTrimmedFinishedCourse } from "./persistence.js";
 import { resolveAnyPreferencesForGeneration } from "./preferences.js";
-import { getProductionLengthThresholds } from "./targets.js";
+import { getDifficultyThresholds, getProductionLengthThresholds } from "./targets.js";
 import { withGenerationRandomSeed } from "./random.js";
 import {
   GENERATION_ROUTE_PROGRESS_DISPLAY_INTERVAL_MS,
@@ -260,11 +260,13 @@ export async function generateScenarioForPreferences(assets, preferences, option
     return evaluated;
   }
 
-  // A finished course that came out too long often fits with its last checkpoint
-  // removed: in the 2026-10-21 trim test about a third of them became acceptable
-  // (ROADMAP.md, Later / ideas). The shorter course is evaluated from scratch and
-  // replaces the original only when it is acceptable; the original stays the
-  // fallback otherwise. At least two checkpoints remain.
+  // A finished course that missed only by being too long often fits with its
+  // last checkpoint removed: in the 2026-10-21 trim test about half of them became
+  // acceptable, against about one in six when difficulty was off as well, which
+  // does not repay the extra evaluation (ROADMAP.md, Later / ideas). The shorter
+  // course is evaluated from scratch and replaces the original only when it is
+  // acceptable; the original stays the fallback otherwise. At least two
+  // checkpoints remain.
   async function evaluateTrimmedCandidate(evaluated, onStart = null) {
     if (
       !evaluated ||
@@ -278,7 +280,12 @@ export async function generateScenarioForPreferences(assets, preferences, option
     const lengthBand = getProductionLengthThresholds()[preferences.length];
     const length = Number(evaluated.metrics?.lengthWallClockTurnIndex);
     const playableCheckpoints = (evaluated.checkpoints?.length ?? 0) - (evaluated.virtualBots ? 1 : 0);
-    if (!lengthBand || !(length >= lengthBand[1]) || playableCheckpoints < 3) return null;
+    const difficultyBand = preferences.targetGuidanceOnlyDifficulty
+      ? null
+      : getDifficultyThresholds()[preferences.difficulty];
+    const difficulty = Number(evaluated.metrics?.difficultyTurnRE);
+    const difficultyInBand = !difficultyBand || (difficulty >= difficultyBand[0] && difficulty < difficultyBand[1]);
+    if (!lengthBand || !(length >= lengthBand[1]) || !difficultyInBand || playableCheckpoints < 3) return null;
 
     onStart?.();
     const startedAt = generationNow();
