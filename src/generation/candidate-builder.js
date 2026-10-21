@@ -188,6 +188,23 @@ export function getFlagRetryBudget(preferences = {}, remainingEvaluations = 1) {
   return Math.max(1, Math.min(remainingEvaluations, retries));
 }
 
+// The checkpoint count to try next when every proposal at the planned count is
+// predicted to miss only the length band, all in the same direction; otherwise
+// null. Stays within the counts calibration sampled.
+export function getAlternateFlagCount(proposals = [], flagCount, options = {}) {
+  if (!proposals.length || options.calibrationHarness) return null;
+  const directions = new Set();
+  for (const proposal of proposals) {
+    const mismatches = proposal.mismatch?.abort ? proposal.mismatch.mismatches ?? [] : [];
+    if (!mismatches.length || mismatches.some((entry) => entry.metric !== "length")) return null;
+    mismatches.forEach((entry) => directions.add(entry.direction));
+  }
+  if (directions.size !== 1) return null;
+  const alternate = directions.has("high") ? flagCount - 1 : flagCount + 1;
+  const domain = options.flagCounts?.length ? options.flagCounts : [2, 3, 4, 5, 6];
+  return domain.includes(alternate) && alternate <= (options.maxFlags ?? Infinity) ? alternate : null;
+}
+
 export function getFlagRetryStallLimit(preferences = {}) {
   const limitsByMode = {
     fastest: 2,
@@ -726,10 +743,10 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
     const checkpointProposals = [];
     const seenCheckpointProposalKeys = new Set();
 
-    for (let proposalIndex = 0; proposalIndex < checkpointProposalCount; proposalIndex += 1) {
-      if (checkpointProposalCount > 1) {
+    const drawCheckpointProposal = async (proposalFlagCount, proposalIndex, proposalTotal) => {
+      if (proposalTotal > 1) {
         await reportStage(
-          `Choosing checkpoints — checkpoint try ${retry + 1} / ${retryBudget}; proposal ${proposalIndex + 1} / ${checkpointProposalCount}`,
+          `Choosing checkpoints — checkpoint try ${retry + 1} / ${retryBudget}; proposal ${proposalIndex + 1} / ${proposalTotal}`,
           evaluationsUsed
         );
       }
@@ -743,7 +760,7 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
         )
         : null;
       if (virtualBots && !virtualEntryCandidate) {
-        continue;
+        return;
       }
 
       const checkpointCandidatePool = virtualEntryCandidate
@@ -755,7 +772,7 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
       const pickedCheckpoints = typeof shouldStopDuringAnalysis === "function"
         ? await pickFlagsCooperative(
           checkpointCandidatePool,
-          flagCount,
+          proposalFlagCount,
           boardLayout.placements,
           courseDockPlacements,
           pieceMap,
@@ -770,19 +787,19 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
         )
         : pickFlags(
           checkpointCandidatePool,
-          flagCount,
+          proposalFlagCount,
           boardLayout.placements,
           courseDockPlacements,
           pieceMap,
           virtualBots ? [virtualEntryCandidate] : setupStarts,
           checkpointPreferences
         );
-      if (!pickedCheckpoints) continue;
+      if (!pickedCheckpoints) return;
 
       const virtualEntryFacing = virtualEntryCandidate && !startupSpinUp
         ? pickVirtualBotEntryFacing(tileMap, virtualEntryCandidate)
         : null;
-      if (virtualBots && !startupSpinUp && !virtualEntryFacing) continue;
+      if (virtualBots && !startupSpinUp && !virtualEntryFacing) return;
       const flagZero = virtualBots
         ? {
           ...virtualEntryCandidate,
@@ -833,7 +850,7 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
       const key = checkpoints
         .map((checkpoint) => `${checkpoint.x},${checkpoint.y},${checkpoint.facing ?? ""}`)
         .join("|");
-      if (seenCheckpointProposalKeys.has(key)) continue;
+      if (seenCheckpointProposalKeys.has(key)) return;
       seenCheckpointProposalKeys.add(key);
       const spacingExpectation = getCheckpointSpacingExpectationProfile(
         playableCheckpoints,
@@ -847,8 +864,31 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
         activeStarts,
         prediction,
         mismatch,
-        spacingExpectation
+        spacingExpectation,
+        flagCount: proposalFlagCount
       });
+    };
+    for (let proposalIndex = 0; proposalIndex < checkpointProposalCount; proposalIndex += 1) {
+      await drawCheckpointProposal(flagCount, proposalIndex, checkpointProposalCount);
+    }
+    // When every proposal at the planned checkpoint count is predicted to miss the
+    // length band the same way, the board layout may still fit with one checkpoint
+    // fewer (too long) or one more (too short). Drawing those costs no routing, and
+    // it is cheaper than abandoning the layout. Proposals that already fit are
+    // never displaced, so routing-cost ranking cannot drift courses shorter.
+    const alternateFlagCount = getAlternateFlagCount(checkpointProposals, flagCount, {
+      calibrationHarness: isCalibrationHarnessGeneration(generationPreferences),
+      flagCounts: assets.constructionGuidance?.domain?.flagCounts,
+      maxFlags: flagCandidates.length
+    });
+    if (alternateFlagCount) {
+      await reportStage(
+        `Choosing checkpoints — ${flagCount} checkpoints predicted too ${alternateFlagCount < flagCount ? "long" : "short"}; trying ${alternateFlagCount}`,
+        evaluationsUsed
+      );
+      for (let proposalIndex = 0; proposalIndex < checkpointProposalCount; proposalIndex += 1) {
+        await drawCheckpointProposal(alternateFlagCount, proposalIndex, checkpointProposalCount);
+      }
     }
 
     if (!checkpointProposals.length) {
@@ -945,6 +985,7 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
     }
 
     const flagZero = selectedCheckpointProposal.flagZero;
+    const courseFlagCount = selectedCheckpointProposal.flagCount;
     const checkpoints = selectedCheckpointProposal.checkpoints;
     const playableCheckpoints = selectedCheckpointProposal.playableCheckpoints;
 
@@ -985,7 +1026,7 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
       ...effectiveVariantBundle,
       actFast,
       actFastMode,
-      flagCount,
+      flagCount: courseFlagCount,
       recoveryRule,
       classicSharedDeck,
       movingTargets
@@ -1201,7 +1242,7 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
               ...effectiveVariantBundle,
               actFast,
               actFastMode,
-              flagCount,
+              flagCount: courseFlagCount,
               classicSharedDeck,
               movingTargets
             },
@@ -1724,7 +1765,7 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
           ...generationPreferences,
           actFast,
           actFastMode,
-          flagCount,
+          flagCount: courseFlagCount,
           recoveryRule,
           classicSharedDeck,
           criticalSpam,
@@ -2115,7 +2156,7 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
       ...effectiveVariantBundle,
       actFast,
       actFastMode,
-      flagCount,
+      flagCount: courseFlagCount,
       recoveryRule,
       classicSharedDeck,
       movingTargets
@@ -2275,7 +2316,7 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
       boardCount: scenarioBoardPlacements.length,
       constructionFingerprint: currentConstructionFingerprint,
       boardRects: scenarioBoardRects,
-      constructionGuidancePrior,
+      constructionGuidancePrior: courseFlagCount === flagCount ? constructionGuidancePrior : null,
       constructionGuidanceStages: {
         boardsKnown: boardsKnownGuidance,
         checkpointsKnown: checkpointsKnownGuidance
@@ -2302,7 +2343,7 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
           pieceMap
         ),
         factoryRejects,
-        flagCount,
+        flagCount: courseFlagCount,
         virtualBots,
         // Run-local construction feedback; not part of the saved course.
         generationGuidanceFeedback: undefined,
