@@ -13,6 +13,7 @@ import { cachedAssets } from "./assets.js";
 import { countFeatureTypeInTileMap } from "./board-profile.js";
 import { MAX_DOCK_COUNT } from "./config.js";
 import { getConstructionGuidanceVariantTilts } from "./construction-guidance.js";
+import { getSlowVariantChanceMultiplier } from "./generation-modes.js";
 import { clamp } from "../shared/math.js";
 import { getMovingCheckpointTrace } from "./moving-targets.js";
 import {
@@ -408,7 +409,8 @@ export function chooseVariantBundle(preferences = {}, options = {}) {
   const allowedCandidates = collectionAvailableEntries
     .filter((entry) => getVariantPreferenceState(normalizedPreferences, entry.id) === "allowed");
   // Calibrated tilt toward the requested bands, judged with the Must variants
-  // already in place; it grows with the misses of this Generate run.
+  // already in place; it grows with the misses of this Generate run. Fast and
+  // Fastest also lean away from allowed variants that are slow to generate.
   const tilts = getConstructionGuidanceVariantTilts(
     options.calibration ?? cachedAssets?.constructionGuidance ?? null,
     { ...normalizedPreferences, ...buildVariantBundle(active) },
@@ -417,7 +419,13 @@ export function chooseVariantBundle(preferences = {}, options = {}) {
   );
   const allowedEntries = allowedCandidates.map((entry) => ({
     ...entry,
-    chance: clamp(getVariantBaseChance(entry.id) * (tilts?.[entry.id] ?? 1), 0, 0.95)
+    chance: clamp(
+      getVariantBaseChance(entry.id) *
+        (tilts?.[entry.id] ?? 1) *
+        getSlowVariantChanceMultiplier(normalizedPreferences, entry.id),
+      0,
+      0.95
+    )
   }));
   const orderedEntries = weightedOrder(
     allowedEntries,
