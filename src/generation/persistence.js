@@ -1398,26 +1398,33 @@ export function removeBoardsFromSnapshot(snapshot, boardIndices, pieceMap) {
   };
 }
 
-export async function evaluateFinishedCourse(assets, candidate, preferences, control = {}) {
+// The snapshot generation's final evaluation rehydrates. Mirrors what the final
+// save records for "Any" targets (see runProductionGeneration): the concrete
+// target stays in effectiveTargetPreferences, the saved preference remains "any".
+function buildFinalEvaluationSnapshot(candidate, preferences) {
   const snapshot = JSON.parse(JSON.stringify(serializeScenario(candidate)));
-  // Mirror what the final save records for "Any" targets (see
-  // runProductionGeneration): the concrete target stays in
-  // effectiveTargetPreferences, the saved preference remains "any".
+  snapshot.effectiveTargetPreferences = {
+    difficulty: preferences.difficulty,
+    length: preferences.length
+  };
+  snapshot.preferences = {
+    ...snapshot.preferences,
+    difficulty: preferences.targetGuidanceOnlyDifficulty ? "any" : preferences.difficulty,
+    length: preferences.targetGuidanceOnlyLength ? "any" : preferences.length
+  };
+  return snapshot;
+}
+
+async function evaluateFinalSnapshot(assets, snapshot, candidate, preferences, routedFirstLeg, control = {}) {
   const concreteTarget = {
     difficulty: preferences.difficulty,
     length: preferences.length
   };
-  snapshot.effectiveTargetPreferences = concreteTarget;
-  snapshot.preferences = {
-    ...snapshot.preferences,
-    difficulty: preferences.targetGuidanceOnlyDifficulty ? "any" : concreteTarget.difficulty,
-    length: preferences.targetGuidanceOnlyLength ? "any" : concreteTarget.length
-  };
-  const evaluate = async (courseSnapshot, routedFirstLeg) => {
+  const evaluate = async (courseSnapshot, courseRoutedFirstLeg) => {
     const evaluated = await hydrateScenarioFromSnapshot(assets, courseSnapshot, {
       ...control,
       keepAnalysisCaches: true,
-      routedFirstLeg
+      routedFirstLeg: courseRoutedFirstLeg
     });
     if (!evaluated || evaluated.hydrationPresentationFallback || evaluated.hydrationPresentationUnavailable) {
       return null;
@@ -1429,7 +1436,7 @@ export async function evaluateFinishedCourse(assets, candidate, preferences, con
     evaluated.attempts = candidate.attempts;
     return evaluated;
   };
-  const evaluated = await evaluate(snapshot, candidate.sequence?.firstLeg ?? null);
+  const evaluated = await evaluate(snapshot, routedFirstLeg);
   if (!evaluated) return null;
 
   // A board the course does not use at all is dropped silently. The reduced
@@ -1450,4 +1457,31 @@ export async function evaluateFinishedCourse(assets, candidate, preferences, con
   );
   if (comparison.materialDifference) return evaluated;
   return reduced;
+}
+
+export async function evaluateFinishedCourse(assets, candidate, preferences, control = {}) {
+  return evaluateFinalSnapshot(
+    assets,
+    buildFinalEvaluationSnapshot(candidate, preferences),
+    candidate,
+    preferences,
+    candidate.sequence?.firstLeg ?? null,
+    control
+  );
+}
+
+// The same course without its last checkpoint, evaluated from scratch: routes,
+// start balance and start prices are rebuilt for the shorter course. Used to
+// rescue a finished course that came out too long (see generation-loop.js).
+export async function evaluateTrimmedFinishedCourse(assets, evaluated, preferences, control = {}) {
+  const snapshot = buildFinalEvaluationSnapshot(evaluated, preferences);
+  snapshot.checkpoints = snapshot.checkpoints.slice(0, -1);
+  snapshot.constructionFingerprint = null;
+  snapshot.startDisposition = null;
+  snapshot.normalStartBalance = null;
+  snapshot.startPricing = null;
+  snapshot.payToWinPricing = null;
+  snapshot.presentationMetrics = null;
+  snapshot.courseNotesHtml = null;
+  return evaluateFinalSnapshot(assets, snapshot, evaluated, preferences, null, control);
 }
