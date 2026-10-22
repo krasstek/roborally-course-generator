@@ -808,6 +808,15 @@ export function movementDir(facing, relative) {
     return rotateFacing(facing ?? "E", "uturn");
   }
 
+  // Drift (Drift Deck): sideways, facing unchanged.
+  if (relative === "left") {
+    return rotateFacing(facing ?? "E", "ccw");
+  }
+
+  if (relative === "right") {
+    return rotateFacing(facing ?? "E", "cw");
+  }
+
   return facing ?? "E";
 }
 
@@ -1174,7 +1183,13 @@ export function resolveTeleporterMove(tileMap, state, action, options = {}) {
     return null;
   }
 
-  const signedDistance = getSignedMoveDistance(action) + (teleporter.power ?? 2);
+  // A drift starting on a teleporter teleports sideways, in the drift's
+  // direction, by the drift plus the teleporter's power (assumption: the rules
+  // only describe forward and back moves).
+  const sideways = action.relative === "left" || action.relative === "right";
+  const signedDistance = sideways
+    ? Math.max(1, action.steps ?? 1) + (teleporter.power ?? 2)
+    : getSignedMoveDistance(action) + (teleporter.power ?? 2);
   if (signedDistance === 0) {
     return {
       state: cloneState(state),
@@ -1190,9 +1205,11 @@ export function resolveTeleporterMove(tileMap, state, action, options = {}) {
     };
   }
 
-  const dir = signedDistance > 0
-    ? movementDir(state.facing, "forward")
-    : movementDir(state.facing, "back");
+  const dir = sideways
+    ? movementDir(state.facing, action.relative)
+    : signedDistance > 0
+      ? movementDir(state.facing, "forward")
+      : movementDir(state.facing, "back");
   const steps = Math.abs(signedDistance);
   // Teleporter movement is a jump: no walls, pits, trapdoors, flamers, or other
   // board elements on the skipped squares are traversed or resolved.

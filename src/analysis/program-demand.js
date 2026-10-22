@@ -1,8 +1,8 @@
 // Robo Rally Course Randomizer - estimated programming-card demand of routes and numeric state codes for contextual search
 import {
   AGAIN_CARD_COUNT,
-  PROGRAM_CARD_COUNTS,
   PROGRAM_CARD_IDS,
+  PROGRAM_CARD_MAX_COUNTS,
   REGISTER_COUNT
 } from "./constants.js";
 import {
@@ -12,8 +12,10 @@ import {
   PROGRAM_CHEAP_RESOURCE_IDS,
   getCheapProgramLiteralAvailabilityDelta,
   getCompactProgramResourceCount,
+  getProgramCardCount,
   getProgramCardEffectivePreviousCounts,
-  getProgramCardModelProfile
+  getProgramCardModelProfile,
+  getProgramDeck
 } from "./program-availability.js";
 import { getRebootEndedAbsoluteActions } from "./reboot-recovery.js";
 
@@ -34,13 +36,32 @@ export const APPROX_PROGRAM_DEMAND_SPACE = Math.pow(
 export const APPROX_PROGRAM_DEMAND_INDEX = new Map(
   PROGRAM_CARD_IDS.map((id, index) => [id, index])
 );
+
+// The demand-code space a deck actually uses: cards are laid out in
+// PROGRAM_CARD_IDS order (standard deck first), so the standard deck's codes
+// stay below 6^8 and its numeric memo keys stay safe integers.
+const APPROX_PROGRAM_DEMAND_SPACE_BY_DECK = new Map();
+export function getApproxProgramDemandSpace(options = {}) {
+  const deck = getProgramDeck(options);
+  let space = APPROX_PROGRAM_DEMAND_SPACE_BY_DECK.get(deck.id);
+  if (space === undefined) {
+    const lastIndex = Math.max(...PROGRAM_CARD_IDS
+      .map((id, index) => ((deck.counts.get(id) || 0) > 0 ? index : -1)));
+    space = Math.pow(APPROX_PROGRAM_DEMAND_RADIX, lastIndex + 1);
+    APPROX_PROGRAM_DEMAND_SPACE_BY_DECK.set(deck.id, space);
+  }
+  return space;
+}
+// Cards with at most two copies in every deck are tracked exactly across the
+// two-turn window. Limits are the largest count any deck has; a card a deck
+// lacks is never offered (getApproxProgramDemandOptions checks the deck).
 export const APPROX_ROLLING_HARD_IDS = Object.freeze([
-  ...PROGRAM_CARD_IDS.filter((id) => (PROGRAM_CARD_COUNTS.get(id) || 0) <= 2),
+  ...PROGRAM_CARD_IDS.filter((id) => (PROGRAM_CARD_MAX_COUNTS.get(id) || 0) <= 2),
   "AGAIN"
 ]);
 export const APPROX_ROLLING_HARD_LIMITS = Object.freeze(
   APPROX_ROLLING_HARD_IDS.map((id) => (
-    id === "AGAIN" ? AGAIN_CARD_COUNT : (PROGRAM_CARD_COUNTS.get(id) || 0)
+    id === "AGAIN" ? AGAIN_CARD_COUNT : (PROGRAM_CARD_MAX_COUNTS.get(id) || 0)
   ))
 );
 export const APPROX_ROLLING_HARD_RADICES = Object.freeze(
@@ -386,7 +407,7 @@ export function getApproxProgramDemandOptions(
   actionId,
   options = {}
 ) {
-  const copies = PROGRAM_CARD_COUNTS.get(actionId) || 0;
+  const copies = getProgramCardCount(actionId, options);
   if (copies <= 0) return [];
   const currentUses = getApproxProgramDemandCount(demandCode, actionId);
   const nextDemandCode = addApproxProgramDemandUse(demandCode, actionId);
@@ -397,7 +418,7 @@ export function getApproxProgramDemandOptions(
   const currentCounts = getApproxProgramDemandCounts(demandCode, currentAgain);
   const optionsOut = [];
 
-  if (copies <= 2) {
+  if (copies <= 2 && APPROX_ROLLING_HARD_INDEX.has(actionId)) {
     const previousUses = getProgramCardModelProfile(options).previousTurnDepletionActive
       ? getApproxRollingHardCount(previousScarceCode, actionId)
       : 0;

@@ -3,8 +3,6 @@ import { buildPortalMap, cloneState, stateKey } from "./board-geometry.js";
 import { MinHeap } from "./collections.js";
 import {
   ACTIONS,
-  AGAIN_CARD_COUNT,
-  PROGRAM_CARD_COUNTS,
   REGISTER_COUNT,
   REGISTER_TEMPO_COST,
   ROTATION_ORDER,
@@ -50,17 +48,19 @@ import {
   getLiteralProgramResourceSummary,
   getProgramCardModelProfile,
   getProgramCardModelSignature,
+  getProgramDeckActions,
   getProgramHistoryWindow,
+  getProgramResourceFullCount,
   getProgramResourceStateCounts,
   getRollingProgramResourceContext,
   scoreCompactProgramCardSequenceUntilFailure,
   scoreContextualCardSequence
 } from "./program-availability.js";
 import {
-  APPROX_PROGRAM_DEMAND_SPACE,
   closeEstimatedProgramDemandForEndedTurn,
   contextualNumericFallbackId,
   getApproxProgramDemandOptions,
+  getApproxProgramDemandSpace,
   getApproxProgramDemandStateCode,
   getEstimatedProgramDemandStep,
   scoreEstimatedProgramDemand
@@ -947,6 +947,9 @@ export function* enumeratePhysicalTimingLegTemplatesSteps(
   } = estimatedCardMemoStore;
   const estimatedDemandContextSpace =
     4 * COMPACT_PROGRAM_ACTION_RADIX * REGISTER_COUNT * COMPACT_PROGRAM_ACTION_RADIX;
+  // Per deck, so the standard deck's demand keys stay safe integers; a larger
+  // deck falls back to string keys where they would not.
+  const approxProgramDemandSpace = getApproxProgramDemandSpace(options);
 
   const canonicalizeEstimatedForecastFrontier = (frontier) => {
     if (!Array.isArray(frontier) || !frontier.length) return [];
@@ -993,7 +996,7 @@ export function* enumeratePhysicalTimingLegTemplatesSteps(
         previousActionCode) * REGISTER_COUNT + phase) *
         COMPACT_PROGRAM_ACTION_RADIX) + actionCode
     );
-    const pairCode = previousDemand * APPROX_PROGRAM_DEMAND_SPACE + currentDemand;
+    const pairCode = previousDemand * approxProgramDemandSpace + currentDemand;
     const numericKey = pairCode * estimatedDemandContextSpace + contextCode;
     const key = Number.isSafeInteger(numericKey)
       ? numericKey
@@ -1496,7 +1499,7 @@ export function* enumeratePhysicalTimingLegTemplatesSteps(
     }
 
     const currentTarget = getDynamicGoalPosition(dynamicGoal, current.absoluteActions) ?? goal;
-    for (const action of ACTIONS) {
+    for (const action of getProgramDeckActions(options)) {
       profile.actionCandidates += 1;
       if (current.localActions === 0 && forbiddenFirstActions.has(action.id)) {
         continue;
@@ -2516,7 +2519,7 @@ export function enumerateContextualLegRoutes(
         const forcedAction = ACTIONS.find((action) => action.id === forcedId) ?? null;
         return forcedAction ? [forcedAction] : [];
       })()
-      : ACTIONS;
+      : getProgramDeckActions(options);
 
     for (const action of candidateActions) {
       profile.actionCandidates += 1;
@@ -4094,9 +4097,7 @@ export function summarizeRouteAgainUsage(route, options = {}) {
         }
       });
       for (const resourceId of COMPACT_PROGRAM_RESOURCE_IDS) {
-        const limit = resourceId === "AGAIN"
-          ? AGAIN_CARD_COUNT
-          : (PROGRAM_CARD_COUNTS.get(resourceId) || 0);
+        const limit = getProgramResourceFullCount(resourceId, options);
         if ((counts.get(resourceId) || 0) > limit) {
           literalProgramViolations += 1;
           break;
@@ -4121,9 +4122,7 @@ export function summarizeRouteAgainUsage(route, options = {}) {
           combined.set(cardId, (combined.get(cardId) || 0) + 1);
         });
         const violation = COMPACT_PROGRAM_RESOURCE_IDS.some((resourceId) => {
-          const limit = resourceId === "AGAIN"
-            ? AGAIN_CARD_COUNT
-            : (PROGRAM_CARD_COUNTS.get(resourceId) || 0);
+          const limit = getProgramResourceFullCount(resourceId, options);
           return (combined.get(resourceId) || 0) > limit;
         });
         if (violation) rollingWindowViolations += 1;
