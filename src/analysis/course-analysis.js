@@ -351,6 +351,7 @@ export function analyzeCourse(tileMap, starts, goal, options = {}) {
       upgradeWorld: options.upgradeWorld,
       factoryRejects: Boolean(options.factoryRejects),
       classicSharedDeck: Boolean(options.classicSharedDeck),
+      driftDeck: Boolean(options.driftDeck),
       lessForeshadowing: Boolean(options.lessForeshadowing),
       lessSpammyGame: options.lessSpammyGame,
       criticalSpam: options.criticalSpam,

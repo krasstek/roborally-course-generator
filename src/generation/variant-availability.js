@@ -302,6 +302,12 @@ export function getVariantUnavailabilityReason(variantId, preferences = {}, piec
       : availabilityRule.reason;
   }
 
+  if (availabilityRule.type === "expansionSelected") {
+    return getSelectedExpansionIds(preferences)?.has(availabilityRule.expansionId) === false
+      ? availabilityRule.reason
+      : null;
+  }
+
   if (availabilityRule.type === "featureTypeAvailable") {
     return countFeatureTypeInSelectedSets(availabilityRule.featureType, pieceMap, preferences) > 0
       ? null
@@ -370,6 +376,7 @@ const NEUTRAL_VARIANT_CHANCE = Object.freeze({
   movingTargets: 0.14,
   homeReboot: 0.12,
   lessForeshadowing: 0.16,
+  driftDeck: 0.15,
   staggeredBoards: 0.37,
   virtualBots: 0.13,
   noDocks: 0.15,

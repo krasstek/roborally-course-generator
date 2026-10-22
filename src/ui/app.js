@@ -698,6 +698,10 @@ document.getElementById("expansion-contamination").addEventListener("change", ()
   updateExpansionSummary();
 });
 
+document.getElementById("expansion-transformers").addEventListener("change", () => {
+  updateExpansionSummary();
+});
+
 document.addEventListener("click", (event) => {
   document.querySelectorAll(".variant-picker").forEach((picker) => {
     if (!picker.contains(event.target)) {

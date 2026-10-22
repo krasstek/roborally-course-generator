@@ -621,6 +621,9 @@ export function updateExpansionSummary() {
   if (document.getElementById("expansion-contamination").checked) {
     enabled.push(formatExpansionName("contamination"));
   }
+  if (document.getElementById("expansion-transformers").checked) {
+    enabled.push(formatExpansionName("transformers"));
+  }
 
   summaryEl.textContent = `${enabled.length} selected`;
   summaryEl.title = enabled.length ? enabled.join(", ") : "None";
@@ -728,7 +731,8 @@ export function getPreferencesFromControls() {
       "thrills-and-spills": document.getElementById("expansion-thrills-and-spills").checked,
       "chaos-and-carnage": document.getElementById("expansion-chaos-and-carnage").checked,
       "wet-and-wild": document.getElementById("expansion-wet-and-wild").checked,
-      "contamination": document.getElementById("expansion-contamination").checked
+      "contamination": document.getElementById("expansion-contamination").checked,
+      "transformers": document.getElementById("expansion-transformers").checked
     },
     allowedVariantRules: Object.fromEntries(
       VARIANT_DEFINITIONS.map((variant) => [variant.id, getVariantControlState(variant.id)])
@@ -771,6 +775,7 @@ export function applyPreferencesToControls(preferences) {
   document.getElementById("expansion-chaos-and-carnage").checked = normalizedPreferences.selectedExpansions?.["chaos-and-carnage"] ?? false;
   document.getElementById("expansion-wet-and-wild").checked = normalizedPreferences.selectedExpansions?.["wet-and-wild"] ?? false;
   document.getElementById("expansion-contamination").checked = normalizedPreferences.selectedExpansions?.["contamination"] ?? false;
+  document.getElementById("expansion-transformers").checked = normalizedPreferences.selectedExpansions?.["transformers"] ?? false;
   VARIANT_DEFINITIONS.forEach((variant) => {
     if (variant.id === "actFast") {
       return;

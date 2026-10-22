@@ -50,8 +50,12 @@ export function getConstructionGuidanceInventoryPreset(calibration, preferences 
   const supported = new Set(calibration?.domain?.inventoryPresets ?? []);
   if (!supported.size) return null;
 
-  const selected = [...getSelectedExpansionIds(preferences)].sort();
   const all = getCalibrationExpansionIds(pieceMap);
+  // Sets without boards (Transformers, for its Drift Deck) do not change the
+  // board inventory calibration knows.
+  const selected = [...getSelectedExpansionIds(preferences)]
+    .filter((id) => all.includes(id))
+    .sort();
   const sameIds = (left, right) => (
     left.length === right.length && left.every((value, index) => value === right[index])
   );

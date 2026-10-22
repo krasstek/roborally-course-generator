@@ -166,6 +166,7 @@ export function getTilePenalty(
       upgradeWorld: options.upgradeWorld,
       factoryRejects: Boolean(options.factoryRejects),
       classicSharedDeck: Boolean(options.classicSharedDeck),
+      driftDeck: Boolean(options.driftDeck),
       lessForeshadowing: Boolean(options.lessForeshadowing),
       lessSpammyGame: options.lessSpammyGame,
       criticalSpam: options.criticalSpam,

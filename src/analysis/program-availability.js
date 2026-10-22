@@ -183,7 +183,9 @@ export function getProgramCardVariantModelSummary(options = {}) {
     sharedDeckCrossRobotHandsModeled: false,
     factoryRejects: Boolean(options.factoryRejects),
     lessForeshadowing: Boolean(options.lessForeshadowing),
-    classicSharedDeck: Boolean(options.classicSharedDeck)
+    classicSharedDeck: Boolean(options.classicSharedDeck),
+    deck: profile.deck.id,
+    deckSize: profile.deck.size
   };
 }
 

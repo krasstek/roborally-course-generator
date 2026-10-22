@@ -7,6 +7,7 @@ import {
   getCompletedRouteExpansions
 } from "../../analyze.js";
 import { buildResolvedMap } from "../../board.js";
+import { getProgramDeckId } from "../analysis/program-availability.js";
 import {
   applyVariantAnalysisOptions,
   applyVariantGenerationOptions,
@@ -1128,6 +1129,7 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
           `hand:${variantAnalysisOptions.factoryRejects ? 7 : 9}`,
           `lessForeshadowing:${variantAnalysisOptions.lessForeshadowing ? 1 : 0}`,
           `classicSharedDeck:${variantAnalysisOptions.classicSharedDeck ? 1 : 0}`,
+          `deck:${getProgramDeckId(variantAnalysisOptions)}`,
           `players:${Math.max(1, Number(variantAnalysisOptions.playerCount ?? generationPreferences.playerCount ?? preferences.playerCount) || 4)}`
         ].join("|");
         const baseAnalysisOptions = {
