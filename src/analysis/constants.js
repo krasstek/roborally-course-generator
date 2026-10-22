@@ -21,7 +21,11 @@ export const ACTIONS = [
   { id: "BACK", type: "move", relative: "back" },
   { id: "LEFT", type: "turn", rotation: "ccw" },
   { id: "RIGHT", type: "turn", rotation: "cw" },
-  { id: "UTURN", type: "turn", rotation: "uturn" }
+  { id: "UTURN", type: "turn", rotation: "uturn" },
+  // Drift Deck (Robo Rally: Transformers planning cards): one space sideways,
+  // facing unchanged. Searched only when the active deck holds them.
+  { id: "DRIFT_LEFT", type: "move", relative: "left" },
+  { id: "DRIFT_RIGHT", type: "move", relative: "right" }
 ];
 
 export const ROTATION_ORDER = ["N", "E", "S", "W"];
@@ -42,28 +46,53 @@ export const REGISTER_COUNT = 5;
 // or (for token-based recovery only) can sometimes be exploited as mobility.
 export const AUTO_KILL_SETBACK_TEMPO_PER_STEP = REGISTER_TEMPO_COST * 0.5;
 export const AUTO_KILL_PRESSURE_SETBACK_WEIGHT = 0.08;
-// The programming deck, the single definition the card model derives from: deck
-// size, the four-copy availability baseline and the Energy exchange rate (see
-// program-availability.js). A future deck (another edition, an expansion or a
-// variant) should change these counts here and nothing else; no rule variant
-// changes them yet, so the card model's caches are not keyed by deck.
-export const PROGRAM_CARD_COUNTS = new Map([
-  ["FORWARD", 4],
-  ["FORWARD_2", 3],
-  ["FORWARD_3", 1],
-  ["RIGHT", 4],
-  ["LEFT", 4],
-  ["UTURN", 1],
-  ["BACK", 1],
-  ["WAIT", 1]
+// The programming decks the card model can use. Everything deck-dependent is
+// derived from these counts (program-availability.js getProgramDeck): deck size,
+// the four-copy availability baseline, the Energy exchange rate and which card
+// actions route search tries. A new deck (another edition, an expansion or a
+// variant) is one more entry here plus the rule that selects it.
+export const AGAIN_CARD_COUNT = 1; // every deck so far has one Again
+export const PROGRAM_DECKS = Object.freeze({
+  standard: Object.freeze({
+    id: "standard",
+    counts: new Map([
+      ["FORWARD", 4],
+      ["FORWARD_2", 3],
+      ["FORWARD_3", 1],
+      ["RIGHT", 4],
+      ["LEFT", 4],
+      ["UTURN", 1],
+      ["BACK", 1],
+      ["WAIT", 1]
+    ])
+  }),
+  // Drift Deck: the 22 planning cards of Robo Rally: Transformers.
+  drift: Object.freeze({
+    id: "drift",
+    counts: new Map([
+      ["FORWARD", 4],
+      ["FORWARD_2", 3],
+      ["FORWARD_3", 1],
+      ["RIGHT", 3],
+      ["LEFT", 3],
+      ["UTURN", 1],
+      ["BACK", 1],
+      ["WAIT", 1],
+      ["DRIFT_LEFT", 2],
+      ["DRIFT_RIGHT", 2]
+    ])
+  })
+});
+// Every card id any deck uses, standard deck first. Packed card-state codes are
+// laid out over this list with room for the largest count any deck has, so the
+// standard deck's codes stay small; legality always checks the active deck.
+export const PROGRAM_CARD_IDS = Object.freeze([
+  ...new Set(Object.values(PROGRAM_DECKS).flatMap((deck) => [...deck.counts.keys()]))
 ]);
-export const PROGRAM_CARD_IDS = Object.freeze([...PROGRAM_CARD_COUNTS.keys()]);
-export const AGAIN_CARD_COUNT = 1;
-export const PROGRAM_DECK_SIZE = [...PROGRAM_CARD_COUNTS.values()]
-  .reduce((sum, count) => sum + count, AGAIN_CARD_COUNT);
-// The most common card's copy count: needing one of those is the zero-cost
-// availability baseline.
-export const PROGRAM_COMMON_CARD_COPIES = Math.max(...PROGRAM_CARD_COUNTS.values());
+export const PROGRAM_CARD_MAX_COUNTS = new Map(PROGRAM_CARD_IDS.map((id) => [
+  id,
+  Math.max(...Object.values(PROGRAM_DECKS).map((deck) => deck.counts.get(id) || 0))
+]));
 
 // v49by PROVISIONAL card-scarcity adaptability calibration.
 //

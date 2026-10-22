@@ -13,7 +13,7 @@ import {
 import {
   DIRS,
   OPPOSITE,
-  PROGRAM_CARD_COUNTS,
+  PROGRAM_CARD_MAX_COUNTS,
   REGISTER_COUNT,
   REGISTER_TEMPO_COST
 } from "./constants.js";
@@ -26,6 +26,9 @@ import {
   getExactProgramDeckCounts,
   getExactProgramRequirementVectors,
   getProgramAvailabilityPenaltyFromProbability,
+  getProgramDeck,
+  getProgramDeckKeySuffix,
+  compactExactProgramDeck,
   getProgramCardEffectivePreviousCode,
   getProgramCardModelProfile
 } from "./program-availability.js";
@@ -151,6 +154,7 @@ export function getDamageEconomyVariantProfile(options = {}) {
     options.factoryRejects ? "factoryRejects" : null,
     options.lessForeshadowing ? "lessForeshadowing" : null,
     options.classicSharedDeck ? "classicSharedDeck" : null,
+    options.driftDeck ? "driftDeck" : null,
     options.repairStations ? "repairStations" : null,
     options.cuttingFloor ? "cuttingFloor" : null,
     options.flamingOil ? "flamingOil" : null,
@@ -165,6 +169,7 @@ export function getDamageEconomyVariantProfile(options = {}) {
     options.factoryRejects ? "factoryRejects" : null,
     options.lessForeshadowing ? "lessForeshadowing" : null,
     options.classicSharedDeck ? "classicSharedDeck" : null,
+    options.driftDeck ? "driftDeck" : null,
     options.criticalHaywire ? "criticalHaywire" : null,
     options.lessSpammyGame ? "lessSpammyGame" : null,
     options.criticalSpam ? "criticalSpam" : null,
@@ -446,7 +451,8 @@ export function getDamageEconomyProgramAvailabilityProbabilityInteger(
   actionIds = [],
   circulatingSpam = 0,
   heldSpam = 0,
-  targetHandSize = PROGRAM_EXACT_HAND_SIZE
+  targetHandSize = PROGRAM_EXACT_HAND_SIZE,
+  options = {}
 ) {
   const safePreviousCode = Math.max(0, Math.floor(Number(previousCode) || 0));
   const safeCirculatingSpam = Math.max(0, Math.floor(Number(circulatingSpam) || 0));
@@ -454,7 +460,7 @@ export function getDamageEconomyProgramAvailabilityProbabilityInteger(
   const safeTargetHandSize = Math.max(0, Math.floor(Number(targetHandSize) || 0));
   const actions = Array.isArray(actionIds) ? actionIds : [];
   if (!actions.length) return 1;
-  const key = `${safePreviousCode}|${actions.join(".")}|c${safeCirculatingSpam}|held${safeHeldSpam}|h${safeTargetHandSize}|floor5`;
+  const key = `${safePreviousCode}|${actions.join(".")}|c${safeCirculatingSpam}|held${safeHeldSpam}|h${safeTargetHandSize}|floor5${getProgramDeckKeySuffix(options)}`;
   DAMAGE_ECONOMY_TELEMETRY.programLookups += 1;
   if (DAMAGE_ECONOMY_PROGRAM_CACHE.has(key)) {
     DAMAGE_ECONOMY_TELEMETRY.programCacheHits += 1;
@@ -462,7 +468,7 @@ export function getDamageEconomyProgramAvailabilityProbabilityInteger(
   }
   DAMAGE_ECONOMY_TELEMETRY.programCacheMisses += 1;
 
-  const baseDeckSize = getExactProgramDeckCounts(safePreviousCode)
+  const baseDeckSize = getExactProgramDeckCounts(safePreviousCode, options)
     .reduce((sum, count) => sum + count, 0);
   const deckSize = baseDeckSize + safeCirculatingSpam;
   const drawSlots = Math.max(0, Math.min(
@@ -491,7 +497,8 @@ export function getDamageEconomyProgramAvailabilityProbabilityInteger(
     const successfulBaseWays = getDamageEconomyBaseProgramSuccessfulWays(
       safePreviousCode,
       actions,
-      modeledNormalCards
+      modeledNormalCards,
+      options
     );
     const conditionalProbability = totalBaseWays > 0
       ? clamp(successfulBaseWays / totalBaseWays, 0, 1)
@@ -522,7 +529,7 @@ export function getDamageEconomyProgrammingSummary(
     : [1, 0, 0, 0, 0, 0];
   const expectedHaywireClogs = getDamageEconomyExpectedCount(haywireDistribution);
   const effectivePreviousCode = getProgramCardEffectivePreviousCode(previousCode, options);
-  const baseDeckSize = getExactProgramDeckCounts(effectivePreviousCode)
+  const baseDeckSize = getExactProgramDeckCounts(effectivePreviousCode, options)
     .reduce((sum, count) => sum + count, 0);
 
   const cleanProgramProbability = getDamageEconomyProgramAvailabilityProbabilityInteger(
@@ -530,7 +537,8 @@ export function getDamageEconomyProgrammingSummary(
     actions,
     0,
     0,
-    profile.handSize
+    profile.handSize,
+    options
   );
   let damagedProgramProbability = 0;
   let expectedSpamDrawn = 0;
@@ -559,7 +567,8 @@ export function getDamageEconomyProgrammingSummary(
         actions,
         effectiveSpam.circulatingSpam,
         effectiveSpam.heldSpam,
-        targetHandSize
+        targetHandSize,
+        options
       );
 
     const spamDraw = getDamageEconomySpamDrawDistributionInteger(
@@ -1071,27 +1080,30 @@ export function getDamageEconomyProgramCodeFromLiteralCards(programCardIds = [])
       state.againUsed = true;
       continue;
     }
-    if (!PROGRAM_CARD_COUNTS.has(cardId)) continue;
+    if (!PROGRAM_CARD_MAX_COUNTS.has(cardId)) continue;
     state.naturalUses.set(cardId, (state.naturalUses.get(cardId) || 0) + 1);
   }
   return encodeCompactProgramResourceState(state);
 }
 
-export function getDamageEconomyBaseProgramSuccessfulWays(previousCode, actionIds, handSize) {
+export function getDamageEconomyBaseProgramSuccessfulWays(previousCode, actionIds, handSize, options = {}) {
   const safePreviousCode = Math.max(0, Math.floor(Number(previousCode) || 0));
   const safeHandSize = Math.max(0, Math.floor(Number(handSize) || 0));
   const actions = Array.isArray(actionIds) ? actionIds : [];
-  const cacheKey = `${safePreviousCode}|${actions.join(".")}|h${safeHandSize}`;
+  const cacheKey = `${safePreviousCode}|${actions.join(".")}|h${safeHandSize}${getProgramDeckKeySuffix(options)}`;
   if (DAMAGE_ECONOMY_BASE_PROGRAM_WAYS_CACHE.has(cacheKey)) {
     return DAMAGE_ECONOMY_BASE_PROGRAM_WAYS_CACHE.get(cacheKey);
   }
 
-  const deckCounts = getExactProgramDeckCounts(safePreviousCode);
-  const deckSize = deckCounts.reduce((sum, count) => sum + count, 0);
+  const fullDeckCounts = getExactProgramDeckCounts(safePreviousCode, options);
+  const deckSize = fullDeckCounts.reduce((sum, count) => sum + count, 0);
   if (safeHandSize > deckSize) return 0;
-  const requirements = getExactProgramRequirementVectors(actions).filter((vector) => (
-    vector.every((count, index) => count <= deckCounts[index])
-  ));
+  const { deckCounts, requirements } = compactExactProgramDeck(
+    fullDeckCounts,
+    getExactProgramRequirementVectors(actions).filter((vector) => (
+      vector.every((count, index) => count <= fullDeckCounts[index])
+    ))
+  );
   if (!requirements.length) return 0;
 
   const hand = Array(deckCounts.length).fill(0);
@@ -1124,7 +1136,8 @@ export function getDamageEconomyBaseProgramSuccessfulWays(previousCode, actionId
 export function getDamageEconomyAvailabilityPenaltyFromProbability(probability, options = {}) {
   return getProgramAvailabilityPenaltyFromProbability(
     probability,
-    getProgramCardModelProfile(options).adaptabilityFactor
+    getProgramCardModelProfile(options).adaptabilityFactor,
+    getProgramDeck(options).baselineProbability
   );
 }
 

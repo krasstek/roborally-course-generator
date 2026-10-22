@@ -154,8 +154,45 @@ const WAIT = { id: "WAIT", type: "wait" };
 const FORWARD = { id: "FORWARD", type: "move", relative: "forward", steps: 1 };
 const BACK = { id: "BACK", type: "move", relative: "back", steps: 1 };
 const FORWARD_3 = { id: "FORWARD_3", type: "move", relative: "forward", steps: 3 };
+const DRIFT_LEFT = { id: "DRIFT_LEFT", type: "move", relative: "left" };
+const DRIFT_RIGHT = { id: "DRIFT_RIGHT", type: "move", relative: "right" };
 
 const cases = [
+  {
+    name: "drift left moves one space to the robot's left without turning",
+    tiles: [tile(0, 0), tile(-1, 0)],
+    start: { x: 0, y: 0, facing: "N" },
+    action: DRIFT_LEFT,
+    expected: { x: -1, y: 0, facing: "N", turnedSteps: 0 }
+  },
+  {
+    name: "drift right moves one space to the robot's right without turning",
+    tiles: [tile(0, 0), tile(0, 1)],
+    start: { x: 0, y: 0, facing: "E" },
+    action: DRIFT_RIGHT,
+    expected: { x: 0, y: 1, facing: "E", turnedSteps: 0 }
+  },
+  {
+    name: "drift is blocked by a wall on its side",
+    tiles: [wall(0, 0, ["W"]), tile(-1, 0)],
+    start: { x: 0, y: 0, facing: "N" },
+    action: DRIFT_LEFT,
+    expected: { x: 0, y: 0, facing: "N", turnedSteps: 0 }
+  },
+  {
+    name: "drift onto a conveyor is then carried by it",
+    tiles: [tile(0, 0), belt(1, 0, "S"), tile(1, 1)],
+    start: { x: 0, y: 0, facing: "N" },
+    action: DRIFT_RIGHT,
+    expected: { x: 1, y: 1, facing: "N", turnedSteps: 0 }
+  },
+  {
+    name: "drift from a teleporter teleports sideways by one plus its power",
+    tiles: [teleporter(0, 0, 2), tile(3, 0)],
+    start: { x: 0, y: 0, facing: "N" },
+    action: DRIFT_RIGHT,
+    expected: { x: 3, y: 0, facing: "N", turnedSteps: 0 }
+  },
   {
     name: "left turn rotates ccw when entering from belt-relative left side",
     tiles: [

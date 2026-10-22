@@ -6,7 +6,7 @@ import {
 import { crossesLedgeBoundary, getLedgeElevationDelta, tileKey } from "./board-geometry.js";
 import {
   DIRS,
-  PROGRAM_CARD_COUNTS,
+  PROGRAM_DECKS,
   PROGRAM_CARD_IDS,
   REGISTER_COUNT,
   REGISTER_TEMPO_COST,
@@ -628,8 +628,9 @@ export function getNeutralOneDamageEconomyReferenceRE() {
   );
   advanceDamageEconomyToTurn(state, 2);
 
+  // A fixed reference: the standard deck's common cards, analysed with it.
   const commonActionIds = PROGRAM_CARD_IDS.filter(
-    (actionId) => (PROGRAM_CARD_COUNTS.get(actionId) || 0) >= 3
+    (actionId) => (PROGRAM_DECKS.standard.counts.get(actionId) || 0) >= 3
   );
   const supplySamples = commonActionIds.map((actionId) => (
     getDamageEconomyProgrammingSummary(0, [actionId], state, {})

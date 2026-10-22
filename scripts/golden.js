@@ -92,6 +92,7 @@ const CASES = [
   { name: "forced-subsidized-starts", variants: { subsidizedStarts: "forced" } },
   { name: "forced-competitive", variants: { competitiveMode: "forced" } },
   { name: "forced-moving-targets", variants: { movingTargets: "forced" } },
+  { name: "forced-drift-deck", expansions: ["roborally", "transformers"], variants: { driftDeck: "forced" } },
   // Standard collects several candidates; this is the case that ran for minutes
   // before the route-work budget (2026-09-29).
   { name: "standard-moving-targets", seed: 2888408162, generationMode: "standard", variants: { movingTargets: "forced" } },
@@ -129,7 +130,10 @@ function buildPreferences(testCase, variantDefinitions) {
     boardSpread: spec.boardSpread,
     overlayMode: spec.overlayMode,
     actFastMode: spec.actFastMode,
-    selectedExpansions: Object.fromEntries(ALL_EXPANSIONS.map((id) => [id, spec.expansions.includes(id)])),
+    // Sets a case names beyond ALL_EXPANSIONS (Transformers has no boards) still count.
+    selectedExpansions: Object.fromEntries(
+      [...new Set([...ALL_EXPANSIONS, ...spec.expansions])].map((id) => [id, spec.expansions.includes(id)])
+    ),
     allowedVariantRules
   };
 }

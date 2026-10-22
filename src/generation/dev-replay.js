@@ -22,6 +22,7 @@ export function getDamageFoundationScenarioOptions(scenario) {
     criticalHaywire: Boolean(scenario?.criticalHaywire),
     permanentShutdown: Boolean(scenario?.permanentShutdown),
     factoryRejects: Boolean(scenario?.factoryRejects),
+    driftDeck: Boolean(scenario?.driftDeck),
     repairStations: Boolean(scenario?.repairStations),
     cuttingFloor: Boolean(scenario?.cuttingFloor),
     flamingOil: Boolean(scenario?.flamingOil),

@@ -1,11 +1,11 @@
 // Robo Rally Course Randomizer - programming cards: card model, rolling two-program resource state, card availability probabilities and their caches
 import {
+  ACTIONS,
   AGAIN_CARD_COUNT,
-  PROGRAM_CARD_COUNTS,
   PROGRAM_CARD_IDS,
+  PROGRAM_CARD_MAX_COUNTS,
   PROGRAM_CARD_SCARCITY_ADAPTABILITY_FACTOR,
-  PROGRAM_COMMON_CARD_COPIES,
-  PROGRAM_DECK_SIZE,
+  PROGRAM_DECKS,
   REGISTER_COUNT,
   REGISTER_TEMPO_COST,
   SHARED_DECK_ALPHA_INCREMENT_PER_ADDITIONAL_PLAYER
@@ -18,20 +18,99 @@ import { getTurnEndAfterActionIndexes } from "./reboot-recovery.js";
 // step, so each combination is built once. The cached profiles are frozen: they
 // are shared by every caller.
 const PROGRAM_CARD_MODEL_PROFILE_CACHE = new Map();
-const PROGRAM_CARD_MODEL_SIGNATURE_CACHE = new Map();
 
 function getProgramCardModelKey(options) {
   const playerCount = Math.max(1, Math.floor(Number(options.playerCount) || 4));
-  return `${playerCount}|${options.lessForeshadowing ? 1 : 0}|${options.classicSharedDeck ? 1 : 0}|${options.factoryRejects ? 1 : 0}`;
+  return `${playerCount}|${options.lessForeshadowing ? 1 : 0}|${options.classicSharedDeck ? 1 : 0}|${options.factoryRejects ? 1 : 0}|${getProgramDeckId(options)}`;
 }
 
+// The programming deck a course uses (constants.js PROGRAM_DECKS): Drift Deck
+// replaces the standard program cards with the Transformers planning cards.
+export function getProgramDeckId(options = {}) {
+  return options.driftDeck ? "drift" : "standard";
+}
+
+const PROGRAM_DECK_CACHE = new Map();
+// Everything the card model derives from a deck: per-card counts (0 for cards
+// it lacks), size, the zero-cost baseline (needing one of the most common card)
+// and the card actions route search may try.
+export function getProgramDeck(options = {}) {
+  const id = getProgramDeckId(options);
+  let deck = PROGRAM_DECK_CACHE.get(id);
+  if (!deck) {
+    const counts = PROGRAM_DECKS[id].counts;
+    const size = [...counts.values()].reduce((sum, count) => sum + count, AGAIN_CARD_COUNT);
+    const commonCopies = Math.max(...counts.values());
+    deck = Object.freeze({
+      id,
+      counts,
+      size,
+      commonCopies,
+      baselineProbability: Number((
+        1 -
+        chooseSmall(size - commonCopies, PROGRAM_EXACT_HAND_SIZE) /
+          chooseSmall(size, PROGRAM_EXACT_HAND_SIZE)
+      ).toFixed(12)),
+      // In ACTIONS order, so the standard deck searches exactly what it always did.
+      actions: Object.freeze(ACTIONS.filter((action) => (counts.get(action.id) || 0) > 0)),
+      // Full count per entry of PROGRAM_CHEAP_RESOURCE_IDS (Again included).
+      resourceCounts: Object.freeze(PROGRAM_CHEAP_RESOURCE_IDS.map((resourceId) => (
+        resourceId === "AGAIN" ? AGAIN_CARD_COUNT : (counts.get(resourceId) || 0)
+      )))
+    });
+    PROGRAM_DECK_CACHE.set(id, deck);
+  }
+  return deck;
+}
+
+// Cache-key suffix for caches keyed without the card model signature: empty for
+// the standard deck, so its keys are unchanged.
+export function getProgramDeckKeySuffix(options = {}) {
+  const id = getProgramDeckId(options);
+  return id === "standard" ? "" : `|d${id}`;
+}
+
+export function getProgramCardCount(actionId, options = {}) {
+  return getProgramCardModelProfile(options).deck.counts.get(actionId) || 0;
+}
+
+// Card actions the active deck can program (search loops use this, not ACTIONS).
+export function getProgramDeckActions(options = {}) {
+  return getProgramDeck(options).actions;
+}
+
+// Asked for on every search step, usually with the same options object: remember
+// the profile per object and re-check the five inputs instead of rebuilding the key.
+const PROGRAM_CARD_MODEL_PROFILE_BY_OPTIONS = new WeakMap();
+
 export function getProgramCardModelProfile(options = {}) {
+  const remembered = PROGRAM_CARD_MODEL_PROFILE_BY_OPTIONS.get(options);
+  if (
+    remembered &&
+    remembered.playerCount === options.playerCount &&
+    remembered.lessForeshadowing === options.lessForeshadowing &&
+    remembered.classicSharedDeck === options.classicSharedDeck &&
+    remembered.factoryRejects === options.factoryRejects &&
+    remembered.driftDeck === options.driftDeck
+  ) {
+    return remembered.profile;
+  }
   const key = getProgramCardModelKey(options);
   let profile = PROGRAM_CARD_MODEL_PROFILE_CACHE.get(key);
   if (!profile) {
-    profile = Object.freeze(buildProgramCardModelProfile(options));
+    const built = buildProgramCardModelProfile(options);
+    built.signature = buildProgramCardModelSignature(built);
+    profile = Object.freeze(built);
     PROGRAM_CARD_MODEL_PROFILE_CACHE.set(key, profile);
   }
+  PROGRAM_CARD_MODEL_PROFILE_BY_OPTIONS.set(options, {
+    playerCount: options.playerCount,
+    lessForeshadowing: options.lessForeshadowing,
+    classicSharedDeck: options.classicSharedDeck,
+    factoryRejects: options.factoryRejects,
+    driftDeck: options.driftDeck,
+    profile
+  });
   return profile;
 }
 
@@ -45,8 +124,10 @@ function buildProgramCardModelProfile(options) {
   const baseAlpha = resetEachTurn ? 1 : PROGRAM_CARD_SCARCITY_ADAPTABILITY_FACTOR;
   const handSize = options.factoryRejects ? 7 : PROGRAM_EXACT_HAND_SIZE;
   const adaptabilityFactor = baseAlpha + sharedDeckAlphaIncrement;
-  const powerUpRate = getPowerUpRegistersPerEnergy(handSize, resetEachTurn, adaptabilityFactor);
+  const deck = getProgramDeck(options);
+  const powerUpRate = getPowerUpRegistersPerEnergy(deck, handSize, resetEachTurn, adaptabilityFactor);
   return {
+    deck,
     handSize,
     resetEachTurn,
     previousTurnDepletionActive: !resetEachTurn,
@@ -67,19 +148,20 @@ function buildProgramCardModelProfile(options) {
 // which costs the same card-scarcity RE as any other card requirement: under
 // the rolling model (previous program known, Power Up not in it) the hand is
 // drawn from the deck minus five cards; Less Foreshadowing draws from the full
-// deck. Today's deck (1 Power Up in 20, 9-card hand, alpha 0.70) gives ~1.39.
+// deck. The standard deck (1 Power Up in 20, 9-card hand, alpha 0.70) gives
+// ~1.39; the 22-card Drift Deck a little more.
 // Every Energy and upgrade value in energy-value-table.js is in Energy units
 // and is multiplied by this rate. A deck without Power Up has no such price;
 // the rate then falls back to what a single Power Up copy would cost (a stated
 // assumption, see MODEL-REVIEW.md).
-function getPowerUpRegistersPerEnergy(handSize, resetEachTurn, adaptabilityFactor) {
-  const powerUpCopies = PROGRAM_CARD_COUNTS.get("WAIT") || 0;
+function getPowerUpRegistersPerEnergy(deck, handSize, resetEachTurn, adaptabilityFactor) {
+  const powerUpCopies = deck.counts.get("WAIT") || 0;
   const copies = powerUpCopies > 0 ? powerUpCopies : 1;
-  const population = PROGRAM_DECK_SIZE - (resetEachTurn ? 0 : REGISTER_COUNT);
+  const population = deck.size - (resetEachTurn ? 0 : REGISTER_COUNT);
   const hand = Math.min(handSize, population);
   const probability = 1 - chooseSmall(population - copies, hand) / chooseSmall(population, hand);
   const scarcityRE = probability > 0
-    ? Math.max(0, PROGRAM_EXACT_FOUR_COPY_BASELINE_PROBABILITY / probability - 1) *
+    ? Math.max(0, deck.baselineProbability / probability - 1) *
       Math.max(0, adaptabilityFactor)
     : 0;
   return {
@@ -89,23 +171,17 @@ function getPowerUpRegistersPerEnergy(handSize, resetEachTurn, adaptabilityFacto
 }
 
 export function getProgramCardModelSignature(options = {}) {
-  const key = getProgramCardModelKey(options);
-  let signature = PROGRAM_CARD_MODEL_SIGNATURE_CACHE.get(key);
-  if (signature === undefined) {
-    signature = buildProgramCardModelSignature(options);
-    PROGRAM_CARD_MODEL_SIGNATURE_CACHE.set(key, signature);
-  }
-  return signature;
+  return getProgramCardModelProfile(options).signature;
 }
 
-function buildProgramCardModelSignature(options) {
-  const profile = getProgramCardModelProfile(options);
+function buildProgramCardModelSignature(profile) {
   return [
     `h${profile.handSize}`,
     `reset${profile.resetEachTurn ? 1 : 0}`,
     `shared${profile.sharedDeck ? 1 : 0}`,
     `p${profile.playerCount}`,
-    `a${profile.adaptabilityFactor.toFixed(4)}`
+    `a${profile.adaptabilityFactor.toFixed(4)}`,
+    ...(profile.deck.id === "standard" ? [] : [`d${profile.deck.id}`])
   ].join(":");
 }
 
@@ -128,7 +204,9 @@ export function getProgramCardVariantModelSummary(options = {}) {
     sharedDeckCrossRobotHandsModeled: false,
     factoryRejects: Boolean(options.factoryRejects),
     lessForeshadowing: Boolean(options.lessForeshadowing),
-    classicSharedDeck: Boolean(options.classicSharedDeck)
+    classicSharedDeck: Boolean(options.classicSharedDeck),
+    deck: profile.deck.id,
+    deckSize: profile.deck.size
   };
 }
 
@@ -148,7 +226,7 @@ export function getProgramCardEffectivePreviousCode(previousCode = 0, options = 
 // v13/v48w card-model design invariant:
 // The route analyzer is not a deck-order simulator. For planning credibility it
 // uses a rolling two-turn abstraction: the previous five-register program is
-// treated as known depletion from the 20-card deck (PROGRAM_DECK_SIZE), while the current program
+// treated as known depletion from the deck (getProgramDeck: 20 cards, Drift 22), while the current program
 // must fit what remains. Real reshuffle boundaries are deliberately ignored:
 // they are too fragile to plan around, and modelling them would add false
 // precision to a course randomizer. The four unplayed cards from the previous
@@ -166,7 +244,13 @@ export function getProgramCardEffectivePreviousCode(previousCode = 0, options = 
 // same probability-shaped ordering as exact realization. The cheap proxy still
 // never owns route/card legality: exact realization below unions every legal
 // natural-vs-Again assignment and remains authoritative.
-export const PROGRAM_CHEAP_RESOURCE_IDS = Object.freeze([...PROGRAM_CARD_IDS, "AGAIN"]);
+// Standard cards, Again, then cards only other decks have: the standard deck's
+// packed codes (and the codes saved courses carry) are unchanged by new decks.
+export const PROGRAM_CHEAP_RESOURCE_IDS = Object.freeze([
+  ...PROGRAM_CARD_IDS.filter((id) => PROGRAM_DECKS.standard.counts.has(id)),
+  "AGAIN",
+  ...PROGRAM_CARD_IDS.filter((id) => !PROGRAM_DECKS.standard.counts.has(id))
+]);
 export const PROGRAM_CHEAP_AVAILABILITY_CACHE = new Map();
 export const PROGRAM_CHEAP_AVAILABILITY_CACHE_LIMIT = 50000;
 export const PROGRAM_CHEAP_AVAILABILITY_TELEMETRY = {
@@ -272,10 +356,10 @@ export function getProgramTurnActionsFromHistory(
   ));
 }
 
-export function getProgramResourceFullCount(resourceId) {
+export function getProgramResourceFullCount(resourceId, options = {}) {
   return resourceId === "AGAIN"
     ? AGAIN_CARD_COUNT
-    : (PROGRAM_CARD_COUNTS.get(resourceId) || 0);
+    : getProgramCardCount(resourceId, options);
 }
 
 export function getProgramResourceStateCounts(state) {
@@ -297,9 +381,10 @@ export function getCheapProgramLiteralAvailabilityProbability(
     previousCounts,
     options
   );
-  const safePrevious = PROGRAM_CHEAP_RESOURCE_IDS.map((resourceId, index) => (
+  const resourceCounts = getProgramCardModelProfile(options).deck.resourceCounts;
+  const safePrevious = PROGRAM_CHEAP_RESOURCE_IDS.map((_, index) => (
     Math.max(0, Math.min(
-      getProgramResourceFullCount(resourceId),
+      resourceCounts[index],
       Math.floor(Number(effectivePreviousCounts[index]) || 0)
     ))
   ));
@@ -330,10 +415,9 @@ export function getCheapProgramLiteralAvailabilityProbability(
   let requiredCards = 0;
   const requiredCategories = [];
   for (let index = 0; index < PROGRAM_CHEAP_RESOURCE_IDS.length; index += 1) {
-    const resourceId = PROGRAM_CHEAP_RESOURCE_IDS[index];
     const available = Math.max(
       0,
-      getProgramResourceFullCount(resourceId) - safePrevious[index]
+      resourceCounts[index] - safePrevious[index]
     );
     const required = safeCurrent[index];
     deckSize += available;
@@ -402,7 +486,8 @@ export function getCheapProgramLiteralAvailabilityPenalty(
   return Number(
     getProgramAvailabilityPenaltyFromProbability(
       probability,
-      getProgramCardModelProfile(options).adaptabilityFactor
+      getProgramCardModelProfile(options).adaptabilityFactor,
+      getProgramDeck(options).baselineProbability
     ).toFixed(3)
   );
 }
@@ -417,9 +502,10 @@ export function getCheapProgramRequirementUnionAvailabilityProbability(
     previousCounts,
     options
   );
-  const safePrevious = PROGRAM_CHEAP_RESOURCE_IDS.map((resourceId, index) => (
+  const resourceCounts = getProgramCardModelProfile(options).deck.resourceCounts;
+  const safePrevious = PROGRAM_CHEAP_RESOURCE_IDS.map((_, index) => (
     Math.max(0, Math.min(
-      getProgramResourceFullCount(resourceId),
+      resourceCounts[index],
       Math.floor(Number(effectivePreviousCounts[index]) || 0)
     ))
   ));
@@ -520,7 +606,8 @@ export function getCheapProgramRequirementUnionAvailabilityPenalty(
   return Number(
     getProgramAvailabilityPenaltyFromProbability(
       probability,
-      getProgramCardModelProfile(options).adaptabilityFactor
+      getProgramCardModelProfile(options).adaptabilityFactor,
+      getProgramDeck(options).baselineProbability
     ).toFixed(3)
   );
 }
@@ -665,9 +752,11 @@ export function getProgramResourceStateScarcityCost(state) {
 // program becomes the previous program, the new current program is empty, and
 // Again cannot reach back into the preceding program.
 export const COMPACT_PROGRAM_RESOURCE_IDS = PROGRAM_CHEAP_RESOURCE_IDS;
+// Room for the largest count any deck has; the active deck's counts decide what
+// is legal (getCompactProgramCardOptions, the availability probabilities).
 export const COMPACT_PROGRAM_RESOURCE_LIMITS = Object.freeze(
   COMPACT_PROGRAM_RESOURCE_IDS.map((id) => (
-    id === "AGAIN" ? AGAIN_CARD_COUNT : (PROGRAM_CARD_COUNTS.get(id) || 0)
+    id === "AGAIN" ? AGAIN_CARD_COUNT : (PROGRAM_CARD_MAX_COUNTS.get(id) || 0)
   ))
 );
 export const COMPACT_PROGRAM_RESOURCE_RADICES = Object.freeze(
@@ -814,7 +903,7 @@ export function getCompactProgramCardOptions(
   const currentCounts = getCompactProgramResourceCounts(currentCode);
   const optionsOut = [];
 
-  const naturalLimit = PROGRAM_CARD_COUNTS.get(actionId) || 0;
+  const naturalLimit = getProgramCardCount(actionId, options);
   if (naturalLimit > 0) {
     const used = (
       getCompactProgramResourceCount(previousCode, actionId) +
@@ -1328,8 +1417,10 @@ export function getLiteralProgramResourceStates(actionIds = []) {
     againActionId: null
   }];
 
+  // Cached by the actions alone, so it allows the largest count any deck has;
+  // the availability probability then applies the active deck's counts.
   actions.forEach((actionId, index) => {
-    const cardCount = PROGRAM_CARD_COUNTS.get(actionId);
+    const cardCount = PROGRAM_CARD_MAX_COUNTS.get(actionId);
     if (!cardCount) {
       states = [];
       return;
@@ -1408,7 +1499,9 @@ export function areRollingProgramResourceStatesCompatible(previousState, current
       (previousState?.naturalUses?.get(actionId) || 0) +
       (currentState?.naturalUses?.get(actionId) || 0)
     );
-    if (totalUses > (PROGRAM_CARD_COUNTS.get(actionId) || 0)) {
+    // Largest count any deck has; the availability probability applies the
+    // active deck's counts.
+    if (totalUses > (PROGRAM_CARD_MAX_COUNTS.get(actionId) || 0)) {
       return false;
     }
   }
@@ -1427,20 +1520,18 @@ export function chooseSmall(n, k) {
   return value;
 }
 
-export const PROGRAM_EXACT_FOUR_COPY_BASELINE_PROBABILITY = Number((
-  1 -
-  chooseSmall(PROGRAM_DECK_SIZE - PROGRAM_COMMON_CARD_COPIES, PROGRAM_EXACT_HAND_SIZE) /
-    chooseSmall(PROGRAM_DECK_SIZE, PROGRAM_EXACT_HAND_SIZE)
-).toFixed(12));
+// The standard deck's baseline (diagnostics); the card model uses the active
+// deck's (getProgramDeck().baselineProbability).
+export const PROGRAM_EXACT_FOUR_COPY_BASELINE_PROBABILITY = getProgramDeck({}).baselineProbability;
 
 export function getProgramAvailabilityPenaltyFromProbability(
   probability,
-  adaptabilityFactor = PROGRAM_CARD_SCARCITY_ADAPTABILITY_FACTOR
+  adaptabilityFactor = PROGRAM_CARD_SCARCITY_ADAPTABILITY_FACTOR,
+  baselineProbability = PROGRAM_EXACT_FOUR_COPY_BASELINE_PROBABILITY
 ) {
   const p = Math.max(0, Number(probability) || 0);
   if (p <= 0) return Infinity;
-  const availabilityRatio =
-    PROGRAM_EXACT_FOUR_COPY_BASELINE_PROBABILITY / p;
+  const availabilityRatio = baselineProbability / p;
 
   // Baseline invariant:
   // P(program) == P(one ordinary four-copy card) -> exactly 0 extra card RE.
@@ -1451,9 +1542,10 @@ export function getProgramAvailabilityPenaltyFromProbability(
   return REGISTER_TEMPO_COST * rawScarcityRE * factor;
 }
 
-export function getExactProgramDeckCounts(previousCode = 0) {
+export function getExactProgramDeckCounts(previousCode = 0, options = {}) {
+  const resourceCounts = getProgramCardModelProfile(options).deck.resourceCounts;
   return COMPACT_PROGRAM_RESOURCE_IDS.map((resourceId, index) => {
-    const fullCount = COMPACT_PROGRAM_RESOURCE_LIMITS[index];
+    const fullCount = resourceCounts[index];
     const used = getCompactProgramResourceCount(previousCode, resourceId);
     return Math.max(0, fullCount - used);
   });
@@ -1476,6 +1568,18 @@ export function getExactProgramRequirementVectors(actionIds = []) {
   )));
 }
 
+// Hand enumeration over the card kinds the deck actually has: a kind with no
+// copies left only ever takes zero cards, so dropping it changes no sum.
+export function compactExactProgramDeck(deckCounts, requirements) {
+  const kept = [];
+  deckCounts.forEach((count, index) => { if (count > 0) kept.push(index); });
+  if (kept.length === deckCounts.length) return { deckCounts, requirements };
+  return {
+    deckCounts: kept.map((index) => deckCounts[index]),
+    requirements: requirements.map((vector) => kept.map((index) => vector[index]))
+  };
+}
+
 export function getExactProgramHandAvailabilityProbability(
   previousCode,
   actionIds = [],
@@ -1490,12 +1594,15 @@ export function getExactProgramHandAvailabilityProbability(
     return PROGRAM_EXACT_AVAILABILITY_CACHE.get(cacheKey);
   }
 
-  const deckCounts = getExactProgramDeckCounts(safePreviousCode);
-  const deckSize = deckCounts.reduce((sum, count) => sum + count, 0);
+  const fullDeckCounts = getExactProgramDeckCounts(safePreviousCode, options);
+  const deckSize = fullDeckCounts.reduce((sum, count) => sum + count, 0);
   const handSize = Math.min(profile.handSize, deckSize);
-  const requirements = getExactProgramRequirementVectors(actions).filter((vector) => (
-    vector.every((count, index) => count <= deckCounts[index])
-  ));
+  const { deckCounts, requirements } = compactExactProgramDeck(
+    fullDeckCounts,
+    getExactProgramRequirementVectors(actions).filter((vector) => (
+      vector.every((count, index) => count <= fullDeckCounts[index])
+    ))
+  );
   if (!requirements.length || handSize <= 0) {
     PROGRAM_EXACT_AVAILABILITY_CACHE.set(cacheKey, 0);
     return 0;
@@ -1550,7 +1657,8 @@ export function getExactProgramAvailabilityPenalty(previousCode, actionIds = [],
   return Number(
     getProgramAvailabilityPenaltyFromProbability(
       probability,
-      getProgramCardModelProfile(options).adaptabilityFactor
+      getProgramCardModelProfile(options).adaptabilityFactor,
+      getProgramDeck(options).baselineProbability
     ).toFixed(3)
   );
 }

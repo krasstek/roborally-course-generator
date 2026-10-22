@@ -166,6 +166,7 @@ export function getTilePenalty(
       upgradeWorld: options.upgradeWorld,
       factoryRejects: Boolean(options.factoryRejects),
       classicSharedDeck: Boolean(options.classicSharedDeck),
+      driftDeck: Boolean(options.driftDeck),
       lessForeshadowing: Boolean(options.lessForeshadowing),
       lessSpammyGame: options.lessSpammyGame,
       criticalSpam: options.criticalSpam,
@@ -808,6 +809,15 @@ export function movementDir(facing, relative) {
     return rotateFacing(facing ?? "E", "uturn");
   }
 
+  // Drift (Drift Deck): sideways, facing unchanged.
+  if (relative === "left") {
+    return rotateFacing(facing ?? "E", "ccw");
+  }
+
+  if (relative === "right") {
+    return rotateFacing(facing ?? "E", "cw");
+  }
+
   return facing ?? "E";
 }
 
@@ -1174,7 +1184,13 @@ export function resolveTeleporterMove(tileMap, state, action, options = {}) {
     return null;
   }
 
-  const signedDistance = getSignedMoveDistance(action) + (teleporter.power ?? 2);
+  // A drift starting on a teleporter works like a normal move: the teleporter's
+  // power is added to the drift distance, sideways, facing unchanged (Transformers
+  // does not cover teleporters; ruling 2026-10-22).
+  const sideways = action.relative === "left" || action.relative === "right";
+  const signedDistance = sideways
+    ? Math.max(1, action.steps ?? 1) + (teleporter.power ?? 2)
+    : getSignedMoveDistance(action) + (teleporter.power ?? 2);
   if (signedDistance === 0) {
     return {
       state: cloneState(state),
@@ -1190,9 +1206,11 @@ export function resolveTeleporterMove(tileMap, state, action, options = {}) {
     };
   }
 
-  const dir = signedDistance > 0
-    ? movementDir(state.facing, "forward")
-    : movementDir(state.facing, "back");
+  const dir = sideways
+    ? movementDir(state.facing, action.relative)
+    : signedDistance > 0
+      ? movementDir(state.facing, "forward")
+      : movementDir(state.facing, "back");
   const steps = Math.abs(signedDistance);
   // Teleporter movement is a jump: no walls, pits, trapdoors, flamers, or other
   // board elements on the skipped squares are traversed or resolved.

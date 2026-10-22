@@ -46,6 +46,7 @@ const VARIANT_COMPLEXITY = {
   hazardousFlags: 1,
   movingTargets: 2,
   lessForeshadowing: 1,
+  driftDeck: 1,
   extraDocks: 0,
   factoryRejects: 1,
   startupSpinUp: 0,
@@ -586,6 +587,26 @@ const VARIANT_DEFINITION_ROWS = [
     applyBundle: applyBooleanField("classicSharedDeck")
   },
   {
+    id: "driftDeck",
+    label: "Drift Deck",
+    category: VARIANT_CATEGORIES.programming,
+    controlId: "variant-drift-deck",
+    defaultState: "off",
+    description: "Use the 22 planning cards from Robo Rally: Transformers instead of the program cards. Drift Left and Drift Right move one space sideways without turning; there are three of each Turn instead of four.",
+    cost: VARIANT_COMPLEXITY.driftDeck,
+    complexityRationale: "A different deck is one persistent special rule; drift cards are ordinary moves once learned.",
+    mentalEvent: {
+      cadence: "none",
+      rationale: "Drift cards are options in the hand, not an extra fact to remember while programming."
+    },
+    availability: {
+      type: "expansionSelected",
+      expansionId: "transformers",
+      reason: "Requires Robo Rally: Transformers in the selected sets."
+    },
+    applyBundle: applyBooleanField("driftDeck")
+  },
+  {
     id: "competitiveMode",
     label: "Competitive Mode",
     category: VARIANT_CATEGORIES.setup,
@@ -806,6 +827,7 @@ export function applyVariantAnalysisOptions(baseOptions = {}, variantBundle = {}
     factoryRejects: Boolean(variantBundle.factoryRejects),
     classicSharedDeck: Boolean(variantBundle.classicSharedDeck),
     lessForeshadowing: Boolean(variantBundle.lessForeshadowing),
+    driftDeck: Boolean(variantBundle.driftDeck),
     competitiveMode: Boolean(variantBundle.competitiveMode),
     payToWin: Boolean(variantBundle.payToWin || variantBundle.subsidizedStarts),
     subsidizedStarts: Boolean(variantBundle.subsidizedStarts),

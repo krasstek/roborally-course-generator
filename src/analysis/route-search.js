@@ -32,6 +32,7 @@ import {
   PROGRAM_HISTORY_WINDOW_SIZE,
   evaluateProgramAction,
   getCardAvailabilityPressure,
+  getProgramDeckActions,
   getProgramHistoryWindow,
   getRollingProgramResourceContext
 } from "./program-availability.js";
@@ -925,7 +926,7 @@ export function enumerateRoutes(tileMap, start, goal, options = {}) {
       continue;
     }
 
-    for (const action of ACTIONS) {
+    for (const action of getProgramDeckActions(options)) {
       const cardEvaluation = evaluateProgramAction(
         current.actionHistory,
         current.absoluteActions,
@@ -1403,7 +1404,7 @@ export function enumerateFullCourseRoutes(tileMap, start, flags, options = {}) {
       current.absoluteActions,
       options
     );
-    for (const action of ACTIONS) {
+    for (const action of getProgramDeckActions(options)) {
       const cardEvaluation = evaluateProgramAction(
         current.actionHistory,
         current.absoluteActions,
