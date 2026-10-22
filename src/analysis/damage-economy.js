@@ -28,6 +28,7 @@ import {
   getProgramAvailabilityPenaltyFromProbability,
   getProgramDeck,
   getProgramDeckKeySuffix,
+  compactExactProgramDeck,
   getProgramCardEffectivePreviousCode,
   getProgramCardModelProfile
 } from "./program-availability.js";
@@ -1094,12 +1095,15 @@ export function getDamageEconomyBaseProgramSuccessfulWays(previousCode, actionId
     return DAMAGE_ECONOMY_BASE_PROGRAM_WAYS_CACHE.get(cacheKey);
   }
 
-  const deckCounts = getExactProgramDeckCounts(safePreviousCode, options);
-  const deckSize = deckCounts.reduce((sum, count) => sum + count, 0);
+  const fullDeckCounts = getExactProgramDeckCounts(safePreviousCode, options);
+  const deckSize = fullDeckCounts.reduce((sum, count) => sum + count, 0);
   if (safeHandSize > deckSize) return 0;
-  const requirements = getExactProgramRequirementVectors(actions).filter((vector) => (
-    vector.every((count, index) => count <= deckCounts[index])
-  ));
+  const { deckCounts, requirements } = compactExactProgramDeck(
+    fullDeckCounts,
+    getExactProgramRequirementVectors(actions).filter((vector) => (
+      vector.every((count, index) => count <= fullDeckCounts[index])
+    ))
+  );
   if (!requirements.length) return 0;
 
   const hand = Array(deckCounts.length).fill(0);
