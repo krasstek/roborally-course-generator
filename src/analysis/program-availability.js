@@ -4,6 +4,8 @@ import {
   PROGRAM_CARD_COUNTS,
   PROGRAM_CARD_IDS,
   PROGRAM_CARD_SCARCITY_ADAPTABILITY_FACTOR,
+  PROGRAM_COMMON_CARD_COPIES,
+  PROGRAM_DECK_SIZE,
   REGISTER_COUNT,
   REGISTER_TEMPO_COST,
   SHARED_DECK_ALPHA_INCREMENT_PER_ADDITIONAL_PLAYER
@@ -41,17 +43,48 @@ function buildProgramCardModelProfile(options) {
     ? Math.max(0, playerCount - 1) * SHARED_DECK_ALPHA_INCREMENT_PER_ADDITIONAL_PLAYER
     : 0;
   const baseAlpha = resetEachTurn ? 1 : PROGRAM_CARD_SCARCITY_ADAPTABILITY_FACTOR;
+  const handSize = options.factoryRejects ? 7 : PROGRAM_EXACT_HAND_SIZE;
+  const adaptabilityFactor = baseAlpha + sharedDeckAlphaIncrement;
+  const powerUpRate = getPowerUpRegistersPerEnergy(handSize, resetEachTurn, adaptabilityFactor);
   return {
-    handSize: options.factoryRejects ? 7 : PROGRAM_EXACT_HAND_SIZE,
+    handSize,
     resetEachTurn,
     previousTurnDepletionActive: !resetEachTurn,
     sharedDeck,
     playerCount,
     baseAlpha,
     sharedDeckAlphaIncrement: Number(sharedDeckAlphaIncrement.toFixed(4)),
-    adaptabilityFactor: Number((baseAlpha + sharedDeckAlphaIncrement).toFixed(4)),
+    adaptabilityFactor: Number(adaptabilityFactor.toFixed(4)),
+    powerUpRegistersPerEnergy: powerUpRate.registersPerEnergy,
+    powerUpRateFallback: powerUpRate.fallback,
     sharedDeckEnlargedDeckModeled: false,
     sharedDeckCrossRobotHandsModeled: false
+  };
+}
+
+// What one Energy is worth in registers: the price of making it with Power Up.
+// Power Up spends a register, and planning on it also needs the card in hand,
+// which costs the same card-scarcity RE as any other card requirement: under
+// the rolling model (previous program known, Power Up not in it) the hand is
+// drawn from the deck minus five cards; Less Foreshadowing draws from the full
+// deck. Today's deck (1 Power Up in 20, 9-card hand, alpha 0.70) gives ~1.39.
+// Every Energy and upgrade value in energy-value-table.js is in Energy units
+// and is multiplied by this rate. A deck without Power Up has no such price;
+// the rate then falls back to what a single Power Up copy would cost (a stated
+// assumption, see MODEL-REVIEW.md).
+function getPowerUpRegistersPerEnergy(handSize, resetEachTurn, adaptabilityFactor) {
+  const powerUpCopies = PROGRAM_CARD_COUNTS.get("WAIT") || 0;
+  const copies = powerUpCopies > 0 ? powerUpCopies : 1;
+  const population = PROGRAM_DECK_SIZE - (resetEachTurn ? 0 : REGISTER_COUNT);
+  const hand = Math.min(handSize, population);
+  const probability = 1 - chooseSmall(population - copies, hand) / chooseSmall(population, hand);
+  const scarcityRE = probability > 0
+    ? Math.max(0, PROGRAM_EXACT_FOUR_COPY_BASELINE_PROBABILITY / probability - 1) *
+      Math.max(0, adaptabilityFactor)
+    : 0;
+  return {
+    registersPerEnergy: Number((1 + scarcityRE).toFixed(4)),
+    fallback: powerUpCopies === 0
   };
 }
 
@@ -115,7 +148,7 @@ export function getProgramCardEffectivePreviousCode(previousCode = 0, options = 
 // v13/v48w card-model design invariant:
 // The route analyzer is not a deck-order simulator. For planning credibility it
 // uses a rolling two-turn abstraction: the previous five-register program is
-// treated as known depletion from the 20-card deck, while the current program
+// treated as known depletion from the 20-card deck (PROGRAM_DECK_SIZE), while the current program
 // must fit what remains. Real reshuffle boundaries are deliberately ignored:
 // they are too fragile to plan around, and modelling them would add false
 // precision to a course randomizer. The four unplayed cards from the previous
@@ -1396,8 +1429,8 @@ export function chooseSmall(n, k) {
 
 export const PROGRAM_EXACT_FOUR_COPY_BASELINE_PROBABILITY = Number((
   1 -
-  chooseSmall(20 - 4, PROGRAM_EXACT_HAND_SIZE) /
-    chooseSmall(20, PROGRAM_EXACT_HAND_SIZE)
+  chooseSmall(PROGRAM_DECK_SIZE - PROGRAM_COMMON_CARD_COPIES, PROGRAM_EXACT_HAND_SIZE) /
+    chooseSmall(PROGRAM_DECK_SIZE, PROGRAM_EXACT_HAND_SIZE)
 ).toFixed(12));
 
 export function getProgramAvailabilityPenaltyFromProbability(

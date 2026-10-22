@@ -284,7 +284,7 @@ export function evaluateRouteStartingEconomyPotentialR(tileMap, route, options =
   const startingEnergy = clamp(Math.floor(config.startingEnergy), 0, config.maxEnergy);
   let potential = UPGRADE_VALUE_BY_STARTING_ENERGY[raceTurns][
     Math.min(startingEnergy, ENERGY_VALUE_TABLE_MAX_ENERGY)
-  ];
+  ] * config.powerRegistersPerEnergy;
   let reserve = startingEnergy;
   let elapsed = Math.max(0, Number(route.absoluteStartAction) || 0);
   for (const transition of route.transitions) {

@@ -10,6 +10,7 @@ import {
   FREE_UPGRADE_INSTALL_VALUE,
   UPGRADE_CARD_GAIN_VALUE
 } from "./energy-value-table.js";
+import { getProgramCardModelProfile } from "./program-availability.js";
 import { isRouteAwareBatteryScoringActive } from "./rule-options.js";
 
 // Shared upgrade-economy defaults.  The legacy DP diagnostics and the v18
@@ -29,7 +30,9 @@ export const ROUTE_ENERGY_ECONOMY_DEFAULTS = Object.freeze({
   // This is useful investment throughput per install opportunity, not a claim
   // that real upgrade cards cost 2E or have identical effects.
   usefulEnergyPerInstall: 2,
-  powerRegistersPerEnergy: 1,
+  // Registers per Energy is not a fixed default: it is the price of making one
+  // Energy with Power Up, derived from the programming deck and card model
+  // (getProgramCardModelProfile().powerUpRegistersPerEnergy, ~1.39 today).
   registersPerTurn: REGISTER_COUNT
 });
 
@@ -108,7 +111,7 @@ export function getRouteEnergyEconomyConfig(options = {}) {
     powerRegistersPerEnergy: getUpgradeEconomyRate(
       options,
       "upgradePowerRegistersPerEnergy",
-      ROUTE_ENERGY_ECONOMY_DEFAULTS.powerRegistersPerEnergy
+      getProgramCardModelProfile(options).powerUpRegistersPerEnergy
     ),
     registersPerTurn: Math.max(1, getUpgradeEconomyRate(
       options,
@@ -244,7 +247,8 @@ export function getRouteEconomyNextBoundaryAction(absoluteActionCount, config) {
 // more Energy, one more blind upgrade card, or a free random install is worth,
 // by the race turn whose Upgrade Phase can first use it, the race length, and the
 // Energy the robot has received so far (starting Energy plus route gains; the
-// table already accounts for spending it on upgrades).
+// table already accounts for spending it on upgrades). The table is in Energy
+// units; config.powerRegistersPerEnergy turns it into registers.
 function getEnergyValueTableRaceTurns(options) {
   const turns = Number(options?.routeEnergyHorizonTurns);
   if (!(turns > 0)) return 0;
@@ -270,7 +274,8 @@ export function getFlattenedRouteEnergyMarginalValueR(
   if (!raceTurns || reserve >= config.maxEnergy) return 0;
   const turn = getEnergyValueTableUpgradeTurn(absoluteActionCount, config);
   if (turn > raceTurns) return 0;
-  return ENERGY_GAIN_VALUE[raceTurns][turn][getEnergyValueTableEnergyIndex(reserve)];
+  return ENERGY_GAIN_VALUE[raceTurns][turn][getEnergyValueTableEnergyIndex(reserve)] *
+    config.powerRegistersPerEnergy;
 }
 
 export function getFlattenedUnknownUpgradeCardValueR(
@@ -283,7 +288,8 @@ export function getFlattenedUnknownUpgradeCardValueR(
   if (!raceTurns) return 0;
   const turn = getEnergyValueTableUpgradeTurn(absoluteActionCount, config);
   if (turn > raceTurns) return 0;
-  return UPGRADE_CARD_GAIN_VALUE[raceTurns][turn][getEnergyValueTableEnergyIndex(energy)];
+  return UPGRADE_CARD_GAIN_VALUE[raceTurns][turn][getEnergyValueTableEnergyIndex(energy)] *
+    config.powerRegistersPerEnergy;
 }
 
 export function getFlattenedFreeRandomUpgradeInstallValueR(
@@ -296,7 +302,7 @@ export function getFlattenedFreeRandomUpgradeInstallValueR(
   // Radioactive Waste installs at once, during the current turn.
   const turn = Math.floor(Math.max(0, Number(absoluteActionCount) || 0) / config.registersPerTurn) + 1;
   if (turn > raceTurns) return 0;
-  return FREE_UPGRADE_INSTALL_VALUE[raceTurns][turn];
+  return FREE_UPGRADE_INSTALL_VALUE[raceTurns][turn] * config.powerRegistersPerEnergy;
 }
 
 // The route's energy shadow counts Energy received so far, starting with the
@@ -368,7 +374,8 @@ export function getRouteEnergyDominanceBoundConfig(options = {}) {
   if (!Number.isFinite(registerScore)) {
     return { active: true, unbounded: true, energyCubeScore: Infinity, unknownCardScore: Infinity, upgradeWorld: Boolean(options.upgradeWorld) };
   }
-  const nonnegativeRegisterScore = Math.max(0, registerScore);
+  const nonnegativeRegisterScore = Math.max(0, registerScore) *
+    getRouteEnergyEconomyConfig(options).powerRegistersPerEnergy;
   // The largest values in the energy value table bound every single gain.
   const energyCubeScore = ENERGY_VALUE_TABLE_MAXIMA.energy * nonnegativeRegisterScore;
   const unknownCardScore = ENERGY_VALUE_TABLE_MAXIMA.card * nonnegativeRegisterScore;
