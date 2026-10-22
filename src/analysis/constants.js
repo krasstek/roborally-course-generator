@@ -42,6 +42,11 @@ export const REGISTER_COUNT = 5;
 // or (for token-based recovery only) can sometimes be exploited as mobility.
 export const AUTO_KILL_SETBACK_TEMPO_PER_STEP = REGISTER_TEMPO_COST * 0.5;
 export const AUTO_KILL_PRESSURE_SETBACK_WEIGHT = 0.08;
+// The programming deck, the single definition the card model derives from: deck
+// size, the four-copy availability baseline and the Energy exchange rate (see
+// program-availability.js). A future deck (another edition, an expansion or a
+// variant) should change these counts here and nothing else; no rule variant
+// changes them yet, so the card model's caches are not keyed by deck.
 export const PROGRAM_CARD_COUNTS = new Map([
   ["FORWARD", 4],
   ["FORWARD_2", 3],
@@ -54,6 +59,11 @@ export const PROGRAM_CARD_COUNTS = new Map([
 ]);
 export const PROGRAM_CARD_IDS = Object.freeze([...PROGRAM_CARD_COUNTS.keys()]);
 export const AGAIN_CARD_COUNT = 1;
+export const PROGRAM_DECK_SIZE = [...PROGRAM_CARD_COUNTS.values()]
+  .reduce((sum, count) => sum + count, AGAIN_CARD_COUNT);
+// The most common card's copy count: needing one of those is the zero-cost
+// availability baseline.
+export const PROGRAM_COMMON_CARD_COPIES = Math.max(...PROGRAM_CARD_COUNTS.values());
 
 // v49by PROVISIONAL card-scarcity adaptability calibration.
 //
