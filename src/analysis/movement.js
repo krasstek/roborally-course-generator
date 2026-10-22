@@ -1184,9 +1184,9 @@ export function resolveTeleporterMove(tileMap, state, action, options = {}) {
     return null;
   }
 
-  // A drift starting on a teleporter teleports sideways, in the drift's
-  // direction, by the drift plus the teleporter's power (assumption: the rules
-  // only describe forward and back moves).
+  // A drift starting on a teleporter works like a normal move: the teleporter's
+  // power is added to the drift distance, sideways, facing unchanged (Transformers
+  // does not cover teleporters; ruling 2026-10-22).
   const sideways = action.relative === "left" || action.relative === "right";
   const signedDistance = sideways
     ? Math.max(1, action.steps ?? 1) + (teleporter.power ?? 2)
