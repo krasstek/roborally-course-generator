@@ -203,6 +203,9 @@ export function getVariantImpactSummary(scenario) {
   if (scenario.lessForeshadowing) {
     addImpact("lessForeshadowing");
   }
+  if (scenario.driftDeck) {
+    addImpact("driftDeck");
+  }
   if (scenario.staggeredBoards) {
     addImpact("staggeredBoards");
   }
@@ -791,6 +794,13 @@ export function updateRulesNote(scenario) {
     notes.push(appendRuleReference(
       "Less Foreshadowing: at the end of each round, shuffle your programming deck, discard pile, and non-damage cards in hand together to form a new programming deck.",
       { page: 32 }
+    ));
+  }
+
+  if (scenario.driftDeck) {
+    notes.push(appendRuleReference(
+      "Drift Deck: use the 22 planning cards from Robo Rally: Transformers instead of the program cards. Drift Left and Drift Right move one space sideways without turning; a drift that starts on a teleporter adds the teleporter's power to the drift.",
+      { source: "Robo Rally: Transformers", relation: "patterned" }
     ));
   }
 
