@@ -799,7 +799,7 @@ export function updateRulesNote(scenario) {
 
   if (scenario.driftDeck) {
     notes.push(appendRuleReference(
-      "Drift Deck: use the 22 planning cards from Robo Rally: Transformers instead of the program cards. Drift Left and Drift Right move one space sideways without turning; a drift that starts on a teleporter adds the teleporter's power to the drift.",
+      "Drift Deck: use the 22 planning cards from Robo Rally: Transformers instead of the program cards.",
       { source: "Robo Rally: Transformers", relation: "patterned" }
     ));
   }
