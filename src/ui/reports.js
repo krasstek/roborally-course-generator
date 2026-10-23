@@ -1278,6 +1278,7 @@ export function buildScenarioReport(scenario, selectedLegIndices = null) {
     `Repair Stations used: ${scenario.repairStations ? "yes" : "no"}`,
     `Moving Targets used: ${scenario.movingTargets ? "yes" : "no"}`,
     `Less Foreshadowing used: ${scenario.lessForeshadowing ? "yes" : "no"}`,
+    `Drift Deck used: ${scenario.driftDeck ? "yes" : "no"}`,
     `Staggered Boards used: ${scenario.staggeredBoards ? "yes" : "no"}`,
     scenario.generationBestMatch
       ? ((scenario.metrics?.difficultyFit ?? 0) > 0 || (scenario.metrics?.lengthFit ?? 0) > 0
