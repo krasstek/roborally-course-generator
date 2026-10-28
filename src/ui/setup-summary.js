@@ -338,7 +338,8 @@ export function updateSetupSummary(scenario) {
     difficultyFit >= strongDifficultyThreshold ||
     lengthFit >= 24 ||
     hasSelectionWarning ||
-    (noteParts.length > 0 && (Number(presentationMetrics?.fitScore) || 0) >= 30)
+    // 21 = the old 30 less the flat route-drama 9 the fit score no longer carries.
+    (noteParts.length > 0 && (Number(presentationMetrics?.fitScore) || 0) >= 21)
   );
   const checkpointPlacementAdvisory = courseNoteFacts.checkpointPlacement;
   const epicLengthSentence = epicVeryLong
