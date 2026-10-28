@@ -15,6 +15,7 @@ import {
   isViableFallbackScenario
 } from "./candidate-selection.js";
 import {
+  CLEAN_MATCH_FIT_SCORE,
   DIAGNOSTIC_DIFFICULTIES,
   DIAGNOSTIC_LENGTHS,
   DIAGNOSTIC_PLAYER_COUNTS,
@@ -306,6 +307,14 @@ export async function generateScenarioForPreferences(assets, preferences, option
       elapsedMs: Number((generationNow() - startedAt).toFixed(2))
     });
     return trimmed?.metrics?.acceptable ? trimmed : null;
+  }
+
+  function isCleanMatchScenario(scenario) {
+    return Boolean(
+      scenario?.metrics?.acceptable &&
+      scenario.metrics.exactTargetMatch &&
+      getAcceptableScenarioScore(scenario) <= CLEAN_MATCH_FIT_SCORE
+    );
   }
 
   // Picks the course for the player from the acceptable pool: { choice, scenario }.
@@ -690,11 +699,17 @@ export async function generateScenarioForPreferences(assets, preferences, option
       break;
     }
 
-    const selection = acceptableCandidates.length >= acceptableCandidateTarget
+    // A clean match (both bands, no soft penalty at all) cannot be beaten, only
+    // tied, so the run stops without waiting for the mode's candidate target.
+    const cleanMatchStop = !isCalibrationHarnessGeneration(preferences) &&
+      acceptableCandidates.length < acceptableCandidateTarget &&
+      acceptableCandidates.some(isCleanMatchScenario);
+    const selection = acceptableCandidates.length >= acceptableCandidateTarget || cleanMatchStop
       ? chooseAcceptableCandidate()
       : null;
     if (selection) {
       terminationReason = "accepted";
+      generationDiagnostics.cleanMatchStop = cleanMatchStop;
       const nearBestChoice = selection.choice;
       const selectedScenario = selection.scenario;
       generationDiagnostics.nearBestCandidateScores = nearBestChoice.pool.map((entry) => (

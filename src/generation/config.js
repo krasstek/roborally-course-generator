@@ -207,6 +207,9 @@ export const TARGET_STRONG_DIFFICULTY_FIT = 42;
 export const TARGET_STRONG_EASY_DIFFICULTY_FIT = 48;
 export const TARGET_STRONG_LENGTH_FIT = 24;
 export const NEAR_BEST_MIN_BIN_WIDTH = 2;
+// A course in both target bands with a fit score at or below this has no soft
+// penalty at all; the generation loop stops on the first one (2026-10-28).
+export const CLEAN_MATCH_FIT_SCORE = 1e-6;
 
 // Extra Docks remains a special forced-request fallback until the later variant
 // policy audit. Ordinary quality mismatches no longer acquire fallback cliffs.
