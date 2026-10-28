@@ -539,7 +539,7 @@ export function updateRulesNote(scenario) {
 
   if (scenario.repairStations) {
     notes.push(appendRuleReference(
-      "Repair Stations: at the end of the fifth register, a robot on an ordinary checkpoint may remove one Damage card from its deck, discard pile, hand, or registers and place it in the damage discard pile.",
+      "Repair Stations: at the end of the fifth register, a robot on a checkpoint may remove one Damage card from its deck, discard pile, hand, or registers and place it in the damage discard pile.",
       { source: "previous-editions", relation: "patterned" }
     ));
   }

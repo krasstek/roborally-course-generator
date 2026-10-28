@@ -420,7 +420,7 @@ const VARIANT_DEFINITION_ROWS = [
     category: VARIANT_CATEGORIES.factoryFloor,
     controlId: "variant-repair-stations",
     defaultState: "off",
-    description: "At the end of register 5, a robot on an ordinary checkpoint removes 1 Damage card. The Virtual Bots entry is not a repair station.",
+    description: "At the end of register 5, a robot on a checkpoint removes 1 Damage card. The Virtual Bots entry is not a repair station.",
     cost: VARIANT_COMPLEXITY.repairStations,
     complexityRationale: "Ordinary checkpoints gain one persistent end-of-turn repair rule.",
     mentalEvent: {
