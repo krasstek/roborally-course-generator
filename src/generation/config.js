@@ -196,7 +196,9 @@ export const VIRTUAL_BOT_EDGE_PROXIMITY_PENALTY = Object.freeze({
 // pacing, board-use and balance mismatches compete in one continuous fit score.
 // 45 is a modest tightening after the first empirical pass and remains exposed
 // in diagnostics so it can be tuned from real candidate distributions.
-export const SOFT_CANDIDATE_RETENTION_LIMIT = 45;
+// 2026-10-28: 45 -> 36 when route drama (a flat ~9 on nearly every course) left
+// the fit score, so acceptance stays as strict as before.
+export const SOFT_CANDIDATE_RETENTION_LIMIT = 36;
 // v49ag: strong target-axis misses are non-compensatory for ordinary acceptance.
 // They remain eligible for clearly labelled closest-match fallback after the
 // search is exhausted; this is an acceptance gate, not a physical hard failure.
@@ -205,6 +207,9 @@ export const TARGET_STRONG_DIFFICULTY_FIT = 42;
 export const TARGET_STRONG_EASY_DIFFICULTY_FIT = 48;
 export const TARGET_STRONG_LENGTH_FIT = 24;
 export const NEAR_BEST_MIN_BIN_WIDTH = 2;
+// A course in both target bands with a fit score at or below this has no soft
+// penalty at all; the generation loop stops on the first one (2026-10-28).
+export const CLEAN_MATCH_FIT_SCORE = 1e-6;
 
 // Extra Docks remains a special forced-request fallback until the later variant
 // policy audit. Ordinary quality mismatches no longer acquire fallback cliffs.

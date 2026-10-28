@@ -111,13 +111,12 @@ export function getFullCourseExpectedRoutes(sequence) {
     }));
 }
 
-export function getRouteDramaProfile(sequence, preferences = {}) {
+export function getRouteDramaProfile(sequence) {
   const entries = getFullCourseExpectedRoutes(sequence);
   if (entries.length <= 1) {
     return {
       level: "none",
       score: 0,
-      penalty: 0,
       crossings: 0,
       sharedTiles: 0,
       sharedTilePairs: 0,
@@ -185,22 +184,16 @@ export function getRouteDramaProfile(sequence, preferences = {}) {
   const pairCount = (entries.length * (entries.length - 1)) / 2;
   const normalizedShared = pairCount ? sharedTilePairs / pairCount : 0;
   const normalizedReverse = pairCount ? reverseEdges / pairCount : 0;
-  const score = Number(Math.min(40, normalizedShared * 2.2 + normalizedReverse * 1.6).toFixed(2));
-  const target = preferences.length === "short" || preferences.difficulty === "easy"
-    ? 2.5
-    : preferences.length === "long" || preferences.length === "epic" || preferences.difficulty === "hard" || preferences.difficulty === "brutal"
-      ? 7
-      : 5;
-  const weakPenaltyScale = preferences.length === "short" || preferences.difficulty === "easy" ? 0.35 : 1;
-  const weakPenalty = Math.max(0, target - score) * weakPenaltyScale;
-  const excessivePenalty = Math.max(0, score - 20) * 0.45;
-  const penalty = Number((weakPenalty + excessivePenalty).toFixed(2));
+  // Diagnostic only (Dev View), not part of the fit score since 2026-10-28: on
+  // full-course routes the score mostly measures route length (harness median
+  // ~96, p10 ~39), so its old 2.5-7 target and 20+ excess penalty charged a
+  // flat 9 to nearly every course. Robot interaction is priced as traffic RE.
+  const score = Number((normalizedShared * 2.2 + normalizedReverse * 1.6).toFixed(2));
   const level = score >= 14 ? "high" : score >= 7 ? "moderate" : score >= 3 ? "low" : "none";
 
   return {
     level,
     score,
-    penalty,
     crossings: sharedTilePairs,
     sharedTiles: sharedTiles.size,
     sharedTilePairs,

@@ -268,41 +268,21 @@ export function getCheckpointPlacementAdvisory(scenario) {
     };
   }
 
-  const locations = [opening ? "opening" : null, consecutive ? "middle" : null, final ? "finish" : null].filter(Boolean);
-  let noteText = "Checkpoint pacing is unusually quick.";
-  if (locations.length === 1) {
-    noteText = locations[0] === "opening"
-      ? "The opening is unusually quick."
-      : locations[0] === "middle"
-        ? (middleShortestShortfall > 0 && middleAverageShortfall <= 0
-          ? "One middle checkpoint leg is unusually quick."
-          : "The middle checkpoints come unusually quickly.")
-        : "The last leg of the course is unusually quick.";
-  } else if (locations.length === 2) {
-    noteText = locations.includes("opening") && locations.includes("middle")
-      ? "The opening and middle checkpoints come unusually quickly."
-      : locations.includes("middle") && locations.includes("finish")
-        ? "The middle checkpoints and last leg are unusually quick."
-        : "The opening and last leg are unusually quick.";
-  } else if (locations.length === 3) {
-    noteText = "Checkpoint pacing is unusually quick throughout the course.";
-  }
-
-  let bannerText = "Checkpoint pacing is tighter than usual.";
-  if (locations.length === 1) {
-    bannerText = locations[0] === "opening"
-      ? "The opening checkpoint comes up quickly."
-      : locations[0] === "middle"
-        ? "Some middle checkpoints come in quick succession."
-        : "The last leg of the course is unusually quick.";
-  } else if (locations.length === 2) {
-    bannerText = locations.includes("opening") && locations.includes("middle")
-      ? "Checkpoint pacing is compressed in the opening and middle."
-      : locations.includes("middle") && locations.includes("finish")
-        ? "Checkpoint pacing is unusually quick through the middle and last leg."
-        : "The opening and last leg are quicker than usual.";
-  } else if (locations.length === 3) {
-    bannerText = "Checkpoint pacing is unusually quick in the opening, middle, and last leg.";
+  // One sentence for both the course note and the fit banner, naming the short
+  // sections: "The opening and the last leg are short."
+  const oneMiddleLeg = middleShortestShortfall > 0 && middleAverageShortfall <= 0;
+  const sections = [
+    opening ? "the opening" : null,
+    consecutive ? (oneMiddleLeg ? "one middle leg" : "the middle legs") : null,
+    final ? "the last leg" : null
+  ].filter(Boolean);
+  let text = "Checkpoint legs are shorter than usual.";
+  if (sections.length === 3) {
+    text = "Checkpoint legs are short throughout the course.";
+  } else if (sections.length) {
+    const subject = sections.join(" and ");
+    const plural = sections.length > 1 || sections[0] === "the middle legs";
+    text = `${subject[0].toUpperCase()}${subject.slice(1)} ${plural ? "are" : "is"} short.`;
   }
 
   const score = Math.min(9, 5.5 + severity / 4);
@@ -315,8 +295,8 @@ export function getCheckpointPlacementAdvisory(scenario) {
     severity: Number(severity.toFixed(2)),
     threshold: advisoryThreshold,
     score: Number(score.toFixed(2)),
-    bannerText,
-    text: noteText
+    bannerText: text,
+    text
   };
 }
 
@@ -540,6 +520,23 @@ function concept(id, score, title, text) {
   return { id, score, title, text };
 }
 
+// Board Footprint wording, shared by the course note and the fit banner. Says
+// what players see on the table, not the app's route assumptions.
+export function getBoardFootprintSentences(notEnteredCount, lightlyUsedCount) {
+  const parts = [];
+  if (notEnteredCount > 0) {
+    parts.push(notEnteredCount === 1
+      ? "One board lies off the paths between checkpoints, but its edges and hazards still matter when robots get pushed."
+      : "Some boards lie off the paths between checkpoints, but their edges and hazards still matter when robots get pushed.");
+  }
+  if (lightlyUsedCount > 0) {
+    parts.push(lightlyUsedCount === 1
+      ? "One board is crossed only along an edge or a narrow corridor."
+      : "Some boards are crossed only along edges or narrow corridors.");
+  }
+  return parts;
+}
+
 export function buildCourseNoteConcepts(evidence) {
   const concepts = [];
   const { opening } = evidence;
@@ -573,18 +570,8 @@ export function buildCourseNoteConcepts(evidence) {
   const lightlyUsedCount = Number(evidence.boardUse?.weakTraversedCount) || 0;
   const notEnteredCount = Number(evidence.boardUse?.zeroRouteInfluenceCount) || 0;
   if (lightlyUsedCount > 0 || notEnteredCount > 0) {
-    const parts = [];
-    if (notEnteredCount > 0) {
-      parts.push(notEnteredCount === 1
-        ? "Robots are not expected to drive across one board, but it still affects the race beside it: its edges, hazards and walls matter when a robot is pushed off line."
-        : "Robots are not expected to drive across some boards, but they still affect the race beside them: their edges, hazards and walls matter when a robot is pushed off line.");
-    }
-    if (lightlyUsedCount > 0) {
-      parts.push(lightlyUsedCount === 1
-        ? "One board is used only as a narrow corridor or edge section."
-        : "Several boards are used only as narrow corridors or edge sections.");
-    }
-    parts.push("That is intentional; keep the full layout.");
+    const parts = getBoardFootprintSentences(notEnteredCount, lightlyUsedCount);
+    parts.push(lightlyUsedCount + notEnteredCount === 1 ? "Keep it in the layout." : "Keep them in the layout.");
     concepts.push(concept(
       "limited-board-footprint",
       (notEnteredCount > 0 ? 5 : 4.6) + Math.min(0.4, Math.max(0, lightlyUsedCount + notEnteredCount - 1) * 0.15),
@@ -623,6 +610,18 @@ export function buildCourseNoteConcepts(evidence) {
   // out. Threshold: about the top fifth of generated courses' offered starts
   // (2026-10-16 sample: spread 25%+ of the median route; typical 15%) and at
   // least one full turn. Competitive has its own start notes.
+  // STARTING SPACES (below) reports a meaningful accepted range overflow; when it
+  // does, Start Routes must not also claim the starts are balanced.
+  const fairnessOverflow = evidence.fairnessOverflow ?? null;
+  const meaningfulRangeOverflow = Boolean(
+    fairnessOverflow?.active &&
+    (
+      (Number(fairnessOverflow.fitPenalty) || 0) >= 4 ||
+      (Number(fairnessOverflow.overflowRE) || 0) >=
+        Math.max(0.4, (Number(fairnessOverflow.softOverflowAllowance) || 0) * 0.5)
+    )
+  );
+
   const startLengths = evidence.startLengths;
   if (
     startLengths && !evidence.variants?.competitiveMode &&
@@ -633,29 +632,20 @@ export function buildCourseNoteConcepts(evidence) {
       card: "awkward card sequences",
       mental: "tricky timing"
     }[startLengths.balancedBy];
+    const balancedClaim = meaningfulRangeOverflow ? "" : " Overall the starts are balanced.";
     concepts.push(concept(
       "start-lengths",
       5.4 + Math.min(1.4, (startLengths.relativeSpread - 0.25) * 4),
       "Start Routes",
       startLengths.balancedBy === "traffic"
-        ? "Some starting spaces have noticeably shorter routes, but they run through the busiest parts of the course; the longer routes are quieter. Overall the starts are balanced."
-        : `Some starting spaces have noticeably shorter routes, but those routes cost more along the way (${ownCost}). Overall the starts are balanced.`
+        ? `Some starting spaces have noticeably shorter routes, but they run through the busiest parts of the course; the longer routes are quieter.${balancedClaim}`
+        : `Some starting spaces have noticeably shorter routes, but those routes cost more along the way (${ownCost}).${balancedClaim}`
     ));
   }
 
   // STARTING SPACES: ordinary in-range fairness is silent. Only a meaningful
   // accepted overflow or fallback mismatch is worth telling the player about.
   {
-    const fairnessOverflow = evidence.fairnessOverflow ?? null;
-    const meaningfulRangeOverflow = Boolean(
-      fairnessOverflow?.active &&
-      (
-        (Number(fairnessOverflow.fitPenalty) || 0) >= 4 ||
-        (Number(fairnessOverflow.overflowRE) || 0) >=
-          Math.max(0.4, (Number(fairnessOverflow.softOverflowAllowance) || 0) * 0.5)
-      )
-    );
-
     if (meaningfulRangeOverflow) {
       concepts.push(concept(
         "start-balance-range",

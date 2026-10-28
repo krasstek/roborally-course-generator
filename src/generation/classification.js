@@ -395,7 +395,7 @@ export function classifyCandidate(sequence, preferences, context = {}) {
   if ((sandwichedDockUse.missingSideCount ?? 0) > 0) {
     softFailures.push("sandwiched-side-use");
   }
-  const routeDrama = getRouteDramaProfile(sequence, preferences);
+  const routeDrama = getRouteDramaProfile(sequence);
   const spacingStarts = Array.isArray(context.activeStarts) && context.activeStarts.length
     ? context.activeStarts
     : (sequence?.firstLeg?.starts ?? []).map((entry) => entry.start).filter(Boolean);
@@ -566,7 +566,6 @@ export function classifyCandidate(sequence, preferences, context = {}) {
     finalPacing: finalLegAnticlimax.penalty,
     boardUse: boardFootprintUse.penalty,
     sandwichedUse: sandwichedDockUse.penalty,
-    routeDrama: routeDrama.penalty,
     startCapacity: Math.max(0, preferences.playerCount - usableStarts.length) * 20
   };
   const fitScore = Object.values(fitComponents).reduce((sum, value) => (
