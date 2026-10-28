@@ -623,6 +623,18 @@ export function buildCourseNoteConcepts(evidence) {
   // out. Threshold: about the top fifth of generated courses' offered starts
   // (2026-10-16 sample: spread 25%+ of the median route; typical 15%) and at
   // least one full turn. Competitive has its own start notes.
+  // STARTING SPACES (below) reports a meaningful accepted range overflow; when it
+  // does, Start Routes must not also claim the starts are balanced.
+  const fairnessOverflow = evidence.fairnessOverflow ?? null;
+  const meaningfulRangeOverflow = Boolean(
+    fairnessOverflow?.active &&
+    (
+      (Number(fairnessOverflow.fitPenalty) || 0) >= 4 ||
+      (Number(fairnessOverflow.overflowRE) || 0) >=
+        Math.max(0.4, (Number(fairnessOverflow.softOverflowAllowance) || 0) * 0.5)
+    )
+  );
+
   const startLengths = evidence.startLengths;
   if (
     startLengths && !evidence.variants?.competitiveMode &&
@@ -633,29 +645,20 @@ export function buildCourseNoteConcepts(evidence) {
       card: "awkward card sequences",
       mental: "tricky timing"
     }[startLengths.balancedBy];
+    const balancedClaim = meaningfulRangeOverflow ? "" : " Overall the starts are balanced.";
     concepts.push(concept(
       "start-lengths",
       5.4 + Math.min(1.4, (startLengths.relativeSpread - 0.25) * 4),
       "Start Routes",
       startLengths.balancedBy === "traffic"
-        ? "Some starting spaces have noticeably shorter routes, but they run through the busiest parts of the course; the longer routes are quieter. Overall the starts are balanced."
-        : `Some starting spaces have noticeably shorter routes, but those routes cost more along the way (${ownCost}). Overall the starts are balanced.`
+        ? `Some starting spaces have noticeably shorter routes, but they run through the busiest parts of the course; the longer routes are quieter.${balancedClaim}`
+        : `Some starting spaces have noticeably shorter routes, but those routes cost more along the way (${ownCost}).${balancedClaim}`
     ));
   }
 
   // STARTING SPACES: ordinary in-range fairness is silent. Only a meaningful
   // accepted overflow or fallback mismatch is worth telling the player about.
   {
-    const fairnessOverflow = evidence.fairnessOverflow ?? null;
-    const meaningfulRangeOverflow = Boolean(
-      fairnessOverflow?.active &&
-      (
-        (Number(fairnessOverflow.fitPenalty) || 0) >= 4 ||
-        (Number(fairnessOverflow.overflowRE) || 0) >=
-          Math.max(0.4, (Number(fairnessOverflow.softOverflowAllowance) || 0) * 0.5)
-      )
-    );
-
     if (meaningfulRangeOverflow) {
       concepts.push(concept(
         "start-balance-range",
