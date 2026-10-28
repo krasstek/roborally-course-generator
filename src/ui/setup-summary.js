@@ -2,7 +2,8 @@
 import {
   buildCourseNoteFacts,
   buildCourseNotesHtml,
-  clearCourseNotesCache
+  clearCourseNotesCache,
+  getBoardFootprintSentences
 } from "../../course-notes.js";
 import { normalizeGenerationMode, VARIANT_GENERATION_TIME_FACTORS as VARIANT_FACTORS } from "../generation/generation-modes.js";
 import {
@@ -355,17 +356,10 @@ export function updateSetupSummary(scenario) {
       ? "One side of the Sandwiched Dock uses only a small part of its board area. It is kept to preserve the intended sandwich."
       : "The Sandwiched Dock sides use only a small part of their board area. They are kept to preserve the intended sandwich."}`
     : "";
-  const notEnteredSentence = notEnteredBoardCount > 0
-    ? ` ${notEnteredBoardCount === 1
-      ? "One board is not driven across but still affects the routes beside it."
-      : "Some boards are not driven across but still affect the routes beside them."}`
-    : "";
-  const limitedFootprintSentence = lightlyUsedBoardCount > 0
-    ? ` ${lightlyUsedBoardCount === 1
-      ? "One board sees only a small part of its area used by the race."
-      : "Some boards see only a small part of their area used by the race."}`
-    : "";
-  const boardUseSentence = `${sandwichedUseSentence}${notEnteredSentence}${limitedFootprintSentence}`;
+  const boardUseSentence = [
+    sandwichedUseSentence,
+    ...getBoardFootprintSentences(notEnteredBoardCount, lightlyUsedBoardCount).map((text) => ` ${text}`)
+  ].join("");
   const extraDocksRequestMismatch = courseNoteFacts.extraDocksRequestMismatch;
   const competitiveSoftMismatch = courseNoteFacts.competitiveSoftMismatch;
   const competitiveMismatchSentence = competitiveSoftMismatch

@@ -540,6 +540,23 @@ function concept(id, score, title, text) {
   return { id, score, title, text };
 }
 
+// Board Footprint wording, shared by the course note and the fit banner. Says
+// what players see on the table, not the app's route assumptions.
+export function getBoardFootprintSentences(notEnteredCount, lightlyUsedCount) {
+  const parts = [];
+  if (notEnteredCount > 0) {
+    parts.push(notEnteredCount === 1
+      ? "One board lies off the paths between checkpoints, but its edges and hazards still matter when robots get pushed."
+      : "Some boards lie off the paths between checkpoints, but their edges and hazards still matter when robots get pushed.");
+  }
+  if (lightlyUsedCount > 0) {
+    parts.push(lightlyUsedCount === 1
+      ? "One board is crossed only along an edge or a narrow corridor."
+      : "Some boards are crossed only along edges or narrow corridors.");
+  }
+  return parts;
+}
+
 export function buildCourseNoteConcepts(evidence) {
   const concepts = [];
   const { opening } = evidence;
@@ -573,18 +590,8 @@ export function buildCourseNoteConcepts(evidence) {
   const lightlyUsedCount = Number(evidence.boardUse?.weakTraversedCount) || 0;
   const notEnteredCount = Number(evidence.boardUse?.zeroRouteInfluenceCount) || 0;
   if (lightlyUsedCount > 0 || notEnteredCount > 0) {
-    const parts = [];
-    if (notEnteredCount > 0) {
-      parts.push(notEnteredCount === 1
-        ? "Robots are not expected to drive across one board, but it still affects the race beside it: its edges, hazards and walls matter when a robot is pushed off line."
-        : "Robots are not expected to drive across some boards, but they still affect the race beside them: their edges, hazards and walls matter when a robot is pushed off line.");
-    }
-    if (lightlyUsedCount > 0) {
-      parts.push(lightlyUsedCount === 1
-        ? "One board is used only as a narrow corridor or edge section."
-        : "Several boards are used only as narrow corridors or edge sections.");
-    }
-    parts.push("That is intentional; keep the full layout.");
+    const parts = getBoardFootprintSentences(notEnteredCount, lightlyUsedCount);
+    parts.push(lightlyUsedCount + notEnteredCount === 1 ? "Keep it in the layout." : "Keep them in the layout.");
     concepts.push(concept(
       "limited-board-footprint",
       (notEnteredCount > 0 ? 5 : 4.6) + Math.min(0.4, Math.max(0, lightlyUsedCount + notEnteredCount - 1) * 0.15),
