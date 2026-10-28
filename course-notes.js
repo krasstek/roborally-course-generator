@@ -268,41 +268,21 @@ export function getCheckpointPlacementAdvisory(scenario) {
     };
   }
 
-  const locations = [opening ? "opening" : null, consecutive ? "middle" : null, final ? "finish" : null].filter(Boolean);
-  let noteText = "Checkpoint pacing is unusually quick.";
-  if (locations.length === 1) {
-    noteText = locations[0] === "opening"
-      ? "The opening is unusually quick."
-      : locations[0] === "middle"
-        ? (middleShortestShortfall > 0 && middleAverageShortfall <= 0
-          ? "One middle checkpoint leg is unusually quick."
-          : "The middle checkpoints come unusually quickly.")
-        : "The last leg of the course is unusually quick.";
-  } else if (locations.length === 2) {
-    noteText = locations.includes("opening") && locations.includes("middle")
-      ? "The opening and middle checkpoints come unusually quickly."
-      : locations.includes("middle") && locations.includes("finish")
-        ? "The middle checkpoints and last leg are unusually quick."
-        : "The opening and last leg are unusually quick.";
-  } else if (locations.length === 3) {
-    noteText = "Checkpoint pacing is unusually quick throughout the course.";
-  }
-
-  let bannerText = "Checkpoint pacing is tighter than usual.";
-  if (locations.length === 1) {
-    bannerText = locations[0] === "opening"
-      ? "The opening checkpoint comes up quickly."
-      : locations[0] === "middle"
-        ? "Some middle checkpoints come in quick succession."
-        : "The last leg of the course is unusually quick.";
-  } else if (locations.length === 2) {
-    bannerText = locations.includes("opening") && locations.includes("middle")
-      ? "Checkpoint pacing is compressed in the opening and middle."
-      : locations.includes("middle") && locations.includes("finish")
-        ? "Checkpoint pacing is unusually quick through the middle and last leg."
-        : "The opening and last leg are quicker than usual.";
-  } else if (locations.length === 3) {
-    bannerText = "Checkpoint pacing is unusually quick in the opening, middle, and last leg.";
+  // One sentence for both the course note and the fit banner, naming the short
+  // sections: "The opening and the last leg are short."
+  const oneMiddleLeg = middleShortestShortfall > 0 && middleAverageShortfall <= 0;
+  const sections = [
+    opening ? "the opening" : null,
+    consecutive ? (oneMiddleLeg ? "one middle leg" : "the middle legs") : null,
+    final ? "the last leg" : null
+  ].filter(Boolean);
+  let text = "Checkpoint legs are shorter than usual.";
+  if (sections.length === 3) {
+    text = "Checkpoint legs are short throughout the course.";
+  } else if (sections.length) {
+    const subject = sections.join(" and ");
+    const plural = sections.length > 1 || sections[0] === "the middle legs";
+    text = `${subject[0].toUpperCase()}${subject.slice(1)} ${plural ? "are" : "is"} short.`;
   }
 
   const score = Math.min(9, 5.5 + severity / 4);
@@ -315,8 +295,8 @@ export function getCheckpointPlacementAdvisory(scenario) {
     severity: Number(severity.toFixed(2)),
     threshold: advisoryThreshold,
     score: Number(score.toFixed(2)),
-    bannerText,
-    text: noteText
+    bannerText: text,
+    text
   };
 }
 
