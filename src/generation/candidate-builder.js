@@ -1029,20 +1029,24 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
           pieceMap
         )
         : [];
-      rebootTokens = recoveryRule === "reboot_tokens"
+      const boardRebootPlacement = recoveryRule === "reboot_tokens"
         ? placeRebootTokens(
           scenarioBoardRects,
           scenarioTileMap,
           rebootPlacementExclusions,
           preferences.playerCount,
-          scenarioOverlayRebootRects
+          scenarioOverlayRebootRects,
+          { lessDeadlyGame }
         )
+        : null;
+      rebootTokens = boardRebootPlacement
+        ? boardRebootPlacement.tokens
         : recoveryRule === "home_reboot"
           ? placeHomeRebootTokens(scenarioDockPlacements, pieceMap, resolved.starts, scenarioTileMap, checkpoints, {
             lessDeadlyGame
           })
           : [];
-      if (recoveryRule === "reboot_tokens" && rebootTokens.length < scenarioBoardRects.length + scenarioOverlayRebootRects.length) {
+      if (boardRebootPlacement?.missingCount > 0) {
         sequenceFailureCategory = "reboot-layout";
         sequenceFailureReason = `reboot token placement could not provide ${preferences.playerCount}-robot safe capacity on every board`;
         sequence = null;

@@ -548,10 +548,13 @@ export function analyzeCalibrationPlacements(assets, sourceScenario, placements,
       pieceMap
     )
     : [];
-  const rebootTokens = recoveryRule === "reboot_tokens"
-    ? placeRebootTokens(boardRects, tileMap, checkpoints, playerCount, overlayRebootRects)
-    : [];
-  if (recoveryRule === "reboot_tokens" && rebootTokens.length < boardRects.length + overlayRebootRects.length) {
+  const boardRebootPlacement = recoveryRule === "reboot_tokens"
+    ? placeRebootTokens(boardRects, tileMap, checkpoints, playerCount, overlayRebootRects, {
+      lessDeadlyGame: Boolean(variantBundle.lessDeadlyGame)
+    })
+    : null;
+  const rebootTokens = boardRebootPlacement?.tokens ?? [];
+  if (boardRebootPlacement?.missingCount > 0) {
     return null;
   }
   const baseOptions = applyVariantAnalysisOptions({

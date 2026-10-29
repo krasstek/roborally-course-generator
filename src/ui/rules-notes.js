@@ -518,10 +518,37 @@ export function updateRulesNote(scenario) {
   const hasOverlayBoards = (scenario.overlayPlacements ?? []).some((placement) => (
     pieceMap?.[placement.pieceId] && !isMiniOverlayPiece(pieceMap[placement.pieceId])
   ));
+  // Older saves have no overlayReboot preference; their tokens tell.
+  const overlayOwnTokens = (scenario.rebootTokens ?? []).some((token) => token.overlayRect) ||
+    scenario.preferences?.overlayReboot === "own";
   if (scenario.recoveryRule === "reboot_tokens" && hasOverlayBoards) {
-    notes.push((scenario.rebootTokens ?? []).some((token) => token.overlayRect)
+    notes.push(overlayOwnTokens
       ? "Overlay boards: each overlay board has its own reboot token. A robot destroyed on an overlay board reboots there."
       : "Overlay boards: a robot destroyed on an overlay board reboots at the reboot token of the board underneath.");
+  }
+
+  // A board where nothing can destroy a robot gets no reboot token; say so, or
+  // the missing token looks like a mistake.
+  if (scenario.recoveryRule === "reboot_tokens" && pieceMap) {
+    const tokens = scenario.rebootTokens ?? [];
+    const tokenlessBoards = (scenario.boardRects ?? [])
+      .filter((rect) => !tokens.some((token) => token.boardIndex === rect.index))
+      .map((rect) => rect.pieceId);
+    if (overlayOwnTokens) {
+      (scenario.overlayPlacements ?? [])
+        .filter((placement) => pieceMap[placement.pieceId] && !isMiniOverlayPiece(pieceMap[placement.pieceId]))
+        .filter((placement) => !tokens.some((token) => (
+          token.overlayRect && token.overlayRect.x === placement.x && token.overlayRect.y === placement.y
+        )))
+        .forEach((placement) => tokenlessBoards.push(placement.pieceId));
+    }
+    if (tokenlessBoards.length) {
+      const names = tokenlessBoards.map((pieceId) => pieceMap[pieceId]?.name ?? pieceId);
+      const list = names.length === 1
+        ? names[0]
+        : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+      notes.push(`No reboot token on ${list}: nothing there can destroy a robot.`);
+    }
   }
 
   if (scenario.recoveryRule === "home_reboot") {
