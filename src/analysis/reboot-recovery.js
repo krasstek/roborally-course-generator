@@ -19,13 +19,21 @@ export function getBoardRectForPoint(point, boardRects = []) {
   )) ?? null;
 }
 
+// A 6x6 overlay board with its own token (Overlay Reboot Tokens: own) owns its
+// squares; its token carries the overlay rect. Older saves have none.
+function getOverlayRebootTokenForPoint(point, rebootTokens = []) {
+  return rebootTokens.find((token) => token.overlayRect && getBoardRectForPoint(point, [token.overlayRect])) ?? null;
+}
+
 export function getRebootTokenForPoint(point, boardRects = [], rebootTokens = []) {
   const boardRect = getBoardRectForPoint(point, boardRects);
   if (!boardRect) {
     return null;
   }
 
-  return rebootTokens.find((token) => token.boardIndex === boardRect.index) ?? null;
+  return getOverlayRebootTokenForPoint(point, rebootTokens) ??
+    rebootTokens.find((token) => token.boardIndex === boardRect.index) ??
+    null;
 }
 
 export function getRebootChoicesForPoint(point) {
@@ -63,9 +71,11 @@ export function resolveRebootRecoveryPoint(state, crashPoint, options = {}, { of
       : null;
     const referenceBoard = crashBoard ?? departureBoard;
     if (!referenceBoard) return null;
-    const token = (options.rebootTokens || []).find(
-      (candidate) => candidate.boardIndex === referenceBoard.index
-    ) ?? null;
+    const token = getOverlayRebootTokenForPoint(crashBoard ? crashPoint : state, options.rebootTokens) ??
+      (options.rebootTokens || []).find(
+        (candidate) => candidate.boardIndex === referenceBoard.index
+      ) ??
+      null;
     if (!token) return null;
     return {
       source: "board_reboot_token",

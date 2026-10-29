@@ -46,6 +46,7 @@ import {
   cycleActFastControlChoice,
   cycleBoardSpreadControl,
   cycleOverlayModeControl,
+  cycleOverlayRebootControl,
   cycleVariantControlState,
   filterOptionalRulesIndex,
   getPreferencesFromControls,
@@ -629,6 +630,11 @@ function handleOptionalRuleControlClick(event) {
 
   if (button.dataset.overlayControl) {
     cycleOverlayModeControl();
+    return;
+  }
+
+  if (button.dataset.overlayRebootControl) {
+    cycleOverlayRebootControl();
     return;
   }
 

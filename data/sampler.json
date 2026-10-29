@@ -543,10 +543,11 @@
       "features": [
         {
           "type": "ramp",
-          "dir": [
-            "S",
-            "E"
-          ]
+          "dir": "S"
+        },
+        {
+          "type": "ramp",
+          "dir": "E"
         }
       ]
     },

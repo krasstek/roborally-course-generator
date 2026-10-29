@@ -97,8 +97,10 @@ import { chooseOverlayPlacements } from "./overlays.js";
 import {
   BOARD_SPREAD_MODES,
   getSelectedExpansionIds,
+  OVERLAY_REBOOT_MODES,
   normalizeBoardSpread,
-  normalizeOverlayMode
+  normalizeOverlayMode,
+  normalizeOverlayReboot
 } from "./preferences.js";
 import { generationRandom, sample, shuffle } from "./random.js";
 import { placeHomeRebootTokens, placeRebootTokens } from "./reboot-tokens.js";
@@ -1021,19 +1023,26 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
       const rebootPlacementExclusions = virtualBots && flagZero
         ? [flagZero, ...playableCheckpoints]
         : playableCheckpoints;
+      const scenarioOverlayRebootRects = normalizeOverlayReboot(preferences.overlayReboot) === OVERLAY_REBOOT_MODES.own
+        ? buildBoardRects(
+          scenarioOverlayPlacements.filter((placement) => !isMiniOverlayPiece(pieceMap[placement.pieceId])),
+          pieceMap
+        )
+        : [];
       rebootTokens = recoveryRule === "reboot_tokens"
         ? placeRebootTokens(
           scenarioBoardRects,
           scenarioTileMap,
           rebootPlacementExclusions,
-          preferences.playerCount
+          preferences.playerCount,
+          scenarioOverlayRebootRects
         )
         : recoveryRule === "home_reboot"
           ? placeHomeRebootTokens(scenarioDockPlacements, pieceMap, resolved.starts, scenarioTileMap, checkpoints, {
             lessDeadlyGame
           })
           : [];
-      if (recoveryRule === "reboot_tokens" && rebootTokens.length < scenarioBoardRects.length) {
+      if (recoveryRule === "reboot_tokens" && rebootTokens.length < scenarioBoardRects.length + scenarioOverlayRebootRects.length) {
         sequenceFailureCategory = "reboot-layout";
         sequenceFailureReason = `reboot token placement could not provide ${preferences.playerCount}-robot safe capacity on every board`;
         sequence = null;
@@ -2291,6 +2300,7 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
       preferences: {
         ...generationPreferences,
         overlayMode: normalizeOverlayMode(generationPreferences.overlayMode),
+        overlayReboot: normalizeOverlayReboot(generationPreferences.overlayReboot),
         actFast,
         actFastMode,
         competitiveMode,

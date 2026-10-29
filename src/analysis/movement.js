@@ -682,7 +682,11 @@ export function canMoveBetween(
     ledgeDamage: toLedges.has(OPPOSITE[dir]) && !hasRampForDir(toTile, OPPOSITE[dir])
       ? (isWater(toTile) ? 1 : 2)
       : 0,
-    rampAscent: fromLedges.has(dir) && hasRampForDir(fromTile, dir)
+    // A ramp sits on the lower square and points uphill; its square carries no
+    // ledge on that side (data convention). Leaving through the ramp side is the
+    // climb, which costs one extra move for any programmed move (forward, back,
+    // drift); coming down is an ordinary step.
+    rampAscent: hasRampForDir(fromTile, dir)
   };
 }
 

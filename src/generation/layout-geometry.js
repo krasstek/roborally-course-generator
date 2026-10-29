@@ -1,5 +1,6 @@
 // Robo Rally Course Randomizer - layout geometry: placement offsets and rects, tile wall/laser helpers, board connectivity
 import { placePiece, rotatedDimensions } from "../../board.js";
+import { CARDINAL_DIRS } from "./config.js";
 
 export function countConnectedComponents(graph) {
   if (!graph?.nodes?.length) {
@@ -271,6 +272,33 @@ export function tileHasLaserSupportBlock(features = [], side, options = {}) {
 
 export function tileHasLaserInDirection(features = [], dir) {
   return features.some((feature) => feature.type === "laser" && feature.dir === dir);
+}
+
+// Every cardinal laser beam must start and end at an anchor: a wall-type block
+// (wall, repulsor, red/green wall, or a ledge seen from its lower square) or the
+// edge of the course (no square beyond). Returns each laser tile whose beam is
+// open on one side, i.e. the neighbour has no anchor and does not continue the
+// beam. An overlay's own border is not an edge: the board underneath continues.
+// Diagonal lasers (Robo Rally Dice) are exempt.
+export function findUnanchoredLaserEnds(tileMap) {
+  const openEnds = [];
+  for (const tile of tileMap.values()) {
+    const features = tile.features || [];
+    for (const laser of features) {
+      if (laser.type !== "laser" || !CARDINAL_DIRS[laser.dir]) continue;
+      for (const side of [laser.dir, getOppositeSide(laser.dir)]) {
+        if (tileHasLaserSupportBlock(features, side, { includeLowerLedge: true })) continue;
+        const delta = CARDINAL_DIRS[side];
+        const neighbor = tileMap.get(`${tile.x + delta.dx},${tile.y + delta.dy}`);
+        if (!neighbor) continue;
+        const neighborFeatures = neighbor.features || [];
+        if (tileHasLaserSupportBlock(neighborFeatures, getOppositeSide(side), { includeLowerLedge: false })) continue;
+        if (tileHasLaserInDirection(neighborFeatures, laser.dir)) continue;
+        openEnds.push({ x: tile.x, y: tile.y, dir: laser.dir, side });
+      }
+    }
+  }
+  return openEnds;
 }
 
 export function getPlacedTileFeatureMap(piece, placement) {

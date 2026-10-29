@@ -18,7 +18,9 @@ export function isUnsafeRebootQueueTile(tile) {
   ));
 }
 
-export function canStepForReboot(tileMap, boardRect, from, dir) {
+// crossBoards: the reboot queue may continue onto a neighbouring board (or off
+// an overlay onto the board underneath); used only when it cannot fit inside.
+export function canStepForReboot(tileMap, boardRect, from, dir, crossBoards = false) {
   const delta = {
     N: { dx: 0, dy: -1 },
     E: { dx: 1, dy: 0 },
@@ -36,7 +38,7 @@ export function canStepForReboot(tileMap, boardRect, from, dir) {
     y: from.y + delta.dy
   };
 
-  if (!pointOnRect(to, boardRect)) {
+  if (!crossBoards && !pointOnRect(to, boardRect)) {
     return false;
   }
 
@@ -55,11 +57,11 @@ export function canStepForReboot(tileMap, boardRect, from, dir) {
   return true;
 }
 
-export function scoreRebootDirection(tileMap, boardRect, point, dir, requiredRunway) {
+export function scoreRebootDirection(tileMap, boardRect, point, dir, requiredRunway, crossBoards = false) {
   let runway = 0;
   let current = point;
 
-  while (canStepForReboot(tileMap, boardRect, current, dir)) {
+  while (canStepForReboot(tileMap, boardRect, current, dir, crossBoards)) {
     const delta = {
       N: { dx: 0, dy: -1 },
       E: { dx: 1, dy: 0 },
@@ -83,15 +85,35 @@ export function scoreRebootDirection(tileMap, boardRect, point, dir, requiredRun
   return Math.min(runway, 3) * 4;
 }
 
-export function placeRebootTokens(boardRects, tileMap, checkpoints, playerCount) {
+// overlayRects: 6x6 overlay boards that get their own token (Overlay Reboot
+// Tokens: own). Their tokens carry the overlay's rect, which recovery matches
+// before the main board, and main-board tokens stay off overlay squares.
+export function placeRebootTokens(boardRects, tileMap, checkpoints, playerCount, overlayRects = []) {
   // The token square is the first simultaneous-reboot position. The arrow must
   // provide one additional safe square per remaining player so every robot can
   // be placed without looping back through an occupied or lethal reboot space.
   const requiredRunway = Math.max(0, Math.floor(Number(playerCount) || 1) - 1);
   const dirs = ["N", "E", "S", "W"];
   const tokens = [];
+  const areas = [
+    ...boardRects.map((rect) => ({ rect, overlay: false })),
+    ...overlayRects.map((rect) => ({ rect, overlay: true }))
+  ];
 
-  for (const boardRect of boardRects) {
+  for (const { rect: boardRect, overlay } of areas) {
+    // A queue that fits inside the board keeps today's choice; only a board too
+    // small for the player count (e.g. a 6x6 at 7-8 players) lets it continue
+    // onto the next board. A lone 6x6 board still cannot fit 8 robots.
+    const best = findRebootTokenForArea(boardRect, overlay, false) ??
+      findRebootTokenForArea(boardRect, overlay, true);
+    if (best) {
+      tokens.push(best);
+    }
+  }
+
+  return tokens;
+
+  function findRebootTokenForArea(boardRect, overlay, crossBoards) {
     const center = {
       x: boardRect.x + (boardRect.width - 1) / 2,
       y: boardRect.y + (boardRect.height - 1) / 2
@@ -105,6 +127,10 @@ export function placeRebootTokens(boardRects, tileMap, checkpoints, playerCount)
         const features = tile.features || [];
 
         if (checkpoints.some((checkpoint) => checkpoint.x === x && checkpoint.y === y)) {
+          continue;
+        }
+
+        if (!overlay && overlayRects.some((overlayRect) => pointOnRect(point, overlayRect))) {
           continue;
         }
 
@@ -124,7 +150,7 @@ export function placeRebootTokens(boardRects, tileMap, checkpoints, playerCount)
         const centerDistance = Math.abs(point.x - center.x) + Math.abs(point.y - center.y);
 
         for (const dir of dirs) {
-          const directionScore = scoreRebootDirection(tileMap, boardRect, point, dir, requiredRunway);
+          const directionScore = scoreRebootDirection(tileMap, boardRect, point, dir, requiredRunway, crossBoards);
           if (directionScore === null) {
             continue;
           }
@@ -137,25 +163,36 @@ export function placeRebootTokens(boardRects, tileMap, checkpoints, playerCount)
           );
 
           if (!best || score > best.score) {
-            best = {
-              boardIndex: boardRect.index,
-              pieceId: boardRect.pieceId,
-              x,
-              y,
-              dir,
-              score
-            };
+            best = overlay
+              ? {
+                boardIndex: null,
+                pieceId: boardRect.pieceId,
+                overlayRect: {
+                  x: boardRect.x,
+                  y: boardRect.y,
+                  width: boardRect.width,
+                  height: boardRect.height
+                },
+                x,
+                y,
+                dir,
+                score
+              }
+              : {
+                boardIndex: boardRect.index,
+                pieceId: boardRect.pieceId,
+                x,
+                y,
+                dir,
+                score
+              };
           }
         }
       }
     }
 
-    if (best) {
-      tokens.push(best);
-    }
+    return best;
   }
-
-  return tokens;
 }
 
 export function canTraceRouteFromHomeRebootTile(tileMap, point, checkpoints = [], options = {}) {

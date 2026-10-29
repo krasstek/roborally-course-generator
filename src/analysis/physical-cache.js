@@ -22,7 +22,10 @@ export function getContextualPhysicalOptionSignature(options = {}) {
         token.x ?? "",
         token.y ?? "",
         token.facing ?? token.dir ?? "",
-        token.boardId ?? token.board ?? ""
+        token.boardId ?? token.board ?? "",
+        token.overlayRect
+          ? `o${token.overlayRect.x}:${token.overlayRect.y}:${token.overlayRect.width}:${token.overlayRect.height}`
+          : ""
       ].join(","))
       .sort()
       .join(";");

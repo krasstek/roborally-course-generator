@@ -308,10 +308,14 @@ function drawFeatureFocusShade(ctx, goals, overlayPlacements, pieces, bounds, ti
   }
 }
 
+// Walls rest against the owning square's border, inside that square, so a wall
+// listed on one side of a border never paints over its neighbour (e.g. a red
+// wall facing a green wall shows both).
 function drawWalls(ctx, sides, x, y, tileSize, options = {}) {
   ctx.save();
   ctx.strokeStyle = options.strokeStyle ?? "#111";
   ctx.lineWidth = options.lineWidth ?? 3;
+  const half = ctx.lineWidth / 2;
 
   const left = x;
   const top = y;
@@ -321,17 +325,17 @@ function drawWalls(ctx, sides, x, y, tileSize, options = {}) {
   for (const side of sides || []) {
     ctx.beginPath();
     if (side === "N") {
-      ctx.moveTo(left, top);
-      ctx.lineTo(right, top);
+      ctx.moveTo(left, top + half);
+      ctx.lineTo(right, top + half);
     } else if (side === "E") {
-      ctx.moveTo(right, top);
-      ctx.lineTo(right, bottom);
+      ctx.moveTo(right - half, top);
+      ctx.lineTo(right - half, bottom);
     } else if (side === "S") {
-      ctx.moveTo(left, bottom);
-      ctx.lineTo(right, bottom);
+      ctx.moveTo(left, bottom - half);
+      ctx.lineTo(right, bottom - half);
     } else if (side === "W") {
-      ctx.moveTo(left, top);
-      ctx.lineTo(left, bottom);
+      ctx.moveTo(left + half, top);
+      ctx.lineTo(left + half, bottom);
     }
     ctx.stroke();
   }
@@ -349,6 +353,14 @@ function directionToAngle(dir) {
       return Math.PI / 2;
     case "W":
       return Math.PI;
+    case "NE":
+      return -Math.PI / 4;
+    case "SE":
+      return Math.PI / 4;
+    case "SW":
+      return (3 * Math.PI) / 4;
+    case "NW":
+      return (-3 * Math.PI) / 4;
     default:
       return 0;
   }
@@ -836,59 +848,52 @@ function drawBackgroundFeature(ctx, feature, x, y, tileSize) {
   }
 }
 
+// A ledge is listed on its lower square (the wall face exists only there). Draw
+// it as a cliff edge: a bar against the border with short teeth pointing down
+// into the lower square, so up and down read at a glance.
 function drawLedgeFeature(ctx, feature, x, y, tileSize) {
+  const barWidth = Math.max(3, tileSize * 0.1);
+  const toothLength = tileSize * 0.16;
+  const toothCount = 4;
   ctx.save();
-  ctx.strokeStyle = "#493d2d";
-  ctx.lineWidth = Math.max(2, tileSize * 0.09);
+  ctx.strokeStyle = "#5b4128";
+  ctx.lineCap = "butt";
 
   for (const side of feature.sides || []) {
-    let x1 = x;
-    let y1 = y;
-    let x2 = x;
-    let y2 = y;
-    let insetX = 0;
-    let insetY = 0;
-
+    ctx.save();
+    // Local frame: the border runs along y = 0 from x = 0 to tileSize, and +y
+    // points into the lower (owning) square.
     if (side === "N") {
-      x1 = x;
-      y1 = y + 1;
-      x2 = x + tileSize;
-      y2 = y + 1;
-      insetY = tileSize * 0.12;
+      ctx.translate(x, y);
     } else if (side === "E") {
-      x1 = x + tileSize - 1;
-      y1 = y;
-      x2 = x + tileSize - 1;
-      y2 = y + tileSize;
-      insetX = -tileSize * 0.12;
+      ctx.translate(x + tileSize, y);
+      ctx.rotate(Math.PI / 2);
     } else if (side === "S") {
-      x1 = x;
-      y1 = y + tileSize - 1;
-      x2 = x + tileSize;
-      y2 = y + tileSize - 1;
-      insetY = -tileSize * 0.12;
+      ctx.translate(x + tileSize, y + tileSize);
+      ctx.rotate(Math.PI);
     } else if (side === "W") {
-      x1 = x + 1;
-      y1 = y;
-      x2 = x + 1;
-      y2 = y + tileSize;
-      insetX = tileSize * 0.12;
+      ctx.translate(x, y + tileSize);
+      ctx.rotate(-Math.PI / 2);
+    } else {
+      ctx.restore();
+      continue;
     }
 
+    ctx.lineWidth = barWidth;
     ctx.beginPath();
-    ctx.moveTo(x1, y1);
-    ctx.lineTo(x2, y2);
+    ctx.moveTo(0, barWidth / 2);
+    ctx.lineTo(tileSize, barWidth / 2);
     ctx.stroke();
 
-    ctx.strokeStyle = "rgba(255, 244, 219, 0.9)";
-    ctx.lineWidth = Math.max(1, tileSize * 0.04);
+    ctx.lineWidth = Math.max(1.5, tileSize * 0.045);
     ctx.beginPath();
-    ctx.moveTo(x1 + insetX, y1 + insetY);
-    ctx.lineTo(x2 + insetX, y2 + insetY);
+    for (let index = 0; index < toothCount; index += 1) {
+      const toothX = (tileSize * (index + 0.5)) / toothCount;
+      ctx.moveTo(toothX, barWidth);
+      ctx.lineTo(toothX, barWidth + toothLength);
+    }
     ctx.stroke();
-
-    ctx.strokeStyle = "#493d2d";
-    ctx.lineWidth = Math.max(2, tileSize * 0.09);
+    ctx.restore();
   }
 
   ctx.restore();
@@ -928,6 +933,8 @@ function drawRampFeature(ctx, feature, x, y, tileSize) {
   ctx.restore();
 }
 
+// Drawn in a frame rotated to the laser's direction, so diagonal lasers (the
+// Robo Rally Dice boards) run corner to corner instead of falling back to East.
 function drawLaserFeature(ctx, feature, x, y, tileSize) {
   const beamCount = Math.max(1, Math.min(3, feature.damage ?? 1));
   const inset = tileSize * 0.16;
@@ -937,8 +944,12 @@ function drawLaserFeature(ctx, feature, x, y, tileSize) {
     : beamCount === 2
       ? [-spacing / 2, spacing / 2]
       : [-spacing, 0, spacing];
+  const lengthScale = String(feature.dir ?? "").length === 2 ? Math.SQRT2 : 1;
+  const halfLength = (tileSize / 2 - inset) * lengthScale;
 
   ctx.save();
+  ctx.translate(x + tileSize / 2, y + tileSize / 2);
+  ctx.rotate(directionToAngle(feature.dir));
   ctx.strokeStyle = "rgba(212, 66, 24, 0.96)";
   ctx.lineWidth = Math.max(1.3, tileSize * 0.06);
   ctx.lineCap = "round";
@@ -946,37 +957,18 @@ function drawLaserFeature(ctx, feature, x, y, tileSize) {
 
   offsets.forEach((offset) => {
     ctx.beginPath();
-    if (feature.dir === "N" || feature.dir === "S") {
-      const lineX = x + tileSize / 2 + offset;
-      ctx.moveTo(lineX, y + inset);
-      ctx.lineTo(lineX, y + tileSize - inset);
-    } else {
-      const lineY = y + tileSize / 2 + offset;
-      ctx.moveTo(x + inset, lineY);
-      ctx.lineTo(x + tileSize - inset, lineY);
-    }
+    ctx.moveTo(-halfLength, offset);
+    ctx.lineTo(halfLength, offset);
     ctx.stroke();
   });
 
   const arrowSize = tileSize * 0.12;
+  const tip = (tileSize / 2 - inset * 0.55) * lengthScale;
+  const base = halfLength - arrowSize;
   ctx.beginPath();
-  if (feature.dir === "N") {
-    ctx.moveTo(x + tileSize / 2, y + inset * 0.55);
-    ctx.lineTo(x + tileSize / 2 - arrowSize, y + inset + arrowSize);
-    ctx.lineTo(x + tileSize / 2 + arrowSize, y + inset + arrowSize);
-  } else if (feature.dir === "S") {
-    ctx.moveTo(x + tileSize / 2, y + tileSize - inset * 0.55);
-    ctx.lineTo(x + tileSize / 2 - arrowSize, y + tileSize - inset - arrowSize);
-    ctx.lineTo(x + tileSize / 2 + arrowSize, y + tileSize - inset - arrowSize);
-  } else if (feature.dir === "W") {
-    ctx.moveTo(x + inset * 0.55, y + tileSize / 2);
-    ctx.lineTo(x + inset + arrowSize, y + tileSize / 2 - arrowSize);
-    ctx.lineTo(x + inset + arrowSize, y + tileSize / 2 + arrowSize);
-  } else {
-    ctx.moveTo(x + tileSize - inset * 0.55, y + tileSize / 2);
-    ctx.lineTo(x + tileSize - inset - arrowSize, y + tileSize / 2 - arrowSize);
-    ctx.lineTo(x + tileSize - inset - arrowSize, y + tileSize / 2 + arrowSize);
-  }
+  ctx.moveTo(tip, 0);
+  ctx.lineTo(base, -arrowSize);
+  ctx.lineTo(base, arrowSize);
   ctx.closePath();
   ctx.fill();
   ctx.restore();

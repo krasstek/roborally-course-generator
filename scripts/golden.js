@@ -82,6 +82,11 @@ const CASES = [
   { name: "overlays-off", overlayMode: "no" },
   { name: "sets-all", expansions: ALL_EXPANSIONS },
   { name: "sets-30th-master-builder", expansions: ["roborally", "30th-anniversary", "master-builder"] },
+  // 6x6 overlay boards with their own reboot tokens (the default) and sharing the
+  // token of the board underneath. Seeds chosen so each places an overlay board
+  // and uses reboot tokens (the token layout changes the run, so seeds differ).
+  { name: "overlay-boards-own", seed: 3, difficulty: "hard", length: "long", overlayMode: "boards", expansions: ["roborally", "master-builder"] },
+  { name: "overlay-boards-shared", seed: 5, difficulty: "hard", length: "long", overlayMode: "boards", overlayReboot: "shared", expansions: ["roborally", "master-builder"] },
   { name: "sets-thrills-wet", expansions: ["roborally", "thrills-and-spills", "wet-and-wild"] },
   { name: "sets-chaos-contamination", expansions: ["roborally", "chaos-and-carnage", "contamination"] },
   { name: "variants-all-allowed", variants: "all-allowed", expansions: ALL_EXPANSIONS },
@@ -129,6 +134,7 @@ function buildPreferences(testCase, variantDefinitions) {
     generationMode: spec.generationMode,
     boardSpread: spec.boardSpread,
     overlayMode: spec.overlayMode,
+    ...(spec.overlayReboot ? { overlayReboot: spec.overlayReboot } : {}),
     actFastMode: spec.actFastMode,
     // Sets a case names beyond ALL_EXPANSIONS (Transformers has no boards) still count.
     selectedExpansions: Object.fromEntries(
