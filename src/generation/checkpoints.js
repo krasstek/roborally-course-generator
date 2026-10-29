@@ -613,9 +613,11 @@ export function sampleFlagSequence(flagCandidates, flagCount, tileMap, starts, p
   return picked;
 }
 
-export function pickFlags(flagCandidates, flagCount, boardPlacements, dockPlacements, pieceMap, starts = [], preferences = {}) {
+// extraPlacements: docks and overlays, so checkpoint choice sees the squares as
+// they end up on the table (an overlay can add a laser or a wall).
+export function pickFlags(flagCandidates, flagCount, boardPlacements, extraPlacements, pieceMap, starts = [], preferences = {}) {
   const firstFlagThresholds = getFirstFlagDistanceThresholds();
-  const { tileMap } = buildResolvedMap([...boardPlacements, ...(dockPlacements || [])], pieceMap);
+  const { tileMap } = buildResolvedMap([...boardPlacements, ...(extraPlacements || [])], pieceMap);
   const movingTargetTraceCache = preferences.movingTargets ? new Map() : null;
   const movingCandidates = preferences.movingTargets
     ? new Set(flagCandidates.filter((candidate) => getMovingCheckpointTrace(tileMap, candidate, movingTargetTraceCache, preferences).moving).map((candidate) => `${candidate.x},${candidate.y}`))
@@ -650,14 +652,14 @@ export async function pickFlagsCooperative(
   flagCandidates,
   flagCount,
   boardPlacements,
-  dockPlacements,
+  extraPlacements,
   pieceMap,
   starts = [],
   preferences = {},
   control = {}
 ) {
   const firstFlagThresholds = getFirstFlagDistanceThresholds();
-  const { tileMap } = buildResolvedMap([...boardPlacements, ...(dockPlacements || [])], pieceMap);
+  const { tileMap } = buildResolvedMap([...boardPlacements, ...(extraPlacements || [])], pieceMap);
   const movingTargetTraceCache = preferences.movingTargets ? new Map() : null;
   const movingCandidates = preferences.movingTargets
     ? new Set(flagCandidates.filter((candidate) => getMovingCheckpointTrace(tileMap, candidate, movingTargetTraceCache, preferences).moving).map((candidate) => `${candidate.x},${candidate.y}`))

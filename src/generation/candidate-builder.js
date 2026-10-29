@@ -610,7 +610,9 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
   const noDockStarts = noDockSelection?.starts ?? [];
   const setupStarts = effectiveNoDocks ? noDockStarts : starts;
   const flagCandidates = getFlagCandidates(placements, pieceMap);
-  const movingTargetsForced = isVariantForced(preferences, "movingTargets");
+  // Must only counts when the rule is active: an unavailable Must (e.g. Clear
+  // floor checkpoints) is never drawn, and must not reject every attempt.
+  const movingTargetsForced = movingTargets && isVariantForced(preferences, "movingTargets");
   const movingTargetTraceCache = movingTargets ? new Map() : null;
   const movingCheckpointCandidateCount = movingTargets
     ? flagCandidates.filter((candidate) => getMovingCheckpointTrace(tileMap, candidate, movingTargetTraceCache, generationPreferences).moving).length
@@ -761,7 +763,7 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
           checkpointCandidatePool,
           flagCount,
           boardLayout.placements,
-          courseDockPlacements,
+          [...courseDockPlacements, ...overlayPlacements],
           pieceMap,
           virtualBots ? [virtualEntryCandidate] : setupStarts,
           checkpointPreferences,
@@ -776,7 +778,7 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
           checkpointCandidatePool,
           flagCount,
           boardLayout.placements,
-          courseDockPlacements,
+          [...courseDockPlacements, ...overlayPlacements],
           pieceMap,
           virtualBots ? [virtualEntryCandidate] : setupStarts,
           checkpointPreferences
