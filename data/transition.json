@@ -259,6 +259,12 @@
           "type": "laser",
           "dir": "N",
           "damage": 1
+        },
+        {
+          "type": "wall",
+          "sides": [
+            "N"
+          ]
         }
       ]
     },
