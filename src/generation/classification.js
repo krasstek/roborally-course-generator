@@ -1,7 +1,13 @@
 // Robo Rally Course Randomizer - candidate classification (classifyCandidate): difficulty, length, fit and acceptance of a routed course
 import { getSandwichedDockUseProfile } from "./board-layout.js";
-import { getCheckpointSpacingExpectationProfile } from "./checkpoints.js";
 import {
+  getCheckpointPushDirections,
+  getCheckpointSpacingExpectationProfile,
+  getPlayableCheckpoints
+} from "./checkpoints.js";
+import {
+  CHECKPOINT_ONE_PUSH_PENALTY,
+  CHECKPOINT_UNPUSHABLE_PENALTY,
   FORCED_ECONOMY_NO_EFFECT_FIT_PENALTY,
   MIN_LENGTH_RAW,
   NORMAL_EFFECTIVE_RE_SCORE_PER_RE,
@@ -396,6 +402,15 @@ export function classifyCandidate(sequence, preferences, context = {}) {
     softFailures.push("sandwiched-side-use");
   }
   const routeDrama = getRouteDramaProfile(sequence);
+  // Checkpoints no robot can be pushed off (a wall corner) are not fun; one
+  // push direction only is a milder version of the same (user 2026-10-28).
+  const checkpointPushDirections = context.tileMap
+    ? getPlayableCheckpoints(context.checkpoints ?? [], preferences.virtualBots)
+      .map((checkpoint) => getCheckpointPushDirections(context.tileMap, checkpoint, preferences))
+    : [];
+  const checkpointPushabilityPenalty = checkpointPushDirections.reduce((sum, directions) => (
+    sum + (directions === 0 ? CHECKPOINT_UNPUSHABLE_PENALTY : directions === 1 ? CHECKPOINT_ONE_PUSH_PENALTY : 0)
+  ), 0);
   const spacingStarts = Array.isArray(context.activeStarts) && context.activeStarts.length
     ? context.activeStarts
     : (sequence?.firstLeg?.starts ?? []).map((entry) => entry.start).filter(Boolean);
@@ -566,6 +581,7 @@ export function classifyCandidate(sequence, preferences, context = {}) {
     finalPacing: finalLegAnticlimax.penalty,
     boardUse: boardFootprintUse.penalty,
     sandwichedUse: sandwichedDockUse.penalty,
+    checkpointPushability: checkpointPushabilityPenalty,
     startCapacity: Math.max(0, preferences.playerCount - usableStarts.length) * 20
   };
   const fitScore = Object.values(fitComponents).reduce((sum, value) => (
@@ -637,6 +653,7 @@ export function classifyCandidate(sequence, preferences, context = {}) {
     meaningfulBoardUse,
     sandwichedDockUse,
     routeDrama,
+    checkpointPushDirections,
     checkpointSpacingExpectation,
     targetAcceptance,
     fairnessAcceptance,

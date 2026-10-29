@@ -18,8 +18,10 @@ import { clamp } from "../shared/math.js";
 import { getMovingCheckpointTrace } from "./moving-targets.js";
 import {
   ACT_FAST_MODE_IDS,
+  CHECKPOINT_FLOOR_MODES,
   getSelectedExpansionIds,
-  getTuningDifficulty
+  getTuningDifficulty,
+  normalizeCheckpointFloor
 } from "./preferences.js";
 import { generationRandom, sample, shuffle } from "./random.js";
 import { applyVariantAnalysisOptions } from "../../variants.js";
@@ -231,6 +233,14 @@ export function getMissingRequiredVariantIds(variantId, preferences = {}, active
 }
 
 export function getVariantUnavailabilityReason(variantId, preferences = {}, pieceMap = cachedAssets?.pieceMap ?? null) {
+  // Both need a board element under the checkpoint.
+  if (
+    (variantId === "hazardousFlags" || variantId === "movingTargets") &&
+    normalizeCheckpointFloor(preferences.checkpointFloor) === CHECKPOINT_FLOOR_MODES.clear
+  ) {
+    return "Checkpoint Squares is set to Clear floor, so checkpoints never sit on board elements.";
+  }
+
   if (variantId === "competitiveMode" && pieceMap) {
     const playerCount = preferences.playerCount ?? 4;
     const requiredStarts = playerCount * 2;

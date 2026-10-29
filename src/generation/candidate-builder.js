@@ -99,6 +99,7 @@ import {
   getSelectedExpansionIds,
   OVERLAY_REBOOT_MODES,
   normalizeBoardSpread,
+  normalizeCheckpointFloor,
   normalizeOverlayMode,
   normalizeOverlayReboot
 } from "./preferences.js";
@@ -609,7 +610,9 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
   const noDockStarts = noDockSelection?.starts ?? [];
   const setupStarts = effectiveNoDocks ? noDockStarts : starts;
   const flagCandidates = getFlagCandidates(placements, pieceMap);
-  const movingTargetsForced = isVariantForced(preferences, "movingTargets");
+  // Must only counts when the rule is active: an unavailable Must (e.g. Clear
+  // floor checkpoints) is never drawn, and must not reject every attempt.
+  const movingTargetsForced = movingTargets && isVariantForced(preferences, "movingTargets");
   const movingTargetTraceCache = movingTargets ? new Map() : null;
   const movingCheckpointCandidateCount = movingTargets
     ? flagCandidates.filter((candidate) => getMovingCheckpointTrace(tileMap, candidate, movingTargetTraceCache, generationPreferences).moving).length
@@ -760,7 +763,7 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
           checkpointCandidatePool,
           flagCount,
           boardLayout.placements,
-          courseDockPlacements,
+          [...courseDockPlacements, ...overlayPlacements],
           pieceMap,
           virtualBots ? [virtualEntryCandidate] : setupStarts,
           checkpointPreferences,
@@ -775,7 +778,7 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
           checkpointCandidatePool,
           flagCount,
           boardLayout.placements,
-          courseDockPlacements,
+          [...courseDockPlacements, ...overlayPlacements],
           pieceMap,
           virtualBots ? [virtualEntryCandidate] : setupStarts,
           checkpointPreferences
@@ -1029,20 +1032,24 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
           pieceMap
         )
         : [];
-      rebootTokens = recoveryRule === "reboot_tokens"
+      const boardRebootPlacement = recoveryRule === "reboot_tokens"
         ? placeRebootTokens(
           scenarioBoardRects,
           scenarioTileMap,
           rebootPlacementExclusions,
           preferences.playerCount,
-          scenarioOverlayRebootRects
+          scenarioOverlayRebootRects,
+          { lessDeadlyGame }
         )
+        : null;
+      rebootTokens = boardRebootPlacement
+        ? boardRebootPlacement.tokens
         : recoveryRule === "home_reboot"
           ? placeHomeRebootTokens(scenarioDockPlacements, pieceMap, resolved.starts, scenarioTileMap, checkpoints, {
             lessDeadlyGame
           })
           : [];
-      if (recoveryRule === "reboot_tokens" && rebootTokens.length < scenarioBoardRects.length + scenarioOverlayRebootRects.length) {
+      if (boardRebootPlacement?.missingCount > 0) {
         sequenceFailureCategory = "reboot-layout";
         sequenceFailureReason = `reboot token placement could not provide ${preferences.playerCount}-robot safe capacity on every board`;
         sequence = null;
@@ -2301,6 +2308,7 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
         ...generationPreferences,
         overlayMode: normalizeOverlayMode(generationPreferences.overlayMode),
         overlayReboot: normalizeOverlayReboot(generationPreferences.overlayReboot),
+        checkpointFloor: normalizeCheckpointFloor(generationPreferences.checkpointFloor),
         actFast,
         actFastMode,
         competitiveMode,

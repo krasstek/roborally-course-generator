@@ -10,6 +10,7 @@ import {
   OVERLAY_MODES,
   OVERLAY_MODE_CYCLE,
   OVERLAY_REBOOT_MODES,
+  CHECKPOINT_FLOOR_MODES,
   formatActFastMode,
   formatExpansionName,
   formatOverlayMode,
@@ -17,6 +18,7 @@ import {
   normalizeBoardSpread,
   normalizeOverlayMode,
   normalizeOverlayReboot,
+  normalizeCheckpointFloor,
   shouldUseBoardOverlays
 } from "../generation/preferences.js";
 import { normalizeStartBalance } from "../generation/start-balance.js";
@@ -365,6 +367,86 @@ export function createOverlayRebootRow(options = {}) {
   return rowEl;
 }
 
+export function getCheckpointFloorControlButtons() {
+  return Array.from(document.querySelectorAll("[data-checkpoint-floor-control]"));
+}
+
+export function formatCheckpointFloorMode(mode) {
+  return normalizeCheckpointFloor(mode) === CHECKPOINT_FLOOR_MODES.clear ? "Clear floor" : "Any";
+}
+
+function getCheckpointFloorTitle(mode) {
+  return normalizeCheckpointFloor(mode) === CHECKPOINT_FLOOR_MODES.clear
+    ? "Checkpoint Squares: Clear floor. Checkpoints sit only on plain floor (walls allowed), as in the 1994 first edition. Click for Any."
+    : "Checkpoint Squares: Any. Checkpoints may sit on board elements. Click for Clear floor.";
+}
+
+export function setCheckpointFloorControl(mode, buttonEl = null) {
+  const targets = buttonEl ? [buttonEl] : getCheckpointFloorControlButtons();
+  const normalized = normalizeCheckpointFloor(mode);
+  targets.forEach((button) => {
+    button.value = normalized;
+    button.dataset.state = normalized === CHECKPOINT_FLOOR_MODES.clear ? "allowed" : "off";
+    button.textContent = formatCheckpointFloorMode(normalized);
+    button.title = getCheckpointFloorTitle(normalized);
+    button.setAttribute("aria-label", button.title);
+  });
+}
+
+export function cycleCheckpointFloorControl() {
+  const buttonEl = document.getElementById("checkpoint-floor");
+  if (!buttonEl) {
+    return;
+  }
+  setCheckpointFloorControl(
+    normalizeCheckpointFloor(buttonEl.value) === CHECKPOINT_FLOOR_MODES.clear
+      ? CHECKPOINT_FLOOR_MODES.any
+      : CHECKPOINT_FLOOR_MODES.clear
+  );
+  // Clear floor makes Hazardous Checkpoints and Moving Targets unavailable.
+  updateVariantAvailability();
+}
+
+export function createCheckpointFloorRow(options = {}) {
+  const rowEl = document.createElement("div");
+  rowEl.className = "variant-rule";
+  rowEl.title = "Whether checkpoints may sit on board elements, or only on plain floor as in the 1994 first edition.";
+  rowEl.dataset.ruleSearch = "checkpoint squares clear floor plain 1994 first edition setup layout";
+
+  const nameWrapEl = document.createElement("div");
+  nameWrapEl.className = "variant-rule-name-wrap";
+  const nameEl = document.createElement("div");
+  nameEl.className = "variant-rule-name";
+  nameEl.textContent = "Checkpoint Squares";
+  nameWrapEl.appendChild(nameEl);
+  if (options.showCategory) {
+    const categoryEl = document.createElement("div");
+    categoryEl.className = "variant-rule-category";
+    categoryEl.textContent = "Setup & Layout";
+    nameWrapEl.appendChild(categoryEl);
+  }
+  if (options.showDescription) {
+    const descriptionEl = document.createElement("div");
+    descriptionEl.className = "variant-rule-description";
+    descriptionEl.textContent = "Any lets checkpoints sit on board elements. Clear floor keeps them on plain floor (walls allowed), as in the 1994 first edition; Hazardous Checkpoints and Moving Targets are then unavailable.";
+    nameWrapEl.appendChild(descriptionEl);
+  }
+
+  const buttonEl = document.createElement("button");
+  if (!options.mirror) {
+    buttonEl.id = "checkpoint-floor";
+  }
+  buttonEl.className = "variant-state checkpoint-floor-state";
+  buttonEl.type = "button";
+  buttonEl.dataset.checkpointFloorControl = "true";
+
+  rowEl.append(nameWrapEl, buttonEl);
+
+  const primary = document.getElementById("checkpoint-floor");
+  setCheckpointFloorControl(primary?.value ?? CHECKPOINT_FLOOR_MODES.any, buttonEl);
+  return rowEl;
+}
+
 export function normalizeActFastControlChoice(choice, variantState = null, mode = null) {
   if (ACT_FAST_CONTROL_CHOICES.some((entry) => entry.id === choice)) {
     return choice;
@@ -490,6 +572,7 @@ export function renderOptionalRulesIndex() {
     { type: "board-spread", label: "Board Spread" },
     { type: "overlay", label: "Overlays" },
     { type: "overlay-reboot", label: "Overlay Reboot Tokens" },
+    { type: "checkpoint-floor", label: "Checkpoint Squares" },
     ...VARIANT_DEFINITIONS.map((variant) => ({ type: "variant", label: variant.label, variant }))
   ].sort((left, right) => left.label.localeCompare(right.label));
 
@@ -504,6 +587,10 @@ export function renderOptionalRulesIndex() {
     }
     if (entry.type === "overlay-reboot") {
       listEl.appendChild(createOverlayRebootRow({ mirror: true, showCategory: true, showDescription: true }));
+      return;
+    }
+    if (entry.type === "checkpoint-floor") {
+      listEl.appendChild(createCheckpointFloorRow({ mirror: true, showCategory: true, showDescription: true }));
       return;
     }
     listEl.appendChild(createVariantRuleRow(entry.variant, { mirror: true, showCategory: true, showDescription: true }));
@@ -567,6 +654,7 @@ export function renderVariantControls() {
       menuEl.appendChild(createBoardSpreadRow());
       menuEl.appendChild(createOverlayModeRow());
       menuEl.appendChild(createOverlayRebootRow());
+      menuEl.appendChild(createCheckpointFloorRow());
     }
 
     variants.forEach((variant) => {
@@ -844,6 +932,7 @@ export function getPreferencesFromControls() {
     boardSpread: normalizeBoardSpread(document.getElementById("board-spread")?.value),
     overlayMode: normalizeOverlayMode(document.getElementById("overlay-mode")?.value),
     overlayReboot: normalizeOverlayReboot(document.getElementById("overlay-reboot")?.value),
+    checkpointFloor: normalizeCheckpointFloor(document.getElementById("checkpoint-floor")?.value),
     actFastMode: getActFastModeFromControls(),
     selectedExpansions: {
       roborally: document.getElementById("expansion-roborally").checked,
@@ -890,6 +979,7 @@ export function applyPreferencesToControls(preferences) {
   setBoardSpreadControl(normalizedPreferences.boardSpread);
   setOverlayModeControl(normalizedPreferences.overlayMode);
   setOverlayRebootControl(normalizedPreferences.overlayReboot);
+  setCheckpointFloorControl(normalizedPreferences.checkpointFloor);
   document.getElementById("expansion-roborally").checked = normalizedPreferences.selectedExpansions?.roborally ?? true;
   document.getElementById("expansion-rr-dice").checked = normalizedPreferences.selectedExpansions?.["rr-dice"] ?? false;
   document.getElementById("expansion-30th-anniversary").checked = normalizedPreferences.selectedExpansions?.["30th-anniversary"] ?? false;

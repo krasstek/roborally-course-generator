@@ -1,5 +1,6 @@
 // Robo Rally Course Randomizer - checkpoints: candidates, spacing expectations, Hazardous Checkpoints claimability, weighting and picking, flag overrides
 import { simulateAction } from "../../analyze.js";
+import { canMoveBetween } from "../analysis/movement.js";
 import { buildResolvedMap, placePiece } from "../../board.js";
 import { getEffectiveLaserDamage, getTilePenaltyForFeature } from "../../feature-weights.js";
 import {
@@ -10,7 +11,7 @@ import {
 import { applyConstructionGuidanceRanking } from "./construction-guidance.js";
 import { cloneTileMap, manhattanDistance } from "./layout-geometry.js";
 import { getMovingCheckpointTrace } from "./moving-targets.js";
-import { getTuningDifficulty } from "./preferences.js";
+import { CHECKPOINT_FLOOR_MODES, getTuningDifficulty, normalizeCheckpointFloor } from "./preferences.js";
 import { sample, sampleManyWeighted } from "./random.js";
 import { makeGenerationStopRequestedError } from "./scheduling.js";
 import {
@@ -210,7 +211,38 @@ export function sampleCheckpointProposalWithExpectations(candidates = [], prefer
   return sampleManyWeighted(weighted, 1)[0] ?? sample(weighted);
 }
 
+const CLEAR_FLOOR_CHECKPOINT_FEATURES = new Set(["wall", "redWall", "greenWall"]);
+const PUSH_STEPS = { N: [0, -1], E: [1, 0], S: [0, 1], W: [-1, 0] };
+const OPPOSITE_SIDE = { N: "S", E: "W", S: "N", W: "E" };
+
+// How many ways a robot standing on this square can be pushed off it: the
+// pusher must be able to step in from the opposite side, and the pushed robot
+// must be able to leave (falling into a pit or off the course still counts).
+// Walls, red walls, ledges, repulsors and Walled In edges block, exactly as in
+// movement. Players don't enjoy checkpoints nobody can be shoved off (a wall
+// corner leaves none).
+export function getCheckpointPushDirections(tileMap, point, options = {}) {
+  let count = 0;
+  for (const [dir, [dx, dy]] of Object.entries(PUSH_STEPS)) {
+    const pushedTo = { x: point.x + dx, y: point.y + dy };
+    const pusherFrom = { x: point.x - dx, y: point.y - dy };
+    const leave = canMoveBetween(tileMap, point, pushedTo, dir, options);
+    if (!leave.ok && !leave.crash) continue;
+    const enter = canMoveBetween(tileMap, pusherFrom, point, dir, options);
+    if (!enter.ok) continue;
+    count += 1;
+  }
+  return count;
+}
+
 export function canUseCheckpointTile(candidate, tileMap, starts, preferences = {}) {
+  if (normalizeCheckpointFloor(preferences.checkpointFloor) === CHECKPOINT_FLOOR_MODES.clear) {
+    const tile = tileMap.get(`${candidate.x},${candidate.y}`);
+    if ((tile?.features || []).some((feature) => !CLEAR_FLOOR_CHECKPOINT_FEATURES.has(feature.type))) {
+      return false;
+    }
+  }
+
   if (!preferences.hazardousFlags) {
     return true;
   }
@@ -540,7 +572,13 @@ export function getFlagCandidateWeight(candidate, tileMap, starts, preferences, 
     }
   }
 
-  return Math.max(0.05, Number(weight.toFixed(2)));
+  // A checkpoint no robot can be pushed off is rarely proposed (one push
+  // direction a little less often); the fit score penalizes it too. Applied
+  // after the floor, since the summed weight can be negative.
+  const baseWeight = Math.max(0.05, Number(weight.toFixed(2)));
+  const pushDirections = getCheckpointPushDirections(tileMap, candidate, preferences);
+  const pushFactor = pushDirections === 0 ? 0.1 : pushDirections === 1 ? 0.6 : 1;
+  return pushFactor === 1 ? baseWeight : Number((baseWeight * pushFactor).toFixed(3));
 }
 
 export function sampleFlagSequence(flagCandidates, flagCount, tileMap, starts, preferences, thresholds, boardPlacements, pieceMap, movingTargetTraceCache = null) {
@@ -575,9 +613,11 @@ export function sampleFlagSequence(flagCandidates, flagCount, tileMap, starts, p
   return picked;
 }
 
-export function pickFlags(flagCandidates, flagCount, boardPlacements, dockPlacements, pieceMap, starts = [], preferences = {}) {
+// extraPlacements: docks and overlays, so checkpoint choice sees the squares as
+// they end up on the table (an overlay can add a laser or a wall).
+export function pickFlags(flagCandidates, flagCount, boardPlacements, extraPlacements, pieceMap, starts = [], preferences = {}) {
   const firstFlagThresholds = getFirstFlagDistanceThresholds();
-  const { tileMap } = buildResolvedMap([...boardPlacements, ...(dockPlacements || [])], pieceMap);
+  const { tileMap } = buildResolvedMap([...boardPlacements, ...(extraPlacements || [])], pieceMap);
   const movingTargetTraceCache = preferences.movingTargets ? new Map() : null;
   const movingCandidates = preferences.movingTargets
     ? new Set(flagCandidates.filter((candidate) => getMovingCheckpointTrace(tileMap, candidate, movingTargetTraceCache, preferences).moving).map((candidate) => `${candidate.x},${candidate.y}`))
@@ -612,14 +652,14 @@ export async function pickFlagsCooperative(
   flagCandidates,
   flagCount,
   boardPlacements,
-  dockPlacements,
+  extraPlacements,
   pieceMap,
   starts = [],
   preferences = {},
   control = {}
 ) {
   const firstFlagThresholds = getFirstFlagDistanceThresholds();
-  const { tileMap } = buildResolvedMap([...boardPlacements, ...(dockPlacements || [])], pieceMap);
+  const { tileMap } = buildResolvedMap([...boardPlacements, ...(extraPlacements || [])], pieceMap);
   const movingTargetTraceCache = preferences.movingTargets ? new Map() : null;
   const movingCandidates = preferences.movingTargets
     ? new Set(flagCandidates.filter((candidate) => getMovingCheckpointTrace(tileMap, candidate, movingTargetTraceCache, preferences).moving).map((candidate) => `${candidate.x},${candidate.y}`))

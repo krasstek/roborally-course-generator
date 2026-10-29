@@ -1,6 +1,7 @@
 // Robo Rally Course Randomizer - reboot token placement (board tokens and Home Reboot)
 import { analyzeFlagLeg } from "../../analyze.js";
 import { rotatedDimensions } from "../../board.js";
+import { isBoundaryBlockedByWalls } from "../analysis/board-geometry.js";
 import { FACINGS } from "./config.js";
 import {
   getPlacementOccupiedOffsets,
@@ -85,10 +86,44 @@ export function scoreRebootDirection(tileMap, boardRect, point, dir, requiredRun
   return Math.min(runway, 3) * 4;
 }
 
+const ROBOT_DESTROYING_FEATURES = new Set(["pit", "trapdoor", "crusher", "teleporter"]);
+const SIDE_STEPS = { N: [0, -1], E: [1, 0], S: [0, 1], W: [-1, 0] };
+
+// Whether a robot can ever be destroyed on this area, i.e. whether it needs a
+// reboot token. A robot is destroyed by a pit, an open trapdoor or a crusher on
+// the square, by leaving the course through an outer side with no wall (unless
+// Walled In makes the edges walls), or by a teleporter jump landing off the
+// course or in a pit (Walled In does not stop a jump). Damage never destroys.
+// Squares inside excludedRects belong to an overlay board with its own token.
+export function areaCanDestroyRobot(rect, tileMap, { lessDeadlyGame = false, excludedRects = [] } = {}) {
+  for (let y = rect.y; y < rect.y + rect.height; y += 1) {
+    for (let x = rect.x; x < rect.x + rect.width; x += 1) {
+      const point = { x, y };
+      if (excludedRects.some((excluded) => pointOnRect(point, excluded))) continue;
+      const tile = tileMap.get(`${x},${y}`);
+      if (!tile) continue;
+      if ((tile.features || []).some((feature) => ROBOT_DESTROYING_FEATURES.has(feature.type))) {
+        return true;
+      }
+      if (lessDeadlyGame) continue;
+      for (const [side, [dx, dy]] of Object.entries(SIDE_STEPS)) {
+        const to = { x: x + dx, y: y + dy };
+        if (!tileMap.has(`${to.x},${to.y}`) && !isBoundaryBlockedByWalls(tileMap, point, to, side)) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
 // overlayRects: 6x6 overlay boards that get their own token (Overlay Reboot
 // Tokens: own). Their tokens carry the overlay's rect, which recovery matches
 // before the main board, and main-board tokens stay off overlay squares.
-export function placeRebootTokens(boardRects, tileMap, checkpoints, playerCount, overlayRects = []) {
+// Returns { tokens, missingCount }: an area where no robot can be destroyed gets
+// no token (and is not missing); missingCount counts areas that needed one but
+// had no legal square.
+export function placeRebootTokens(boardRects, tileMap, checkpoints, playerCount, overlayRects = [], { lessDeadlyGame = false } = {}) {
   // The token square is the first simultaneous-reboot position. The arrow must
   // provide one additional safe square per remaining player so every robot can
   // be placed without looping back through an occupied or lethal reboot space.
@@ -100,7 +135,15 @@ export function placeRebootTokens(boardRects, tileMap, checkpoints, playerCount,
     ...overlayRects.map((rect) => ({ rect, overlay: true }))
   ];
 
+  let missingCount = 0;
+
   for (const { rect: boardRect, overlay } of areas) {
+    if (!areaCanDestroyRobot(boardRect, tileMap, {
+      lessDeadlyGame,
+      excludedRects: overlay ? [] : overlayRects
+    })) {
+      continue;
+    }
     // A queue that fits inside the board keeps today's choice; only a board too
     // small for the player count (e.g. a 6x6 at 7-8 players) lets it continue
     // onto the next board. A lone 6x6 board still cannot fit 8 robots.
@@ -108,10 +151,12 @@ export function placeRebootTokens(boardRects, tileMap, checkpoints, playerCount,
       findRebootTokenForArea(boardRect, overlay, true);
     if (best) {
       tokens.push(best);
+    } else {
+      missingCount += 1;
     }
   }
 
-  return tokens;
+  return { tokens, missingCount };
 
   function findRebootTokenForArea(boardRect, overlay, crossBoards) {
     const center = {
