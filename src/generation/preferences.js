@@ -77,6 +77,20 @@ export function shouldUseMiniOverlays(preferences = {}) {
   return mode === OVERLAY_MODES.yes || mode === OVERLAY_MODES.tokens;
 }
 
+// Reboot tokens for 6x6 overlay boards (2026-10-29). "own": each overlay board
+// gets its own token and a robot destroyed on it reboots there (the default;
+// missing means own). "shared": the token of the main board underneath.
+export const OVERLAY_REBOOT_MODES = Object.freeze({
+  own: "own",
+  shared: "shared"
+});
+
+export function normalizeOverlayReboot(value) {
+  return value === OVERLAY_REBOOT_MODES.shared
+    ? OVERLAY_REBOOT_MODES.shared
+    : OVERLAY_REBOOT_MODES.own;
+}
+
 export function getSelectedExpansionIds(preferences = {}) {
   const selected = preferences.selectedExpansions ?? { roborally: true };
   return new Set(Object.entries(selected)

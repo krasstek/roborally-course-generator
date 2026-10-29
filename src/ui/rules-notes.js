@@ -8,6 +8,7 @@ import {
 import { cachedAssets } from "../generation/assets.js";
 import { countFeatureTypeInTileMap } from "../generation/board-profile.js";
 import { getPlayableCheckpoints } from "../generation/checkpoints.js";
+import { isMiniOverlayPiece } from "../generation/layout-geometry.js";
 import { DEFAULT_STARTING_ENERGY } from "../generation/config.js";
 import { ACT_FAST_MODE_IDS, formatActFastMode } from "../generation/preferences.js";
 import {
@@ -509,6 +510,18 @@ export function updateRulesNote(scenario) {
       "Dynamic Archiving: do not use reboot tokens. A robot archives when it ends a register on a checkpoint or battery space.",
       { page: 32 }
     ));
+  }
+
+  // Which token a robot destroyed on a 6x6 overlay board uses is a setup choice
+  // (Overlay Reboot Tokens), so say it whenever the course has overlay boards.
+  const pieceMap = scenario.pieceMap ?? cachedAssets?.pieceMap ?? null;
+  const hasOverlayBoards = (scenario.overlayPlacements ?? []).some((placement) => (
+    pieceMap?.[placement.pieceId] && !isMiniOverlayPiece(pieceMap[placement.pieceId])
+  ));
+  if (scenario.recoveryRule === "reboot_tokens" && hasOverlayBoards) {
+    notes.push((scenario.rebootTokens ?? []).some((token) => token.overlayRect)
+      ? "Overlay boards: each overlay board has its own reboot token. A robot destroyed on an overlay board reboots there."
+      : "Overlay boards: a robot destroyed on an overlay board reboots at the reboot token of the board underneath.");
   }
 
   if (scenario.recoveryRule === "home_reboot") {

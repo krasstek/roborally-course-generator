@@ -9,12 +9,15 @@ import {
   BOARD_SPREAD_MODES,
   OVERLAY_MODES,
   OVERLAY_MODE_CYCLE,
+  OVERLAY_REBOOT_MODES,
   formatActFastMode,
   formatExpansionName,
   formatOverlayMode,
   getSelectedExpansionIds,
   normalizeBoardSpread,
-  normalizeOverlayMode
+  normalizeOverlayMode,
+  normalizeOverlayReboot,
+  shouldUseBoardOverlays
 } from "../generation/preferences.js";
 import { normalizeStartBalance } from "../generation/start-balance.js";
 import {
@@ -207,6 +210,7 @@ export function cycleOverlayModeControl() {
   const currentIndex = OVERLAY_MODE_CYCLE.indexOf(current);
   const next = OVERLAY_MODE_CYCLE[(currentIndex + 1) % OVERLAY_MODE_CYCLE.length];
   setOverlayModeControl(next);
+  updateOverlayRebootAvailability(getPreferencesFromControls());
   updateVariantSummary();
 }
 
@@ -247,6 +251,117 @@ export function createOverlayModeRow(options = {}) {
 
   const primary = document.getElementById("overlay-mode");
   setOverlayModeControl(primary?.value ?? OVERLAY_MODES.yes, buttonEl);
+  return rowEl;
+}
+
+export function getOverlayRebootControlButtons() {
+  return Array.from(document.querySelectorAll("[data-overlay-reboot-control]"));
+}
+
+export function formatOverlayRebootMode(mode) {
+  return normalizeOverlayReboot(mode) === OVERLAY_REBOOT_MODES.own ? "Own" : "Shared";
+}
+
+function getOverlayRebootTitle(mode) {
+  return normalizeOverlayReboot(mode) === OVERLAY_REBOOT_MODES.own
+    ? "Overlay Reboot Tokens: Own. Each overlay board has its own reboot token. Click for Shared."
+    : "Overlay Reboot Tokens: Shared. A robot destroyed on an overlay board reboots at the token of the board underneath. Click for Own.";
+}
+
+export function setOverlayRebootControl(mode, buttonEl = null) {
+  const targets = buttonEl ? [buttonEl] : getOverlayRebootControlButtons();
+  const normalized = normalizeOverlayReboot(mode);
+  targets.forEach((button) => {
+    button.value = normalized;
+    button.dataset.state = normalized === OVERLAY_REBOOT_MODES.own ? "allowed" : "off";
+    button.textContent = formatOverlayRebootMode(normalized);
+    if (!button.dataset.unavailableReason) {
+      button.title = getOverlayRebootTitle(normalized);
+      button.setAttribute("aria-label", button.title);
+    }
+  });
+}
+
+export function cycleOverlayRebootControl() {
+  const buttonEl = document.getElementById("overlay-reboot");
+  if (!buttonEl) {
+    return;
+  }
+  setOverlayRebootControl(
+    normalizeOverlayReboot(buttonEl.value) === OVERLAY_REBOOT_MODES.own
+      ? OVERLAY_REBOOT_MODES.shared
+      : OVERLAY_REBOOT_MODES.own
+  );
+  updateVariantSummary();
+}
+
+// Only meaningful when overlay boards can be placed and reboot tokens are used.
+function getOverlayRebootUnavailabilityReason(preferences) {
+  if (getOverlayUnavailabilityReason(preferences)) {
+    return "Requires overlay boards in the selected sets.";
+  }
+  if (!shouldUseBoardOverlays(preferences)) {
+    return "Applies to overlay boards: set Overlays to Boards or Both.";
+  }
+  return null;
+}
+
+function updateOverlayRebootAvailability(preferences) {
+  const reason = getOverlayRebootUnavailabilityReason(preferences);
+  getOverlayRebootControlButtons().forEach((buttonEl) => {
+    if (reason) {
+      buttonEl.dataset.unavailableReason = reason;
+      buttonEl.classList.add("unavailable");
+      buttonEl.setAttribute("aria-disabled", "true");
+      buttonEl.title = reason;
+      buttonEl.setAttribute("aria-label", `Overlay Reboot Tokens: unavailable. ${reason}`);
+    } else {
+      delete buttonEl.dataset.unavailableReason;
+      buttonEl.classList.remove("unavailable");
+      buttonEl.removeAttribute("aria-disabled");
+      buttonEl.title = getOverlayRebootTitle(buttonEl.value);
+      buttonEl.setAttribute("aria-label", buttonEl.title);
+    }
+  });
+}
+
+export function createOverlayRebootRow(options = {}) {
+  const rowEl = document.createElement("div");
+  rowEl.className = "variant-rule";
+  rowEl.title = "Whether each overlay board has its own reboot token, or robots destroyed on it use the token of the board underneath.";
+  rowEl.dataset.ruleSearch = "overlay reboot tokens boards master builder setup layout";
+
+  const nameWrapEl = document.createElement("div");
+  nameWrapEl.className = "variant-rule-name-wrap";
+  const nameEl = document.createElement("div");
+  nameEl.className = "variant-rule-name";
+  nameEl.textContent = "Overlay Reboot Tokens";
+  nameWrapEl.appendChild(nameEl);
+  if (options.showCategory) {
+    const categoryEl = document.createElement("div");
+    categoryEl.className = "variant-rule-category";
+    categoryEl.textContent = "Setup & Layout";
+    nameWrapEl.appendChild(categoryEl);
+  }
+  if (options.showDescription) {
+    const descriptionEl = document.createElement("div");
+    descriptionEl.className = "variant-rule-description";
+    descriptionEl.textContent = "Own gives each overlay board its own reboot token. Shared lets a robot destroyed on an overlay board reboot at the token of the board underneath.";
+    nameWrapEl.appendChild(descriptionEl);
+  }
+
+  const buttonEl = document.createElement("button");
+  if (!options.mirror) {
+    buttonEl.id = "overlay-reboot";
+  }
+  buttonEl.className = "variant-state overlay-reboot-state";
+  buttonEl.type = "button";
+  buttonEl.dataset.overlayRebootControl = "true";
+
+  rowEl.append(nameWrapEl, buttonEl);
+
+  const primary = document.getElementById("overlay-reboot");
+  setOverlayRebootControl(primary?.value ?? OVERLAY_REBOOT_MODES.own, buttonEl);
   return rowEl;
 }
 
@@ -374,6 +489,7 @@ export function renderOptionalRulesIndex() {
   const entries = [
     { type: "board-spread", label: "Board Spread" },
     { type: "overlay", label: "Overlays" },
+    { type: "overlay-reboot", label: "Overlay Reboot Tokens" },
     ...VARIANT_DEFINITIONS.map((variant) => ({ type: "variant", label: variant.label, variant }))
   ].sort((left, right) => left.label.localeCompare(right.label));
 
@@ -384,6 +500,10 @@ export function renderOptionalRulesIndex() {
     }
     if (entry.type === "overlay") {
       listEl.appendChild(createOverlayModeRow({ mirror: true, showCategory: true, showDescription: true }));
+      return;
+    }
+    if (entry.type === "overlay-reboot") {
+      listEl.appendChild(createOverlayRebootRow({ mirror: true, showCategory: true, showDescription: true }));
       return;
     }
     listEl.appendChild(createVariantRuleRow(entry.variant, { mirror: true, showCategory: true, showDescription: true }));
@@ -446,6 +566,7 @@ export function renderVariantControls() {
     if (category === UI_SETUP_LAYOUT_CATEGORY) {
       menuEl.appendChild(createBoardSpreadRow());
       menuEl.appendChild(createOverlayModeRow());
+      menuEl.appendChild(createOverlayRebootRow());
     }
 
     variants.forEach((variant) => {
@@ -722,6 +843,7 @@ export function getPreferencesFromControls() {
     generationMode: normalizeGenerationMode(document.getElementById("generation-mode")?.value),
     boardSpread: normalizeBoardSpread(document.getElementById("board-spread")?.value),
     overlayMode: normalizeOverlayMode(document.getElementById("overlay-mode")?.value),
+    overlayReboot: normalizeOverlayReboot(document.getElementById("overlay-reboot")?.value),
     actFastMode: getActFastModeFromControls(),
     selectedExpansions: {
       roborally: document.getElementById("expansion-roborally").checked,
@@ -767,6 +889,7 @@ export function applyPreferencesToControls(preferences) {
   }
   setBoardSpreadControl(normalizedPreferences.boardSpread);
   setOverlayModeControl(normalizedPreferences.overlayMode);
+  setOverlayRebootControl(normalizedPreferences.overlayReboot);
   document.getElementById("expansion-roborally").checked = normalizedPreferences.selectedExpansions?.roborally ?? true;
   document.getElementById("expansion-rr-dice").checked = normalizedPreferences.selectedExpansions?.["rr-dice"] ?? false;
   document.getElementById("expansion-30th-anniversary").checked = normalizedPreferences.selectedExpansions?.["30th-anniversary"] ?? false;
@@ -954,5 +1077,6 @@ export function updateVariantAvailability() {
   preferences = getPreferencesFromControls();
   updatePlayerCountAvailability(preferences);
   updateOverlayAvailability(preferences);
+  updateOverlayRebootAvailability(preferences);
   updateVariantSummary();
 }

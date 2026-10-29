@@ -44,7 +44,13 @@ import { getGenerationModeProfile, normalizeGenerationMode } from "./generation-
 import { buildBoardRects, countPhysicalBoards, isMiniOverlayPiece } from "./layout-geometry.js";
 import { getAvailableOverlayIds } from "./overlays.js";
 import { hydrateScenarioFromSnapshot, serializeScenario } from "./persistence.js";
-import { OVERLAY_MODES, normalizeBoardSpread, normalizeOverlayMode } from "./preferences.js";
+import {
+  OVERLAY_MODES,
+  OVERLAY_REBOOT_MODES,
+  normalizeBoardSpread,
+  normalizeOverlayMode,
+  normalizeOverlayReboot
+} from "./preferences.js";
 import { withGenerationRandomSeed } from "./random.js";
 import { placeRebootTokens } from "./reboot-tokens.js";
 import { generationNow } from "./scheduling.js";
@@ -536,10 +542,16 @@ export function analyzeCalibrationPlacements(assets, sourceScenario, placements,
   const tileMap = resolved.tileMap;
   const goalTileMap = applyFlagOverrides(tileMap, checkpoints, { hazardousFlags: false, movingTargets: false });
   const activeStarts = filterStartsForGoals(resolved.starts, checkpoints).map((start, index) => ({ ...start, analysisIndex: index }));
-  const rebootTokens = recoveryRule === "reboot_tokens"
-    ? placeRebootTokens(boardRects, tileMap, checkpoints, playerCount)
+  const overlayRebootRects = normalizeOverlayReboot(sourceScenario.preferences?.overlayReboot) === OVERLAY_REBOOT_MODES.own
+    ? buildBoardRects(
+      placements.filter((placement) => placement.overlay && !isMiniOverlayPiece(pieceMap[placement.pieceId])),
+      pieceMap
+    )
     : [];
-  if (recoveryRule === "reboot_tokens" && rebootTokens.length < boardRects.length) {
+  const rebootTokens = recoveryRule === "reboot_tokens"
+    ? placeRebootTokens(boardRects, tileMap, checkpoints, playerCount, overlayRebootRects)
+    : [];
+  if (recoveryRule === "reboot_tokens" && rebootTokens.length < boardRects.length + overlayRebootRects.length) {
     return null;
   }
   const baseOptions = applyVariantAnalysisOptions({
