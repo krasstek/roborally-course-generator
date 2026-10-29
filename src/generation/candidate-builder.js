@@ -99,6 +99,7 @@ import {
   getSelectedExpansionIds,
   OVERLAY_REBOOT_MODES,
   normalizeBoardSpread,
+  normalizeCheckpointFloor,
   normalizeOverlayMode,
   normalizeOverlayReboot
 } from "./preferences.js";
@@ -2305,6 +2306,7 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
         ...generationPreferences,
         overlayMode: normalizeOverlayMode(generationPreferences.overlayMode),
         overlayReboot: normalizeOverlayReboot(generationPreferences.overlayReboot),
+        checkpointFloor: normalizeCheckpointFloor(generationPreferences.checkpointFloor),
         actFast,
         actFastMode,
         competitiveMode,

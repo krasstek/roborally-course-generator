@@ -45,6 +45,7 @@ import {
   closeVariantPicker,
   cycleActFastControlChoice,
   cycleBoardSpreadControl,
+  cycleCheckpointFloorControl,
   cycleOverlayModeControl,
   cycleOverlayRebootControl,
   cycleVariantControlState,
@@ -635,6 +636,11 @@ function handleOptionalRuleControlClick(event) {
 
   if (button.dataset.overlayRebootControl) {
     cycleOverlayRebootControl();
+    return;
+  }
+
+  if (button.dataset.checkpointFloorControl) {
+    cycleCheckpointFloorControl();
     return;
   }
 

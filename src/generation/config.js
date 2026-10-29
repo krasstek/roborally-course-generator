@@ -207,6 +207,10 @@ export const TARGET_STRONG_DIFFICULTY_FIT = 42;
 export const TARGET_STRONG_EASY_DIFFICULTY_FIT = 48;
 export const TARGET_STRONG_LENGTH_FIT = 24;
 export const NEAR_BEST_MIN_BIN_WIDTH = 2;
+// Fit-score penalty per checkpoint no robot can be pushed off (wall corner),
+// and per checkpoint with a single push direction (2026-10-29, first guess).
+export const CHECKPOINT_UNPUSHABLE_PENALTY = 12;
+export const CHECKPOINT_ONE_PUSH_PENALTY = 3;
 // A course in both target bands with a fit score at or below this has no soft
 // penalty at all; the generation loop stops on the first one (2026-10-28).
 export const CLEAN_MATCH_FIT_SCORE = 1e-6;

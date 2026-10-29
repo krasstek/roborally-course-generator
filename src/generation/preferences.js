@@ -91,6 +91,19 @@ export function normalizeOverlayReboot(value) {
     : OVERLAY_REBOOT_MODES.own;
 }
 
+// Checkpoint squares (2026-10-29). "clear": a checkpoint may sit only on plain
+// floor, walls allowed (as in the 1994 first edition); "any" is the default.
+export const CHECKPOINT_FLOOR_MODES = Object.freeze({
+  any: "any",
+  clear: "clear"
+});
+
+export function normalizeCheckpointFloor(value) {
+  return value === CHECKPOINT_FLOOR_MODES.clear
+    ? CHECKPOINT_FLOOR_MODES.clear
+    : CHECKPOINT_FLOOR_MODES.any;
+}
+
 export function getSelectedExpansionIds(preferences = {}) {
   const selected = preferences.selectedExpansions ?? { roborally: true };
   return new Set(Object.entries(selected)
