@@ -798,6 +798,28 @@ export function applyPreferencesToControls(preferences) {
   }
 }
 
+// Current Robo Rally sets play up to 6; only the 30th Anniversary Edition
+// supports 7-8 players (earlier editions' 8 is not the standard now).
+const MAX_PLAYERS_WITHOUT_30TH_ANNIVERSARY = 6;
+
+function getMaxPlayerCount(expansionIds) {
+  return expansionIds.has("30th-anniversary") ? Infinity : MAX_PLAYERS_WITHOUT_30TH_ANNIVERSARY;
+}
+
+// Brings the player count within what the selected sets support (also after a
+// restored save); runs before anything else reads the count.
+function clampPlayerCountToSets() {
+  const select = document.getElementById("player-count");
+  if (!select) return;
+  const maxPlayers = getMaxPlayerCount(getSelectedExpansionIds(getPreferencesFromControls()));
+  const previous = select.value;
+  if (previous && Number(previous) <= maxPlayers) return;
+  select.value = String(Math.min(maxPlayers, MAX_PLAYERS_WITHOUT_30TH_ANNIVERSARY));
+  if (previous) {
+    showToast(`Player count set to ${select.value}: 7-8 players needs Robo Rally 30th Anniversary Edition.`);
+  }
+}
+
 export function updatePlayerCountAvailability(preferences = getPreferencesFromControls()) {
   const select = document.getElementById("player-count");
   if (!select || !cachedAssets?.pieceMap) {
@@ -809,11 +831,18 @@ export function updatePlayerCountAvailability(preferences = getPreferencesFromCo
   const dockIds = getEligibleDockIds(cachedAssets.pieceMap, expansionIds);
   const noDocksState = getVariantPreferenceState(preferences, "noDocks");
   const docklessOptionPermitted = noDocksState !== "off";
+  const maxPlayers = getMaxPlayerCount(expansionIds);
 
   Array.from(select.options).forEach((option) => {
     const playerCount = Number(option.value);
     option.disabled = false;
     option.title = "";
+
+    if (playerCount > maxPlayers) {
+      option.disabled = true;
+      option.title = "7-8 players needs Robo Rally 30th Anniversary Edition.";
+      return;
+    }
 
     if (!competitiveModeEnabled) {
       return;
@@ -844,6 +873,7 @@ export function updatePlayerCountAvailability(preferences = getPreferencesFromCo
 }
 
 export function updateVariantAvailability() {
+  clampPlayerCountToSets();
   let preferences = getPreferencesFromControls();
 
   const competitiveModeForced = getVariantPreferenceState(preferences, "competitiveMode") === "forced";
