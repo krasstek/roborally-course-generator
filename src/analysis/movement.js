@@ -8,8 +8,10 @@ import {
   REGISTER_START_FEATURE_TRAPDOOR,
   cloneState,
   getBelt,
+  getBuilding,
   getFeatureDutyCycle,
   getGear,
+  getJumpRamp,
   getLedgeSides,
   getPortal,
   getPushes,
@@ -19,10 +21,13 @@ import {
   hasActiveFeature,
   hasExplicitTiming,
   hasKnownRegisterTiming,
+  getRoad,
   hasRampForDir,
   isBoundaryBlockedByWalls,
+  isBuildingSideClosed,
   isCurrent,
   isFeatureActiveThisRegister,
+  isFirePit,
   isOil,
   isPit,
   isWater,
@@ -639,6 +644,18 @@ export function canMoveBetween(
     return { ok: false, crash: false, offBoard: false };
   }
 
+  // Transformers: a building square is entered and left only through its
+  // doorways (a grandstand has none), and a jump ramp is entered only in its
+  // arrow direction. Conveyors and pushers obey both.
+  const toJumpRamp = getJumpRamp(toTile);
+  if (
+    isBuildingSideClosed(fromTile, dir) ||
+    isBuildingSideClosed(toTile, OPPOSITE[dir]) ||
+    (toJumpRamp && toJumpRamp.dir !== dir)
+  ) {
+    return { ok: false, crash: false, offBoard: false };
+  }
+
   if (!toTile) {
     return {
       ok: false,
@@ -1052,6 +1069,27 @@ export function moveOneStep(
     turned = Boolean(beltTurnRotation);
   }
 
+  // A road corner rotates a robot whose programmed move enters it along the
+  // road (same entry rule as a conveyor turn); the rest of the move follows the
+  // new facing. Pushes and conveyors never rotate on roads.
+  const road = mode === "manual" ? getRoad(nextTile) : null;
+  if (road?.turn) {
+    const roadTurnRotation = getBeltTurnRotation(road, OPPOSITE[dir]);
+    if (roadTurnRotation) {
+      nextFacing = rotateFacing(nextFacing, roadTurnRotation);
+    }
+  }
+
+  // Entering a building square through a doorway turns the robot to face the
+  // square's other doorway, if it has one.
+  const building = getBuilding(nextTile);
+  const exitDoorway = building
+    ? (building.sides || []).find((side) => side !== OPPOSITE[dir])
+    : null;
+  if (exitDoorway) {
+    nextFacing = exitDoorway;
+  }
+
   const resolvedState = {
     x: next.x,
     y: next.y,
@@ -1258,6 +1296,48 @@ export function resolveTeleporterMove(tileMap, state, action, options = {}) {
   }
 
   return outcome;
+}
+
+// Transformers jump ramp: a programmed move that enters a ramp in its arrow
+// direction continues as many squares as it took to reach the ramp, flying
+// over everything (walls and robots included), and the card ends there. A
+// landing on a building continues until the robot clears it; a landing in a
+// pit or off the course reboots. Facing is unchanged.
+export function resolveJumpRampMove(tileMap, state, dir, squares, options = {}) {
+  const delta = DIRS[dir];
+  let steps = squares;
+  let destination = { x: state.x + delta.dx * steps, y: state.y + delta.dy * steps };
+  let destinationTile = tileMap.get(tileKey(destination.x, destination.y));
+  while (getBuilding(destinationTile)) {
+    steps += 1;
+    destination = { x: state.x + delta.dx * steps, y: state.y + delta.dy * steps };
+    destinationTile = tileMap.get(tileKey(destination.x, destination.y));
+  }
+  const traversed = [{ x: destination.x, y: destination.y, jump: true }];
+
+  if (!destinationTile || isPit(destinationTile) || hasActiveFeature(destinationTile, "trapdoor", options)) {
+    return resolveCrashOrReboot(tileMap, state, destination, traversed, options, steps);
+  }
+
+  const resolvedState = { x: destination.x, y: destination.y, facing: state.facing };
+  return {
+    state: resolvedState,
+    blocked: false,
+    crashed: false,
+    rebooted: false,
+    traversed,
+    conveyorSteps: [],
+    hazard: getTilePenalty(destinationTile, options) +
+      getActiveFlamethrowerEntryPenalty(destinationTile, options) +
+      getTimedTraversalFragilityPenalty(destinationTile, options) +
+      getPitPressurePenalty(tileMap, resolvedState, options) +
+      getLedgePressurePenalty(tileMap, resolvedState, options),
+    rebootPenalty: 0,
+    distance: steps,
+    forcedDistance: 0,
+    spentMove: true,
+    rampAscent: false
+  };
 }
 
 export function resolveConveyorPhase(
@@ -1883,10 +1963,19 @@ export function simulateAction(tileMap, startState, action, options = {}) {
     const onOil = isOil(startTile);
     const onWater = isWater(startTile);
     const cardMoveDistance = Math.max(1, action.steps ?? 1);
-    let remainingSteps = Math.max(0, cardMoveDistance - (
+    // A Move card (forward or Move Back, not a drift) started on a road while
+    // facing its arrow moves one square further (mandatory).
+    const startRoad = getRoad(startTile);
+    const roadBonus = startRoad && startRoad.dir === state.facing &&
+      (action.relative === "forward" || action.relative === "back")
+      ? 1
+      : 0;
+    let remainingSteps = Math.max(0, cardMoveDistance + roadBonus - (
       (onOil ? 1 : 0) +
       (onWater ? 1 : 0)
     ));
+    let cardSquaresMoved = 0;
+    let pendingJump = null;
     const manualMoveDir = movementDir(state.facing, action.relative);
     const manualDistanceBefore = distance;
     if (physicalMissProfile) {
@@ -1895,16 +1984,20 @@ export function simulateAction(tileMap, startState, action, options = {}) {
     }
 
     while (remainingSteps > 0) {
-      const step = moveOneStep(
-        tileMap,
-        state,
-        movementDir(state.facing, action.relative),
-        "manual",
-        options,
-        remainingSteps,
-        cardMoveDistance,
-        true
-      );
+      const stepDir = movementDir(state.facing, action.relative);
+      const jump = pendingJump;
+      const step = jump
+        ? resolveJumpRampMove(tileMap, state, jump.dir, jump.squares, options)
+        : moveOneStep(
+          tileMap,
+          state,
+          stepDir,
+          "manual",
+          options,
+          remainingSteps,
+          cardMoveDistance,
+          true
+        );
       const manualBookkeepingStartedAt = physicalMissProfile ? analysisTelemetryNow() : 0;
       traversed.push(...step.traversed);
       hazard += step.hazard;
@@ -1952,7 +2045,22 @@ export function simulateAction(tileMap, startState, action, options = {}) {
         }
         break;
       }
-      remainingSteps -= 1 + (step.rampAscent ? 1 : 0);
+      if (jump) {
+        // The jump ends the card.
+        remainingSteps = 0;
+      } else {
+        remainingSteps -= 1 + (step.rampAscent ? 1 : 0);
+        cardSquaresMoved += 1;
+        const landedTile = tileMap.get(tileKey(state.x, state.y));
+        const jumpRamp = getJumpRamp(landedTile);
+        if (jumpRamp && jumpRamp.dir === stepDir) {
+          pendingJump = { dir: stepDir, squares: cardSquaresMoved };
+          remainingSteps = 1;
+        } else if (isFirePit(landedTile)) {
+          // Entering a fire pit stops the move.
+          remainingSteps = 0;
+        }
+      }
       if (physicalMissProfile) {
         physicalMissProfile.physicalMissProgramBookkeepingMs +=
           analysisTelemetryNow() - manualBookkeepingStartedAt;

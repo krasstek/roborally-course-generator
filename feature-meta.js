@@ -60,6 +60,24 @@ export function formatFeatureLabel(feature, options = {}) {
       return `ramp ${feature.dir ?? "?"}`;
     case "checkpoint":
       return compact ? `cp ${feature.id ?? "?"}` : `checkpoint ${feature.id ?? "?"}`;
+    case "road":
+      return `road ${feature.dir ?? "?"}${feature.turn ? ` turn ${feature.turn}` : ""}`;
+    case "building":
+      return (feature.sides || []).length
+        ? `building, doorways ${feature.sides.join(compact ? "," : ", ")}`
+        : "grandstand";
+    case "jumpRamp":
+      return `jump ramp ${feature.dir ?? "?"}`;
+    case "firePit":
+      return "fire pit";
+    case "pitStop":
+      return "pit stop";
+    case "mine":
+      return "mine";
+    case "spaceBridge":
+      return `space bridge ${feature.id ?? "?"}`;
+    case "energon":
+      return "energon";
     default:
       return JSON.stringify(feature);
   }

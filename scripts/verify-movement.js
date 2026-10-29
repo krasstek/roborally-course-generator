@@ -164,7 +164,189 @@ function ramp(x, y, dir) {
 
 const FORWARD_2 = { id: "FORWARD_2", type: "move", relative: "forward", steps: 2 };
 
+// Transformers elements.
+function road(x, y, dir, turn) {
+  return tile(x, y, [{ type: "road", dir, ...(turn ? { turn } : {}) }]);
+}
+
+function building(x, y, doorways) {
+  return tile(x, y, [{ type: "building", sides: doorways }]);
+}
+
+function jumpRamp(x, y, dir) {
+  return tile(x, y, [{ type: "jumpRamp", dir }]);
+}
+
+function row(fromX, toX, y = 0) {
+  return Array.from({ length: toX - fromX + 1 }, (_, index) => tile(fromX + index, y));
+}
+
+const transformersCases = [
+  {
+    name: "road: a Move card started facing the road's arrow moves one further",
+    tiles: [road(0, 0, "E"), ...row(1, 3)],
+    start: { x: 0, y: 0, facing: "E" },
+    action: FORWARD,
+    expected: { x: 2, y: 0, facing: "E", turnedSteps: 0 }
+  },
+  {
+    name: "road: no bonus when not facing the arrow",
+    tiles: [road(0, 0, "N"), ...row(1, 3)],
+    start: { x: 0, y: 0, facing: "E" },
+    action: FORWARD,
+    expected: { x: 1, y: 0, facing: "E", turnedSteps: 0 }
+  },
+  {
+    name: "road: Move Back facing the arrow also moves one further",
+    tiles: [road(0, 0, "W"), tile(1, 0), tile(2, 0), tile(3, 0)],
+    start: { x: 0, y: 0, facing: "W" },
+    action: BACK,
+    expected: { x: 2, y: 0, facing: "W", turnedSteps: 0 }
+  },
+  {
+    name: "road: a drift gets no bonus",
+    tiles: [road(0, 0, "N"), ...row(1, 3)],
+    start: { x: 0, y: 0, facing: "N" },
+    action: DRIFT_RIGHT,
+    options: { driftDeck: true },
+    expected: { x: 1, y: 0, facing: "N", turnedSteps: 0 }
+  },
+  {
+    name: "road: entering a corner along the road rotates and the move follows the road",
+    tiles: [tile(0, 0), road(1, 0, "S", "right"), tile(1, 1), tile(1, 2), tile(2, 0)],
+    start: { x: 0, y: 0, facing: "E" },
+    action: FORWARD_2,
+    expected: { x: 1, y: 1, facing: "S", turnedSteps: 0 }
+  },
+  {
+    name: "road: Move Back along the road also turns with the corner",
+    tiles: [tile(0, 0), road(1, 0, "S", "right"), tile(1, 1), tile(2, 0)],
+    start: { x: 0, y: 0, facing: "W" },
+    action: { id: "BACK_2", type: "move", relative: "back", steps: 2 },
+    expected: { x: 1, y: 1, facing: "N", turnedSteps: 0 }
+  },
+  {
+    name: "road: entering a corner counter-traffic does not rotate",
+    tiles: [tile(1, 2), tile(1, 1), road(1, 0, "S", "right"), tile(0, 0), tile(1, -1)],
+    start: { x: 1, y: 1, facing: "N" },
+    action: FORWARD_2,
+    expected: { x: 1, y: -1, facing: "N", turnedSteps: 0 }
+  },
+  {
+    name: "building: entry only through a doorway",
+    tiles: [tile(0, 0), building(1, 0, ["N"]), tile(1, -1)],
+    start: { x: 0, y: 0, facing: "E" },
+    action: FORWARD,
+    expected: { x: 0, y: 0, facing: "E", turnedSteps: 0 }
+  },
+  {
+    name: "building: a grandstand is never entered",
+    tiles: [tile(0, 0), building(1, 0, [])],
+    start: { x: 0, y: 0, facing: "E" },
+    action: FORWARD,
+    expected: { x: 0, y: 0, facing: "E", turnedSteps: 0 }
+  },
+  {
+    name: "building: entering turns the robot to face the other doorway",
+    tiles: [tile(0, 0), building(1, 0, ["W", "S"]), tile(1, 1)],
+    start: { x: 0, y: 0, facing: "E" },
+    action: FORWARD,
+    expected: { x: 1, y: 0, facing: "S", turnedSteps: 0 }
+  },
+  {
+    name: "building: the rest of the move continues through the new doorway",
+    tiles: [tile(0, 0), building(1, 0, ["W", "S"]), building(1, 1, ["N"]), tile(2, 0)],
+    start: { x: 0, y: 0, facing: "E" },
+    action: FORWARD_3,
+    expected: { x: 1, y: 1, facing: "S", turnedSteps: 0 }
+  },
+  {
+    name: "building: leaving only through a doorway",
+    tiles: [building(0, 0, ["W"]), tile(1, 0), tile(-1, 0)],
+    start: { x: 0, y: 0, facing: "E" },
+    action: FORWARD,
+    expected: { x: 0, y: 0, facing: "E", turnedSteps: 0 }
+  },
+  {
+    name: "building: a conveyor carries a robot in through a doorway",
+    tiles: [belt(0, 0, "E"), building(1, 0, ["W"])],
+    start: { x: 0, y: 0, facing: "N" },
+    action: WAIT,
+    expected: { x: 1, y: 0, facing: "N", turnedSteps: 0 }
+  },
+  {
+    name: "jump ramp: Move 1 from the adjacent square jumps one square",
+    tiles: [tile(0, 0), jumpRamp(1, 0, "E"), ...row(2, 5)],
+    start: { x: 0, y: 0, facing: "E" },
+    action: FORWARD,
+    expected: { x: 2, y: 0, facing: "E", turnedSteps: 0 }
+  },
+  {
+    name: "jump ramp: jumps as far as it took to reach the ramp, then the card ends",
+    tiles: [...row(0, 1), jumpRamp(2, 0, "E"), ...row(3, 8)],
+    start: { x: 0, y: 0, facing: "E" },
+    action: FORWARD_3,
+    expected: { x: 4, y: 0, facing: "E", turnedSteps: 0 }
+  },
+  {
+    name: "jump ramp: the jump flies over walls",
+    tiles: [tile(0, 0), tile(1, 0, [{ type: "jumpRamp", dir: "E" }, { type: "wall", sides: ["E"] }]), tile(2, 0)],
+    start: { x: 0, y: 0, facing: "E" },
+    action: FORWARD,
+    expected: { x: 2, y: 0, facing: "E", turnedSteps: 0 }
+  },
+  {
+    name: "jump ramp: Move Back works too, facing unchanged",
+    tiles: [tile(0, 0), jumpRamp(1, 0, "E"), ...row(2, 4)],
+    start: { x: 0, y: 0, facing: "W" },
+    action: BACK,
+    expected: { x: 2, y: 0, facing: "W", turnedSteps: 0 }
+  },
+  {
+    name: "jump ramp: entered only in its arrow direction",
+    tiles: [tile(1, 1), jumpRamp(1, 0, "E"), tile(2, 0)],
+    start: { x: 1, y: 1, facing: "N" },
+    action: FORWARD,
+    expected: { x: 1, y: 1, facing: "N", turnedSteps: 0 }
+  },
+  {
+    name: "jump ramp: a landing on a building continues until clear of it",
+    tiles: [tile(0, 0), jumpRamp(1, 0, "E"), building(2, 0, []), building(3, 0, []), tile(4, 0)],
+    start: { x: 0, y: 0, facing: "E" },
+    action: FORWARD,
+    expected: { x: 4, y: 0, facing: "E", turnedSteps: 0 }
+  },
+  {
+    name: "jump ramp: a conveyor onto the ramp does not jump",
+    tiles: [belt(0, 0, "E"), jumpRamp(1, 0, "E"), tile(2, 0)],
+    start: { x: 0, y: 0, facing: "N" },
+    action: WAIT,
+    expected: { x: 1, y: 0, facing: "N", turnedSteps: 0 }
+  },
+  {
+    name: "jump ramp: a landing in a pit reboots",
+    tiles: [tile(0, 0), jumpRamp(1, 0, "E"), tile(2, 0, [{ type: "pit" }]), tile(5, 5)],
+    start: { x: 0, y: 0, facing: "E" },
+    action: FORWARD,
+    options: {
+      registerIndex: 0,
+      recoveryRule: "reboot_tokens",
+      boardRects: [{ index: 0, x: 0, y: 0, width: 6, height: 6 }],
+      rebootTokens: [{ boardIndex: 0, x: 5, y: 5 }]
+    },
+    expected: { x: 5, y: 5, facing: "E", turnedSteps: 0, rebooted: true }
+  },
+  {
+    name: "fire pit: entering it stops the move",
+    tiles: [tile(0, 0), tile(1, 0, [{ type: "firePit" }]), tile(2, 0), tile(3, 0)],
+    start: { x: 0, y: 0, facing: "E" },
+    action: FORWARD_3,
+    expected: { x: 1, y: 0, facing: "E", turnedSteps: 0 }
+  }
+];
+
 const cases = [
+  ...transformersCases,
   {
     name: "climbing a ramp with one move left spends the move without moving",
     tiles: [ramp(0, 0, "E"), tile(1, 0)],
