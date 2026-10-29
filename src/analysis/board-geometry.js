@@ -203,6 +203,29 @@ export function isPit(tile) {
   return (tile?.features || []).some((feature) => feature.type === "pit");
 }
 
+// Transformers elements. A building square's sides are its doorways; a
+// grandstand is a building with none.
+export function getBuilding(tile) {
+  return (tile?.features || []).find((feature) => feature.type === "building") ?? null;
+}
+
+export function isBuildingSideClosed(tile, side) {
+  const building = getBuilding(tile);
+  return Boolean(building && !(building.sides || []).includes(side));
+}
+
+export function getJumpRamp(tile) {
+  return (tile?.features || []).find((feature) => feature.type === "jumpRamp") ?? null;
+}
+
+export function getRoad(tile) {
+  return (tile?.features || []).find((feature) => feature.type === "road") ?? null;
+}
+
+export function isFirePit(tile) {
+  return (tile?.features || []).some((feature) => feature.type === "firePit");
+}
+
 export function getLedgeSides(tile) {
   const sides = new Set();
 
