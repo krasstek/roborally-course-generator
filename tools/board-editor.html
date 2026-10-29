@@ -315,15 +315,22 @@
           <button data-tool="belt">Conveyor</button>
           <button data-tool="crusher">Crusher</button>
           <button data-tool="eraseFeature">Erase feature</button>
+          <button data-tool="energon">Energon</button>
           <button data-tool="eraseTile">Erase tile</button>
+          <button data-tool="firePit">Fire pit</button>
           <button data-tool="flamethrower">Flamethrower</button>
           <button data-tool="gear">Gear</button>
+          <button data-tool="grandstand">Grandstand</button>
+          <button data-tool="building">Building doorway</button>
           <button data-tool="homingMissile">Homing missile</button>
           <button data-tool="inspectTile">Inspect tile</button>
+          <button data-tool="jumpRamp">Jump ramp</button>
           <button data-tool="laser">Laser</button>
           <button data-tool="ledge">Ledge</button>
+          <button data-tool="mine">Mine</button>
           <button data-tool="oil">Oil slick</button>
           <button data-tool="pit">Pit</button>
+          <button data-tool="pitStop">Pit stop</button>
           <button data-tool="portal">Portal</button>
           <button data-tool="push">Push panel</button>
           <button data-tool="randomizer">Randomizer</button>
@@ -332,6 +339,8 @@
           <button data-tool="ramp">Ramp</button>
           <button data-tool="redWall">Red wall</button>
           <button data-tool="repulsor">Repulsor</button>
+          <button data-tool="road">Road</button>
+          <button data-tool="spaceBridge">Space bridge</button>
           <button data-tool="start">Start</button>
           <button data-tool="teleporter">Teleporter</button>
           <button data-tool="trapdoor">Trapdoor</button>
@@ -566,6 +575,10 @@
     const tiles = {};
     const starts = [];
 
+    // Overlay tokens that sit on top of the square below instead of covering it
+    // (exported as mergeMode "add").
+    const ADDITIVE_TOKEN_TYPES = new Set(["mine", "energon"]);
+
     function tileKey(x, y) {
       return `${x},${y}`;
     }
@@ -599,7 +612,34 @@
         case "radioactiveWaste":
         case "chopShop":
         case "homingMissile":
+        case "firePit":
+        case "pitStop":
+        case "mine":
+        case "energon":
           return { type: feature.type };
+        // Transformers road: like a conveyor without speed; turn marks a corner.
+        case "road": {
+          const normalizedRoad = { type: "road", dir: feature.dir || "N" };
+          const roadTurn = feature.turn === "left" || feature.turn === "right" ? feature.turn : undefined;
+          if (roadTurn) normalizedRoad.turn = roadTurn;
+          return normalizedRoad;
+        }
+        // Building square; sides are its doorways (none = grandstand, blocked).
+        case "building":
+          return {
+            type: "building",
+            sides: normalizeSides(feature.sides)
+          };
+        case "jumpRamp":
+          return {
+            type: "jumpRamp",
+            dir: feature.dir || "N"
+          };
+        case "spaceBridge":
+          return {
+            type: "spaceBridge",
+            id: String(feature.id || "1")
+          };
         case "belt": {
           const normalizedBelt = {
             type: "belt",
@@ -737,6 +777,24 @@
           return "chop shop";
         case "homingMissile":
           return "homing missile";
+        case "road":
+          return `road dir=${feature.dir}${feature.turn ? ` turn=${feature.turn}` : ""}`;
+        case "building":
+          return (feature.sides || []).length
+            ? `building doorways=${feature.sides.join(",")}`
+            : "grandstand (building, no doorways)";
+        case "jumpRamp":
+          return `jump ramp dir=${feature.dir}`;
+        case "firePit":
+          return "fire pit";
+        case "pitStop":
+          return "pit stop";
+        case "mine":
+          return "mine";
+        case "spaceBridge":
+          return `space bridge id=${feature.id}`;
+        case "energon":
+          return "energon";
         default:
           return JSON.stringify(feature);
       }
@@ -852,7 +910,13 @@
         }
       }
 
-      if (["wall", "redWall", "greenWall", "ledge", "repulsor"].includes(normalizedFeature.type)) {
+      if (normalizedFeature.type === "building" && !normalizedFeature.sides.length) {
+        tile.features = tile.features.filter(f => f.type !== "building");
+        tile.features.push(normalizedFeature);
+        return;
+      }
+
+      if (["wall", "redWall", "greenWall", "ledge", "repulsor", "building"].includes(normalizedFeature.type)) {
         const existing = tile.features.find(f => f.type === normalizedFeature.type);
         if (existing) {
           for (const side of normalizedFeature.sides) {
@@ -993,6 +1057,24 @@
           return normalizeFeature({ type: "chopShop" });
         case "homingMissile":
           return normalizeFeature({ type: "homingMissile" });
+        case "road":
+          return normalizeFeature({ type: "road", dir, turn: beltTurn });
+        case "building":
+          return normalizeFeature({ type: "building", sides: [dir] });
+        case "grandstand":
+          return normalizeFeature({ type: "building", sides: [] });
+        case "jumpRamp":
+          return normalizeFeature({ type: "jumpRamp", dir });
+        case "firePit":
+          return normalizeFeature({ type: "firePit" });
+        case "pitStop":
+          return normalizeFeature({ type: "pitStop" });
+        case "mine":
+          return normalizeFeature({ type: "mine" });
+        case "spaceBridge":
+          return normalizeFeature({ type: "spaceBridge", id: featureId || "1" });
+        case "energon":
+          return normalizeFeature({ type: "energon" });
         default:
           return null;
       }
@@ -1296,6 +1378,29 @@
         } else if (f.type === "homingMissile") {
           ctx.fillText("HM", left + 4, textY);
           textY += 12;
+        } else if (f.type === "road") {
+          const roadTurnSuffix = f.turn === "left" ? "L" : f.turn === "right" ? "R" : "";
+          drawArrowInTile(x, y, f.dir, `Rd${roadTurnSuffix}`);
+        } else if (f.type === "building") {
+          ctx.fillText((f.sides || []).length ? `Bd ${(f.sides || []).join("")}` : "Grand", left + 4, textY);
+          textY += 12;
+        } else if (f.type === "jumpRamp") {
+          drawArrowInTile(x, y, f.dir, "Jmp");
+        } else if (f.type === "firePit") {
+          ctx.fillText("Fire", left + 4, textY);
+          textY += 12;
+        } else if (f.type === "pitStop") {
+          ctx.fillText("PitStop", left + 4, textY);
+          textY += 12;
+        } else if (f.type === "mine") {
+          ctx.fillText("Mine", left + 4, textY);
+          textY += 12;
+        } else if (f.type === "spaceBridge") {
+          ctx.fillText(`SB${f.id}`, left + 4, textY);
+          textY += 12;
+        } else if (f.type === "energon") {
+          ctx.fillText("En", left + 4, textY);
+          textY += 12;
         } else if (f.type === "wall" || f.type === "redWall" || f.type === "greenWall") {
           // drawn separately
         } else {
@@ -1477,7 +1582,11 @@
         kind: pieceKindInput.value,
         width: Number(gridWidthInput.value),
         height: Number(gridHeightInput.value),
-        mergeMode: pieceKindInput.value === "overlay" ? "overlay" : "base",
+        mergeMode: pieceKindInput.value !== "overlay"
+          ? "base"
+          : exportedTiles.length && exportedTiles.every((tile) => tile.features.every((f) => ADDITIVE_TOKEN_TYPES.has(f.type)))
+            ? "add"
+            : "overlay",
         starts: [...starts].sort((a, b) => (a.y - b.y) || (a.x - b.x)),
         tiles: exportedTiles
       };

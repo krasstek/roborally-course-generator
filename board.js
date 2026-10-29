@@ -556,7 +556,9 @@ export function buildResolvedMap(placements, pieces) {
           features: []
         });
       }
-      if (placement.overlay) {
+      // Tokens that sit on top of a square (mergeMode "add": mines, Energon)
+      // keep its features; other overlays cover the square.
+      if (placement.overlay && piece.mergeMode !== "add") {
         tileMap.set(key, {
           x: tileX,
           y: tileY,

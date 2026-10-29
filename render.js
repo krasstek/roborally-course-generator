@@ -719,6 +719,28 @@ function drawFeatureIcon(ctx, feature, left, top, size) {
       drawIconBadge(ctx, left, top, size, { fill: "#4d9d6a", stroke: "#1d5a38" });
       drawBadgeText(ctx, "CS", left, top, size, { color: "#f3fff4", bold: true });
       return;
+    case "jumpRamp":
+      drawIconBadge(ctx, left, top, size, { fill: "#d9a521", stroke: "#7a5608" });
+      drawDirectionArrow(ctx, cx, cy, size * 0.62, feature.dir, "#2b1d00");
+      return;
+    case "pitStop":
+      drawIconBadge(ctx, left, top, size, { fill: "#3a6fb0", stroke: "#173a66" });
+      drawBadgeText(ctx, "PS", left, top, size, { color: "#ffffff", bold: true });
+      return;
+    case "mine":
+      drawIconBadge(ctx, left, top, size, { fill: "#2a2a2a", stroke: "#b3261e" });
+      drawBadgeText(ctx, "M", left, top, size, { color: "#ff7a6e", bold: true });
+      return;
+    case "spaceBridge": {
+      const bridgeColor = getSpaceBridgeColor(feature.id);
+      drawIconBadge(ctx, left, top, size, { fill: bridgeColor, stroke: "#1b1b1b" });
+      drawBadgeText(ctx, "SB", left, top, size, { color: "#ffffff", bold: true });
+      return;
+    }
+    case "energon":
+      drawIconBadge(ctx, left, top, size, { fill: "#c43ea8", stroke: "#5e1250" });
+      drawBadgeText(ctx, "E", left, top, size, { color: "#fff0fb", bold: true });
+      return;
     case "homingMissile":
       drawIconBadge(ctx, left, top, size, { fill: "#7d2f2f", stroke: "#461414" });
       ctx.save();
@@ -750,7 +772,12 @@ function getFeatureIconLayer(feature) {
     case "water":
     case "oil":
     case "pit":
+    case "road":
+    case "building":
+    case "firePit":
       return "background";
+    case "jumpRamp":
+      return "middle";
     case "belt":
     case "trapdoor":
     case "gear":
@@ -796,11 +823,98 @@ function getLayerSlots(count, x, y, tileSize, size) {
   ];
 }
 
+// Space bridge colours: the id is the colour name when it is one, otherwise a
+// stable pick from a small palette.
+const SPACE_BRIDGE_COLORS = {
+  red: "#c0392b",
+  blue: "#2d6fc4",
+  green: "#2f9a52",
+  yellow: "#c9a015",
+  purple: "#7d3cb5",
+  orange: "#d4721c"
+};
+
+function getSpaceBridgeColor(id) {
+  const key = String(id ?? "").toLowerCase();
+  if (SPACE_BRIDGE_COLORS[key]) return SPACE_BRIDGE_COLORS[key];
+  const palette = Object.values(SPACE_BRIDGE_COLORS);
+  const hash = [...key].reduce((sum, char) => sum + char.charCodeAt(0), 0);
+  return palette[hash % palette.length];
+}
+
+// Building square: a solid block whose edges are drawn except at doorways; a
+// grandstand (no doorways) is hatched.
+function drawBuildingFeature(ctx, feature, x, y, tileSize) {
+  const doorways = feature.sides || [];
+  ctx.save();
+  ctx.fillStyle = doorways.length ? "rgba(92, 84, 76, 0.78)" : "rgba(70, 64, 58, 0.85)";
+  ctx.fillRect(x + 1, y + 1, tileSize - 2, tileSize - 2);
+  if (!doorways.length) {
+    ctx.strokeStyle = "rgba(220, 210, 196, 0.45)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let offset = -tileSize; offset < tileSize; offset += tileSize / 4) {
+      ctx.moveTo(x + Math.max(0, offset), y + Math.max(0, -offset));
+      ctx.lineTo(x + Math.min(tileSize, tileSize + offset), y + Math.min(tileSize, tileSize - offset));
+    }
+    ctx.stroke();
+  }
+  const edge = Math.max(2, tileSize * 0.08);
+  ctx.fillStyle = "#2c2622";
+  for (const side of ["N", "E", "S", "W"]) {
+    if (doorways.includes(side)) continue;
+    if (side === "N") ctx.fillRect(x, y, tileSize, edge);
+    else if (side === "S") ctx.fillRect(x, y + tileSize - edge, tileSize, edge);
+    else if (side === "W") ctx.fillRect(x, y, edge, tileSize);
+    else ctx.fillRect(x + tileSize - edge, y, edge, tileSize);
+  }
+  ctx.fillStyle = "#e8c35a";
+  for (const side of doorways) {
+    const span = tileSize * 0.4;
+    const start = (tileSize - span) / 2;
+    if (side === "N") ctx.fillRect(x + start, y, span, edge * 0.6);
+    else if (side === "S") ctx.fillRect(x + start, y + tileSize - edge * 0.6, span, edge * 0.6);
+    else if (side === "W") ctx.fillRect(x, y + start, edge * 0.6, span);
+    else if (side === "E") ctx.fillRect(x + tileSize - edge * 0.6, y + start, edge * 0.6, span);
+  }
+  ctx.restore();
+}
+
 function drawBackgroundFeature(ctx, feature, x, y, tileSize) {
   const cx = x + tileSize / 2;
   const cy = y + tileSize / 2;
 
   switch (feature.type) {
+    case "road":
+      ctx.save();
+      ctx.fillStyle = "rgba(78, 82, 88, 0.62)";
+      ctx.fillRect(x + 1, y + 1, tileSize - 2, tileSize - 2);
+      ctx.restore();
+      drawDirectionArrow(ctx, cx, cy, tileSize * 0.42, feature.dir, "rgba(245, 245, 240, 0.95)");
+      if (feature.turn) {
+        drawBadgeText(ctx, feature.turn === "left" ? "L" : "R", x + tileSize * 0.62, y + tileSize * 0.04, tileSize * 0.34, {
+          color: "#f4d35e",
+          bold: true
+        });
+      }
+      return;
+    case "building":
+      drawBuildingFeature(ctx, feature, x, y, tileSize);
+      return;
+    case "firePit":
+      ctx.save();
+      ctx.fillStyle = "rgba(226, 88, 34, 0.55)";
+      ctx.beginPath();
+      ctx.arc(cx, cy, tileSize * 0.38, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "rgba(255, 196, 64, 0.9)";
+      ctx.beginPath();
+      ctx.moveTo(cx, y + tileSize * 0.26);
+      ctx.quadraticCurveTo(x + tileSize * 0.7, cy, cx, y + tileSize * 0.74);
+      ctx.quadraticCurveTo(x + tileSize * 0.3, cy, cx, y + tileSize * 0.26);
+      ctx.fill();
+      ctx.restore();
+      return;
     case "water":
       ctx.save();
       ctx.fillStyle = "rgba(90, 169, 214, 0.38)";
