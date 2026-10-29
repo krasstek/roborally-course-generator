@@ -7,6 +7,7 @@ import {
 } from "../../board.js";
 import { CARDINAL_DIRS, LASER_BUNDLE_DEFINITIONS, ROTATIONS } from "./config.js";
 import {
+  findUnanchoredLaserEnds,
   getCombinedPlacedTileFeatureMap,
   getDockTileKeySet,
   getFullRectOffsets,
@@ -272,7 +273,35 @@ export function sampleWeightedLaserBundle(patterns) {
   return bag.length ? sample(bag) : null;
 }
 
-export function tryPlaceLaserBundleOnBoard(groupedMiniOverlayIds, pieceMap, supportTiles, dockTiles, occupiedMiniOverlayTiles, currentTileMap, remainingSlots) {
+// True when adding `newPlacements` opens no laser beam end that was anchored
+// before: compares the merged course map with and without them, so it also
+// catches an overlay covering a beam or the wall a beam ends on.
+export function placementsKeepLasersAnchored(newPlacements, currentPlacements, pieceMap) {
+  const endKey = (end) => `${end.x},${end.y},${end.dir},${end.side}`;
+  const before = new Set(
+    findUnanchoredLaserEnds(buildResolvedMap(currentPlacements, pieceMap).tileMap).map(endKey)
+  );
+  const after = findUnanchoredLaserEnds(
+    buildResolvedMap([...currentPlacements, ...newPlacements], pieceMap).tileMap
+  );
+  return after.every((end) => before.has(endKey(end)));
+}
+
+// Samples like sample(), redrawing without a candidate that breaks a laser, so
+// the random draw is unchanged whenever the first pick is legal.
+function sampleKeepingLasersAnchored(candidates, keepsLasersAnchored) {
+  let pool = candidates;
+  while (pool.length) {
+    const choice = sample(pool);
+    if (keepsLasersAnchored(choice)) {
+      return choice;
+    }
+    pool = pool.filter((candidate) => candidate !== choice);
+  }
+  return null;
+}
+
+export function tryPlaceLaserBundleOnBoard(groupedMiniOverlayIds, pieceMap, supportTiles, dockTiles, occupiedMiniOverlayTiles, currentTileMap, remainingSlots, currentPlacements) {
   const bundlePattern = sampleWeightedLaserBundle(getAvailableLaserBundlePatterns(groupedMiniOverlayIds, remainingSlots));
   if (!bundlePattern) {
     return null;
@@ -333,7 +362,10 @@ export function tryPlaceLaserBundleOnBoard(groupedMiniOverlayIds, pieceMap, supp
     return null;
   }
 
-  return sample(candidateBundles);
+  return sampleKeepingLasersAnchored(
+    candidateBundles,
+    (bundle) => placementsKeepLasersAnchored(bundle, currentPlacements, pieceMap)
+  );
 }
 
 export function placementTouchesSupportEdge(placement, piece, supportTiles) {
@@ -400,7 +432,8 @@ export function placeMiniOverlaysOnBoards(targetBoards, groupedMiniOverlayIds, p
         dockTiles,
         occupiedMiniOverlayTiles,
         currentTileMap,
-        remainingSlots
+        remainingSlots,
+        currentPlacements
       );
       if (laserBundlePlacements?.length) {
         laserBundlePlacements.forEach((placement) => {
@@ -450,7 +483,13 @@ export function placeMiniOverlaysOnBoards(targetBoards, groupedMiniOverlayIds, p
         const candidatePlacements = preferredPlacements.length
           ? preferredPlacements
           : (fallbackPlacements.length ? fallbackPlacements : legalPlacements);
-        const chosenPlacement = candidatePlacements[0];
+        const chosenPlacement = [
+          ...candidatePlacements,
+          ...legalPlacements.filter((placement) => !candidatePlacements.includes(placement))
+        ].find((placement) => placementsKeepLasersAnchored([placement], currentPlacements, pieceMap));
+        if (!chosenPlacement) {
+          continue;
+        }
         getPlacementOccupiedTiles(overlayPiece, chosenPlacement).forEach((key) => occupiedMiniOverlayTiles.add(key));
         placements.push(chosenPlacement);
         currentPlacements.push(chosenPlacement);
@@ -669,7 +708,13 @@ export function chooseOverlayPlacements(structuralPlacements, dockPlacements, pi
       if (!legalPlacements.length) {
         continue;
       }
-      chosenPlacement = sample(legalPlacements);
+      chosenPlacement = sampleKeepingLasersAnchored(
+        legalPlacements,
+        (placement) => placementsKeepLasersAnchored([placement], currentPlacements, pieceMap)
+      );
+      if (!chosenPlacement) {
+        continue;
+      }
       chosenOverlayPiece = overlayPiece;
       break;
     }
