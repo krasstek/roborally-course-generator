@@ -157,7 +157,57 @@ const FORWARD_3 = { id: "FORWARD_3", type: "move", relative: "forward", steps: 3
 const DRIFT_LEFT = { id: "DRIFT_LEFT", type: "move", relative: "left" };
 const DRIFT_RIGHT = { id: "DRIFT_RIGHT", type: "move", relative: "right" };
 
+// A ramp sits on the lower square and points uphill (no ledge encoded there).
+function ramp(x, y, dir) {
+  return tile(x, y, [{ type: "ramp", dir }]);
+}
+
+const FORWARD_2 = { id: "FORWARD_2", type: "move", relative: "forward", steps: 2 };
+
 const cases = [
+  {
+    name: "climbing a ramp with one move left spends the move without moving",
+    tiles: [ramp(0, 0, "E"), tile(1, 0)],
+    start: { x: 0, y: 0, facing: "E" },
+    action: FORWARD,
+    expected: { x: 0, y: 0, facing: "E", turnedSteps: 0 }
+  },
+  {
+    name: "climbing a ramp costs two moves",
+    tiles: [ramp(0, 0, "E"), tile(1, 0), tile(2, 0), tile(3, 0)],
+    start: { x: 0, y: 0, facing: "E" },
+    action: FORWARD_3,
+    expected: { x: 2, y: 0, facing: "E", turnedSteps: 0 }
+  },
+  {
+    name: "climbing a ramp with two moves ends on the higher square",
+    tiles: [ramp(0, 0, "E"), tile(1, 0), tile(2, 0)],
+    start: { x: 0, y: 0, facing: "E" },
+    action: FORWARD_2,
+    expected: { x: 1, y: 0, facing: "E", turnedSteps: 0 }
+  },
+  {
+    name: "backing up a ramp also costs the extra move",
+    tiles: [ramp(0, 0, "E"), tile(1, 0)],
+    start: { x: 0, y: 0, facing: "W" },
+    action: BACK,
+    expected: { x: 0, y: 0, facing: "W", turnedSteps: 0 }
+  },
+  {
+    name: "drifting up a ramp also costs the extra move",
+    tiles: [ramp(0, 0, "E"), tile(1, 0)],
+    start: { x: 0, y: 0, facing: "N" },
+    action: DRIFT_RIGHT,
+    options: { driftDeck: true },
+    expected: { x: 0, y: 0, facing: "N", turnedSteps: 0 }
+  },
+  {
+    name: "coming down a ramp is an ordinary step",
+    tiles: [tile(1, 0), ramp(0, 0, "E")],
+    start: { x: 1, y: 0, facing: "W" },
+    action: FORWARD,
+    expected: { x: 0, y: 0, facing: "W", turnedSteps: 0 }
+  },
   {
     name: "drift left moves one space to the robot's left without turning",
     tiles: [tile(0, 0), tile(-1, 0)],
