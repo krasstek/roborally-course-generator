@@ -610,8 +610,7 @@ export function buildCourseNoteConcepts(evidence) {
   // out. Threshold: about the top fifth of generated courses' offered starts
   // (2026-10-16 sample: spread 25%+ of the median route; typical 15%) and at
   // least one full turn. Competitive has its own start notes.
-  // STARTING SPACES (below) reports a meaningful accepted range overflow; when it
-  // does, Start Routes must not also claim the starts are balanced.
+  // STARTING SPACES (below) reports a meaningful accepted range overflow.
   const fairnessOverflow = evidence.fairnessOverflow ?? null;
   const meaningfulRangeOverflow = Boolean(
     fairnessOverflow?.active &&
@@ -622,9 +621,11 @@ export function buildCourseNoteConcepts(evidence) {
     )
   );
 
+  // When Starting Spaces reports uneven starts, it is the message that matters;
+  // Start Routes covers the same ground, so it is left out (user 2026-10-30).
   const startLengths = evidence.startLengths;
   if (
-    startLengths && !evidence.variants?.competitiveMode &&
+    startLengths && !evidence.variants?.competitiveMode && !meaningfulRangeOverflow &&
     startLengths.spread >= 5 && startLengths.relativeSpread >= 0.25
   ) {
     const ownCost = {
@@ -632,14 +633,13 @@ export function buildCourseNoteConcepts(evidence) {
       card: "awkward card sequences",
       mental: "tricky timing"
     }[startLengths.balancedBy];
-    const balancedClaim = meaningfulRangeOverflow ? "" : " Overall the starts are balanced.";
     concepts.push(concept(
       "start-lengths",
       5.4 + Math.min(1.4, (startLengths.relativeSpread - 0.25) * 4),
       "Start Routes",
       startLengths.balancedBy === "traffic"
-        ? `Some starting spaces have noticeably shorter routes, but they run through the busiest parts of the course; the longer routes are quieter.${balancedClaim}`
-        : `Some starting spaces have noticeably shorter routes, but those routes cost more along the way (${ownCost}).${balancedClaim}`
+        ? `Some starting spaces have noticeably shorter routes, but they run through the busiest parts of the course; the longer routes are quieter. Overall the starts are balanced.`
+        : `Some starting spaces have noticeably shorter routes, but those routes cost more along the way (${ownCost}). Overall the starts are balanced.`
     ));
   }
 

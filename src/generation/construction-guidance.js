@@ -46,6 +46,13 @@ const OUTCOMES = Object.freeze({
 
 // ---- Inputs ----------------------------------------------------------------------
 
+// The guidance models were fitted when course RE used card-scarcity alpha 0.70.
+// Course RE now uses 0.50 (constants.js), which lowered difficulty by a mean
+// log ratio of -0.102 (34 golden courses, routes unchanged; length -0.006, not
+// corrected). Applied to difficulty predictions until the calibration rerun,
+// then remove (set to 0).
+const CARD_ALPHA_DIFFICULTY_LOG_OFFSET = -0.102;
+
 export function getConstructionGuidanceInventoryPreset(calibration, preferences = {}, pieceMap = {}) {
   const supported = new Set(calibration?.domain?.inventoryPresets ?? []);
   if (!supported.size) return null;
@@ -301,7 +308,11 @@ export function predictConstructionGuidanceStage(
     const linear = evaluateConstructionGuidanceModel(models[outcome], features);
     if (!Number.isFinite(linear)) return null;
     const shift = outcome === "difficulty" ? feedback.difficultyLogShift : feedback.lengthLogShift;
-    return makeOutcomePrediction(models[outcome], linear + getRuleVariantLogOffset(calibration, activeIds, outcome) + shift);
+    const modelScaleOffset = outcome === "difficulty" ? CARD_ALPHA_DIFFICULTY_LOG_OFFSET : 0;
+    return makeOutcomePrediction(
+      models[outcome],
+      linear + getRuleVariantLogOffset(calibration, activeIds, outcome) + shift + modelScaleOffset
+    );
   };
   const difficulty = predictOutcome("difficulty");
   const length = predictOutcome("length");

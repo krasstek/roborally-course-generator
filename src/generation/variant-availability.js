@@ -26,7 +26,12 @@ import {
 import { generationRandom, sample, shuffle } from "./random.js";
 import { applyVariantAnalysisOptions } from "../../variants.js";
 
-export const DEFAULT_CHECKPOINT_ACTIVE_FEATURE_TYPES = new Set(["wall", "redWall", "greenWall", "laser"]);
+// A checkpoint suppresses the board elements under it except the wall-like
+// ones (walls, ledges, repulsors: official boards anchor lasers to all of
+// them) and lasers. Ramps are not wall-like (user ruling 2026-10-30).
+export const DEFAULT_CHECKPOINT_ACTIVE_FEATURE_TYPES = new Set([
+  "wall", "redWall", "greenWall", "ledge", "repulsor", "laser"
+]);
 
 export function isCheckpointActiveFeature(feature, options = {}) {
   if (DEFAULT_CHECKPOINT_ACTIVE_FEATURE_TYPES.has(feature?.type)) {

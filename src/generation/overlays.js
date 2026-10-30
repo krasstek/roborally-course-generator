@@ -5,6 +5,7 @@ import {
   placePiece,
   rotatedDimensions
 } from "../../board.js";
+import { canMoveBetween } from "../analysis/movement.js";
 import { CARDINAL_DIRS, LASER_BUNDLE_DEFINITIONS, ROTATIONS } from "./config.js";
 import {
   findUnanchoredLaserEnds,
@@ -287,6 +288,38 @@ export function placementsKeepLasersAnchored(newPlacements, currentPlacements, p
   return after.every((end) => before.has(endKey(end)));
 }
 
+// Conveyor and pusher tokens must not point straight into a wall or another
+// impassable edge (a building side without a doorway, a grandstand, a ledge
+// from below, a wrong-way jump ramp); a pit or the course edge is fine (user
+// 2026-10-30). Uses the movement step test on the merged course map, and
+// checks the tokens already placed too (a new token can wall one in).
+export function placementPointsIntoBlockedEdge(newPlacements, currentPlacements, pieceMap) {
+  const { tileMap } = buildResolvedMap([...currentPlacements, ...newPlacements], pieceMap);
+  const tokens = [
+    ...newPlacements,
+    ...currentPlacements.filter((placement) => placement.overlay && isMiniOverlayPiece(pieceMap[placement.pieceId]))
+  ];
+  return tokens.some((placement) => (
+    placePiece(pieceMap[placement.pieceId], placement).tiles.some((tile) => (
+      (tile.features || []).some((feature) => {
+        if ((feature.type !== "belt" && feature.type !== "push") || !CARDINAL_DIRS[feature.dir]) {
+          return false;
+        }
+        const delta = CARDINAL_DIRS[feature.dir];
+        const step = canMoveBetween(
+          tileMap,
+          tile,
+          { x: tile.x + delta.dx, y: tile.y + delta.dy },
+          feature.dir,
+          {},
+          false
+        );
+        return !step.ok && !step.crash;
+      })
+    ))
+  ));
+}
+
 // Samples like sample(), redrawing without a candidate that breaks a laser, so
 // the random draw is unchanged whenever the first pick is legal.
 function sampleKeepingLasersAnchored(candidates, keepsLasersAnchored) {
@@ -486,7 +519,10 @@ export function placeMiniOverlaysOnBoards(targetBoards, groupedMiniOverlayIds, p
         const chosenPlacement = [
           ...candidatePlacements,
           ...legalPlacements.filter((placement) => !candidatePlacements.includes(placement))
-        ].find((placement) => placementsKeepLasersAnchored([placement], currentPlacements, pieceMap));
+        ].find((placement) => (
+          placementsKeepLasersAnchored([placement], currentPlacements, pieceMap) &&
+          !placementPointsIntoBlockedEdge([placement], currentPlacements, pieceMap)
+        ));
         if (!chosenPlacement) {
           continue;
         }
