@@ -1483,5 +1483,55 @@ export async function evaluateTrimmedFinishedCourse(assets, evaluated, preferenc
   snapshot.payToWinPricing = null;
   snapshot.presentationMetrics = null;
   snapshot.courseNotesHtml = null;
-  return evaluateFinalSnapshot(assets, snapshot, evaluated, preferences, null, control);
+  const balanced = await evaluateFinalSnapshot(assets, snapshot, evaluated, preferences, null, control);
+  if (!balanced) return balanced;
+  // The pass above chose the start disposition by balancing afresh; a reload
+  // instead restores that disposition and recomputes over it, which can give
+  // different numbers. Evaluate once more the way a reload does, so the saved
+  // course and its reload agree (as for every other generated course).
+  const withDisposition = withRecomputedNormalStartDisposition(balanced);
+  if (withDisposition === balanced) return balanced;
+  return evaluateFinalSnapshot(
+    assets,
+    buildFinalEvaluationSnapshot(withDisposition, preferences),
+    evaluated,
+    preferences,
+    null,
+    control
+  );
+}
+
+// Without a saved disposition the trimmed course is balanced afresh, but
+// hydration's fallback disposition repeats the pre-trim blocked list and
+// records no Normal pruning, so a reload would not restore the pruned starts
+// (found 2026-10-30: core-easy-short reloaded unbalanced). Rebuild it from the
+// evaluated course, as the candidate builder does. Competitive, priced and
+// Virtual Bots courses recompute their selection on reload anyway.
+function withRecomputedNormalStartDisposition(scenario) {
+  if (scenario.competitiveMode || scenario.payToWin || scenario.subsidizedStarts || scenario.virtualBots) {
+    return scenario;
+  }
+  const activeIndices = (scenario.activeStarts ?? []).map((_, index) => index);
+  const validatedSet = new Set(computeCourseReachableStarts(scenario.sequence.firstLeg).map((entry) => entry.index));
+  const usableSet = new Set((scenario.metrics?.usableStarts ?? []).map((entry) => entry.index));
+  const blockedStartIndices = activeIndices.filter((index) => !usableSet.has(index));
+  const routeFailedIndices = activeIndices.filter((index) => !validatedSet.has(index));
+  const normalPrunedIndices = [...validatedSet].filter((index) => !usableSet.has(index)).sort((a, b) => a - b);
+  return {
+    ...scenario,
+    blockedStartIndices,
+    validatedStartIndices: [...validatedSet].sort((a, b) => a - b),
+    startDisposition: {
+      ...(scenario.startDisposition ?? {}),
+      physicalCount: activeIndices.length,
+      validatedCount: validatedSet.size,
+      blockedCount: blockedStartIndices.length,
+      outsidePoolIndices: [],
+      routeFailedIndices,
+      normalPrunedIndices,
+      pricePrunedIndices: [],
+      selectorUnavailableIndices: [],
+      otherBlockedIndices: []
+    }
+  };
 }
