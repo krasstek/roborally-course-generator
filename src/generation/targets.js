@@ -8,12 +8,16 @@ import { MIN_LENGTH_RAW } from "./config.js";
 // 4.3 boundary could still carry distinctly non-beginner local RE burdens.
 // The 4.0 ceiling creates a semantic safety margin while remaining purely
 // RE-native; no legacy hazard/visual score participates in classification.
+// 2026-10-30: all cuts lowered by 0.4 (from 4.0 / 4.8 / 5.8) when course RE
+// moved to card-scarcity alpha 0.50: on the 34 golden courses every course's
+// difficulty fell 0.22-0.73 RE/turn (median 0.43), so the labels keep their
+// meaning on average. To re-check in the post-Transformers benchmark (user).
 export function getDifficultyThresholds() {
   return {
-    easy: [0, 4.0],
-    moderate: [4.0, 4.8],
-    hard: [4.8, 5.8],
-    brutal: [5.8, Infinity]
+    easy: [0, 3.6],
+    moderate: [3.6, 4.4],
+    hard: [4.4, 5.4],
+    brutal: [5.4, Infinity]
   };
 }
 

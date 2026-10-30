@@ -1133,10 +1133,11 @@ export function getDamageEconomyBaseProgramSuccessfulWays(previousCode, actionId
   return successfulWays;
 }
 
+// SPAM supply is course RE, so it uses the evaluation alpha (constants.js).
 export function getDamageEconomyAvailabilityPenaltyFromProbability(probability, options = {}) {
   return getProgramAvailabilityPenaltyFromProbability(
     probability,
-    getProgramCardModelProfile(options).adaptabilityFactor,
+    getProgramCardModelProfile(options).evaluationAdaptabilityFactor,
     getProgramDeck(options).baselineProbability
   );
 }

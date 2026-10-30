@@ -5,6 +5,7 @@ import {
   PROGRAM_CARD_IDS,
   PROGRAM_CARD_MAX_COUNTS,
   PROGRAM_CARD_SCARCITY_ADAPTABILITY_FACTOR,
+  PROGRAM_CARD_SCARCITY_EVALUATION_FACTOR,
   PROGRAM_DECKS,
   REGISTER_COUNT,
   REGISTER_TEMPO_COST,
@@ -124,6 +125,9 @@ function buildProgramCardModelProfile(options) {
   const baseAlpha = resetEachTurn ? 1 : PROGRAM_CARD_SCARCITY_ADAPTABILITY_FACTOR;
   const handSize = options.factoryRejects ? 7 : PROGRAM_EXACT_HAND_SIZE;
   const adaptabilityFactor = baseAlpha + sharedDeckAlphaIncrement;
+  // Course RE uses its own alpha (constants.js); the search keeps the one above.
+  const evaluationAdaptabilityFactor =
+    (resetEachTurn ? 1 : PROGRAM_CARD_SCARCITY_EVALUATION_FACTOR) + sharedDeckAlphaIncrement;
   const deck = getProgramDeck(options);
   const powerUpRate = getPowerUpRegistersPerEnergy(deck, handSize, resetEachTurn, adaptabilityFactor);
   return {
@@ -136,6 +140,12 @@ function buildProgramCardModelProfile(options) {
     baseAlpha,
     sharedDeckAlphaIncrement: Number(sharedDeckAlphaIncrement.toFixed(4)),
     adaptabilityFactor: Number(adaptabilityFactor.toFixed(4)),
+    evaluationAdaptabilityFactor: Number(evaluationAdaptabilityFactor.toFixed(4)),
+    // Card scarcity is linear in alpha, so course RE rescales search-alpha
+    // card penalties by this ratio.
+    evaluationCardScale: adaptabilityFactor > 0
+      ? Number((evaluationAdaptabilityFactor / adaptabilityFactor).toFixed(6))
+      : 1,
     powerUpRegistersPerEnergy: powerUpRate.registersPerEnergy,
     powerUpRateFallback: powerUpRate.fallback,
     sharedDeckEnlargedDeckModeled: false,
@@ -148,8 +158,9 @@ function buildProgramCardModelProfile(options) {
 // which costs the same card-scarcity RE as any other card requirement: under
 // the rolling model (previous program known, Power Up not in it) the hand is
 // drawn from the deck minus five cards; Less Foreshadowing draws from the full
-// deck. The standard deck (1 Power Up in 20, 9-card hand, alpha 0.70) gives
-// ~1.39; the 22-card Drift Deck a little more.
+// deck. The standard deck (1 Power Up in 20, 9-card hand, search alpha 0.70)
+// gives ~1.39; the 22-card Drift Deck a little more. The rate uses the search
+// alpha, since it also bounds dominance pruning.
 // Every Energy and upgrade value in energy-value-table.js is in Energy units
 // and is multiplied by this rate. A deck without Power Up has no such price;
 // the rate then falls back to what a single Power Up copy would cost (a stated
@@ -181,6 +192,7 @@ function buildProgramCardModelSignature(profile) {
     `shared${profile.sharedDeck ? 1 : 0}`,
     `p${profile.playerCount}`,
     `a${profile.adaptabilityFactor.toFixed(4)}`,
+    `e${profile.evaluationAdaptabilityFactor.toFixed(4)}`,
     ...(profile.deck.id === "standard" ? [] : [`d${profile.deck.id}`])
   ].join(":");
 }

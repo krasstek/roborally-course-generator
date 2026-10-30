@@ -113,18 +113,30 @@ export const PROGRAM_CARD_MAX_COUNTS = new Map(PROGRAM_CARD_IDS.map((id) => [
 //
 // Therefore v49by tests a SIMPLE LINEAR compression of only EXTRA scarcity:
 //
-//   practicalCardRE = rawScarcityRE * 0.70
+//   practicalCardRE = rawScarcityRE * alpha
 //
-// 0.70 is deliberately provisional, not a fitted truth. Keep this factor easy to
-// inspect/remove/change. Never replace exact hypergeometry with card-category
-// surcharges, and never add an independent Repeat/Again RE surcharge: repeat
-// availability is already the exact union of legal natural/Again realizations.
+// Two values, both deliberately provisional, not fitted truths:
+// - The route search (cheap card costs, exact card validation, the energy rate
+//   that bounds dominance pruning) keeps alpha 0.70. Its card costs are search
+//   heuristics; lowering them flattens the search (2026-10-30: alpha 0.50 there
+//   doubled generation time, Moving Targets 11 s -> 95 s).
+// - Course RE (the evaluated route's card plausibility and SPAM supply, hence
+//   difficulty, balance and notes) uses alpha 0.50 since 2026-10-30 (user): with
+//   a 20-card deck the draw pile alternates, so about every other turn the next
+//   hand is 9 of the remaining 11 cards, nearly known, and good players program
+//   for it; the rolling 9-of-15 draw overstates that.
+// Keep these easy to inspect/remove/change. Never replace exact hypergeometry
+// with card-category surcharges, and never add an independent Repeat/Again RE
+// surcharge: repeat availability is already the exact union of legal
+// natural/Again realizations.
 export const PROGRAM_CARD_SCARCITY_ADAPTABILITY_FACTOR = 0.70;
+export const PROGRAM_CARD_SCARCITY_EVALUATION_FACTOR = 0.50;
 
 // v49ek programming-variant ownership. Probability mechanics and the mapping
 // from probability -> practical card RE are deliberately separate.
 //
-// Normal play retains the provisional alpha=0.70 abstraction discount.
+// Normal play retains the provisional alpha abstraction discount (search 0.70,
+// course RE 0.50; see above).
 // Less Foreshadowing resets the programming deck at every turn boundary, so the
 // previous-turn depletion state is not carried and the ordinary omitted-state
 // discount is removed (base alpha=1.0). Shared Deck deliberately does NOT model

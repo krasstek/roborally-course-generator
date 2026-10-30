@@ -40,6 +40,7 @@ import { getInitialRouteEnergyShadowReserve, getRouteEnergyShadowStep } from "./
 import { average, clamp } from "../shared/math.js";
 import {
   getProgramCardEffectivePreviousCode,
+  getProgramCardModelProfile,
   scoreContextualCardSequence
 } from "./program-availability.js";
 import {
@@ -991,6 +992,9 @@ export function summarizeRegisterEquivalentLedger(
   const transitions = Array.isArray(route.transitions) ? route.transitions : [];
   if (!transitions.length) return null;
 
+  // Card penalties come from the route search at its alpha; course RE uses the
+  // evaluation alpha (constants.js), and card scarcity is linear in alpha.
+  const evaluationCardScale = getProgramCardModelProfile(options).evaluationCardScale;
   const damage = summarizeDamageEconomyFoundationForRoute(
     tileMap,
     route,
@@ -1112,7 +1116,7 @@ export function summarizeRegisterEquivalentLedger(
       turn.cleanCardPlausibilityRE += Math.max(
         0,
         Number(perActionCardScores[index]) || 0
-      ) / REGISTER_TEMPO_COST;
+      ) * evaluationCardScale / REGISTER_TEMPO_COST;
     }
 
     if (transition?.to && transition?.action) {
@@ -1246,7 +1250,7 @@ export function summarizeRegisterEquivalentLedger(
     0,
     (Number(route.cardAvailabilityPenalty) || 0) +
       (Number(route.programPlausibilityPenalty) || 0)
-  ) / REGISTER_TEMPO_COST;
+  ) * evaluationCardScale / REGISTER_TEMPO_COST;
   const cleanCardPlausibilityRE = perActionCardScores
     ? sum("cleanCardPlausibilityRE")
     : Number(routeCardFallbackRE.toFixed(4));
