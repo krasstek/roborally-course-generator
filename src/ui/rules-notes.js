@@ -38,6 +38,42 @@ export function hasSuppressedCheckpointFeatures(scenario) {
   });
 }
 
+const KEPT_CHECKPOINT_FEATURE_LABELS = [
+  [["wall", "redWall", "greenWall"], "walls"],
+  [["ledge"], "ledges"],
+  [["repulsor"], "repulsors"],
+  [["laser"], "lasers"],
+  [["belt"], "conveyors carrying moving checkpoints"]
+];
+
+// Names of the elements a checkpoint keeps that actually sit on this course's
+// checkpoint squares, so the rule text mentions only what is there.
+export function getKeptCheckpointFeatureLabels(scenario) {
+  if (!scenario?.placements?.length || !scenario?.checkpoints?.length) {
+    return [];
+  }
+
+  const { tileMap } = buildResolvedMap(scenario.placements, scenario.pieceMap);
+  const keptTypes = new Set();
+  for (const checkpoint of scenario.checkpoints) {
+    const tile = tileMap.get(`${checkpoint.x},${checkpoint.y}`);
+    for (const feature of tile?.features || []) {
+      if (isCheckpointActiveFeature(feature, { movingTargets: scenario.movingTargets })) {
+        keptTypes.add(feature.type);
+      }
+    }
+  }
+  return KEPT_CHECKPOINT_FEATURE_LABELS
+    .filter(([types]) => types.some((type) => keptTypes.has(type)))
+    .map(([, label]) => label);
+}
+
+function formatList(items) {
+  if (items.length <= 1) return items.join("");
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(", ")}, and ${items.at(-1)}`;
+}
+
 export function hasHazardousFlagsEffect(scenario) {
   if (!scenario?.hazardousFlags) {
     return false;
@@ -492,17 +528,14 @@ export function updateRulesNote(scenario) {
   }
 
   if (!scenario.hazardousFlags && hasSuppressedCheckpointFeatures(scenario)) {
-    checkpointNotes.push(
-      scenario.movingTargets
-        ? appendRuleReference(
-          "Checkpoint spaces suppress board elements other than walls, lasers, and conveyors carrying moving checkpoints.",
-          { page: 15, qualifier: "Moving Targets variant" }
-        )
-        : appendRuleReference(
-          "Checkpoint spaces suppress board elements other than walls and lasers.",
-          { page: 15 }
-        )
-    );
+    const keptLabels = getKeptCheckpointFeatureLabels(scenario);
+    const suppressionText = keptLabels.length
+      ? `Checkpoint spaces suppress board elements other than ${formatList(keptLabels)}.`
+      : "Checkpoint spaces suppress the board elements under them.";
+    checkpointNotes.push(appendRuleReference(
+      suppressionText,
+      scenario.movingTargets ? { page: 15, qualifier: "Moving Targets variant" } : { page: 15 }
+    ));
   }
 
   if (scenario.recoveryRule === "dynamic_archiving") {
