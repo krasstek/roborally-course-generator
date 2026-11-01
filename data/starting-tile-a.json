@@ -7,12 +7,7 @@
   "mergeMode": "base",
   "starts": [
     {
-      "x": 1,
-      "y": 1,
-      "facing": "E"
-    },
-    {
-      "x": 3,
+      "x": 2,
       "y": 1,
       "facing": "E"
     },
