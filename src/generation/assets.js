@@ -94,6 +94,7 @@ export const PIECE_DATA_FILES = [
   "sidewinder",
   "spill",
   "spin-class",
+  "starting-tile-a",
   "steps",
   "stop-and-go",
   "straight-a-ways",
