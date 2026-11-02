@@ -25,8 +25,17 @@
 
     .app {
       display: grid;
-      grid-template-columns: 340px 1fr;
-      min-height: 100vh;
+      grid-template-columns: 380px 1fr;
+      height: 100vh;
+    }
+
+    details.section summary {
+      cursor: pointer;
+      list-style-position: inside;
+    }
+
+    details.section summary h2 {
+      display: inline;
     }
 
     .sidebar {
@@ -118,6 +127,48 @@
       display: grid;
       grid-template-columns: 1fr 1fr;
       gap: 8px;
+    }
+
+    .tool-group {
+      margin-bottom: 10px;
+    }
+
+    .tool-group h3,
+    .tool-options h3 {
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+      margin: 0 0 6px;
+    }
+
+    .tool-grid {
+      grid-template-columns: 1fr 1fr 1fr;
+    }
+
+    .tool-grid button {
+      padding: 6px 8px;
+      font-size: 0.88rem;
+    }
+
+    .tool-options {
+      margin-top: 12px;
+      padding: 12px;
+      border: 1px solid #c7d2fe;
+      border-radius: 10px;
+      background: #f5f7ff;
+    }
+
+    .checkbox-row {
+      display: flex;
+      gap: 14px;
+    }
+
+    .checkbox-row label {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-weight: 400;
     }
 
     .tool-grid button.active {
@@ -236,12 +287,195 @@
     <aside class="sidebar">
       <h1>RoboRally Board Editor</h1>
       <p class="small-note">
-        Dev-only tool for encoding board data. Load an image, set the grid size,
-        click tiles to add features, then export JSON.
+        Dev-only tool for encoding board data. Load an image and set the grid
+        size under Board, pick a tool, click squares, then export JSON.
       </p>
 
       <div class="section">
-        <h2>Board</h2>
+        <h2>Editing mode</h2>
+
+        <div class="tool-group">
+          <h3>Walls &amp; edges</h3>
+          <div class="tool-grid">
+            <button data-tool="wall">Wall</button>
+            <button data-tool="redWall">Red wall</button>
+            <button data-tool="greenWall">Green wall</button>
+            <button data-tool="ledge">Ledge</button>
+            <button data-tool="ramp">Ramp</button>
+            <button data-tool="repulsor">Repulsor</button>
+          </div>
+        </div>
+
+        <div class="tool-group">
+          <h3>Movers</h3>
+          <div class="tool-grid">
+            <button data-tool="belt">Conveyor</button>
+            <button data-tool="gear">Gear</button>
+            <button data-tool="push">Push panel</button>
+            <button data-tool="portal">Portal</button>
+            <button data-tool="teleporter">Teleporter</button>
+            <button data-tool="randomizer">Randomizer</button>
+          </div>
+        </div>
+
+        <div class="tool-group">
+          <h3>Floor &amp; hazards</h3>
+          <div class="tool-grid">
+            <button data-tool="pit">Pit</button>
+            <button data-tool="trapdoor">Trapdoor</button>
+            <button data-tool="crusher">Crusher</button>
+            <button data-tool="laser">Laser</button>
+            <button data-tool="flamethrower">Flamethrower</button>
+            <button data-tool="oil">Oil slick</button>
+            <button data-tool="water">Water</button>
+            <button data-tool="radiation">Radiation</button>
+            <button data-tool="radioactiveWaste">Radioactive Waste</button>
+            <button data-tool="homingMissile">Homing missile</button>
+          </div>
+        </div>
+
+        <div class="tool-group">
+          <h3>Transformers</h3>
+          <div class="tool-grid">
+            <button data-tool="road">Road</button>
+            <button data-tool="building">Building</button>
+            <button data-tool="jumpRamp">Jump ramp</button>
+            <button data-tool="firePit">Fire pit</button>
+            <button data-tool="pitStop">Pit stop</button>
+          </div>
+        </div>
+
+        <div class="tool-group">
+          <h3>Tokens &amp; markers</h3>
+          <div class="tool-grid">
+            <button data-tool="start">Start</button>
+            <button data-tool="checkpoint">Checkpoint</button>
+            <button data-tool="battery">Battery</button>
+            <button data-tool="chopShop">Chop Shop</button>
+            <button data-tool="mine">Mine</button>
+            <button data-tool="spaceBridge">Space bridge</button>
+            <button data-tool="energon">Energon</button>
+          </div>
+        </div>
+
+        <div class="tool-group">
+          <h3>Editing tools</h3>
+          <div class="tool-grid">
+            <button data-tool="inspectTile">Inspect tile</button>
+            <button data-tool="eraseFeature">Erase feature</button>
+            <button data-tool="eraseTile">Erase tile</button>
+          </div>
+        </div>
+
+        <div class="tool-options">
+          <h3 id="toolOptionsTitle">Options</h3>
+
+          <div class="field" data-option="direction">
+            <label for="direction">Direction / side</label>
+            <select id="direction">
+              <option value="N">N</option>
+              <option value="NE">NE</option>
+              <option value="E">E</option>
+              <option value="SE">SE</option>
+              <option value="S">S</option>
+              <option value="SW">SW</option>
+              <option value="W">W</option>
+              <option value="NW">NW</option>
+            </select>
+          </div>
+
+          <div class="field" data-option="beltSpeed">
+            <label for="beltSpeed">Belt speed</label>
+            <select id="beltSpeed">
+              <option value="1">1</option>
+              <option value="2">2</option>
+            </select>
+          </div>
+
+          <div class="field" data-option="beltTurn">
+            <label for="beltTurn">Conveyor turn</label>
+            <select id="beltTurn">
+              <option value="">none</option>
+              <option value="left">left</option>
+              <option value="right">right</option>
+              <option value="both">both</option>
+            </select>
+          </div>
+
+          <div class="field" data-option="roadTurn">
+            <label for="roadTurn">Road corner</label>
+            <select id="roadTurn">
+              <option value="">none (straight)</option>
+              <option value="left">turns left</option>
+              <option value="right">turns right</option>
+            </select>
+          </div>
+
+          <div class="field" data-option="doorways">
+            <label>Doorways</label>
+            <div class="checkbox-row" id="doorways">
+              <label><input type="checkbox" value="N" /> N</label>
+              <label><input type="checkbox" value="E" /> E</label>
+              <label><input type="checkbox" value="S" /> S</label>
+              <label><input type="checkbox" value="W" /> W</label>
+            </div>
+            <p class="small-note">None ticked: a closed building. Clicking a square sets its doorways to the ticked ones.</p>
+          </div>
+
+          <div class="field" data-option="gearRotation">
+            <label for="gearRotation">Gear rotation</label>
+            <select id="gearRotation">
+              <option value="cw">cw</option>
+              <option value="ccw">ccw</option>
+            </select>
+          </div>
+
+          <div class="field" data-option="laserDamage">
+            <label for="laserDamage">Laser damage</label>
+            <select id="laserDamage">
+              <option value="1">1</option>
+              <option value="2">2</option>
+              <option value="3">3</option>
+            </select>
+          </div>
+
+          <div class="field" data-option="checkpointId">
+            <label for="checkpointId">Checkpoint ID</label>
+            <input id="checkpointId" type="number" min="1" value="1" />
+          </div>
+
+          <div class="field" data-option="timing">
+            <label for="pushTiming">Active registers</label>
+            <input id="pushTiming" type="text" value="2,4" />
+          </div>
+
+          <div class="field" data-option="featureId">
+            <label for="featureId" id="featureIdLabel">Feature ID</label>
+            <input id="featureId" type="text" value="1" />
+          </div>
+
+          <div class="field" data-option="teleporterPower">
+            <label for="teleporterPower">Teleporter power</label>
+            <input id="teleporterPower" type="number" min="1" value="2" />
+          </div>
+
+          <div class="field" data-option="startFacing">
+            <label for="startFacing">Start facing</label>
+            <select id="startFacing">
+              <option value="N">N</option>
+              <option value="E" selected>E</option>
+              <option value="S">S</option>
+              <option value="W">W</option>
+            </select>
+          </div>
+
+          <p class="small-note" id="toolOptionsNone" hidden>No options for this tool.</p>
+          <p class="small-note" id="toolHint"></p>
+        </div>
+      </div>
+
+      <details class="section" open>
+        <summary><h2>Board</h2></summary>
 
         <div class="field">
           <label for="pieceId">Piece ID</label>
@@ -303,150 +537,7 @@
         <div class="field">
           <button id="resizeGridBtn">Apply grid size</button>
         </div>
-      </div>
-
-      <div class="section">
-        <h2>Editing mode</h2>
-
-        <div class="tool-grid">
-          <button data-tool="battery">Battery</button>
-          <button data-tool="checkpoint">Checkpoint</button>
-          <button data-tool="chopShop">Chop Shop</button>
-          <button data-tool="belt">Conveyor</button>
-          <button data-tool="crusher">Crusher</button>
-          <button data-tool="eraseFeature">Erase feature</button>
-          <button data-tool="energon">Energon</button>
-          <button data-tool="eraseTile">Erase tile</button>
-          <button data-tool="firePit">Fire pit</button>
-          <button data-tool="flamethrower">Flamethrower</button>
-          <button data-tool="gear">Gear</button>
-          <button data-tool="grandstand">Grandstand</button>
-          <button data-tool="building">Building doorway</button>
-          <button data-tool="homingMissile">Homing missile</button>
-          <button data-tool="inspectTile">Inspect tile</button>
-          <button data-tool="jumpRamp">Jump ramp</button>
-          <button data-tool="laser">Laser</button>
-          <button data-tool="ledge">Ledge</button>
-          <button data-tool="mine">Mine</button>
-          <button data-tool="oil">Oil slick</button>
-          <button data-tool="pit">Pit</button>
-          <button data-tool="pitStop">Pit stop</button>
-          <button data-tool="portal">Portal</button>
-          <button data-tool="push">Push panel</button>
-          <button data-tool="randomizer">Randomizer</button>
-          <button data-tool="radiation">Radiation</button>
-          <button data-tool="radioactiveWaste">Radioactive Waste</button>
-          <button data-tool="ramp">Ramp</button>
-          <button data-tool="redWall">Red wall</button>
-          <button data-tool="repulsor">Repulsor</button>
-          <button data-tool="road">Road</button>
-          <button data-tool="spaceBridge">Space bridge</button>
-          <button data-tool="start">Start</button>
-          <button data-tool="teleporter">Teleporter</button>
-          <button data-tool="trapdoor">Trapdoor</button>
-          <button data-tool="wall">Wall</button>
-          <button data-tool="greenWall">Green wall</button>
-          <button data-tool="water">Water</button>
-        </div>
-
-        <div class="field" style="margin-top: 10px;">
-          <label for="direction">Direction / side</label>
-          <select id="direction">
-            <option value="N">N</option>
-            <option value="NE">NE</option>
-            <option value="E">E</option>
-            <option value="SE">SE</option>
-            <option value="S">S</option>
-            <option value="SW">SW</option>
-            <option value="W">W</option>
-            <option value="NW">NW</option>
-          </select>
-        </div>
-
-        <div class="inline-row">
-          <div class="field">
-            <label for="beltSpeed">Belt speed</label>
-            <select id="beltSpeed">
-              <option value="1">1</option>
-              <option value="2">2</option>
-            </select>
-          </div>
-
-          <div class="field">
-            <label for="beltTurn">Conveyor turn</label>
-            <select id="beltTurn">
-              <option value="">none</option>
-              <option value="left">left</option>
-              <option value="right">right</option>
-              <option value="both">both</option>
-            </select>
-          </div>
-
-          <div class="field">
-            <label for="gearRotation">Gear rotation</label>
-            <select id="gearRotation">
-              <option value="cw">cw</option>
-              <option value="ccw">ccw</option>
-            </select>
-          </div>
-        </div>
-
-        <div class="inline-row">
-          <div class="field">
-            <label for="laserDamage">Laser damage</label>
-            <select id="laserDamage">
-              <option value="1">1</option>
-              <option value="2">2</option>
-              <option value="3">3</option>
-            </select>
-          </div>
-
-          <div class="field">
-            <label for="checkpointId">Checkpoint ID</label>
-            <input id="checkpointId" type="number" min="1" value="1" />
-          </div>
-        </div>
-
-        <div class="field">
-          <label for="pushTiming">Push timing</label>
-          <input id="pushTiming" type="text" value="2,4" />
-        </div>
-
-        <div class="inline-row">
-          <div class="field">
-            <label for="featureId">Feature ID</label>
-            <input id="featureId" type="text" value="1" />
-          </div>
-
-          <div class="field">
-            <label for="teleporterPower">Teleporter power</label>
-            <input id="teleporterPower" type="number" min="1" value="2" />
-          </div>
-        </div>
-
-        <div class="field">
-          <label for="startFacing">Start facing</label>
-          <select id="startFacing">
-            <option value="N">N</option>
-            <option value="E" selected>E</option>
-            <option value="S">S</option>
-            <option value="W">W</option>
-          </select>
-        </div>
-
-        <p class="small-note">
-          Radioactive Waste is a tile feature. If that Waste space also has a current,
-          add a normal Conveyor to the same tile; the exported JSON keeps both features.
-          Red and green walls are directional edge features and may coexist on the same border.
-        </p>
-
-        <p class="small-note">
-          Click a tile to add the selected feature. Most same-type tile features
-          replace earlier ones on that tile. Walls, red/green walls, ledges, repulsors,
-          lasers, and ramps can still accumulate. Use “Erase feature” to remove only the
-          selected type, or “Erase tile” to wipe the tile entirely.
-        </p>
-      </div>
+      </details>
 
       <div class="section">
         <h2>Tile inspector</h2>
@@ -544,6 +635,55 @@
     const featureIdInput = document.getElementById("featureId");
     const teleporterPowerInput = document.getElementById("teleporterPower");
     const startFacingInput = document.getElementById("startFacing");
+    const roadTurnInput = document.getElementById("roadTurn");
+    const doorwayInputs = [...document.querySelectorAll("#doorways input[type=checkbox]")];
+    const optionFields = [...document.querySelectorAll("[data-option]")];
+    const toolOptionsTitle = document.getElementById("toolOptionsTitle");
+    const toolOptionsNone = document.getElementById("toolOptionsNone");
+    const toolHint = document.getElementById("toolHint");
+    const featureIdLabel = document.getElementById("featureIdLabel");
+
+    // Which option fields each tool uses; tools not listed have none.
+    const TOOL_OPTIONS = {
+      wall: ["direction"],
+      redWall: ["direction"],
+      greenWall: ["direction"],
+      ledge: ["direction"],
+      ramp: ["direction"],
+      repulsor: ["direction"],
+      belt: ["direction", "beltSpeed", "beltTurn"],
+      gear: ["gearRotation"],
+      push: ["direction", "timing"],
+      portal: ["featureId"],
+      teleporter: ["teleporterPower"],
+      trapdoor: ["timing"],
+      crusher: ["timing"],
+      laser: ["direction", "laserDamage"],
+      flamethrower: ["direction", "timing"],
+      road: ["direction", "roadTurn"],
+      building: ["doorways"],
+      jumpRamp: ["direction"],
+      start: ["startFacing"],
+      checkpoint: ["checkpointId"],
+      spaceBridge: ["featureId"]
+    };
+
+    const TOOL_HINTS = {
+      wall: "Walls, red/green walls, ledges and repulsors add one side per click.",
+      redWall: "Pair a red wall with a green wall on the adjacent square, facing back.",
+      greenWall: "Pair a green wall with a red wall on the adjacent square, facing back.",
+      ledge: "A ledge is listed on its lower square.",
+      ramp: "A ramp sits on the lower square and points uphill.",
+      radioactiveWaste: "For a Waste current, add a normal Conveyor to the same square.",
+      road: "Direction is the way traffic leaves the square; a corner also gets its turn.",
+      jumpRamp: "Direction is the ramp's arrow (the only way onto it).",
+      spaceBridge: "Bridges with the same colour connect.",
+      mine: "Encode as its own overlay piece; it sits on top of the square below.",
+      energon: "Encode as its own overlay piece; it sits on top of the square below.",
+      eraseFeature: "Removes the last feature on the clicked square.",
+      eraseTile: "Wipes the clicked square.",
+      inspectTile: "Click a square to see its features."
+    };
 
     const output = document.getElementById("output");
     const statusEl = document.getElementById("status");
@@ -624,7 +764,7 @@
           if (roadTurn) normalizedRoad.turn = roadTurn;
           return normalizedRoad;
         }
-        // Building square; sides are its doorways (none = grandstand, blocked).
+        // Building square; sides are its doorways (none = closed, never entered).
         case "building":
           return {
             type: "building",
@@ -782,7 +922,7 @@
         case "building":
           return (feature.sides || []).length
             ? `building doorways=${feature.sides.join(",")}`
-            : "grandstand (building, no doorways)";
+            : "building, no doorways";
         case "jumpRamp":
           return `jump ramp dir=${feature.dir}`;
         case "firePit":
@@ -910,13 +1050,14 @@
         }
       }
 
-      if (normalizedFeature.type === "building" && !normalizedFeature.sides.length) {
+      // A building click sets the square's doorways to the ticked ones.
+      if (normalizedFeature.type === "building") {
         tile.features = tile.features.filter(f => f.type !== "building");
         tile.features.push(normalizedFeature);
         return;
       }
 
-      if (["wall", "redWall", "greenWall", "ledge", "repulsor", "building"].includes(normalizedFeature.type)) {
+      if (["wall", "redWall", "greenWall", "ledge", "repulsor"].includes(normalizedFeature.type)) {
         const existing = tile.features.find(f => f.type === normalizedFeature.type);
         if (existing) {
           for (const side of normalizedFeature.sides) {
@@ -1058,11 +1199,12 @@
         case "homingMissile":
           return normalizeFeature({ type: "homingMissile" });
         case "road":
-          return normalizeFeature({ type: "road", dir, turn: beltTurn });
+          return normalizeFeature({ type: "road", dir, turn: roadTurnInput.value || undefined });
         case "building":
-          return normalizeFeature({ type: "building", sides: [dir] });
-        case "grandstand":
-          return normalizeFeature({ type: "building", sides: [] });
+          return normalizeFeature({
+            type: "building",
+            sides: doorwayInputs.filter((input) => input.checked).map((input) => input.value)
+          });
         case "jumpRamp":
           return normalizeFeature({ type: "jumpRamp", dir });
         case "firePit":
@@ -1082,10 +1224,21 @@
 
     function setActiveTool(tool) {
       currentTool = tool;
+      let toolLabel = tool;
       toolButtons.forEach(btn => {
         btn.classList.toggle("active", btn.dataset.tool === tool);
+        if (btn.dataset.tool === tool) toolLabel = btn.textContent;
       });
-      updateStatus(`Tool: ${tool}`);
+      const options = TOOL_OPTIONS[tool] ?? [];
+      optionFields.forEach(field => {
+        field.hidden = !options.includes(field.dataset.option);
+      });
+      toolOptionsTitle.textContent = `Options: ${toolLabel}`;
+      toolOptionsNone.hidden = options.length > 0;
+      featureIdLabel.textContent = tool === "spaceBridge" ? "Colour" : tool === "portal" ? "Portal ID" : "Feature ID";
+      if (tool === "spaceBridge" && /^\d+$/.test(featureIdInput.value)) featureIdInput.value = "red";
+      toolHint.textContent = TOOL_HINTS[tool] ?? "";
+      updateStatus(`Tool: ${toolLabel}`);
     }
 
     function updateStatus(text) {
@@ -1382,7 +1535,7 @@
           const roadTurnSuffix = f.turn === "left" ? "L" : f.turn === "right" ? "R" : "";
           drawArrowInTile(x, y, f.dir, `Rd${roadTurnSuffix}`);
         } else if (f.type === "building") {
-          ctx.fillText((f.sides || []).length ? `Bd ${(f.sides || []).join("")}` : "Grand", left + 4, textY);
+          ctx.fillText((f.sides || []).length ? `Bd ${(f.sides || []).join("")}` : "Bd closed", left + 4, textY);
           textY += 12;
         } else if (f.type === "jumpRamp") {
           drawArrowInTile(x, y, f.dir, "Jmp");
