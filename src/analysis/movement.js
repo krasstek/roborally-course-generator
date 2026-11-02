@@ -1080,14 +1080,18 @@ export function moveOneStep(
     }
   }
 
-  // Entering a building square through a doorway turns the robot to face the
-  // square's other doorway, if it has one.
+  // A building square with exactly two doorways on adjacent sides (e.g. N and
+  // W) turns a robot entering through one to face the other. Opposite doorways
+  // and squares with three or more never rotate (user ruling 2026-11-02; the
+  // rule is applied here, not encoded in the board data).
   const building = getBuilding(nextTile);
-  const exitDoorway = building
-    ? (building.sides || []).find((side) => side !== OPPOSITE[dir])
-    : null;
-  if (exitDoorway) {
-    nextFacing = exitDoorway;
+  const doorways = building?.sides || [];
+  const entrySide = OPPOSITE[dir];
+  if (doorways.length === 2 && doorways.includes(entrySide)) {
+    const exitDoorway = doorways.find((side) => side !== entrySide);
+    if (exitDoorway !== OPPOSITE[entrySide]) {
+      nextFacing = exitDoorway;
+    }
   }
 
   const resolvedState = {

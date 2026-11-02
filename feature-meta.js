@@ -65,7 +65,7 @@ export function formatFeatureLabel(feature, options = {}) {
     case "building":
       return (feature.sides || []).length
         ? `building, doorways ${feature.sides.join(compact ? "," : ", ")}`
-        : "grandstand";
+        : "building";
     case "jumpRamp":
       return `jump ramp ${feature.dir ?? "?"}`;
     case "firePit":

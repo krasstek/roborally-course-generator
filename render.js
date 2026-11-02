@@ -842,23 +842,12 @@ function getSpaceBridgeColor(id) {
   return palette[hash % palette.length];
 }
 
-// Building square: a solid block whose edges are drawn except at doorways; a
-// grandstand (no doorways) is hatched.
+// Building square: a solid block whose edges are drawn except at doorways.
 function drawBuildingFeature(ctx, feature, x, y, tileSize) {
   const doorways = feature.sides || [];
   ctx.save();
-  ctx.fillStyle = doorways.length ? "rgba(92, 84, 76, 0.78)" : "rgba(70, 64, 58, 0.85)";
+  ctx.fillStyle = "rgba(92, 84, 76, 0.78)";
   ctx.fillRect(x + 1, y + 1, tileSize - 2, tileSize - 2);
-  if (!doorways.length) {
-    ctx.strokeStyle = "rgba(220, 210, 196, 0.45)";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    for (let offset = -tileSize; offset < tileSize; offset += tileSize / 4) {
-      ctx.moveTo(x + Math.max(0, offset), y + Math.max(0, -offset));
-      ctx.lineTo(x + Math.min(tileSize, tileSize + offset), y + Math.min(tileSize, tileSize - offset));
-    }
-    ctx.stroke();
-  }
   const edge = Math.max(2, tileSize * 0.08);
   ctx.fillStyle = "#2c2622";
   for (const side of ["N", "E", "S", "W"]) {

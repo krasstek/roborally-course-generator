@@ -46,7 +46,15 @@ export const AUDIT_FEATURE_TYPES = [
   { id: "teleporter", label: "Teleporters" },
   { id: "trapdoor", label: "Trapdoors" },
   { id: "wall", label: "Walls" },
-  { id: "water", label: "Water" }
+  { id: "water", label: "Water" },
+  { id: "road", label: "Roads" },
+  { id: "building", label: "Buildings" },
+  { id: "jumpRamp", label: "Jump Ramps" },
+  { id: "firePit", label: "Fire Pits" },
+  { id: "pitStop", label: "Pit Stops" },
+  { id: "mine", label: "Mines" },
+  { id: "spaceBridge", label: "Space Bridges" },
+  { id: "energon", label: "Energon" }
 ].sort((left, right) => left.label.localeCompare(right.label));
 
 export let boardAuditInitialized = false;
@@ -108,6 +116,42 @@ export function countBoardLasers(tileMap) {
     total += (tile.features || []).filter((feature) => feature.type === "laser").length;
   }
   return total;
+}
+
+// Board list groups, in the order of the set checkboxes on the page.
+const AUDIT_EXPANSION_ORDER = [
+  "roborally", "30th-anniversary", "chaos-and-carnage", "master-builder", "thrills-and-spills",
+  "wet-and-wild", "contamination", "transformers", "rr-dice"
+];
+
+// Label inside an expansion group: the name, plus the reverse side when known.
+function formatGroupedBoardLabel(piece, pieceMap) {
+  const name = piece.name ?? titleCaseWords(piece.id);
+  const reverseSide = getReverseSideName(piece.id, pieceMap);
+  return reverseSide ? `${name} (reverse side: ${reverseSide})` : name;
+}
+
+// Boards grouped by expansion: [{ expansionId, label, pieces }].
+export function getAuditBoardGroups(pieceMap) {
+  const groups = new Map();
+  for (const piece of getAuditBoardOptions(pieceMap)) {
+    const expansionId = piece.expansionId ?? "unknown";
+    if (!groups.has(expansionId)) groups.set(expansionId, []);
+    groups.get(expansionId).push(piece);
+  }
+  const rank = (expansionId) => {
+    const index = AUDIT_EXPANSION_ORDER.indexOf(expansionId);
+    return index === -1 ? AUDIT_EXPANSION_ORDER.length : index;
+  };
+  return [...groups.entries()]
+    .sort(([left], [right]) => rank(left) - rank(right) || left.localeCompare(right))
+    .map(([expansionId, pieces]) => ({
+      expansionId,
+      label: formatExpansionName(expansionId),
+      pieces: pieces.sort((left, right) => (
+        formatGroupedBoardLabel(left, pieceMap).localeCompare(formatGroupedBoardLabel(right, pieceMap))
+      ))
+    }));
 }
 
 export function getAuditBoardOptions(pieceMap) {
@@ -337,17 +381,22 @@ export function initializeBoardAudit(assets) {
   const featureFilters = document.getElementById("audit-feature-filters");
   const allButton = document.getElementById("audit-filter-all");
   const noneButton = document.getElementById("audit-filter-none");
-  const options = getAuditBoardOptions(assets.pieceMap);
+  const groups = getAuditBoardGroups(assets.pieceMap);
 
   select.innerHTML = "";
-  options.forEach((piece) => {
-    const option = document.createElement("option");
-    option.value = piece.id;
-    option.textContent = formatBoardLabel(piece.id, assets.pieceMap);
-    select.appendChild(option);
+  groups.forEach((group) => {
+    const optgroup = document.createElement("optgroup");
+    optgroup.label = group.label;
+    group.pieces.forEach((piece) => {
+      const option = document.createElement("option");
+      option.value = piece.id;
+      option.textContent = formatGroupedBoardLabel(piece, assets.pieceMap);
+      optgroup.appendChild(option);
+    });
+    select.appendChild(optgroup);
   });
 
-  boardAuditState.pieceId = options[0]?.id ?? null;
+  boardAuditState.pieceId = groups[0]?.pieces[0]?.id ?? null;
   select.value = boardAuditState.pieceId ?? "";
 
   featureFilters.innerHTML = "";

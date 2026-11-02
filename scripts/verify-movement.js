@@ -254,6 +254,27 @@ const transformersCases = [
     expected: { x: 1, y: 0, facing: "S", turnedSteps: 0 }
   },
   {
+    name: "building: opposite doorways do not rotate",
+    tiles: [tile(0, 0), building(1, 0, ["W", "E"]), tile(2, 0)],
+    start: { x: 0, y: 0, facing: "E" },
+    action: FORWARD,
+    expected: { x: 1, y: 0, facing: "E", turnedSteps: 0 }
+  },
+  {
+    name: "building: opposite doorways do not turn a robot backing in",
+    tiles: [tile(0, 0), building(1, 0, ["W", "E"]), tile(2, 0)],
+    start: { x: 0, y: 0, facing: "W" },
+    action: BACK,
+    expected: { x: 1, y: 0, facing: "W", turnedSteps: 0 }
+  },
+  {
+    name: "building: three doorways do not rotate",
+    tiles: [tile(0, 0), building(1, 0, ["W", "N", "E"]), tile(1, -1), tile(2, 0)],
+    start: { x: 0, y: 0, facing: "E" },
+    action: FORWARD,
+    expected: { x: 1, y: 0, facing: "E", turnedSteps: 0 }
+  },
+  {
     name: "building: the rest of the move continues through the new doorway",
     tiles: [tile(0, 0), building(1, 0, ["W", "S"]), building(1, 1, ["N"]), tile(2, 0)],
     start: { x: 0, y: 0, facing: "E" },
