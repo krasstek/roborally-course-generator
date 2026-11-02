@@ -1,4 +1,4 @@
-const APP_VERSION = "20261102145304";
+const APP_VERSION = "20261102173232";
 const STATIC_CACHE = `roborally-static-${APP_VERSION}`;
 const RUNTIME_CACHE = `roborally-runtime-${APP_VERSION}`;
 
@@ -123,6 +123,7 @@ const VERSIONED_ASSETS = [
   "./data/concentric.json",
   "./data/confusion.json",
   "./data/convergence.json",
+  "./data/dirt-boss-derby.json",
   "./data/discovery.json",
   "./data/docking-bay-a.json",
   "./data/docking-bay-b.json",
@@ -140,6 +141,7 @@ const VERSIONED_ASSETS = [
   "./data/laser-maze.json",
   "./data/links.json",
   "./data/locked.json",
+  "./data/maccadams-motorway.json",
   "./data/mb-docking-bay-a.json",
   "./data/mb-docking-bay-b.json",
   "./data/mb-tile-10a.json",
@@ -186,9 +188,11 @@ const VERSIONED_ASSETS = [
   "./data/sampler.json",
   "./data/shake-n-bake.json",
   "./data/sidewinder.json",
+  "./data/speedia-qualifier.json",
   "./data/spill.json",
   "./data/spin-class.json",
   "./data/starting-tile-a.json",
+  "./data/starting-tile-b.json",
   "./data/steps.json",
   "./data/stop-and-go.json",
   "./data/straight-a-ways.json",

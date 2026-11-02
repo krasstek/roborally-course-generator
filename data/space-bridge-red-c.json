@@ -1,0 +1,24 @@
+{
+  "id": "space-bridge-red-c",
+  "name": "Space Bridge (red)",
+  "kind": "overlay",
+  "width": 1,
+  "height": 1,
+  "mergeMode": "overlay",
+  "starts": [],
+  "tiles": [
+    {
+      "x": 0,
+      "y": 0,
+      "features": [
+        {
+          "type": "spaceBridge",
+          "id": "red"
+        }
+      ]
+    }
+  ],
+  "expansionId": "transformers",
+  "physicalBoardId": "space-bridge-c",
+  "image": ".assets/boards/tile-space-bridge-red.jpeg"
+}

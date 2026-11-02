@@ -1,0 +1,24 @@
+{
+  "id": "space-bridge-blue-b",
+  "name": "Space Bridge (blue)",
+  "kind": "overlay",
+  "width": 1,
+  "height": 1,
+  "mergeMode": "overlay",
+  "starts": [],
+  "tiles": [
+    {
+      "x": 0,
+      "y": 0,
+      "features": [
+        {
+          "type": "spaceBridge",
+          "id": "blue"
+        }
+      ]
+    }
+  ],
+  "expansionId": "transformers",
+  "physicalBoardId": "space-bridge-b",
+  "image": ".assets/boards/tile-space-bridge-blue.jpeg"
+}

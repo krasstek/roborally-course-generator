@@ -1,0 +1,115 @@
+{
+  "id": "starting-tile-b",
+  "name": "Starting Tile B",
+  "kind": "dock",
+  "width": 3,
+  "height": 12,
+  "mergeMode": "base",
+  "starts": [
+    {
+      "x": 1,
+      "y": 1,
+      "facing": "E"
+    },
+    {
+      "x": 2,
+      "y": 2,
+      "facing": "E"
+    },
+    {
+      "x": 1,
+      "y": 3,
+      "facing": "E"
+    },
+    {
+      "x": 2,
+      "y": 4,
+      "facing": "E"
+    },
+    {
+      "x": 2,
+      "y": 7,
+      "facing": "E"
+    },
+    {
+      "x": 1,
+      "y": 8,
+      "facing": "E"
+    },
+    {
+      "x": 2,
+      "y": 9,
+      "facing": "E"
+    },
+    {
+      "x": 1,
+      "y": 10,
+      "facing": "E"
+    }
+  ],
+  "tiles": [
+    {
+      "x": 1,
+      "y": 0,
+      "features": [
+        {
+          "type": "building",
+          "sides": []
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 0,
+      "features": [
+        {
+          "type": "building",
+          "sides": []
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 5,
+      "features": [
+        {
+          "type": "building",
+          "sides": []
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 6,
+      "features": [
+        {
+          "type": "building",
+          "sides": []
+        }
+      ]
+    },
+    {
+      "x": 1,
+      "y": 11,
+      "features": [
+        {
+          "type": "building",
+          "sides": []
+        }
+      ]
+    },
+    {
+      "x": 2,
+      "y": 11,
+      "features": [
+        {
+          "type": "building",
+          "sides": []
+        }
+      ]
+    }
+  ],
+  "expansionId": "transformers",
+  "physicalBoardId": "starting-tile",
+  "image": "./assets/boards/starting-tile-b.jpeg"
+}
