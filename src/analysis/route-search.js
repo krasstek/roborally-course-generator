@@ -25,6 +25,7 @@ import {
   DYNAMIC_ARCHIVE_CACHE_TELEMETRY,
   getAutoKillRecoveryProgressFromPoint,
   getRouteAwareActionPenalty,
+  getTransitionVariants,
   heuristic,
   simulateAction
 } from "./movement.js";
@@ -939,106 +940,109 @@ export function enumerateRoutes(tileMap, start, goal, options = {}) {
       if (!cardEvaluation.feasible) {
         continue;
       }
-      const transition = simulateAction(tileMap, current.finalState, action, {
+      const simulatedTransition = simulateAction(tileMap, current.finalState, action, {
         ...simulationOptions,
         goal,
         registerIndex: current.absoluteActions % REGISTER_COUNT,
         dynamicArchivePoint: current.dynamicArchivePoint
       });
-      if (transition.crashed || transition.blocked) {
-        continue;
-      }
-
-      const actionPenalty = getRouteAwareActionPenalty(action, options);
-      const scarceReusePenalty = cardEvaluation.penalty;
-      const executedAbsoluteAction = current.absoluteActions + 1;
-      const nextAbsoluteActions = transition.rebooted
-        ? getRebootEndedAbsoluteActions(executedAbsoluteAction)
-        : executedAbsoluteAction;
-      const nextActionHistory = getProgramHistoryWindow([...current.actionHistory, action.id]);
-      const nextActionAbsoluteHistory = [
-        ...(current.actionAbsoluteHistory || []),
-        executedAbsoluteAction
-      ].slice(-PROGRAM_HISTORY_WINDOW_SIZE);
-      const destinations = transition.rebootChoices?.length ? transition.rebootChoices : [transition.to];
-
-      for (const destination of destinations) {
-        const nextActionCount = current.actions + 1;
-        const nextDynamicArchivePoint = getNextDynamicArchivePoint(
-          tileMap,
-          destination,
-          current.dynamicArchivePoint,
-          options
-        );
-        const transitionRebootPenalty = transition.rebooted
-          ? getRebootRoutePenalty(executedAbsoluteAction)
-          : (transition.rebootPenalty || 0);
-        const transitionForDestination = {
-          ...(transition.rebootChoices?.length
-            ? { ...transition, to: destination }
-            : transition),
-          absoluteAction: executedAbsoluteAction
-        };
-        const energyStep = getRouteEnergyShadowStep(
-          tileMap,
-          destination,
-          action.id,
-          executedAbsoluteAction,
-          current.routeEnergyShadowReserve,
-          current.routeUpgradeCardShadowUnits,
-          options,
-          transitionForDestination
-        );
-        const energyEconomyRewardScore = energyStep.rewardScore;
-        const batteryEconomyRewardScore = energyStep.batteryRewardScore;
-        const powerUpEconomyRewardScore = energyStep.powerUpRewardScore;
-        const chopShopEconomyRewardScore = energyStep.chopShopRewardScore;
-        const nextStateKey = getSearchStateKey(
-          destination,
-          nextAbsoluteActions,
-          options,
-          energyStep.reserveAfter,
-          nextDynamicArchivePoint
-        );
-        const nextRoute = {
-          finalState: destination,
-          initialState: current.initialState,
-          startFacing: current.startFacing,
-          parent: current,
-          transition: transitionForDestination,
-          actions: nextActionCount,
-          absoluteActions: nextAbsoluteActions,
-          distance: current.distance + transition.distance,
-          forcedDistance: current.forcedDistance + transition.forcedDistance,
-          hazard: current.hazard + transition.hazard,
-          rebootPenalty: current.rebootPenalty + transitionRebootPenalty,
-          routeEnergyEconomyRewardScore: (current.routeEnergyEconomyRewardScore || 0) + energyEconomyRewardScore,
-          batteryEconomyRewardScore: (current.batteryEconomyRewardScore || 0) + batteryEconomyRewardScore,
-          powerUpEconomyRewardScore: (current.powerUpEconomyRewardScore || 0) + powerUpEconomyRewardScore,
-          chopShopEconomyRewardScore: (current.chopShopEconomyRewardScore || 0) + chopShopEconomyRewardScore,
-          routeEnergyShadowReserve: energyStep.reserveAfter,
-          routeEnergyShadowReserveStart: current.routeEnergyShadowReserveStart ?? getInitialRouteEnergyShadowReserve(options),
-          routeUpgradeCardShadowUnits: energyStep.usefulCardUnitsAfter,
-          routeUpgradeCardShadowUnitsStart: current.routeUpgradeCardShadowUnitsStart ?? getInitialRouteUpgradeCardShadowUnits(options),
-          routeEconomyNormalDraws: (current.routeEconomyNormalDraws || 0) + (energyStep.normalDraws || 0),
-          routeEconomyInstalls: (current.routeEconomyInstalls || 0) + (energyStep.installs || 0),
-          routeEconomyExtraCardDraws: (current.routeEconomyExtraCardDraws || 0) + (energyStep.extraCardDraws || 0),
-          routeEconomyEnergySpent: (current.routeEconomyEnergySpent || 0) + (energyStep.energySpent || 0),
-          chopShopCardChoices: (current.chopShopCardChoices || 0) + (energyStep.chopShopChoice === "card" ? 1 : 0),
-          chopShopEnergyChoices: (current.chopShopEnergyChoices || 0) + (energyStep.chopShopChoice === "energy" ? 1 : 0),
-          dynamicArchivePoint: nextDynamicArchivePoint,
-          baseCost: current.baseCost + transition.hazard + transitionRebootPenalty + actionPenalty + scarceReusePenalty - energyEconomyRewardScore,
-          actionHistory: nextActionHistory,
-          actionAbsoluteHistory: nextActionAbsoluteHistory
-        };
-
-        const priorBest = bestCostByState.get(nextStateKey);
-        if (priorBest !== undefined && nextRoute.baseCost >= priorBest - 0.001) {
+      // Each space-bridge hop (Transformers) is a separate successor.
+      for (const transition of getTransitionVariants(simulatedTransition)) {
+        if (transition.crashed || transition.blocked) {
           continue;
         }
 
-        bestCostByState.set(nextStateKey, nextRoute.baseCost);
-        queue.push(createQueueEntry(nextRoute, goal, tileMap, options));
+        const actionPenalty = getRouteAwareActionPenalty(action, options);
+        const scarceReusePenalty = cardEvaluation.penalty;
+        const executedAbsoluteAction = current.absoluteActions + 1;
+        const nextAbsoluteActions = transition.rebooted
+          ? getRebootEndedAbsoluteActions(executedAbsoluteAction)
+          : executedAbsoluteAction;
+        const nextActionHistory = getProgramHistoryWindow([...current.actionHistory, action.id]);
+        const nextActionAbsoluteHistory = [
+          ...(current.actionAbsoluteHistory || []),
+          executedAbsoluteAction
+        ].slice(-PROGRAM_HISTORY_WINDOW_SIZE);
+        const destinations = transition.rebootChoices?.length ? transition.rebootChoices : [transition.to];
+
+        for (const destination of destinations) {
+          const nextActionCount = current.actions + 1;
+          const nextDynamicArchivePoint = getNextDynamicArchivePoint(
+            tileMap,
+            destination,
+            current.dynamicArchivePoint,
+            options
+          );
+          const transitionRebootPenalty = transition.rebooted
+            ? getRebootRoutePenalty(executedAbsoluteAction)
+            : (transition.rebootPenalty || 0);
+          const transitionForDestination = {
+            ...(transition.rebootChoices?.length
+              ? { ...transition, to: destination }
+              : transition),
+            absoluteAction: executedAbsoluteAction
+          };
+          const energyStep = getRouteEnergyShadowStep(
+            tileMap,
+            destination,
+            action.id,
+            executedAbsoluteAction,
+            current.routeEnergyShadowReserve,
+            current.routeUpgradeCardShadowUnits,
+            options,
+            transitionForDestination
+          );
+          const energyEconomyRewardScore = energyStep.rewardScore;
+          const batteryEconomyRewardScore = energyStep.batteryRewardScore;
+          const powerUpEconomyRewardScore = energyStep.powerUpRewardScore;
+          const chopShopEconomyRewardScore = energyStep.chopShopRewardScore;
+          const nextStateKey = getSearchStateKey(
+            destination,
+            nextAbsoluteActions,
+            options,
+            energyStep.reserveAfter,
+            nextDynamicArchivePoint
+          );
+          const nextRoute = {
+            finalState: destination,
+            initialState: current.initialState,
+            startFacing: current.startFacing,
+            parent: current,
+            transition: transitionForDestination,
+            actions: nextActionCount,
+            absoluteActions: nextAbsoluteActions,
+            distance: current.distance + transition.distance,
+            forcedDistance: current.forcedDistance + transition.forcedDistance,
+            hazard: current.hazard + transition.hazard,
+            rebootPenalty: current.rebootPenalty + transitionRebootPenalty,
+            routeEnergyEconomyRewardScore: (current.routeEnergyEconomyRewardScore || 0) + energyEconomyRewardScore,
+            batteryEconomyRewardScore: (current.batteryEconomyRewardScore || 0) + batteryEconomyRewardScore,
+            powerUpEconomyRewardScore: (current.powerUpEconomyRewardScore || 0) + powerUpEconomyRewardScore,
+            chopShopEconomyRewardScore: (current.chopShopEconomyRewardScore || 0) + chopShopEconomyRewardScore,
+            routeEnergyShadowReserve: energyStep.reserveAfter,
+            routeEnergyShadowReserveStart: current.routeEnergyShadowReserveStart ?? getInitialRouteEnergyShadowReserve(options),
+            routeUpgradeCardShadowUnits: energyStep.usefulCardUnitsAfter,
+            routeUpgradeCardShadowUnitsStart: current.routeUpgradeCardShadowUnitsStart ?? getInitialRouteUpgradeCardShadowUnits(options),
+            routeEconomyNormalDraws: (current.routeEconomyNormalDraws || 0) + (energyStep.normalDraws || 0),
+            routeEconomyInstalls: (current.routeEconomyInstalls || 0) + (energyStep.installs || 0),
+            routeEconomyExtraCardDraws: (current.routeEconomyExtraCardDraws || 0) + (energyStep.extraCardDraws || 0),
+            routeEconomyEnergySpent: (current.routeEconomyEnergySpent || 0) + (energyStep.energySpent || 0),
+            chopShopCardChoices: (current.chopShopCardChoices || 0) + (energyStep.chopShopChoice === "card" ? 1 : 0),
+            chopShopEnergyChoices: (current.chopShopEnergyChoices || 0) + (energyStep.chopShopChoice === "energy" ? 1 : 0),
+            dynamicArchivePoint: nextDynamicArchivePoint,
+            baseCost: current.baseCost + transition.hazard + transitionRebootPenalty + actionPenalty + scarceReusePenalty - energyEconomyRewardScore,
+            actionHistory: nextActionHistory,
+            actionAbsoluteHistory: nextActionAbsoluteHistory
+          };
+
+          const priorBest = bestCostByState.get(nextStateKey);
+          if (priorBest !== undefined && nextRoute.baseCost >= priorBest - 0.001) {
+            continue;
+          }
+
+          bestCostByState.set(nextStateKey, nextRoute.baseCost);
+          queue.push(createQueueEntry(nextRoute, goal, tileMap, options));
+        }
       }
     }
   }
@@ -1417,121 +1421,124 @@ export function enumerateFullCourseRoutes(tileMap, start, flags, options = {}) {
       if (!cardEvaluation.feasible) {
         continue;
       }
-      const transition = simulateAction(tileMap, current.finalState, action, {
+      const simulatedTransition = simulateAction(tileMap, current.finalState, action, {
         ...simulationOptions,
         goal: currentTarget,
         registerIndex: current.absoluteActions % REGISTER_COUNT,
         dynamicArchivePoint: current.dynamicArchivePoint
       });
-      if (transition.crashed || transition.blocked) continue;
+      // Each space-bridge hop (Transformers) is a separate successor.
+      for (const transition of getTransitionVariants(simulatedTransition)) {
+        if (transition.crashed || transition.blocked) continue;
 
-      const actionPenalty = getRouteAwareActionPenalty(action, options);
-      const scarceReusePenalty = cardEvaluation.penalty;
-      const executedAbsoluteAction = current.absoluteActions + 1;
-      const nextAbsoluteActions = transition.rebooted
-        ? getRebootEndedAbsoluteActions(executedAbsoluteAction)
-        : executedAbsoluteAction;
-      const nextActionHistory = getProgramHistoryWindow([...current.actionHistory, action.id]);
-      const nextActionAbsoluteHistory = [
-        ...(current.actionAbsoluteHistory || []),
-        executedAbsoluteAction
-      ].slice(-PROGRAM_HISTORY_WINDOW_SIZE);
-      const destinations = transition.rebootChoices?.length ? transition.rebootChoices : [transition.to];
+        const actionPenalty = getRouteAwareActionPenalty(action, options);
+        const scarceReusePenalty = cardEvaluation.penalty;
+        const executedAbsoluteAction = current.absoluteActions + 1;
+        const nextAbsoluteActions = transition.rebooted
+          ? getRebootEndedAbsoluteActions(executedAbsoluteAction)
+          : executedAbsoluteAction;
+        const nextActionHistory = getProgramHistoryWindow([...current.actionHistory, action.id]);
+        const nextActionAbsoluteHistory = [
+          ...(current.actionAbsoluteHistory || []),
+          executedAbsoluteAction
+        ].slice(-PROGRAM_HISTORY_WINDOW_SIZE);
+        const destinations = transition.rebootChoices?.length ? transition.rebootChoices : [transition.to];
 
-      for (const destination of destinations) {
-        const nextActionCount = current.actions + 1;
-        const nextDynamicArchivePoint = getNextDynamicArchivePoint(
-          tileMap,
-          destination,
-          current.dynamicArchivePoint,
-          options
-        );
-        const transitionRebootPenalty = transition.rebooted
-          ? getRebootRoutePenalty(executedAbsoluteAction)
-          : (transition.rebootPenalty || 0);
-        const transitionForDestination = {
-          ...(transition.rebootChoices?.length
-            ? { ...transition, to: destination }
-            : transition),
-          absoluteAction: executedAbsoluteAction
-        };
-        const energyStep = getRouteEnergyShadowStep(
-          tileMap,
-          destination,
-          action.id,
-          executedAbsoluteAction,
-          current.routeEnergyShadowReserve,
-          current.routeUpgradeCardShadowUnits,
-          options,
-          transitionForDestination
-        );
-        const energyEconomyRewardScore = energyStep.rewardScore;
-        const batteryEconomyRewardScore = energyStep.batteryRewardScore;
-        const powerUpEconomyRewardScore = energyStep.powerUpRewardScore;
-        const chopShopEconomyRewardScore = energyStep.chopShopRewardScore;
-        let nextRoute = {
-          finalState: destination,
-          initialState: current.initialState,
-          startFacing: current.startFacing,
-          parent: current,
-          transition: transitionForDestination,
-          actions: nextActionCount,
-          absoluteActions: nextAbsoluteActions,
-          distance: current.distance + transition.distance,
-          forcedDistance: current.forcedDistance + transition.forcedDistance,
-          hazard: current.hazard + transition.hazard,
-          rebootPenalty: current.rebootPenalty + transitionRebootPenalty,
-          routeEnergyEconomyRewardScore: (current.routeEnergyEconomyRewardScore || 0) + energyEconomyRewardScore,
-          batteryEconomyRewardScore: (current.batteryEconomyRewardScore || 0) + batteryEconomyRewardScore,
-          powerUpEconomyRewardScore: (current.powerUpEconomyRewardScore || 0) + powerUpEconomyRewardScore,
-          chopShopEconomyRewardScore: (current.chopShopEconomyRewardScore || 0) + chopShopEconomyRewardScore,
-          routeEnergyShadowReserve: energyStep.reserveAfter,
-          routeEnergyShadowReserveStart: current.routeEnergyShadowReserveStart ?? getInitialRouteEnergyShadowReserve(options),
-          routeUpgradeCardShadowUnits: energyStep.usefulCardUnitsAfter,
-          routeUpgradeCardShadowUnitsStart: current.routeUpgradeCardShadowUnitsStart ?? getInitialRouteUpgradeCardShadowUnits(options),
-          routeEconomyNormalDraws: (current.routeEconomyNormalDraws || 0) + (energyStep.normalDraws || 0),
-          routeEconomyInstalls: (current.routeEconomyInstalls || 0) + (energyStep.installs || 0),
-          routeEconomyExtraCardDraws: (current.routeEconomyExtraCardDraws || 0) + (energyStep.extraCardDraws || 0),
-          routeEconomyEnergySpent: (current.routeEconomyEnergySpent || 0) + (energyStep.energySpent || 0),
-          chopShopCardChoices: (current.chopShopCardChoices || 0) + (energyStep.chopShopChoice === "card" ? 1 : 0),
-          chopShopEnergyChoices: (current.chopShopEnergyChoices || 0) + (energyStep.chopShopChoice === "energy" ? 1 : 0),
-          dynamicArchivePoint: nextDynamicArchivePoint,
-          baseCost: current.baseCost + transition.hazard + transitionRebootPenalty + actionPenalty +
-            scarceReusePenalty * diagnosticCardPressureWeight - energyEconomyRewardScore,
-          checkpointIndex: current.checkpointIndex,
-          checkpointHits: current.checkpointHits,
-          actionHistory: nextActionHistory,
-          actionAbsoluteHistory: nextActionAbsoluteHistory
-        };
-
-        if (fullCourseRouteReachesNextCheckpoint(nextRoute, flags, options)) {
-          const hit = makeCheckpointHit(nextRoute, flags, options);
-          nextRoute = {
-            ...nextRoute,
-            checkpointIndex: nextRoute.checkpointIndex + 1,
-            checkpointHits: [...nextRoute.checkpointHits, hit]
+        for (const destination of destinations) {
+          const nextActionCount = current.actions + 1;
+          const nextDynamicArchivePoint = getNextDynamicArchivePoint(
+            tileMap,
+            destination,
+            current.dynamicArchivePoint,
+            options
+          );
+          const transitionRebootPenalty = transition.rebooted
+            ? getRebootRoutePenalty(executedAbsoluteAction)
+            : (transition.rebootPenalty || 0);
+          const transitionForDestination = {
+            ...(transition.rebootChoices?.length
+              ? { ...transition, to: destination }
+              : transition),
+            absoluteAction: executedAbsoluteAction
           };
-        }
+          const energyStep = getRouteEnergyShadowStep(
+            tileMap,
+            destination,
+            action.id,
+            executedAbsoluteAction,
+            current.routeEnergyShadowReserve,
+            current.routeUpgradeCardShadowUnits,
+            options,
+            transitionForDestination
+          );
+          const energyEconomyRewardScore = energyStep.rewardScore;
+          const batteryEconomyRewardScore = energyStep.batteryRewardScore;
+          const powerUpEconomyRewardScore = energyStep.powerUpRewardScore;
+          const chopShopEconomyRewardScore = energyStep.chopShopRewardScore;
+          let nextRoute = {
+            finalState: destination,
+            initialState: current.initialState,
+            startFacing: current.startFacing,
+            parent: current,
+            transition: transitionForDestination,
+            actions: nextActionCount,
+            absoluteActions: nextAbsoluteActions,
+            distance: current.distance + transition.distance,
+            forcedDistance: current.forcedDistance + transition.forcedDistance,
+            hazard: current.hazard + transition.hazard,
+            rebootPenalty: current.rebootPenalty + transitionRebootPenalty,
+            routeEnergyEconomyRewardScore: (current.routeEnergyEconomyRewardScore || 0) + energyEconomyRewardScore,
+            batteryEconomyRewardScore: (current.batteryEconomyRewardScore || 0) + batteryEconomyRewardScore,
+            powerUpEconomyRewardScore: (current.powerUpEconomyRewardScore || 0) + powerUpEconomyRewardScore,
+            chopShopEconomyRewardScore: (current.chopShopEconomyRewardScore || 0) + chopShopEconomyRewardScore,
+            routeEnergyShadowReserve: energyStep.reserveAfter,
+            routeEnergyShadowReserveStart: current.routeEnergyShadowReserveStart ?? getInitialRouteEnergyShadowReserve(options),
+            routeUpgradeCardShadowUnits: energyStep.usefulCardUnitsAfter,
+            routeUpgradeCardShadowUnitsStart: current.routeUpgradeCardShadowUnitsStart ?? getInitialRouteUpgradeCardShadowUnits(options),
+            routeEconomyNormalDraws: (current.routeEconomyNormalDraws || 0) + (energyStep.normalDraws || 0),
+            routeEconomyInstalls: (current.routeEconomyInstalls || 0) + (energyStep.installs || 0),
+            routeEconomyExtraCardDraws: (current.routeEconomyExtraCardDraws || 0) + (energyStep.extraCardDraws || 0),
+            routeEconomyEnergySpent: (current.routeEconomyEnergySpent || 0) + (energyStep.energySpent || 0),
+            chopShopCardChoices: (current.chopShopCardChoices || 0) + (energyStep.chopShopChoice === "card" ? 1 : 0),
+            chopShopEnergyChoices: (current.chopShopEnergyChoices || 0) + (energyStep.chopShopChoice === "energy" ? 1 : 0),
+            dynamicArchivePoint: nextDynamicArchivePoint,
+            baseCost: current.baseCost + transition.hazard + transitionRebootPenalty + actionPenalty +
+              scarceReusePenalty * diagnosticCardPressureWeight - energyEconomyRewardScore,
+            checkpointIndex: current.checkpointIndex,
+            checkpointHits: current.checkpointHits,
+            actionHistory: nextActionHistory,
+            actionAbsoluteHistory: nextActionAbsoluteHistory
+          };
 
-        const nextStateKey = getFullCourseSearchStateKey(
-          nextRoute.finalState,
-          nextAbsoluteActions,
-          nextRoute.checkpointIndex,
-          options,
-          nextRoute.routeEnergyShadowReserve,
-          nextRoute.dynamicArchivePoint,
-          nextRoute.actionHistory,
-          nextRoute.actionAbsoluteHistory,
-          nextRoute.actions
-        );
-        const stateLabelLimit = (
-          options.diverseStateLabelsAfterFirstCheckpoint &&
-          nextRoute.checkpointIndex >= 1
-        )
-          ? maxStateLabels
-          : 1;
-        if (!acceptStateLabel(nextStateKey, nextRoute.baseCost, stateLabelLimit)) continue;
-        queue.push(createFullCourseQueueEntry(nextRoute, flags, options, tileMap));
+          if (fullCourseRouteReachesNextCheckpoint(nextRoute, flags, options)) {
+            const hit = makeCheckpointHit(nextRoute, flags, options);
+            nextRoute = {
+              ...nextRoute,
+              checkpointIndex: nextRoute.checkpointIndex + 1,
+              checkpointHits: [...nextRoute.checkpointHits, hit]
+            };
+          }
+
+          const nextStateKey = getFullCourseSearchStateKey(
+            nextRoute.finalState,
+            nextAbsoluteActions,
+            nextRoute.checkpointIndex,
+            options,
+            nextRoute.routeEnergyShadowReserve,
+            nextRoute.dynamicArchivePoint,
+            nextRoute.actionHistory,
+            nextRoute.actionAbsoluteHistory,
+            nextRoute.actions
+          );
+          const stateLabelLimit = (
+            options.diverseStateLabelsAfterFirstCheckpoint &&
+            nextRoute.checkpointIndex >= 1
+          )
+            ? maxStateLabels
+            : 1;
+          if (!acceptStateLabel(nextStateKey, nextRoute.baseCost, stateLabelLimit)) continue;
+          queue.push(createFullCourseQueueEntry(nextRoute, flags, options, tileMap));
+        }
       }
     }
   }

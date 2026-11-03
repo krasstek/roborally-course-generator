@@ -7,7 +7,7 @@ import {
   getDamageEconomyRealizedDamageForTransition
 } from "../src/analysis/damage-economy.js";
 import { getEnergonContactSquares, getRouteEnergyShadowStep } from "../src/analysis/energy-economy.js";
-import { simulateAction } from "../src/analysis/movement.js";
+import { getTransitionVariants, simulateAction } from "../src/analysis/movement.js";
 import { getIncomingRobotLaserDirection, hasLineOfSight } from "../src/analysis/traffic.js";
 
 function tileKey(x, y) {
@@ -189,6 +189,38 @@ const cases = [
       const taken = energyStep(map, 1, { energonClaims: [] }).rewardRegisterEquivalents;
       return full > 0 && Math.abs(half - full / 2) < 1e-6 && taken === 0;
     }
+  },
+  {
+    name: "space bridge: a robot ending on one may hop to each other bridge of its colour",
+    check: () => {
+      const map = row(8, {
+        1: [{ type: "spaceBridge", id: "red" }],
+        4: [{ type: "spaceBridge", id: "red" }],
+        6: [{ type: "spaceBridge", id: "blue" }]
+      });
+      const variants = getTransitionVariants(simulateAction(map, { x: 0, y: 0, facing: "E" }, FORWARD, { registerIndex: 0 }));
+      return variants.length === 2 &&
+        variants[0].to.x === 1 &&
+        variants[1].to.x === 4 && variants[1].to.facing === "E" && variants[1].spaceBridgeHop?.x === 4;
+    }
+  },
+  {
+    name: "space bridge: board elements after pushers act at the far bridge",
+    check: () => {
+      const map = row(6, {
+        1: [{ type: "spaceBridge", id: "red" }],
+        4: [{ type: "spaceBridge", id: "red" }, { type: "gear", rotation: "cw" }]
+      });
+      const hop = getTransitionVariants(simulateAction(map, { x: 0, y: 0, facing: "E" }, FORWARD, { registerIndex: 0 }))[1];
+      return hop?.to.x === 4 && hop.to.facing === "S";
+    }
+  },
+  {
+    name: "space bridge: no hop off a bridge",
+    check: () => getTransitionVariants(simulateAction(row(6, {
+      3: [{ type: "spaceBridge", id: "red" }],
+      4: [{ type: "spaceBridge", id: "red" }]
+    }), { x: 0, y: 0, facing: "E" }, FORWARD, { registerIndex: 0 })).length === 1
   },
   {
     name: "pit stop: without damage both picks become Energy",

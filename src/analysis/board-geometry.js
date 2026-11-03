@@ -231,6 +231,29 @@ export function isFirePit(tile) {
   return (tile?.features || []).some((feature) => feature.type === "firePit");
 }
 
+export function getSpaceBridge(tile) {
+  return (tile?.features || []).find((feature) => feature.type === "spaceBridge") ?? null;
+}
+
+const SPACE_BRIDGE_SQUARES_CACHE = new WeakMap();
+
+// Squares of every space bridge with this colour (id) on the course.
+export function getSpaceBridgeSquares(tileMap, id) {
+  let byId = SPACE_BRIDGE_SQUARES_CACHE.get(tileMap);
+  if (!byId) {
+    byId = new Map();
+    for (const tile of tileMap.values()) {
+      const bridge = getSpaceBridge(tile);
+      if (!bridge) continue;
+      const key = String(bridge.id);
+      if (!byId.has(key)) byId.set(key, []);
+      byId.get(key).push({ x: tile.x, y: tile.y });
+    }
+    SPACE_BRIDGE_SQUARES_CACHE.set(tileMap, byId);
+  }
+  return byId.get(String(id)) ?? [];
+}
+
 export function getLedgeSides(tile) {
   const sides = new Set();
 

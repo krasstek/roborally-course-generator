@@ -22,6 +22,8 @@ import {
   hasExplicitTiming,
   hasKnownRegisterTiming,
   getRoad,
+  getSpaceBridge,
+  getSpaceBridgeSquares,
   hasRampForDir,
   isBoundaryBlockedByWalls,
   isBuildingSideClosed,
@@ -1190,6 +1192,14 @@ export function moveOneStep(
   return outcome;
 }
 
+// A simulated register and its space-bridge hops (Transformers): each is a
+// complete transition the route search can take.
+export function getTransitionVariants(transition) {
+  return transition?.bridgeAlternatives?.length
+    ? [transition, ...transition.bridgeAlternatives]
+    : [transition];
+}
+
 export function getSignedMoveDistance(action) {
   if (action.type !== "move") {
     return 0;
@@ -2270,6 +2280,31 @@ export function simulateAction(tileMap, startState, action, options = {}) {
   }
   if (finishPhysicalMissPhase) finishPhysicalMissPhase("physicalMissPusherMs");
 
+  // Space bridge (Transformers): after pushers, a robot on a bridge may move
+  // to any other bridge of the same colour, facing unchanged (whether that
+  // bridge is occupied is not modelled). The stay is this transition; each hop
+  // is the same register simulated again with spaceBridgeHop set, returned as
+  // bridgeAlternatives for the search to branch on.
+  let bridgeHopTargets = [];
+  let spaceBridgeHop = null;
+  const bridgeHere = !crashed && !rebooted ? getSpaceBridge(tileMap.get(tileKey(state.x, state.y))) : null;
+  if (bridgeHere) {
+    const otherBridges = getSpaceBridgeSquares(tileMap, bridgeHere.id)
+      .filter((square) => square.x !== state.x || square.y !== state.y);
+    const hop = options.spaceBridgeHop;
+    if (hop) {
+      if (otherBridges.some((square) => square.x === hop.x && square.y === hop.y)) {
+        traversed.push({ x: hop.x, y: hop.y, jump: true });
+        boardEvents.push({ type: "space-bridge", from: cloneState(state), to: { x: hop.x, y: hop.y, facing: state.facing } });
+        state.x = hop.x;
+        state.y = hop.y;
+        spaceBridgeHop = { x: hop.x, y: hop.y };
+      }
+    } else {
+      bridgeHopTargets = otherBridges;
+    }
+  }
+
   let gearTurned = false;
   if (!crashed && !rebooted) {
     const facingBeforeGear = state.facing;
@@ -2325,9 +2360,15 @@ export function simulateAction(tileMap, startState, action, options = {}) {
     delete state.firePitLock;
   }
 
+  const bridgeAlternatives = bridgeHopTargets
+    .map((target) => simulateAction(tileMap, startState, action, { ...options, spaceBridgeHop: target }))
+    .filter((alternative) => alternative?.spaceBridgeHop && !alternative.blocked && !alternative.crashed);
+
   return {
     action: action.id,
     ...(cancelledByFirePit ? { cancelledByFirePit: true } : {}),
+    ...(spaceBridgeHop ? { spaceBridgeHop } : {}),
+    ...(bridgeAlternatives.length ? { bridgeAlternatives } : {}),
     randomizerAtRegisterStart,
     from: cloneState(startState),
     to: state,

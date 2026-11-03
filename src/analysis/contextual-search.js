@@ -19,6 +19,7 @@ import { clamp } from "../shared/math.js";
 import {
   DYNAMIC_ARCHIVE_CACHE_TELEMETRY,
   getRouteAwareActionPenalty,
+  getTransitionVariants,
   heuristic,
   simulateAction
 } from "./movement.js";
@@ -1605,221 +1606,224 @@ export function* enumeratePhysicalTimingLegTemplatesSteps(
         profile.physicalCacheMisses += 1;
         profile.simulationMissMs += simulationElapsed;
       }
-      const transition = physicalResult.transition;
-      if (transition.crashed || transition.blocked) {
-        profile.blockedTransitions += 1;
-        continue;
-      }
+      const simulatedTransition = physicalResult.transition;
+      // Each space-bridge hop (Transformers) is a separate successor.
+      for (const transition of getTransitionVariants(simulatedTransition)) {
+        if (transition.crashed || transition.blocked) {
+          profile.blockedTransitions += 1;
+          continue;
+        }
 
-      blockStartedAt = profileNow();
-      const actionPenalty = getRouteAwareActionPenalty(action, options);
-      profile.actionScoringMs += profileNow() - blockStartedAt;
-      const destinations = transition.rebootChoices?.length
-        ? transition.rebootChoices
-        : [transition.to];
+        blockStartedAt = profileNow();
+        const actionPenalty = getRouteAwareActionPenalty(action, options);
+        profile.actionScoringMs += profileNow() - blockStartedAt;
+        const destinations = transition.rebootChoices?.length
+          ? transition.rebootChoices
+          : [transition.to];
 
-      for (const demandStep of demandSteps) {
-        for (const destination of destinations) {
-          profile.destinationCandidates += 1;
-          blockStartedAt = profileNow();
-          const executedAbsoluteAction = current.absoluteActions + 1;
-          const nextAbsoluteActions = transition.rebooted
-            ? getRebootEndedAbsoluteActions(executedAbsoluteAction)
-            : executedAbsoluteAction;
-          const finalizedDemandStep = transition.rebooted
-            ? closeEstimatedProgramDemandForEndedTurn(demandStep, options)
-            : demandStep;
-          const finalizedForecastFrontier = transition.rebooted && forecastStep.feasible
-            ? getMemoizedClosedEstimatedForecastFrontier(forecastStep.frontier)
-            : forecastStep.frontier;
-          const transitionRebootPenalty = transition.rebooted
-            ? getRebootRoutePenalty(executedAbsoluteAction)
-            : (transition.rebootPenalty || 0);
-          profile.destinationBuildMs += profileNow() - blockStartedAt;
+        for (const demandStep of demandSteps) {
+          for (const destination of destinations) {
+            profile.destinationCandidates += 1;
+            blockStartedAt = profileNow();
+            const executedAbsoluteAction = current.absoluteActions + 1;
+            const nextAbsoluteActions = transition.rebooted
+              ? getRebootEndedAbsoluteActions(executedAbsoluteAction)
+              : executedAbsoluteAction;
+            const finalizedDemandStep = transition.rebooted
+              ? closeEstimatedProgramDemandForEndedTurn(demandStep, options)
+              : demandStep;
+            const finalizedForecastFrontier = transition.rebooted && forecastStep.feasible
+              ? getMemoizedClosedEstimatedForecastFrontier(forecastStep.frontier)
+              : forecastStep.frontier;
+            const transitionRebootPenalty = transition.rebooted
+              ? getRebootRoutePenalty(executedAbsoluteAction)
+              : (transition.rebootPenalty || 0);
+            profile.destinationBuildMs += profileNow() - blockStartedAt;
 
-          blockStartedAt = profileNow();
-          const nextDynamicArchivePoint = getNextDynamicArchivePoint(
-            tileMap,
-            destination,
-            current.dynamicArchivePoint,
-            options
-          );
-          profile.archiveContextMs += profileNow() - blockStartedAt;
-
-          blockStartedAt = profileNow();
-          const preEnergyBaseCost =
-            current.baseCost +
-            transition.hazard +
-            transitionRebootPenalty +
-            actionPenalty +
-            (
-              Number.isFinite(unionFrontierCardPenalty)
-                ? unionFrontierCardPenalty
-                : finalizedDemandStep.penalty
-            ) +
-            forecastBreakPenalty;
-          profile.destinationBuildMs += profileNow() - blockStartedAt;
-
-          blockStartedAt = profileNow();
-          const nextPhysicalKey = getPhysicalTimingTemplateStateKey(
-            destination,
-            nextAbsoluteActions,
-            dynamicGoal,
-            nextDynamicArchivePoint,
-            options
-          );
-          const nextDemandKey = options.contextualEstimatedCardWeightsOnly
-            ? 0
-            : getApproxProgramDemandStateCode(
-              finalizedDemandStep.demandCode,
-              finalizedDemandStep.previousScarceCode,
-              finalizedDemandStep.currentScarceCode,
-              finalizedDemandStep.previousActionId
-            );
-          profile.nextKeyMs += profileNow() - blockStartedAt;
-
-          blockStartedAt = profileNow();
-          const priorBest = getNestedBestCost(
-            bestCostByState,
-            nextPhysicalKey,
-            nextDemandKey
-          );
-          if (priorBest !== undefined) {
-            const energyRewardUpperBound = options.contextualEstimatedEnergyGuidance === false
-              ? 0
-              : getRouteEnergyDominanceRewardUpperBound(
-                tileMap,
-                destination,
-                action.id,
-                energyDominanceBoundConfig,
-                transition
-              );
-            if (preEnergyBaseCost - energyRewardUpperBound >= priorBest - 0.001) {
-              profile.dominatedStates += 1;
-              profile.earlyDominanceEnergyBoundPrunes += 1;
-              profile.dominanceMs += profileNow() - blockStartedAt;
-              continue;
-            }
-          }
-          profile.dominanceMs += profileNow() - blockStartedAt;
-
-          blockStartedAt = profileNow();
-          const energyStep = options.contextualEstimatedEnergyGuidance === false
-            ? {
-              rewardScore: 0,
-              batteryRewardScore: 0,
-              powerUpRewardScore: 0,
-              chopShopRewardScore: 0,
-              reserveAfter: current.routeEnergyShadowReserve
-            }
-            : getRouteEnergyShadowStep(
+            blockStartedAt = profileNow();
+            const nextDynamicArchivePoint = getNextDynamicArchivePoint(
               tileMap,
               destination,
-              action.id,
-              executedAbsoluteAction,
-              current.routeEnergyShadowReserve,
-              0,
-              options,
-              transition
+              current.dynamicArchivePoint,
+              options
             );
-          profile.energyMs += profileNow() - blockStartedAt;
-          const energyEconomyRewardScore = Math.max(
-            0,
-            Number(energyStep.rewardScore) || 0
-          );
-          const nextBaseCost = preEnergyBaseCost - energyEconomyRewardScore;
+            profile.archiveContextMs += profileNow() - blockStartedAt;
 
-          blockStartedAt = profileNow();
-          if (priorBest !== undefined && nextBaseCost >= priorBest - 0.001) {
-            profile.dominatedStates += 1;
-            profile.dominanceMs += profileNow() - blockStartedAt;
-            continue;
-          }
-          setNestedBestCost(
-            bestCostByState,
-            nextPhysicalKey,
-            nextDemandKey,
-            nextBaseCost
-          );
-          profile.acceptedStates += 1;
-          profile.dominanceMs += profileNow() - blockStartedAt;
-
-          blockStartedAt = profileNow();
-          const transitionForDestination = {
-            ...(transition.rebootChoices?.length
-              ? { ...transition, to: destination }
-              : transition),
-            absoluteAction: executedAbsoluteAction
-          };
-          const nextRoute = {
-            finalState: destination,
-            initialState: current.initialState,
-            startFacing: current.startFacing,
-            parent: current,
-            transition: transitionForDestination,
-            localActions: current.localActions + 1,
-            absoluteActions: nextAbsoluteActions,
-            distance: current.distance + transition.distance,
-            forcedDistance: current.forcedDistance + transition.forcedDistance,
-            hazard: current.hazard + transition.hazard,
-            rebootPenalty: current.rebootPenalty + transitionRebootPenalty,
-            baseCost: nextBaseCost,
-            approximateCardPlausibilityPenalty:
-              (current.approximateCardPlausibilityPenalty || 0) +
+            blockStartedAt = profileNow();
+            const preEnergyBaseCost =
+              current.baseCost +
+              transition.hazard +
+              transitionRebootPenalty +
+              actionPenalty +
               (
                 Number.isFinite(unionFrontierCardPenalty)
                   ? unionFrontierCardPenalty
                   : finalizedDemandStep.penalty
-              ),
-            approximatePreviousProgramDemandCode:
-              finalizedDemandStep.previousDemandCode ?? current.approximatePreviousProgramDemandCode ?? 0,
-            approximateProgramDemandCode: finalizedDemandStep.demandCode,
-            approximatePreviousAgainUsed:
-              finalizedDemandStep.previousAgainUsed ?? current.approximatePreviousAgainUsed ?? 0,
-            approximateCurrentAgainUsed:
-              finalizedDemandStep.currentAgainUsed ?? current.approximateCurrentAgainUsed ?? 0,
-            approximatePreviousScarceCode: finalizedDemandStep.previousScarceCode,
-            approximateCurrentScarceCode: finalizedDemandStep.currentScarceCode,
-            approximatePreviousActionId: finalizedDemandStep.previousActionId,
-            estimatedCardFrontier: forecastStep.feasible
-              ? finalizedForecastFrontier
-              : [],
-            estimatedCardForecastFeasible:
-              current.estimatedCardForecastFeasible !== false &&
-              forecastStep.feasible,
-            estimatedCardForecastPenalty:
-              (current.estimatedCardForecastPenalty || 0) +
-              forecastBreakPenalty,
-            routeEnergyEconomyRewardScore:
-              (current.routeEnergyEconomyRewardScore || 0) + energyEconomyRewardScore,
-            batteryEconomyRewardScore:
-              (current.batteryEconomyRewardScore || 0) +
-              (Number(energyStep.batteryRewardScore) || 0),
-            powerUpEconomyRewardScore:
-              (current.powerUpEconomyRewardScore || 0) +
-              (Number(energyStep.powerUpRewardScore) || 0),
-            chopShopEconomyRewardScore:
-              (current.chopShopEconomyRewardScore || 0) +
-              (Number(energyStep.chopShopRewardScore) || 0),
-            routeEnergyShadowReserve:
-              Number.isFinite(Number(energyStep.reserveAfter))
-                ? Number(energyStep.reserveAfter)
-                : current.routeEnergyShadowReserve,
-            routeEnergyShadowReserveStart: current.routeEnergyShadowReserveStart,
-            dynamicArchivePoint: nextDynamicArchivePoint,
-            hazardExposure:
-              Math.max(0, Number(current.hazardExposure) || 0) +
-              Math.max(0, Number(transition.hazard) || 0)
-          };
-          profile.routeNodeBuildMs += profileNow() - blockStartedAt;
+              ) +
+              forecastBreakPenalty;
+            profile.destinationBuildMs += profileNow() - blockStartedAt;
 
-          blockStartedAt = profileNow();
-          queue.push({
-            ...createContextualQueueEntry(nextRoute, goal, dynamicGoal, tileMap, options),
-            searchPhysicalKey: nextPhysicalKey,
-            searchDemandKey: nextDemandKey
-          });
-          profile.queueMs += profileNow() - blockStartedAt;
+            blockStartedAt = profileNow();
+            const nextPhysicalKey = getPhysicalTimingTemplateStateKey(
+              destination,
+              nextAbsoluteActions,
+              dynamicGoal,
+              nextDynamicArchivePoint,
+              options
+            );
+            const nextDemandKey = options.contextualEstimatedCardWeightsOnly
+              ? 0
+              : getApproxProgramDemandStateCode(
+                finalizedDemandStep.demandCode,
+                finalizedDemandStep.previousScarceCode,
+                finalizedDemandStep.currentScarceCode,
+                finalizedDemandStep.previousActionId
+              );
+            profile.nextKeyMs += profileNow() - blockStartedAt;
+
+            blockStartedAt = profileNow();
+            const priorBest = getNestedBestCost(
+              bestCostByState,
+              nextPhysicalKey,
+              nextDemandKey
+            );
+            if (priorBest !== undefined) {
+              const energyRewardUpperBound = options.contextualEstimatedEnergyGuidance === false
+                ? 0
+                : getRouteEnergyDominanceRewardUpperBound(
+                  tileMap,
+                  destination,
+                  action.id,
+                  energyDominanceBoundConfig,
+                  transition
+                );
+              if (preEnergyBaseCost - energyRewardUpperBound >= priorBest - 0.001) {
+                profile.dominatedStates += 1;
+                profile.earlyDominanceEnergyBoundPrunes += 1;
+                profile.dominanceMs += profileNow() - blockStartedAt;
+                continue;
+              }
+            }
+            profile.dominanceMs += profileNow() - blockStartedAt;
+
+            blockStartedAt = profileNow();
+            const energyStep = options.contextualEstimatedEnergyGuidance === false
+              ? {
+                rewardScore: 0,
+                batteryRewardScore: 0,
+                powerUpRewardScore: 0,
+                chopShopRewardScore: 0,
+                reserveAfter: current.routeEnergyShadowReserve
+              }
+              : getRouteEnergyShadowStep(
+                tileMap,
+                destination,
+                action.id,
+                executedAbsoluteAction,
+                current.routeEnergyShadowReserve,
+                0,
+                options,
+                transition
+              );
+            profile.energyMs += profileNow() - blockStartedAt;
+            const energyEconomyRewardScore = Math.max(
+              0,
+              Number(energyStep.rewardScore) || 0
+            );
+            const nextBaseCost = preEnergyBaseCost - energyEconomyRewardScore;
+
+            blockStartedAt = profileNow();
+            if (priorBest !== undefined && nextBaseCost >= priorBest - 0.001) {
+              profile.dominatedStates += 1;
+              profile.dominanceMs += profileNow() - blockStartedAt;
+              continue;
+            }
+            setNestedBestCost(
+              bestCostByState,
+              nextPhysicalKey,
+              nextDemandKey,
+              nextBaseCost
+            );
+            profile.acceptedStates += 1;
+            profile.dominanceMs += profileNow() - blockStartedAt;
+
+            blockStartedAt = profileNow();
+            const transitionForDestination = {
+              ...(transition.rebootChoices?.length
+                ? { ...transition, to: destination }
+                : transition),
+              absoluteAction: executedAbsoluteAction
+            };
+            const nextRoute = {
+              finalState: destination,
+              initialState: current.initialState,
+              startFacing: current.startFacing,
+              parent: current,
+              transition: transitionForDestination,
+              localActions: current.localActions + 1,
+              absoluteActions: nextAbsoluteActions,
+              distance: current.distance + transition.distance,
+              forcedDistance: current.forcedDistance + transition.forcedDistance,
+              hazard: current.hazard + transition.hazard,
+              rebootPenalty: current.rebootPenalty + transitionRebootPenalty,
+              baseCost: nextBaseCost,
+              approximateCardPlausibilityPenalty:
+                (current.approximateCardPlausibilityPenalty || 0) +
+                (
+                  Number.isFinite(unionFrontierCardPenalty)
+                    ? unionFrontierCardPenalty
+                    : finalizedDemandStep.penalty
+                ),
+              approximatePreviousProgramDemandCode:
+                finalizedDemandStep.previousDemandCode ?? current.approximatePreviousProgramDemandCode ?? 0,
+              approximateProgramDemandCode: finalizedDemandStep.demandCode,
+              approximatePreviousAgainUsed:
+                finalizedDemandStep.previousAgainUsed ?? current.approximatePreviousAgainUsed ?? 0,
+              approximateCurrentAgainUsed:
+                finalizedDemandStep.currentAgainUsed ?? current.approximateCurrentAgainUsed ?? 0,
+              approximatePreviousScarceCode: finalizedDemandStep.previousScarceCode,
+              approximateCurrentScarceCode: finalizedDemandStep.currentScarceCode,
+              approximatePreviousActionId: finalizedDemandStep.previousActionId,
+              estimatedCardFrontier: forecastStep.feasible
+                ? finalizedForecastFrontier
+                : [],
+              estimatedCardForecastFeasible:
+                current.estimatedCardForecastFeasible !== false &&
+                forecastStep.feasible,
+              estimatedCardForecastPenalty:
+                (current.estimatedCardForecastPenalty || 0) +
+                forecastBreakPenalty,
+              routeEnergyEconomyRewardScore:
+                (current.routeEnergyEconomyRewardScore || 0) + energyEconomyRewardScore,
+              batteryEconomyRewardScore:
+                (current.batteryEconomyRewardScore || 0) +
+                (Number(energyStep.batteryRewardScore) || 0),
+              powerUpEconomyRewardScore:
+                (current.powerUpEconomyRewardScore || 0) +
+                (Number(energyStep.powerUpRewardScore) || 0),
+              chopShopEconomyRewardScore:
+                (current.chopShopEconomyRewardScore || 0) +
+                (Number(energyStep.chopShopRewardScore) || 0),
+              routeEnergyShadowReserve:
+                Number.isFinite(Number(energyStep.reserveAfter))
+                  ? Number(energyStep.reserveAfter)
+                  : current.routeEnergyShadowReserve,
+              routeEnergyShadowReserveStart: current.routeEnergyShadowReserveStart,
+              dynamicArchivePoint: nextDynamicArchivePoint,
+              hazardExposure:
+                Math.max(0, Number(current.hazardExposure) || 0) +
+                Math.max(0, Number(transition.hazard) || 0)
+            };
+            profile.routeNodeBuildMs += profileNow() - blockStartedAt;
+
+            blockStartedAt = profileNow();
+            queue.push({
+              ...createContextualQueueEntry(nextRoute, goal, dynamicGoal, tileMap, options),
+              searchPhysicalKey: nextPhysicalKey,
+              searchDemandKey: nextDemandKey
+            });
+            profile.queueMs += profileNow() - blockStartedAt;
+          }
         }
       }
     }
@@ -2560,178 +2564,181 @@ export function enumerateContextualLegRoutes(
         },
         physicalOptionSignature
       );
-      const transition = physicalResult.transition;
-      profile.simulationCalls += 1;
-      const simulationElapsedMs = profileNow() - blockStartedAt;
-      if (physicalResult.hit) {
-        profile.physicalCacheHits += 1;
-        profile.simulationHitMs += simulationElapsedMs;
-      } else {
-        profile.physicalCacheMisses += 1;
-        profile.simulationMissMs += simulationElapsedMs;
-      }
-      profile.simulationMs += simulationElapsedMs;
+      const simulatedTransition = physicalResult.transition;
+      // Each space-bridge hop (Transformers) is a separate successor.
+      for (const transition of getTransitionVariants(simulatedTransition)) {
+        profile.simulationCalls += 1;
+        const simulationElapsedMs = profileNow() - blockStartedAt;
+        if (physicalResult.hit) {
+          profile.physicalCacheHits += 1;
+          profile.simulationHitMs += simulationElapsedMs;
+        } else {
+          profile.physicalCacheMisses += 1;
+          profile.simulationMissMs += simulationElapsedMs;
+        }
+        profile.simulationMs += simulationElapsedMs;
 
-      if (transition.crashed || transition.blocked) {
-        profile.blockedTransitions += 1;
-        continue;
-      }
+        if (transition.crashed || transition.blocked) {
+          profile.blockedTransitions += 1;
+          continue;
+        }
 
-      blockStartedAt = profileNow();
-      const actionPenalty = getRouteAwareActionPenalty(action, options);
-      const executedAbsoluteAction = current.absoluteActions + 1;
-      const nextAbsoluteActions = transition.rebooted
-        ? getRebootEndedAbsoluteActions(executedAbsoluteAction)
-        : executedAbsoluteAction;
-      const destinations = transition.rebootChoices?.length
-        ? transition.rebootChoices
-        : [transition.to];
-      profile.actionScoringMs += profileNow() - blockStartedAt;
+        blockStartedAt = profileNow();
+        const actionPenalty = getRouteAwareActionPenalty(action, options);
+        const executedAbsoluteAction = current.absoluteActions + 1;
+        const nextAbsoluteActions = transition.rebooted
+          ? getRebootEndedAbsoluteActions(executedAbsoluteAction)
+          : executedAbsoluteAction;
+        const destinations = transition.rebootChoices?.length
+          ? transition.rebootChoices
+          : [transition.to];
+        profile.actionScoringMs += profileNow() - blockStartedAt;
 
-      for (const cardOption of cardOptions) {
-        const scarceReusePenalty = cardOption.penalty;
-        const scarcityPenalty = Number(cardOption.scarcityPenalty) || 0;
-        const programPlausibilityPenalty =
-          Number(cardOption.programPlausibilityPenalty) || 0;
-        for (const destination of destinations) {
-          profile.destinationCandidates += 1;
+        for (const cardOption of cardOptions) {
+          const scarceReusePenalty = cardOption.penalty;
+          const scarcityPenalty = Number(cardOption.scarcityPenalty) || 0;
+          const programPlausibilityPenalty =
+            Number(cardOption.programPlausibilityPenalty) || 0;
+          for (const destination of destinations) {
+            profile.destinationCandidates += 1;
 
-          blockStartedAt = profileNow();
-          const transitionRebootPenalty = transition.rebooted
-            ? getRebootRoutePenalty(executedAbsoluteAction)
-            : (transition.rebootPenalty || 0);
-          const nextProgramCardState = transition.rebooted
-            ? closeCompactProgramCardStateForEndedTurn(cardOption.state, options)
-            : cardOption.state;
-          profile.destinationBuildMs += profileNow() - blockStartedAt;
+            blockStartedAt = profileNow();
+            const transitionRebootPenalty = transition.rebooted
+              ? getRebootRoutePenalty(executedAbsoluteAction)
+              : (transition.rebootPenalty || 0);
+            const nextProgramCardState = transition.rebooted
+              ? closeCompactProgramCardStateForEndedTurn(cardOption.state, options)
+              : cardOption.state;
+            profile.destinationBuildMs += profileNow() - blockStartedAt;
 
-          blockStartedAt = profileNow();
-          const energyStep = getRouteEnergyShadowStep(
-            tileMap,
-            destination,
-            action.id,
-            executedAbsoluteAction,
-            current.routeEnergyShadowReserve,
-            current.routeUpgradeCardShadowUnits,
-            options,
-            transition
-          );
-          profile.energyMs += profileNow() - blockStartedAt;
-          const energyEconomyRewardScore = energyStep.rewardScore;
-          const batteryEconomyRewardScore = energyStep.batteryRewardScore;
-          const powerUpEconomyRewardScore = energyStep.powerUpRewardScore;
-          const chopShopEconomyRewardScore = energyStep.chopShopRewardScore;
+            blockStartedAt = profileNow();
+            const energyStep = getRouteEnergyShadowStep(
+              tileMap,
+              destination,
+              action.id,
+              executedAbsoluteAction,
+              current.routeEnergyShadowReserve,
+              current.routeUpgradeCardShadowUnits,
+              options,
+              transition
+            );
+            profile.energyMs += profileNow() - blockStartedAt;
+            const energyEconomyRewardScore = energyStep.rewardScore;
+            const batteryEconomyRewardScore = energyStep.batteryRewardScore;
+            const powerUpEconomyRewardScore = energyStep.powerUpRewardScore;
+            const chopShopEconomyRewardScore = energyStep.chopShopRewardScore;
 
-          blockStartedAt = profileNow();
-          const nextHazardExposure =
-            Math.max(0, Number(current.hazardExposure) || 0) +
-            Math.max(0, Number(transition.hazard) || 0);
-          const nextDynamicArchivePoint = getNextDynamicArchivePoint(
-            tileMap,
-            destination,
-            current.dynamicArchivePoint,
-            options
-          );
-          profile.archiveContextMs += profileNow() - blockStartedAt;
+            blockStartedAt = profileNow();
+            const nextHazardExposure =
+              Math.max(0, Number(current.hazardExposure) || 0) +
+              Math.max(0, Number(transition.hazard) || 0);
+            const nextDynamicArchivePoint = getNextDynamicArchivePoint(
+              tileMap,
+              destination,
+              current.dynamicArchivePoint,
+              options
+            );
+            profile.archiveContextMs += profileNow() - blockStartedAt;
 
-          blockStartedAt = profileNow();
-          const nextBaseCost =
-            current.baseCost +
-            transition.hazard +
-            transitionRebootPenalty +
-            actionPenalty +
-            scarceReusePenalty -
-            energyEconomyRewardScore;
-          profile.destinationBuildMs += profileNow() - blockStartedAt;
+            blockStartedAt = profileNow();
+            const nextBaseCost =
+              current.baseCost +
+              transition.hazard +
+              transitionRebootPenalty +
+              actionPenalty +
+              scarceReusePenalty -
+              energyEconomyRewardScore;
+            profile.destinationBuildMs += profileNow() - blockStartedAt;
 
-          blockStartedAt = profileNow();
-          const nextParts = getContextualSearchNumericStateParts(
-            destination,
-            nextAbsoluteActions,
-            nextProgramCardState,
-            dynamicGoal,
-            nextDynamicArchivePoint,
-            options
-          );
-          profile.nextKeyMs += profileNow() - blockStartedAt;
+            blockStartedAt = profileNow();
+            const nextParts = getContextualSearchNumericStateParts(
+              destination,
+              nextAbsoluteActions,
+              nextProgramCardState,
+              dynamicGoal,
+              nextDynamicArchivePoint,
+              options
+            );
+            profile.nextKeyMs += profileNow() - blockStartedAt;
 
-          blockStartedAt = profileNow();
-          const priorBest = getContextualBestCost(bestCostByState, nextParts);
-          if (
-            priorBest !== undefined &&
-            nextBaseCost >= priorBest - 0.001
-          ) {
-            profile.dominatedStates += 1;
+            blockStartedAt = profileNow();
+            const priorBest = getContextualBestCost(bestCostByState, nextParts);
+            if (
+              priorBest !== undefined &&
+              nextBaseCost >= priorBest - 0.001
+            ) {
+              profile.dominatedStates += 1;
+              profile.dominanceMs += profileNow() - blockStartedAt;
+              continue;
+            }
+
+            setContextualBestCost(bestCostByState, nextParts, nextBaseCost);
+            profile.acceptedStates += 1;
             profile.dominanceMs += profileNow() - blockStartedAt;
-            continue;
+
+            blockStartedAt = profileNow();
+            const transitionForDestination = {
+              ...(transition.rebootChoices?.length
+                ? { ...transition, to: destination }
+                : transition),
+              // Executed movement remains `action`; this records which literal card
+              // supplied it. Again is therefore just another card in Dev diagnostics.
+              programCard: cardOption.programCardId,
+              absoluteAction: executedAbsoluteAction
+            };
+            const nextRoute = {
+              finalState: destination,
+              initialState: current.initialState,
+              startFacing: current.startFacing,
+              parent: current,
+              transition: transitionForDestination,
+              localActions: current.localActions + 1,
+              absoluteActions: nextAbsoluteActions,
+              distance: current.distance + transition.distance,
+              forcedDistance:
+                current.forcedDistance + transition.forcedDistance,
+              hazard: current.hazard + transition.hazard,
+              rebootPenalty:
+                current.rebootPenalty + transitionRebootPenalty,
+              routeEnergyEconomyRewardScore:
+                (current.routeEnergyEconomyRewardScore || 0) + energyEconomyRewardScore,
+              batteryEconomyRewardScore:
+                (current.batteryEconomyRewardScore || 0) + batteryEconomyRewardScore,
+              powerUpEconomyRewardScore:
+                (current.powerUpEconomyRewardScore || 0) + powerUpEconomyRewardScore,
+              chopShopEconomyRewardScore:
+                (current.chopShopEconomyRewardScore || 0) + chopShopEconomyRewardScore,
+              routeEnergyShadowReserve: energyStep.reserveAfter,
+              routeEnergyShadowReserveStart: current.routeEnergyShadowReserveStart ?? initialEnergyReserve,
+              routeUpgradeCardShadowUnits: energyStep.usefulCardUnitsAfter,
+              routeUpgradeCardShadowUnitsStart: current.routeUpgradeCardShadowUnitsStart ?? initialUpgradeCardUnits,
+              routeEconomyNormalDraws: (current.routeEconomyNormalDraws || 0) + (energyStep.normalDraws || 0),
+              routeEconomyInstalls: (current.routeEconomyInstalls || 0) + (energyStep.installs || 0),
+              routeEconomyExtraCardDraws: (current.routeEconomyExtraCardDraws || 0) + (energyStep.extraCardDraws || 0),
+              routeEconomyEnergySpent: (current.routeEconomyEnergySpent || 0) + (energyStep.energySpent || 0),
+              chopShopCardChoices: (current.chopShopCardChoices || 0) + (energyStep.chopShopChoice === "card" ? 1 : 0),
+              chopShopEnergyChoices: (current.chopShopEnergyChoices || 0) + (energyStep.chopShopChoice === "energy" ? 1 : 0),
+              baseCost: nextBaseCost,
+              cardAvailabilityPenalty:
+                (current.cardAvailabilityPenalty || 0) +
+                scarcityPenalty,
+              programPlausibilityPenalty:
+                (current.programPlausibilityPenalty || 0) +
+                programPlausibilityPenalty,
+              programCardState: nextProgramCardState,
+              hazardExposure: nextHazardExposure,
+              dynamicArchivePoint: nextDynamicArchivePoint
+            };
+            profile.routeNodeBuildMs += profileNow() - blockStartedAt;
+
+            blockStartedAt = profileNow();
+            queue.push({
+              ...createContextualQueueEntry(nextRoute, goal, dynamicGoal, tileMap, options),
+              searchPhysicalGoalCode: nextParts.physicalGoalCode,
+              searchCardStateCode: nextParts.cardStateCode
+            });
+            profile.queueMs += profileNow() - blockStartedAt;
           }
-
-          setContextualBestCost(bestCostByState, nextParts, nextBaseCost);
-          profile.acceptedStates += 1;
-          profile.dominanceMs += profileNow() - blockStartedAt;
-
-          blockStartedAt = profileNow();
-          const transitionForDestination = {
-            ...(transition.rebootChoices?.length
-              ? { ...transition, to: destination }
-              : transition),
-            // Executed movement remains `action`; this records which literal card
-            // supplied it. Again is therefore just another card in Dev diagnostics.
-            programCard: cardOption.programCardId,
-            absoluteAction: executedAbsoluteAction
-          };
-          const nextRoute = {
-            finalState: destination,
-            initialState: current.initialState,
-            startFacing: current.startFacing,
-            parent: current,
-            transition: transitionForDestination,
-            localActions: current.localActions + 1,
-            absoluteActions: nextAbsoluteActions,
-            distance: current.distance + transition.distance,
-            forcedDistance:
-              current.forcedDistance + transition.forcedDistance,
-            hazard: current.hazard + transition.hazard,
-            rebootPenalty:
-              current.rebootPenalty + transitionRebootPenalty,
-            routeEnergyEconomyRewardScore:
-              (current.routeEnergyEconomyRewardScore || 0) + energyEconomyRewardScore,
-            batteryEconomyRewardScore:
-              (current.batteryEconomyRewardScore || 0) + batteryEconomyRewardScore,
-            powerUpEconomyRewardScore:
-              (current.powerUpEconomyRewardScore || 0) + powerUpEconomyRewardScore,
-            chopShopEconomyRewardScore:
-              (current.chopShopEconomyRewardScore || 0) + chopShopEconomyRewardScore,
-            routeEnergyShadowReserve: energyStep.reserveAfter,
-            routeEnergyShadowReserveStart: current.routeEnergyShadowReserveStart ?? initialEnergyReserve,
-            routeUpgradeCardShadowUnits: energyStep.usefulCardUnitsAfter,
-            routeUpgradeCardShadowUnitsStart: current.routeUpgradeCardShadowUnitsStart ?? initialUpgradeCardUnits,
-            routeEconomyNormalDraws: (current.routeEconomyNormalDraws || 0) + (energyStep.normalDraws || 0),
-            routeEconomyInstalls: (current.routeEconomyInstalls || 0) + (energyStep.installs || 0),
-            routeEconomyExtraCardDraws: (current.routeEconomyExtraCardDraws || 0) + (energyStep.extraCardDraws || 0),
-            routeEconomyEnergySpent: (current.routeEconomyEnergySpent || 0) + (energyStep.energySpent || 0),
-            chopShopCardChoices: (current.chopShopCardChoices || 0) + (energyStep.chopShopChoice === "card" ? 1 : 0),
-            chopShopEnergyChoices: (current.chopShopEnergyChoices || 0) + (energyStep.chopShopChoice === "energy" ? 1 : 0),
-            baseCost: nextBaseCost,
-            cardAvailabilityPenalty:
-              (current.cardAvailabilityPenalty || 0) +
-              scarcityPenalty,
-            programPlausibilityPenalty:
-              (current.programPlausibilityPenalty || 0) +
-              programPlausibilityPenalty,
-            programCardState: nextProgramCardState,
-            hazardExposure: nextHazardExposure,
-            dynamicArchivePoint: nextDynamicArchivePoint
-          };
-          profile.routeNodeBuildMs += profileNow() - blockStartedAt;
-
-          blockStartedAt = profileNow();
-          queue.push({
-            ...createContextualQueueEntry(nextRoute, goal, dynamicGoal, tileMap, options),
-            searchPhysicalGoalCode: nextParts.physicalGoalCode,
-            searchCardStateCode: nextParts.cardStateCode
-          });
-          profile.queueMs += profileNow() - blockStartedAt;
         }
       }
     }
@@ -3421,7 +3428,7 @@ export function replayDynamicArchivingEstimatedLegPhysics(
     const action = ACTIONS.find((candidate) => candidate.id === actionIds[index]);
     if (!action) return failReplay();
     const executedAbsoluteAction = elapsedAbsoluteActions + 1;
-    const transition = simulateAction(
+    const simulatedTransition = simulateAction(
       tileMap,
       state,
       action,
@@ -3434,9 +3441,17 @@ export function replayDynamicArchivingEstimatedLegPhysics(
         dynamicArchivePoint
       }
     );
+    // A recorded space-bridge hop (Transformers) replays as the matching variant.
+    const expectedTo = expectedTransitions[index]?.to;
+    const transition = expectedTo
+      ? getTransitionVariants(simulatedTransition).find((variant) => (
+        variant?.to?.x === expectedTo.x &&
+        variant?.to?.y === expectedTo.y &&
+        variant?.to?.facing === expectedTo.facing
+      )) ?? simulatedTransition
+      : simulatedTransition;
     if (!transition || transition.crashed || transition.blocked) return failReplay();
 
-    const expectedTo = expectedTransitions[index]?.to;
     if (
       expectedTo &&
       (transition.to?.x !== expectedTo.x ||
