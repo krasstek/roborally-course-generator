@@ -16,6 +16,23 @@ import { isRouteAwareBatteryScoringActive } from "./rule-options.js";
 // Pit stop (Transformers): the player picks twice (same allowed).
 export const PIT_STOP_PICKS = 2;
 
+// Energon squares a transition touches (Transformers: +1 Energy on contact,
+// moving through counts), each square once.
+export function getEnergonContactSquares(tileMap, transition, destination = transition?.to) {
+  const squares = [];
+  const seen = new Set();
+  for (const point of [...(transition?.traversed || []), destination]) {
+    if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
+    const key = tileKey(point.x, point.y);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if ((tileMap.get(key)?.features || []).some((feature) => feature.type === "energon")) {
+      squares.push(key);
+    }
+  }
+  return squares;
+}
+
 // Shared upgrade-economy defaults.  The legacy DP diagnostics and the v18
 // flattened production scorer intentionally share these assumptions, while
 // production no longer carries fractional upgrade-card state through routes.
@@ -402,7 +419,8 @@ export function getRouteEnergyDominanceRewardUpperBound(
   tileMap,
   destination,
   actionId,
-  boundConfig
+  boundConfig,
+  transition = null
 ) {
   if (!boundConfig?.active) return 0;
   if (boundConfig.unbounded) return Infinity;
@@ -436,6 +454,8 @@ export function getRouteEnergyDominanceRewardUpperBound(
     // At most two Energy (each pick may instead discard damage).
     rewardUpperBound += PIT_STOP_PICKS * cubeScore;
   }
+  // Energon anywhere on the register's path, one cube per square.
+  rewardUpperBound += getEnergonContactSquares(tileMap, transition, destination).length * cubeScore;
 
   // Include both the intermediate 1e-6 rounding ceiling and the final 0.001
   // score rounding so this stays an upper bound even with custom score scales.
@@ -517,6 +537,8 @@ export function getRouteEnergyShadowStep(
   let batteryEnergyGain = 0;
   let pitStopRewardR = 0;
   let pitStopEnergyGain = 0;
+  let energonRewardR = 0;
+  let energonEnergyGain = 0;
   let powerUpEnergyGain = 0;
   let extraCardDraws = 0;
   let chopShopChoice = null;
@@ -561,6 +583,28 @@ export function getRouteEnergyShadowStep(
       );
       pitStopRewardR += energyPackage.rewardR;
       pitStopEnergyGain += energyPackage.realizedEnergyGain;
+      energy = energyPackage.energy;
+    }
+  }
+
+  // Energon (Transformers): +1 Energy per cube touched. The search credits each
+  // contact; the course ledger passes energonClaims, the chance of reaching
+  // each not-yet-taken cube first (first come, first served).
+  const energonClaims = Array.isArray(transition?.energonClaims)
+    ? transition.energonClaims
+    : getEnergonContactSquares(tileMap, transition, destination).map(() => 1);
+  for (const claimProbability of energonClaims) {
+    const probability = clamp(Number(claimProbability) || 0, 0, 1);
+    if (probability <= 0) continue;
+    const energyPackage = applyFlattenedRouteEnergyGain(
+      energy,
+      1,
+      nextAbsoluteActionCount,
+      options
+    );
+    energonRewardR += energyPackage.rewardR * probability;
+    if (probability >= 0.5) {
+      energonEnergyGain += energyPackage.realizedEnergyGain;
       energy = energyPackage.energy;
     }
   }
@@ -655,7 +699,9 @@ export function getRouteEnergyShadowStep(
   const chopShopRewardScore = chopShopRewardR * registerScore;
   const radioactiveWasteRewardScore = radioactiveWasteRewardR * registerScore;
   const pitStopRewardScore = pitStopRewardR * registerScore;
+  const energonRewardScore = energonRewardR * registerScore;
   const rewardScore = (
+    energonRewardScore +
     pitStopRewardScore +
     batteryRewardScore +
     powerUpRewardScore +
@@ -663,6 +709,7 @@ export function getRouteEnergyShadowStep(
     radioactiveWasteRewardScore
   );
   const rewardRegisterEquivalents = (
+    energonRewardR +
     pitStopRewardR +
     batteryRewardR +
     powerUpRewardR +
@@ -695,6 +742,7 @@ export function getRouteEnergyShadowStep(
     batteryEnergyGain,
     pitStopEnergyGain,
     pitStop: onPitStop,
+    energonEnergyGain,
     powerUpEnergyGain,
     extraCardDraws,
     battery: onBattery,

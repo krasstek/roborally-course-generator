@@ -6,7 +6,7 @@ import {
   getDamageEconomyCombinedClogSummary,
   getDamageEconomyRealizedDamageForTransition
 } from "../src/analysis/damage-economy.js";
-import { getRouteEnergyShadowStep } from "../src/analysis/energy-economy.js";
+import { getEnergonContactSquares, getRouteEnergyShadowStep } from "../src/analysis/energy-economy.js";
 import { simulateAction } from "../src/analysis/movement.js";
 import { getIncomingRobotLaserDirection, hasLineOfSight } from "../src/analysis/traffic.js";
 
@@ -167,6 +167,27 @@ const cases = [
       const clean = getDamageEconomyCombinedClogSummary([[1]], [1], 0).clogRegisterEquivalents;
       const mined = getDamageEconomyCombinedClogSummary([[1]], [1], 0, 2, 2, 1).clogRegisterEquivalents;
       return clean === 0 && Math.abs(mined - 1) < 1e-9;
+    }
+  },
+  {
+    name: "energon: passing through counts as contact",
+    check: () => getEnergonContactSquares(row(3, { 1: [{ type: "energon" }] }), {
+      traversed: [{ x: 1, y: 0 }, { x: 2, y: 0 }],
+      to: { x: 2, y: 0 }
+    }).length === 1
+  },
+  {
+    name: "energon: the search credits 1 Energy per cube touched",
+    check: () => energyStep(row(3, { 1: [{ type: "energon" }] }), 2, { traversed: [{ x: 1, y: 0 }, { x: 2, y: 0 }] }).energonEnergyGain === 1
+  },
+  {
+    name: "energon: a contested claim is worth its chance of arriving first",
+    check: () => {
+      const map = row(3, { 1: [{ type: "energon" }] });
+      const full = energyStep(map, 1, { energonClaims: [1] }).rewardRegisterEquivalents;
+      const half = energyStep(map, 1, { energonClaims: [0.5] }).rewardRegisterEquivalents;
+      const taken = energyStep(map, 1, { energonClaims: [] }).rewardRegisterEquivalents;
+      return full > 0 && Math.abs(half - full / 2) < 1e-6 && taken === 0;
     }
   },
   {

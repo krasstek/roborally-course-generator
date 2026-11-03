@@ -7,6 +7,7 @@ import {
   getRouteEconomyPhaseChoices,
   getRouteEnergyEconomyConfig,
   getRouteEnergyShadowStep,
+  getEnergonContactSquares,
   getRouteUsefulCardUnitsPerDraw,
   PIT_STOP_PICKS
 } from "./energy-economy.js";
@@ -203,6 +204,10 @@ export function applyFixedRoutePricingTransitionEconomy(tileMap, states, transit
     // Two picks, each a discarded damage card or +1 Energy; pricing counts the
     // Energy (the route's damage is not known here).
     next = applyFixedRoutePricingResourceGain(next, PIT_STOP_PICKS, 0, config);
+  }
+  const energonContacts = getEnergonContactSquares(tileMap, transition).length;
+  if (energonContacts > 0) {
+    next = applyFixedRoutePricingResourceGain(next, energonContacts, 0, config);
   }
   if (onBattery) {
     next = applyFixedRoutePricingResourceGain(

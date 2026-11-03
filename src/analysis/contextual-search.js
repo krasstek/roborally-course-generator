@@ -1691,7 +1691,8 @@ export function* enumeratePhysicalTimingLegTemplatesSteps(
                 tileMap,
                 destination,
                 action.id,
-                energyDominanceBoundConfig
+                energyDominanceBoundConfig,
+                transition
               );
             if (preEnergyBaseCost - energyRewardUpperBound >= priorBest - 0.001) {
               profile.dominatedStates += 1;
