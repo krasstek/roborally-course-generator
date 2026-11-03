@@ -238,10 +238,10 @@ export async function loadAssets() {
   const constructionGuidance = normalizeConstructionGuidanceCalibration(rawConstructionGuidance);
 
   for (const piece of Object.values(pieceMap)) {
-    piece.overlayCapable = piece.expansionId === "master-builder" && (
+    piece.overlayCapable = (piece.expansionId === "master-builder" && (
       piece.kind === "overlay" ||
       (piece.width === 6 && piece.height === 6)
-    );
+    )) || (piece.expansionId === "transformers" && piece.kind === "overlay");
   }
 
   for (const piece of Object.values(pieceMap)) {
