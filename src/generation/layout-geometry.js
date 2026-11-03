@@ -253,12 +253,19 @@ export function tileHasLedgeOnSide(features = [], side) {
   return features.some((feature) => feature.type === "ledge" && (feature.sides || []).includes(side));
 }
 
+// A building side without a doorway: lasers can't shoot into buildings, and
+// official boards mount lasers on them (Transformers, user ruling 2026-11-03).
+export function tileHasClosedBuildingSide(features = [], side) {
+  return features.some((feature) => feature.type === "building" && !(feature.sides || []).includes(side));
+}
+
 export function tileHasLaserSupportBlock(features = [], side, options = {}) {
   if (
     tileHasWallOnSide(features, side) ||
     tileHasRepulsorOnEdge(features, side) ||
     tileHasRedWallOnSide(features, side) ||
-    tileHasGreenWallOnSide(features, side)
+    tileHasGreenWallOnSide(features, side) ||
+    tileHasClosedBuildingSide(features, side)
   ) {
     return true;
   }

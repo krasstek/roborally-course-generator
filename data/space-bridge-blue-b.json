@@ -20,5 +20,5 @@
   ],
   "expansionId": "transformers",
   "physicalBoardId": "space-bridge-b",
-  "image": ".assets/boards/tile-space-bridge-blue.jpeg"
+  "image": "./assets/boards/tile-space-bridge-blue.jpeg"
 }
