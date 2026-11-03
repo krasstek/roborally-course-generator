@@ -22,6 +22,8 @@ import {
   hasExplicitTiming,
   hasKnownRegisterTiming,
   getRoad,
+  getSpaceBridge,
+  getSpaceBridgeSquares,
   hasRampForDir,
   isBoundaryBlockedByWalls,
   isBuildingSideClosed,
@@ -40,6 +42,7 @@ import {
   EDGE_BEHAVIOR,
   OPPOSITE,
   REGISTER_COUNT,
+  REGISTER_TEMPO_COST,
   ROTATION_ORDER
 } from "./constants.js";
 import {
@@ -113,11 +116,21 @@ export function getTilePenalty(
   randomizerAtRegisterStart = options.randomizerAtRegisterStart
 ) {
   let penalty = 0;
+  // A fire pit deals 1 damage on entry (and 1 at the end of the register, see
+  // getEndOfRegisterFeaturePenalty), priced like a flamethrower hit; a robot in
+  // it is not hit by board lasers.
+  const firePit = isFirePit(tile);
+  if (firePit) {
+    penalty += getFlamethrowerDamagePenalty(options);
+  }
 
   // Feature penalties are used to approximate local danger/value for route
   // scoring. This intentionally captures many board effects without turning the
   // analyzer into a full combat or timing simulator.
   for (const feature of tile?.features || []) {
+    if (firePit && (feature.type === "laser" || feature.type === "firePit")) {
+      continue;
+    }
     // v42 removes the old static Battery reward from per-tile movement scoring.
     // The route-aware reward is applied once, at the post-register landing
     // boundary, so traversing a Battery does not collect energy.
@@ -1134,10 +1147,12 @@ export function moveOneStep(
     ? 0
     : getTilePenalty(nextTile, options) +
       getActiveFlamethrowerEntryPenalty(nextTile, options) +
+      getMineEntryPenalty(nextTile, options) +
       getTimedTraversalFragilityPenalty(nextTile, options)) +
     (portalDestinationTile
       ? getTilePenalty(portalDestinationTile, options) +
         getActiveFlamethrowerEntryPenalty(portalDestinationTile, options) +
+        getMineEntryPenalty(portalDestinationTile, options) +
         getTimedTraversalFragilityPenalty(portalDestinationTile, options)
       : 0);
   if (finishProgrammedStepPhase) finishProgrammedStepPhase("physicalMissProgramHazardMs");
@@ -1175,6 +1190,14 @@ export function moveOneStep(
   if (finishProgrammedStepPhase) finishProgrammedStepPhase("physicalMissProgramBookkeepingMs");
 
   return outcome;
+}
+
+// A simulated register and its space-bridge hops (Transformers): each is a
+// complete transition the route search can take.
+export function getTransitionVariants(transition) {
+  return transition?.bridgeAlternatives?.length
+    ? [transition, ...transition.bridgeAlternatives]
+    : [transition];
 }
 
 export function getSignedMoveDistance(action) {
@@ -1285,6 +1308,7 @@ export function resolveTeleporterMove(tileMap, state, action, options = {}) {
     conveyorSteps: [],
     hazard: getTilePenalty(destinationTile, options) +
       getActiveFlamethrowerEntryPenalty(destinationTile, options) +
+      getMineEntryPenalty(destinationTile, options) +
       getTimedTraversalFragilityPenalty(destinationTile, options) +
       getPitPressurePenalty(tileMap, resolvedState, options) +
       getLedgePressurePenalty(tileMap, resolvedState, options),
@@ -1333,6 +1357,7 @@ export function resolveJumpRampMove(tileMap, state, dir, squares, options = {}) 
     conveyorSteps: [],
     hazard: getTilePenalty(destinationTile, options) +
       getActiveFlamethrowerEntryPenalty(destinationTile, options) +
+      getMineEntryPenalty(destinationTile, options) +
       getTimedTraversalFragilityPenalty(destinationTile, options) +
       getPitPressurePenalty(tileMap, resolvedState, options) +
       getLedgePressurePenalty(tileMap, resolvedState, options),
@@ -1578,6 +1603,15 @@ export function getFlamethrowerDamagePenalty(options = {}) {
   return Number((4 * damagePressure.hazard).toFixed(2));
 }
 
+// Transformers mine (overlay token, square below stays active): every entry
+// deals 1 damage and 1 clog (user model 2026-10-29); priced as a flamethrower
+// hit plus one register for the clog (the clog curve's first unit, 1 RE).
+export function getMineEntryPenalty(tile, options = {}) {
+  return hasFeatureType(tile, "mine")
+    ? getFlamethrowerDamagePenalty(options) + REGISTER_TEMPO_COST
+    : 0;
+}
+
 export function getActiveFlamethrowerEntryPenalty(tile, options = {}) {
   if (!hasKnownRegisterTiming(options)) return 0;
   const activeCount = (tile?.features || []).filter((feature) => (
@@ -1775,6 +1809,11 @@ export function getEndOfRegisterFeaturePenalty(tileMap, state, options = {}) {
     penalty += 4.5 / REGISTER_COUNT;
   }
 
+  // A fire pit deals 1 more damage just before board lasers.
+  if (isFirePit(tile)) {
+    penalty += getFlamethrowerDamagePenalty(options);
+  }
+
   // Repair Stations are an optional rule on ordinary checkpoints, not a
   // standalone board feature. Flag 0 is excluded from the playable checkpoint map.
   if (options.repairStations) {
@@ -1906,7 +1945,17 @@ export function simulateAction(tileMap, startState, action, options = {}) {
       analysisTelemetryNow() - programmedStartStartedAt;
   }
 
-  if (action.type === "turn") {
+  // Transformers fire pit: entering one in registers 1-4 cancels the turn's
+  // register-5 card. The card is still played (and used up), but the robot
+  // does not move; board elements still act.
+  const registerPosition = Number.isInteger(options.registerIndex)
+    ? ((options.registerIndex % REGISTER_COUNT) + REGISTER_COUNT) % REGISTER_COUNT
+    : null;
+  const cancelledByFirePit = Boolean(startState.firePitLock) && registerPosition === REGISTER_COUNT - 1;
+
+  if (cancelledByFirePit) {
+    // Stand still for the programmed card.
+  } else if (action.type === "turn") {
     const turnStartedAt = physicalMissProfile ? analysisTelemetryNow() : 0;
     state.facing = rotateFacing(state.facing, action.rotation);
     if (physicalMissProfile) {
@@ -2231,6 +2280,31 @@ export function simulateAction(tileMap, startState, action, options = {}) {
   }
   if (finishPhysicalMissPhase) finishPhysicalMissPhase("physicalMissPusherMs");
 
+  // Space bridge (Transformers): after pushers, a robot on a bridge may move
+  // to any other bridge of the same colour, facing unchanged (whether that
+  // bridge is occupied is not modelled). The stay is this transition; each hop
+  // is the same register simulated again with spaceBridgeHop set, returned as
+  // bridgeAlternatives for the search to branch on.
+  let bridgeHopTargets = [];
+  let spaceBridgeHop = null;
+  const bridgeHere = !crashed && !rebooted ? getSpaceBridge(tileMap.get(tileKey(state.x, state.y))) : null;
+  if (bridgeHere) {
+    const otherBridges = getSpaceBridgeSquares(tileMap, bridgeHere.id)
+      .filter((square) => square.x !== state.x || square.y !== state.y);
+    const hop = options.spaceBridgeHop;
+    if (hop) {
+      if (otherBridges.some((square) => square.x === hop.x && square.y === hop.y)) {
+        traversed.push({ x: hop.x, y: hop.y, jump: true });
+        boardEvents.push({ type: "space-bridge", from: cloneState(state), to: { x: hop.x, y: hop.y, facing: state.facing } });
+        state.x = hop.x;
+        state.y = hop.y;
+        spaceBridgeHop = { x: hop.x, y: hop.y };
+      }
+    } else {
+      bridgeHopTargets = otherBridges;
+    }
+  }
+
   let gearTurned = false;
   if (!crashed && !rebooted) {
     const facingBeforeGear = state.facing;
@@ -2274,8 +2348,27 @@ export function simulateAction(tileMap, startState, action, options = {}) {
   }
   if (finishPhysicalMissPhase) finishPhysicalMissPhase("physicalMissEndRegisterMs");
 
+  // The lock holds from entering a fire pit until register 5 of the same turn.
+  const firePitLock = !crashed && !rebooted &&
+    registerPosition !== null && registerPosition < REGISTER_COUNT - 1 &&
+    (Boolean(startState.firePitLock) || traversed.some((point) => (
+      point && isFirePit(tileMap.get(tileKey(point.x, point.y)))
+    )));
+  if (firePitLock) {
+    state.firePitLock = true;
+  } else {
+    delete state.firePitLock;
+  }
+
+  const bridgeAlternatives = bridgeHopTargets
+    .map((target) => simulateAction(tileMap, startState, action, { ...options, spaceBridgeHop: target }))
+    .filter((alternative) => alternative?.spaceBridgeHop && !alternative.blocked && !alternative.crashed);
+
   return {
     action: action.id,
+    ...(cancelledByFirePit ? { cancelledByFirePit: true } : {}),
+    ...(spaceBridgeHop ? { spaceBridgeHop } : {}),
+    ...(bridgeAlternatives.length ? { bridgeAlternatives } : {}),
     randomizerAtRegisterStart,
     from: cloneState(startState),
     to: state,

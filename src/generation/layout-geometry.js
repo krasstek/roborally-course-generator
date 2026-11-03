@@ -214,6 +214,42 @@ export function getPlacementOccupiedTiles(piece, placement) {
   ));
 }
 
+// Space bridge tokens (Transformers): the bridge colour, or null for other pieces.
+export function getSpaceBridgeColour(piece) {
+  for (const tile of piece?.tiles || []) {
+    const bridge = (tile.features || []).find((feature) => feature.type === "spaceBridge");
+    if (bridge) return bridge.id ?? null;
+  }
+  return null;
+}
+
+// A bridge alone in its colour has nowhere to go; bridges stay or leave in
+// colour groups. keepSpaceBridgeColourGroups restores the pruned members of a
+// colour that still has a kept bridge; dropUnpairedSpaceBridges removes a
+// bridge left alone in its colour (after its partners' board was removed).
+export function keepSpaceBridgeColourGroups(keptPlacements, allPlacements, pieceMap) {
+  const keptColours = new Set(
+    keptPlacements.map((placement) => getSpaceBridgeColour(pieceMap[placement.pieceId])).filter(Boolean)
+  );
+  if (!keptColours.size) return keptPlacements;
+  const kept = new Set(keptPlacements);
+  return allPlacements.filter((placement) => (
+    kept.has(placement) || keptColours.has(getSpaceBridgeColour(pieceMap[placement.pieceId]))
+  ));
+}
+
+export function dropUnpairedSpaceBridges(placements, pieceMap) {
+  const counts = new Map();
+  for (const placement of placements) {
+    const colour = getSpaceBridgeColour(pieceMap[placement.pieceId]);
+    if (colour) counts.set(colour, (counts.get(colour) || 0) + 1);
+  }
+  return placements.filter((placement) => {
+    const colour = getSpaceBridgeColour(pieceMap[placement.pieceId]);
+    return !colour || counts.get(colour) >= 2;
+  });
+}
+
 export function isMiniOverlayPiece(piece) {
   return piece?.kind === "overlay";
 }
@@ -253,12 +289,19 @@ export function tileHasLedgeOnSide(features = [], side) {
   return features.some((feature) => feature.type === "ledge" && (feature.sides || []).includes(side));
 }
 
+// A building side without a doorway: lasers can't shoot into buildings, and
+// official boards mount lasers on them (Transformers, user ruling 2026-11-03).
+export function tileHasClosedBuildingSide(features = [], side) {
+  return features.some((feature) => feature.type === "building" && !(feature.sides || []).includes(side));
+}
+
 export function tileHasLaserSupportBlock(features = [], side, options = {}) {
   if (
     tileHasWallOnSide(features, side) ||
     tileHasRepulsorOnEdge(features, side) ||
     tileHasRedWallOnSide(features, side) ||
-    tileHasGreenWallOnSide(features, side)
+    tileHasGreenWallOnSide(features, side) ||
+    tileHasClosedBuildingSide(features, side)
   ) {
     return true;
   }

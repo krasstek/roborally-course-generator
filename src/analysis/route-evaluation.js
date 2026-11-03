@@ -12,6 +12,7 @@ import {
   DAMAGE_ECONOMY_TELEMETRY,
   DAMAGE_ECONOMY_TRAFFIC_ROUTE_SUMMARY_CACHE,
   advanceDamageEconomyToTurn,
+  applyDamageEconomyPitStopPicks,
   applyDamageEconomyRepairStationRelief,
   applyDamageEconomySpamPlayOutcome,
   applyExpectedDamageToEconomyState,
@@ -36,7 +37,25 @@ import {
   planDamageEconomyTurnSpamRelief,
   replayDamageEconomyShutdownEquivalentScore
 } from "./damage-economy.js";
-import { getInitialRouteEnergyShadowReserve, getRouteEnergyShadowStep } from "./energy-economy.js";
+import {
+  getEnergonContactSquares,
+  getInitialRouteEnergyShadowReserve,
+  getRouteEnergyShadowStep,
+  PIT_STOP_PICKS
+} from "./energy-economy.js";
+
+const ENERGON_TILE_MAP_CACHE = new WeakMap();
+
+// Whether the course has any Energon at all (most don't; skip the work).
+function hasEnergon(tileMap) {
+  if (!tileMap) return false;
+  let cached = ENERGON_TILE_MAP_CACHE.get(tileMap);
+  if (cached === undefined) {
+    cached = [...tileMap.values()].some((tile) => (tile.features || []).some((feature) => feature.type === "energon"));
+    ENERGON_TILE_MAP_CACHE.set(tileMap, cached);
+  }
+  return cached;
+}
 import { average, clamp } from "../shared/math.js";
 import {
   getProgramCardEffectivePreviousCode,
@@ -185,6 +204,11 @@ function getDamageEconomyTransitionRecords(tileMap, route, legs, options) {
         !transition?.crashed &&
         isDamageEconomyRepairStationTile(finalTile)
       );
+      // Pit stop (Transformers): two picks for a robot ending the register on it.
+      const pitStopPicks = !transition?.rebooted && !transition?.crashed &&
+        (finalTile?.features || []).some((feature) => feature.type === "pitStop")
+        ? PIT_STOP_PICKS
+        : 0;
       transitionRecords.push({
         legIndex,
         legAction: legActionIndex + 1,
@@ -195,7 +219,8 @@ function getDamageEconomyTransitionRecords(tileMap, route, legs, options) {
         realized,
         reliefProfile,
         randomizerAtRegisterStart,
-        repairStationEligible
+        repairStationEligible,
+        pitStopPicks
       });
       elapsedAbsoluteActions = transition?.rebooted
         ? getRebootEndedAbsoluteActions(absoluteAction)
@@ -294,6 +319,8 @@ export function summarizeDamageEconomyFoundationForRoute(
   const state = createDamageEconomyState();
   const turns = [];
   const events = [];
+  // Pit stop picks that went to Energy, for the energy ledger.
+  const pitStopEnergyPicksByAbsoluteAction = new Map();
   let totalDamageUnits = 0;
   let deterministicDamageUnits = 0;
   let robotLaserExpectedDamageUnits = 0;
@@ -438,7 +465,8 @@ export function summarizeDamageEconomyFoundationForRoute(
         absoluteAction,
         register,
         randomizerAtRegisterStart,
-        repairStationEligible
+        repairStationEligible,
+        pitStopPicks = 0
       } = record;
       const reliefOpportunity = Math.max(
         0,
@@ -580,6 +608,13 @@ export function summarizeDamageEconomyFoundationForRoute(
         totalRepairStationHaywireExpectedRemoved += repairStationRelief.haywireExpectedRemoved;
         repairStationReliefCount += 1;
       }
+      if (pitStopPicks > 0) {
+        pitStopEnergyPicksByAbsoluteAction.set(
+          absoluteAction,
+          applyDamageEconomyPitStopPicks(state, pitStopPicks)
+        );
+        spamInHandRemaining = Math.min(spamInHandRemaining, state.spamTotal);
+      }
 
       const eventSourceTypes = [...(realized.sourceTypes || [])];
       if (robotLaserExpectedDamage > 0.0005) eventSourceTypes.push("robot-laser-expected");
@@ -684,7 +719,8 @@ export function summarizeDamageEconomyFoundationForRoute(
       electiveSpamPlayDistribution,
       turnRandomizerStarts,
       reliefPlan.forcedClogWeight,
-      reliefPlan.electiveClogWeight
+      reliefPlan.electiveClogWeight,
+      turnRecords.reduce((sum, record) => sum + (record.realized?.mineDamageUnits || 0), 0)
     );
     const randomizerClogLoad = combinedClog.randomizerClogLoad;
     const randomizerForcedSpamOverlap =
@@ -972,6 +1008,7 @@ export function summarizeDamageEconomyFoundationForRoute(
     ),
     turns,
     events,
+    pitStopEnergyPicksByAbsoluteAction,
     ...telemetry
   };
   activeRouteSummaryCache.set(route, {
@@ -1093,6 +1130,12 @@ export function summarizeRegisterEquivalentLedger(
     : getInitialRouteEnergyShadowReserve(options);
   const homingMissileActivatedSpacesThisTurn = new Set();
   const variantMentalEventIdsThisTurn = new Set();
+  // Energon cubes are taken once per route; each claim is valued by the chance
+  // of getting there first.
+  const energonWinProbabilities = hasEnergon(tileMap)
+    ? getEnergonWinProbabilities(tileMap, route, trafficContext, options)
+    : null;
+  const energonTaken = new Set();
   let activeHomingMissileTurn = initialAbsoluteAction > 0
     ? Math.floor((initialAbsoluteAction - 1) / REGISTER_COUNT) + 1
     : 1;
@@ -1120,6 +1163,16 @@ export function summarizeRegisterEquivalentLedger(
     }
 
     if (transition?.to && transition?.action) {
+      // Pit stop picks the damage replay did not spend on discarding damage.
+      const pitStopEnergyPicks = damage?.pitStopEnergyPicksByAbsoluteAction?.get(absoluteAction);
+      const energonClaims = energonWinProbabilities
+        ? getEnergonContactSquares(tileMap, transition)
+          .filter((key) => !energonTaken.has(key))
+          .map((key) => {
+            energonTaken.add(key);
+            return energonWinProbabilities.get(key) ?? 1;
+          })
+        : null;
       const energyStep = getRouteEnergyShadowStep(
         tileMap,
         transition.to,
@@ -1128,7 +1181,13 @@ export function summarizeRegisterEquivalentLedger(
         energyReserve,
         0,
         options,
-        transition
+        Number.isInteger(pitStopEnergyPicks) || energonClaims
+          ? {
+            ...transition,
+            ...(Number.isInteger(pitStopEnergyPicks) ? { pitStopEnergyPicks } : {}),
+            ...(energonClaims ? { energonClaims } : {})
+          }
+          : transition
       );
       turn.energyRE -= Math.max(
         0,
@@ -1406,6 +1465,70 @@ function buildDamageEconomyRobotShotProfile(tileMap, route, otherRoute) {
 // traffic model. Nearby/displacement and competition are still calculated to
 // advance confidence exactly as production does, but they are NOT converted to
 // damage here. This preserves congestion/interference as their own consequences.
+// Absolute register of a route's first contact with each Energon square.
+function getEnergonFirstContacts(tileMap, route) {
+  const contacts = new Map();
+  const legs = Array.isArray(route?.legRoutes) && route.legRoutes.length ? route.legRoutes : [route];
+  let previousAbsoluteAction = 0;
+  for (const leg of legs) {
+    let elapsed = Math.max(0, Number(leg?.absoluteStartAction) || previousAbsoluteAction);
+    for (const transition of leg?.transitions || []) {
+      const absoluteAction = getTransitionAbsoluteAction(transition, elapsed + 1);
+      for (const key of getEnergonContactSquares(tileMap, transition)) {
+        if (!contacts.has(key)) contacts.set(key, absoluteAction);
+      }
+      elapsed = transition?.rebooted ? getRebootEndedAbsoluteActions(absoluteAction) : absoluteAction;
+      previousAbsoluteAction = Math.max(previousAbsoluteAction, elapsed);
+    }
+  }
+  return contacts;
+}
+
+// Energon is first come, first served: the chance this route reaches each cube
+// first, against the other robots' routes weighted by how likely each is
+// played (the same traffic field as robot lasers). Earlier wins, later loses,
+// the same register is a coin flip. Without a traffic field: 1.
+export function getEnergonWinProbabilities(tileMap, route, trafficContext = null, options = {}) {
+  const focusContacts = getEnergonFirstContacts(tileMap, route);
+  const probabilities = new Map([...focusContacts.keys()].map((key) => [key, 1]));
+  const analyses = Array.isArray(trafficContext?.analyses)
+    ? trafficContext.analyses.filter((analysis) => analysis?.fullCourseRoute)
+    : [];
+  const focusIndex = trafficContext?.focusIndex;
+  if (!focusContacts.size || !analyses.length || !Number.isInteger(focusIndex)) return probabilities;
+  const playerCount = Math.max(1, Number(options.playerCount) || analyses.length);
+  const occupancyByIndex = buildConditionalOccupancyMap(
+    analyses,
+    focusIndex,
+    playerCount,
+    {
+      ...options,
+      trafficOccupancyUseBalanceScore: true,
+      occupancyQualityScoreByIndex:
+        trafficContext?.occupancyQualityScoreByIndex ?? options.occupancyQualityScoreByIndex
+    },
+    (analysis) => analysis.fullCourseRoute
+  );
+  const otherEntries = buildTrafficRouteMixtureEntries(
+    analyses,
+    focusIndex,
+    occupancyByIndex,
+    trafficContext?.routeMixtureByIndex ?? null
+  );
+  for (const entry of otherEntries) {
+    const weight = clamp(Number(entry?.occupancyWeight) || 0, 0, 1);
+    if (weight <= 0) continue;
+    const otherContacts = getEnergonFirstContacts(tileMap, entry.route);
+    for (const [key, focusAction] of focusContacts) {
+      const otherAction = otherContacts.get(key);
+      if (otherAction === undefined || otherAction > focusAction) continue;
+      const lossShare = otherAction < focusAction ? 1 : 0.5;
+      probabilities.set(key, probabilities.get(key) * (1 - weight * lossShare));
+    }
+  }
+  return probabilities;
+}
+
 export function getDamageEconomyTrafficRangedRegisterInputs(
   tileMap,
   route,

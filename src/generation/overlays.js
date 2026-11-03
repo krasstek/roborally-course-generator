@@ -14,6 +14,7 @@ import {
   getFullRectOffsets,
   getOppositeSide,
   getPhysicalBoardId,
+  getSpaceBridgeColour,
   getPlacedTileFeatureMap,
   getPlacementOccupiedOffsets,
   getPlacementOccupiedTiles,
@@ -432,6 +433,22 @@ export function placementTouchesOccupiedNeighbors(placement, piece, occupiedOver
   });
 }
 
+function getPlacedSpaceBridgeColours(placements, pieceMap) {
+  const colours = new Set();
+  for (const placement of placements) {
+    const colour = getSpaceBridgeColour(pieceMap[placement.pieceId]);
+    if (colour) colours.add(colour);
+  }
+  return colours;
+}
+
+function getSpaceBridgePartnerGroups(groupedMiniOverlayIds, pieceMap, excludedPhysicalBoardId, colour) {
+  return [...groupedMiniOverlayIds.entries()].filter(([physicalBoardId, overlayIds]) => (
+    physicalBoardId !== excludedPhysicalBoardId &&
+    overlayIds.some((overlayId) => getSpaceBridgeColour(pieceMap[overlayId]) === colour)
+  ));
+}
+
 export function placeMiniOverlaysOnBoards(targetBoards, groupedMiniOverlayIds, pieceMap, dockPlacements, occupiedMiniOverlayTiles, countChooser, currentPlacements, boardOverlayPlacements) {
   const dockTiles = getDockTileKeySet(dockPlacements, pieceMap);
   const placements = [];
@@ -480,58 +497,103 @@ export function placeMiniOverlaysOnBoards(targetBoards, groupedMiniOverlayIds, p
         continue;
       }
 
-      for (const [physicalBoardId, overlayIds] of shuffle([...groupedMiniOverlayIds.entries()])) {
-        const chosenOverlayId = sample(overlayIds);
-        const overlayPiece = pieceMap[chosenOverlayId];
+      const chooseTokenPlacement = (overlayPiece, tileMap, occupiedTiles, placementsSoFar) => {
         const legalPlacements = shuffle(
           getOverlayPlacementsForSupportTiles(overlayPiece, supportTiles, dockTiles)
         ).filter((placement) => {
-          if (!getPlacementOccupiedTiles(overlayPiece, placement).every((key) => !occupiedMiniOverlayTiles.has(key))) {
+          if (!getPlacementOccupiedTiles(overlayPiece, placement).every((key) => !occupiedTiles.has(key))) {
             return false;
           }
-          if (placementSuppresssTrackedHazard(placement, overlayPiece, currentTileMap)) {
+          if (placementSuppresssTrackedHazard(placement, overlayPiece, tileMap)) {
             return false;
           }
-          if (!placementHasValidLaserSupport(placement, overlayPiece, currentTileMap, supportTiles)) {
+          if (!placementHasValidLaserSupport(placement, overlayPiece, tileMap, supportTiles)) {
             return false;
           }
           return true;
         });
 
         if (!legalPlacements.length) {
-          continue;
+          return null;
         }
 
         const preferredPlacements = allowDensePacking
           ? legalPlacements
           : legalPlacements.filter((placement) => (
             !placementTouchesSupportEdge(placement, overlayPiece, supportTiles) &&
-            !placementTouchesOccupiedNeighbors(placement, overlayPiece, occupiedMiniOverlayTiles)
+            !placementTouchesOccupiedNeighbors(placement, overlayPiece, occupiedTiles)
           ));
         const fallbackPlacements = allowDensePacking
           ? legalPlacements
           : legalPlacements.filter((placement) => (
-            !placementTouchesOccupiedNeighbors(placement, overlayPiece, occupiedMiniOverlayTiles)
+            !placementTouchesOccupiedNeighbors(placement, overlayPiece, occupiedTiles)
           ));
         const candidatePlacements = preferredPlacements.length
           ? preferredPlacements
           : (fallbackPlacements.length ? fallbackPlacements : legalPlacements);
-        const chosenPlacement = [
+        return [
           ...candidatePlacements,
           ...legalPlacements.filter((placement) => !candidatePlacements.includes(placement))
         ].find((placement) => (
-          placementsKeepLasersAnchored([placement], currentPlacements, pieceMap) &&
-          !placementPointsIntoBlockedEdge([placement], currentPlacements, pieceMap)
-        ));
+          placementsKeepLasersAnchored([placement], placementsSoFar, pieceMap) &&
+          !placementPointsIntoBlockedEdge([placement], placementsSoFar, pieceMap)
+        )) || null;
+      };
+      const commitTokenPlacement = (physicalBoardId, overlayPiece, placement) => {
+        getPlacementOccupiedTiles(overlayPiece, placement).forEach((key) => occupiedMiniOverlayTiles.add(key));
+        placements.push(placement);
+        currentPlacements.push(placement);
+        groupedMiniOverlayIds.delete(physicalBoardId);
+        placedCount += 1;
+      };
+
+      for (const [physicalBoardId, overlayIds] of shuffle([...groupedMiniOverlayIds.entries()])) {
+        // Space bridges (Transformers, user rule 2026-11-03): a bridge whose
+        // colour is not yet on the course comes with a second bridge of that
+        // colour, from another physical token, on this board; if no partner
+        // fits, the bridge is not placed and another token is tried.
+        const placedBridgeColours = getPlacedSpaceBridgeColours(currentPlacements, pieceMap);
+        const viableOverlayIds = overlayIds.filter((overlayId) => {
+          const colour = getSpaceBridgeColour(pieceMap[overlayId]);
+          if (!colour || placedBridgeColours.has(colour)) return true;
+          return remainingSlots >= 2 && getSpaceBridgePartnerGroups(groupedMiniOverlayIds, pieceMap, physicalBoardId, colour).length > 0;
+        });
+        if (!viableOverlayIds.length) {
+          continue;
+        }
+        const chosenOverlayId = sample(viableOverlayIds);
+        const overlayPiece = pieceMap[chosenOverlayId];
+        const chosenPlacement = chooseTokenPlacement(overlayPiece, currentTileMap, occupiedMiniOverlayTiles, currentPlacements);
         if (!chosenPlacement) {
           continue;
         }
-        getPlacementOccupiedTiles(overlayPiece, chosenPlacement).forEach((key) => occupiedMiniOverlayTiles.add(key));
-        placements.push(chosenPlacement);
-        currentPlacements.push(chosenPlacement);
+
+        const bridgeColour = getSpaceBridgeColour(overlayPiece);
+        if (bridgeColour && !placedBridgeColours.has(bridgeColour)) {
+          const withFirst = [...currentPlacements, chosenPlacement];
+          const occupiedWithFirst = new Set(occupiedMiniOverlayTiles);
+          getPlacementOccupiedTiles(overlayPiece, chosenPlacement).forEach((key) => occupiedWithFirst.add(key));
+          const tileMapWithFirst = buildResolvedMap(withFirst, pieceMap).tileMap;
+          let partner = null;
+          for (const [partnerBoardId, partnerIds] of shuffle(
+            getSpaceBridgePartnerGroups(groupedMiniOverlayIds, pieceMap, physicalBoardId, bridgeColour)
+          )) {
+            const partnerPiece = pieceMap[partnerIds.find((overlayId) => getSpaceBridgeColour(pieceMap[overlayId]) === bridgeColour)];
+            const partnerPlacement = chooseTokenPlacement(partnerPiece, tileMapWithFirst, occupiedWithFirst, withFirst);
+            if (partnerPlacement) {
+              partner = { physicalBoardId: partnerBoardId, piece: partnerPiece, placement: partnerPlacement };
+              break;
+            }
+          }
+          if (!partner) {
+            continue;
+          }
+          commitTokenPlacement(physicalBoardId, overlayPiece, chosenPlacement);
+          commitTokenPlacement(partner.physicalBoardId, partner.piece, partner.placement);
+        } else {
+          commitTokenPlacement(physicalBoardId, overlayPiece, chosenPlacement);
+        }
         currentTileMap = buildResolvedMap(currentPlacements, pieceMap).tileMap;
-        groupedMiniOverlayIds.delete(physicalBoardId);
-        placedCount += 1;
         placed = true;
         break;
       }

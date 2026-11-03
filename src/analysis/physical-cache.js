@@ -98,8 +98,25 @@ export function cloneCachedTransition(transition) {
         state: transition.pendingReboot.state ? { ...transition.pendingReboot.state } : null,
         crashPoint: transition.pendingReboot.crashPoint ? { ...transition.pendingReboot.crashPoint } : null
       }
-      : null
+      : null,
+    ...(transition.bridgeAlternatives
+      ? { bridgeAlternatives: transition.bridgeAlternatives.map(cloneCachedTransition) }
+      : {})
   };
+}
+
+// Template transitions get their recovery context after the cache; space-bridge
+// hops (Transformers) are complete transitions and need the same.
+function finalizeCachedTransitionWithAlternatives(tileMap, transition, options) {
+  const finalized = finalizeContextualPhysicalTransition(tileMap, transition, options);
+  return transition.bridgeAlternatives
+    ? {
+      ...finalized,
+      bridgeAlternatives: transition.bridgeAlternatives.map((alternative) => (
+        finalizeContextualPhysicalTransition(tileMap, alternative, options)
+      ))
+    }
+    : finalized;
 }
 
 export function getCachedContextualPhysicalTransition(
@@ -121,6 +138,7 @@ export function getCachedContextualPhysicalTransition(
     state.x,
     state.y,
     state.facing,
+    state.firePitLock ? "L" : "",
     action.id,
     Number.isInteger(options.registerIndex)
       ? `r${((options.registerIndex % REGISTER_COUNT) + REGISTER_COUNT) % REGISTER_COUNT}`
@@ -160,7 +178,7 @@ export function getCachedContextualPhysicalTransition(
     if (dynamicArchiveTelemetry) DYNAMIC_ARCHIVE_CACHE_TELEMETRY.hits += 1;
     return {
       transition: physicalTemplateOnly
-        ? finalizeContextualPhysicalTransition(tileMap, cached, options)
+        ? finalizeCachedTransitionWithAlternatives(tileMap, cached, options)
         : cached,
       hit: true
     };
@@ -191,10 +209,12 @@ export function getCachedContextualPhysicalTransition(
 
   if (physicalTemplateOnly) {
     phaseStartedAt = physicalMissProfile ? analysisTelemetryNow() : 0;
-    CONTEXTUAL_RECOVERY_PRESSURE_POINT_CACHE.set(
-      cachedTransition,
-      collectContextualRecoveryPressurePoints(tileMap, cachedTransition, options)
-    );
+    for (const entry of [cachedTransition, ...(cachedTransition.bridgeAlternatives || [])]) {
+      CONTEXTUAL_RECOVERY_PRESSURE_POINT_CACHE.set(
+        entry,
+        collectContextualRecoveryPressurePoints(tileMap, entry, options)
+      );
+    }
     if (physicalMissProfile) {
       physicalMissProfile.physicalMissRecoveryPressureMs +=
         analysisTelemetryNow() - phaseStartedAt;
@@ -215,7 +235,7 @@ export function getCachedContextualPhysicalTransition(
 
   phaseStartedAt = physicalMissProfile ? analysisTelemetryNow() : 0;
   const finalizedTransition = physicalTemplateOnly
-    ? finalizeContextualPhysicalTransition(tileMap, cachedTransition, options)
+    ? finalizeCachedTransitionWithAlternatives(tileMap, cachedTransition, options)
     : transition;
   if (physicalMissProfile) {
     physicalMissProfile.physicalMissFinalizeMs += analysisTelemetryNow() - phaseStartedAt;

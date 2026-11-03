@@ -1,13 +1,13 @@
 // Robo Rally Course Randomizer - damage pressure in routing: intrinsic damage scores, alternate-route pressure and traffic routing breakdowns
 import { getTilePenaltyForFeature } from "../../feature-weights.js";
-import { getLedgeSides, hasRampForDir, isWater, tileKey } from "./board-geometry.js";
+import { getLedgeSides, hasRampForDir, isFirePit, isWater, tileKey } from "./board-geometry.js";
 import { OPPOSITE, REGISTER_COUNT, REGISTER_TEMPO_COST } from "./constants.js";
 import {
   DAMAGE_ECONOMY_SHUTDOWN_REFERENCE_RE,
   getDamageEconomyActiveFlamethrowerCount
 } from "./damage-economy.js";
 import { clamp } from "../shared/math.js";
-import { getFlamethrowerDamagePenalty } from "./movement.js";
+import { getFlamethrowerDamagePenalty, getMineEntryPenalty } from "./movement.js";
 import {
   getRebootDamagePenalty,
   getRebootEndedAbsoluteActions,
@@ -52,12 +52,15 @@ export function getLegacyRealizedDirectDamageScoreForRoute(tileMap, route, optio
         registerIndex: (Math.max(1, absoluteAction) - 1) % REGISTER_COUNT
       };
 
-      // Active flamethrowers deal one damage on each actual entry/pass-through.
+      // Active flamethrowers deal one damage on each actual entry/pass-through;
+      // so does a fire pit, priced the same in the search.
       for (const point of transition?.traversed || []) {
         if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
         const tile = tileMap.get(tileKey(point.x, point.y));
         score += getDamageEconomyActiveFlamethrowerCount(tile, registerOptions) *
           getFlamethrowerDamagePenalty(registerOptions);
+        if (isFirePit(tile)) score += getFlamethrowerDamagePenalty(registerOptions);
+        score += getMineEntryPenalty(tile, registerOptions);
       }
 
       // Ledge direct damage historically entered route.hazard in raw damage units.
@@ -92,8 +95,10 @@ export function getLegacyRealizedDirectDamageScoreForRoute(tileMap, route, optio
         score += getRebootDamagePenalty(options);
       } else if (!transition?.crashed && transition?.to) {
         const finalTile = tileMap.get(tileKey(transition.to.x, transition.to.y));
+        const inFirePit = isFirePit(finalTile);
+        if (inFirePit) score += getFlamethrowerDamagePenalty(registerOptions);
         for (const feature of finalTile?.features || []) {
-          if (feature.type === "laser") {
+          if (feature.type === "laser" && !inFirePit) {
             score += Math.max(0, getTilePenaltyForFeature(feature, {
               batteryActive: isBatteryActive(options),
               rebootDamagePenalty: getRebootDamagePenalty(options),

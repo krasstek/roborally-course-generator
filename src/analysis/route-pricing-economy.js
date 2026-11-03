@@ -7,7 +7,9 @@ import {
   getRouteEconomyPhaseChoices,
   getRouteEnergyEconomyConfig,
   getRouteEnergyShadowStep,
-  getRouteUsefulCardUnitsPerDraw
+  getEnergonContactSquares,
+  getRouteUsefulCardUnitsPerDraw,
+  PIT_STOP_PICKS
 } from "./energy-economy.js";
 import {
   ENERGY_VALUE_TABLE_MAX_ENERGY,
@@ -194,9 +196,19 @@ export function applyFixedRoutePricingTransitionEconomy(tileMap, states, transit
   const features = tileMap?.get?.(tileKey(destination.x, destination.y))?.features || [];
   const onBattery = features.some((feature) => feature.type === "battery");
   const onChopShop = features.some((feature) => feature.type === "chopShop");
+  const onPitStop = features.some((feature) => feature.type === "pitStop");
   const unknownCardUnits = getRouteUsefulCardUnitsPerDraw(config);
 
   let next = states;
+  if (onPitStop) {
+    // Two picks, each a discarded damage card or +1 Energy; pricing counts the
+    // Energy (the route's damage is not known here).
+    next = applyFixedRoutePricingResourceGain(next, PIT_STOP_PICKS, 0, config);
+  }
+  const energonContacts = getEnergonContactSquares(tileMap, transition).length;
+  if (energonContacts > 0) {
+    next = applyFixedRoutePricingResourceGain(next, energonContacts, 0, config);
+  }
   if (onBattery) {
     next = applyFixedRoutePricingResourceGain(
       next,
@@ -205,7 +217,7 @@ export function applyFixedRoutePricingTransitionEconomy(tileMap, states, transit
       config
     );
   }
-  if (actionId === "WAIT") {
+  if (actionId === "WAIT" && !transition.cancelledByFirePit) {
     next = applyFixedRoutePricingResourceGain(next, 1, 0, config);
   }
   if (!onChopShop) return next;

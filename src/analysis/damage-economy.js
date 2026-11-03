@@ -6,6 +6,7 @@ import {
   hasRampForDir,
   isBoundaryBlockedByWalls,
   isFeatureActiveThisRegister,
+  isFirePit,
   isOil,
   isWater,
   tileKey
@@ -905,7 +906,9 @@ export function getDamageEconomyCombinedClogSummary(
   electiveSpamPlayDistribution = [1],
   randomizerStartCount = 0,
   forcedSpamClogWeight = DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT,
-  electiveSpamClogWeight = DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT
+  electiveSpamClogWeight = DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT,
+  // Deterministic extra clog this turn (Transformers mines: 1 per entry).
+  extraClogLoad = 0
 ) {
   const joint = Array.isArray(forcedSpamHaywireJointDistribution) &&
     forcedSpamHaywireJointDistribution.length
@@ -955,7 +958,8 @@ export function getDamageEconomyCombinedClogSummary(
         const spamClogLoad =
           cappedForcedSpamPlays * forcedSpamClogWeight +
           (spamPlayCount - cappedForcedSpamPlays) * electiveSpamClogWeight;
-        const controlClogLoad = haywireCount + spamClogLoad + safeRandomizerClogLoad;
+        const controlClogLoad = haywireCount + spamClogLoad + safeRandomizerClogLoad +
+          Math.max(0, Number(extraClogLoad) || 0);
         spamPlayCountDistribution[spamPlayCount] += probability;
         const loadKey = Number(controlClogLoad.toFixed(6));
         controlClogLoadProbability.set(
@@ -1436,6 +1440,29 @@ export function isDamageEconomyRepairStationTile(tile) {
   return Boolean(checkpoint && Number(checkpoint.id ?? 1) !== 0);
 }
 
+// Pit stop (Transformers): each pick discards one damage card while the robot
+// is more likely than not to hold one (expected damage cards >= 0.5), using the
+// Repair Stations relief; the remaining picks become Energy. Returns how many
+// picks went to Energy.
+export function applyDamageEconomyPitStopPicks(state, picks) {
+  let energyPicks = 0;
+  for (let pick = 0; pick < picks; pick += 1) {
+    const heldDamage = (Number(state?.pendingSpam) || 0) +
+      (Number(state?.spamTotal) || 0) +
+      (Array.isArray(state?.pendingHaywireRegisterRisks)
+        ? state.pendingHaywireRegisterRisks.reduce((sum, value) => sum + (Number(value) || 0), 0)
+        : 0);
+    // Each pick works like a Repair Station (user 2026-11-03: deck-mix
+    // relief, SPAM and Haywire); a badly damaged robot repairs twice.
+    if (heldDamage >= 0.5) {
+      applyDamageEconomyRepairStationRelief(state);
+    } else {
+      energyPicks += 1;
+    }
+  }
+  return energyPicks;
+}
+
 export function applyDamageEconomyRepairStationRelief(state) {
   const spamReliefTarget = DAMAGE_ECONOMY_SPAM_SHARE;
   const haywireReliefTarget = DAMAGE_ECONOMY_HAYWIRE_SHARE;
@@ -1503,6 +1530,8 @@ export function getDamageEconomyRealizedDamageForTransition(
   let radiationDamageUnits = 0;
   let radioactiveWasteDamageUnits = 0;
   let ledgeDamageUnits = 0;
+  let firePitDamageUnits = 0;
+  let mineDamageUnits = 0;
   const rebootDamageUnits = transition?.rebooted
     ? (options.moreDeadlyGame ? 3 : 2)
     : 0;
@@ -1511,6 +1540,8 @@ export function getDamageEconomyRealizedDamageForTransition(
   // separate +1 if the robot ends the register on the flamethrower space. The
   // final landing square is intentionally present in `traversed`, so an entry
   // that also ends there can correctly become 1 + 1 damage below.
+  // A fire pit (Transformers) also deals 1 on every entry, a jump landing in
+  // it included, and 1 more for ending the register in it (below).
   for (const point of transition?.traversed || []) {
     if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
     const tile = tileMap.get(tileKey(point.x, point.y));
@@ -1518,6 +1549,10 @@ export function getDamageEconomyRealizedDamageForTransition(
       tile,
       registerOptions
     );
+    if (isFirePit(tile)) firePitDamageUnits += 1;
+    // A mine (Transformers token, modelled as never removed) deals 1 damage on
+    // every entry; its +1 clog is added to the turn's clog summary.
+    if (hasFeatureType(tile, "mine")) mineDamageUnits += 1;
   }
 
   // Flaming Oil is never register-specific. It mirrors the flamer's entry/end
@@ -1566,8 +1601,12 @@ export function getDamageEconomyRealizedDamageForTransition(
   // survives, inspect only the final post-conveyor/pusher/gear/machinery square.
   if (!transition?.rebooted && !transition?.crashed && transition?.to) {
     const finalTile = tileMap.get(tileKey(transition.to.x, transition.to.y));
+    // A robot in a fire pit takes 1 just before board lasers and is not hit by
+    // them.
+    const inFirePit = isFirePit(finalTile);
+    if (inFirePit) firePitDamageUnits += 1;
     for (const feature of finalTile?.features || []) {
-      if (feature.type === "laser") {
+      if (feature.type === "laser" && !inFirePit) {
         boardLaserDamageUnits += getEffectiveLaserDamage(feature, options);
       }
     }
@@ -1604,6 +1643,8 @@ export function getDamageEconomyRealizedDamageForTransition(
     radiationDamageUnits +
     radioactiveWasteDamageUnits +
     ledgeDamageUnits +
+    firePitDamageUnits +
+    mineDamageUnits +
     rebootDamageUnits
   );
   const sourceTypes = [];
@@ -1613,6 +1654,8 @@ export function getDamageEconomyRealizedDamageForTransition(
   if (radiationDamageUnits > 0) sourceTypes.push("radiation-hit");
   if (radioactiveWasteDamageUnits > 0) sourceTypes.push("radioactive-waste-hit");
   if (ledgeDamageUnits > 0) sourceTypes.push("ledge-damage");
+  if (firePitDamageUnits > 0) sourceTypes.push("fire-pit-damage");
+  if (mineDamageUnits > 0) sourceTypes.push("mine-hit");
   if (rebootDamageUnits > 0) sourceTypes.push("reboot-damage");
 
   return {
@@ -1622,6 +1665,8 @@ export function getDamageEconomyRealizedDamageForTransition(
     radiationDamageUnits,
     radioactiveWasteDamageUnits,
     ledgeDamageUnits,
+    firePitDamageUnits,
+    mineDamageUnits,
     rebootDamageUnits,
     totalDamageUnits,
     sourceTypes
@@ -1789,7 +1834,8 @@ export function replayDamageEconomyShutdownEquivalentScore({
         absoluteAction,
         register,
         randomizerAtRegisterStart,
-        repairStationEligible
+        repairStationEligible,
+        pitStopPicks = 0
       } = record;
       const plannedRelief = reliefPlan.electiveByAbsoluteAction.get(absoluteAction) ?? 0;
       let reliefInitiation = 0;
@@ -1855,6 +1901,10 @@ export function replayDamageEconomyShutdownEquivalentScore({
         applyDamageEconomyRepairStationRelief(state);
         spamInHandRemaining = Math.min(spamInHandRemaining, state.spamTotal);
       }
+      if (pitStopPicks > 0) {
+        applyDamageEconomyPitStopPicks(state, pitStopPicks);
+        spamInHandRemaining = Math.min(spamInHandRemaining, state.spamTotal);
+      }
     }
 
     const spamHeldBeforeFilter = Math.min(state.spamTotal, spamInHandRemaining);
@@ -1872,7 +1922,8 @@ export function replayDamageEconomyShutdownEquivalentScore({
       electiveSpamPlayDistribution,
       turnRandomizerStarts,
       reliefPlan.forcedClogWeight,
-      reliefPlan.electiveClogWeight
+      reliefPlan.electiveClogWeight,
+      turnRecords.reduce((sum, record) => sum + (record.realized?.mineDamageUnits || 0), 0)
     );
     const turnDamageEconomyRegisterEquivalents =
       programming.spamSupplyRegisterEquivalents + combinedClog.clogRegisterEquivalents;

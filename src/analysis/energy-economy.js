@@ -13,9 +13,34 @@ import {
 import { getProgramCardModelProfile } from "./program-availability.js";
 import { isRouteAwareBatteryScoringActive } from "./rule-options.js";
 
+// Pit stop (Transformers): the player picks twice (same allowed).
+export const PIT_STOP_PICKS = 2;
+
+// Energon squares a transition touches (Transformers: +1 Energy on contact,
+// moving through counts), each square once. The square the robot starts the
+// register on never counts: it took that cube when it arrived, and a robot can
+// claim each cube only once (user 2026-11-03), so standing on it earns nothing.
+// The course ledger also keeps a per-route set for cubes left and re-entered.
+export function getEnergonContactSquares(tileMap, transition, destination = transition?.to) {
+  const squares = [];
+  const from = transition?.from;
+  const seen = new Set(from && Number.isFinite(from.x) && Number.isFinite(from.y) ? [tileKey(from.x, from.y)] : []);
+  for (const point of [...(transition?.traversed || []), destination]) {
+    if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
+    const key = tileKey(point.x, point.y);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if ((tileMap.get(key)?.features || []).some((feature) => feature.type === "energon")) {
+      squares.push(key);
+    }
+  }
+  return squares;
+}
+
 // Shared upgrade-economy defaults.  The legacy DP diagnostics and the v18
 // flattened production scorer intentionally share these assumptions, while
 // production no longer carries fractional upgrade-card state through routes.
+
 export const ROUTE_ENERGY_ECONOMY_DEFAULTS = Object.freeze({
   startingEnergy: 3,
   maxEnergy: 10,
@@ -398,7 +423,8 @@ export function getRouteEnergyDominanceRewardUpperBound(
   tileMap,
   destination,
   actionId,
-  boundConfig
+  boundConfig,
+  transition = null
 ) {
   if (!boundConfig?.active) return 0;
   if (boundConfig.unbounded) return Infinity;
@@ -428,6 +454,12 @@ export function getRouteEnergyDominanceRewardUpperBound(
     // The real step chooses the better of +1 Energy and a free random install.
     rewardUpperBound += Math.max(cubeScore, boundConfig.freeInstallScore ?? cardScore);
   }
+  if (features.some((feature) => feature.type === "pitStop")) {
+    // At most two Energy (each pick may instead discard damage).
+    rewardUpperBound += PIT_STOP_PICKS * cubeScore;
+  }
+  // Energon anywhere on the register's path, one cube per square.
+  rewardUpperBound += getEnergonContactSquares(tileMap, transition, destination).length * cubeScore;
 
   // Include both the intermediate 1e-6 rounding ceiling and the final 0.001
   // score rounding so this stays an upper bound even with custom score scales.
@@ -455,7 +487,8 @@ export function getRouteEnergyShadowStep(
     0,
     config.maxEnergy
   );
-  const powerUp = actionId === "WAIT";
+  // A register-5 card cancelled by a fire pit (Transformers) does nothing.
+  const powerUp = actionId === "WAIT" && !transition?.cancelledByFirePit;
 
   if (!isRouteAwareBatteryScoringActive(options)) {
     return {
@@ -494,6 +527,7 @@ export function getRouteEnergyShadowStep(
   const onRadioactiveWaste = features.some(
     (feature) => feature.type === "radioactiveWaste"
   );
+  const onPitStop = features.some((feature) => feature.type === "pitStop");
   const registerScore = Number(options.routeEnergyRegisterScore);
 
   let energy = reserveBefore;
@@ -505,6 +539,10 @@ export function getRouteEnergyShadowStep(
   let radioactiveWasteFreeUpgradeValueR = 0;
   let radioactiveWasteChoice = null;
   let batteryEnergyGain = 0;
+  let pitStopRewardR = 0;
+  let pitStopEnergyGain = 0;
+  let energonRewardR = 0;
+  let energonEnergyGain = 0;
   let powerUpEnergyGain = 0;
   let extraCardDraws = 0;
   let chopShopChoice = null;
@@ -529,6 +567,49 @@ export function getRouteEnergyShadowStep(
         options
       );
       extraCardDraws += 1;
+    }
+  }
+
+  // Pit stop (Transformers), just after batteries: two picks, each a
+  // discarded damage card or +1 Energy. The search has no damage state and
+  // credits both as Energy; the course ledger passes how many went to Energy
+  // after its damage replay (transition.pitStopEnergyPicks).
+  if (onPitStop) {
+    const energyPicks = Number.isInteger(transition?.pitStopEnergyPicks)
+      ? Math.max(0, Math.min(PIT_STOP_PICKS, transition.pitStopEnergyPicks))
+      : PIT_STOP_PICKS;
+    if (energyPicks > 0) {
+      const energyPackage = applyFlattenedRouteEnergyGain(
+        energy,
+        energyPicks,
+        nextAbsoluteActionCount,
+        options
+      );
+      pitStopRewardR += energyPackage.rewardR;
+      pitStopEnergyGain += energyPackage.realizedEnergyGain;
+      energy = energyPackage.energy;
+    }
+  }
+
+  // Energon (Transformers): +1 Energy per cube touched. The search credits each
+  // contact; the course ledger passes energonClaims, the chance of reaching
+  // each not-yet-taken cube first (first come, first served).
+  const energonClaims = Array.isArray(transition?.energonClaims)
+    ? transition.energonClaims
+    : getEnergonContactSquares(tileMap, transition, destination).map(() => 1);
+  for (const claimProbability of energonClaims) {
+    const probability = clamp(Number(claimProbability) || 0, 0, 1);
+    if (probability <= 0) continue;
+    const energyPackage = applyFlattenedRouteEnergyGain(
+      energy,
+      1,
+      nextAbsoluteActionCount,
+      options
+    );
+    energonRewardR += energyPackage.rewardR * probability;
+    if (probability >= 0.5) {
+      energonEnergyGain += energyPackage.realizedEnergyGain;
+      energy = energyPackage.energy;
     }
   }
 
@@ -621,13 +702,19 @@ export function getRouteEnergyShadowStep(
   const powerUpRewardScore = powerUpRewardR * registerScore;
   const chopShopRewardScore = chopShopRewardR * registerScore;
   const radioactiveWasteRewardScore = radioactiveWasteRewardR * registerScore;
+  const pitStopRewardScore = pitStopRewardR * registerScore;
+  const energonRewardScore = energonRewardR * registerScore;
   const rewardScore = (
+    energonRewardScore +
+    pitStopRewardScore +
     batteryRewardScore +
     powerUpRewardScore +
     chopShopRewardScore +
     radioactiveWasteRewardScore
   );
   const rewardRegisterEquivalents = (
+    energonRewardR +
+    pitStopRewardR +
     batteryRewardR +
     powerUpRewardR +
     chopShopRewardR +
@@ -657,6 +744,9 @@ export function getRouteEnergyShadowStep(
     usefulCardUnitsAfter: 0,
     energyGain: Math.max(0, energy - reserveBefore),
     batteryEnergyGain,
+    pitStopEnergyGain,
+    pitStop: onPitStop,
+    energonEnergyGain,
     powerUpEnergyGain,
     extraCardDraws,
     battery: onBattery,

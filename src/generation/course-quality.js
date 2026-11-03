@@ -13,7 +13,7 @@ import {
   overlayFitsWithinBoards,
   overlayTouchesTrackedPlay
 } from "./construction-cleanup.js";
-import { getPlacementOccupiedOffsets, pointOnPlacement } from "./layout-geometry.js";
+import { dropUnpairedSpaceBridges, getPlacementOccupiedOffsets, pointOnPlacement } from "./layout-geometry.js";
 import { getTuningDifficulty } from "./preferences.js";
 import { getDifficultyThresholds } from "./targets.js";
 
@@ -618,7 +618,7 @@ export function getBoardGameplayRelevanceProfile(
       const remainingBoards = boardPlacements.filter(
         (_, index) => index !== boardIndex
       );
-      const remainingOverlays = (overlayPlacements || []).filter(
+      const remainingOverlays = dropUnpairedSpaceBridges((overlayPlacements || []).filter(
         (overlayPlacement) => (
           overlayFitsWithinBoards(
             overlayPlacement,
@@ -626,7 +626,7 @@ export function getBoardGameplayRelevanceProfile(
             pieceMap
           )
         )
-      );
+      ), pieceMap);
       const ablatedResolved = buildResolvedMap(
         [
           ...remainingBoards,

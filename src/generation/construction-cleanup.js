@@ -4,7 +4,9 @@ import { buildResolvedMap, placePiece } from "../../board.js";
 import {
   getPlacementOccupiedOffsets,
   manhattanDistance,
-  pointOnPlacement
+  pointOnPlacement,
+  dropUnpairedSpaceBridges,
+  keepSpaceBridgeColourGroups
 } from "./layout-geometry.js";
 import { isCheckpointActiveFeature } from "./variant-availability.js";
 
@@ -218,9 +220,10 @@ export function pruneIrrelevantOverlayPlacements(overlayPlacements, pieceMap, se
     ) &&
     overlayTouchesTrackedPlay(placement, pieceMap, routeTileKeys, checkpoints, 2)
   ));
+  const kept = keepSpaceBridgeColourGroups(initiallyKept, overlayPlacements, pieceMap);
   return {
-    overlayPlacements: initiallyKept,
-    pruned: initiallyKept.length !== overlayPlacements.length
+    overlayPlacements: kept,
+    pruned: kept.length !== overlayPlacements.length
   };
 }
 
@@ -295,7 +298,7 @@ export function pruneUnusedBoardPlacements(
     if (!nextBoardPlacements.length) {
       continue;
     }
-    const nextOverlayPlacements = (overlayPlacements || []).filter(
+    const nextOverlayPlacements = dropUnpairedSpaceBridges((overlayPlacements || []).filter(
       (placement) => (
         overlayFitsWithinBoards(
           placement,
@@ -303,7 +306,7 @@ export function pruneUnusedBoardPlacements(
           pieceMap
         )
       )
-    );
+    ), pieceMap);
 
     const currentResolved = buildResolvedMap(
       [
