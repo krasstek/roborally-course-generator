@@ -238,10 +238,10 @@ export async function loadAssets() {
   const constructionGuidance = normalizeConstructionGuidanceCalibration(rawConstructionGuidance);
 
   for (const piece of Object.values(pieceMap)) {
-    piece.overlayCapable = (piece.expansionId === "master-builder" && (
-      piece.kind === "overlay" ||
-      (piece.width === 6 && piece.height === 6)
-    )) || (piece.expansionId === "transformers" && piece.kind === "overlay");
+    // Decided by content, not by set (user 2026-11-03): every overlay token
+    // and every 6x6 board can be placed as an overlay.
+    piece.overlayCapable = piece.kind === "overlay" ||
+      (piece.width === 6 && piece.height === 6);
   }
 
   for (const piece of Object.values(pieceMap)) {
