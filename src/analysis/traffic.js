@@ -3,7 +3,16 @@ import {
   getDamageDeckPressureMultipliers,
   getTilePenaltyForFeature
 } from "../../feature-weights.js";
-import { crossesLedgeBoundary, getLedgeElevationDelta, tileKey } from "./board-geometry.js";
+import {
+  crossesLedgeBoundary,
+  getBuilding,
+  getJumpRamp,
+  getLedgeElevationDelta,
+  isBoundaryBlockedByWalls,
+  isBuildingSideClosed,
+  isFirePit,
+  tileKey
+} from "./board-geometry.js";
 import {
   DIRS,
   PROGRAM_DECKS,
@@ -131,6 +140,36 @@ export function buildEdgeSet(route) {
   return set;
 }
 
+// One step of a robot laser from square a to the neighbouring square b.
+// Transformers squares follow laser rules, not movement rules (user rulings
+// 2026-10-29): a shot can't enter a building from outside, passes between
+// building squares only through a shared doorway, and leaves a building only
+// through a doorway; a jump ramp stops a shot passing over it, but a robot on
+// a ramp can shoot and be shot from any direction. Other squares keep the
+// movement test (walls, repulsors, ledges, pits).
+function robotLaserStepBlocked(tileMap, a, b, dir, entersTarget) {
+  const fromTile = tileMap.get(tileKey(a.x, a.y));
+  const toTile = tileMap.get(tileKey(b.x, b.y));
+  const fromBuilding = getBuilding(fromTile);
+  const toBuilding = getBuilding(toTile);
+  const toRamp = getJumpRamp(toTile);
+  if (!fromBuilding && !toBuilding && !toRamp && !getJumpRamp(fromTile)) {
+    return !canMoveBetween(tileMap, a, b, dir).ok;
+  }
+  if (!toTile || isBoundaryBlockedByWalls(tileMap, a, b, dir)) return true;
+  if (toBuilding && !fromBuilding) return true;
+  if (fromBuilding && isBuildingSideClosed(fromTile, dir)) return true;
+  if (toBuilding && isBuildingSideClosed(toTile, OPPOSITE_DIR[dir])) return true;
+  return Boolean(toRamp && !entersTarget);
+}
+
+const OPPOSITE_DIR = { N: "S", E: "W", S: "N", W: "E" };
+
+// A robot in a fire pit can't be hit by robot lasers or fire them.
+export function isRobotLaserExcludedByFirePit(tileMap, ...points) {
+  return points.some((point) => point && isFirePit(tileMap.get(tileKey(point.x, point.y))));
+}
+
 export function hasLineOfSight(tileMap, from, to) {
   const fromKey = tileKey(from.x, from.y);
   const toKey = tileKey(to.x, to.y);
@@ -161,7 +200,7 @@ export function hasLineOfSight(tileMap, from, to) {
     for (let y = from.y; y !== to.y; y += step) {
       const fromTile = tileMap.get(tileKey(from.x, y));
       const toTile = tileMap.get(tileKey(from.x, y + step));
-      if (!canMoveBetween(tileMap, { x: from.x, y }, { x: from.x, y: y + step }, dir).ok) {
+      if (robotLaserStepBlocked(tileMap, { x: from.x, y }, { x: from.x, y: y + step }, dir, y + step === to.y)) {
         cache.set(pairKey, false);
         return false;
       }
@@ -183,7 +222,7 @@ export function hasLineOfSight(tileMap, from, to) {
   for (let x = from.x; x !== to.x; x += step) {
     const fromTile = tileMap.get(tileKey(x, from.y));
     const toTile = tileMap.get(tileKey(x + step, from.y));
-    if (!canMoveBetween(tileMap, { x, y: from.y }, { x: x + step, y: from.y }, dir).ok) {
+    if (robotLaserStepBlocked(tileMap, { x, y: from.y }, { x: x + step, y: from.y }, dir, x + step === to.x)) {
       cache.set(pairKey, false);
       return false;
     }
@@ -337,7 +376,7 @@ export function lateralThreatPenalty(tileMap, routeA, routeB, options = {}) {
         continue;
       }
 
-      if (!hasLineOfSight(tileMap, pointA, pointB)) {
+      if (isRobotLaserExcludedByFirePit(tileMap, pointA, pointB) || !hasLineOfSight(tileMap, pointA, pointB)) {
         continue;
       }
 
@@ -391,7 +430,7 @@ export function rearThreatPenalty(tileMap, routeA, routeB, options = {}) {
         continue;
       }
 
-      if (!hasLineOfSight(tileMap, pointA, pointB)) {
+      if (isRobotLaserExcludedByFirePit(tileMap, pointA, pointB) || !hasLineOfSight(tileMap, pointA, pointB)) {
         continue;
       }
 
@@ -1277,7 +1316,8 @@ export function getIncomingRobotLaserDirection(tileMap, targetPoint, shooterPoin
   const aligned = vector.dx !== 0
     ? dy === 0 && Math.sign(dx) === Math.sign(vector.dx)
     : dx === 0 && Math.sign(dy) === Math.sign(vector.dy);
-  return aligned && hasLineOfSight(tileMap, shooter, target) ? facing : null;
+  if (!aligned || isRobotLaserExcludedByFirePit(tileMap, shooter, target)) return null;
+  return hasLineOfSight(tileMap, shooter, target) ? facing : null;
 }
 
 export function getRobotRangedPressure(tileMap, targetPoint, shooterPoint, options = {}) {

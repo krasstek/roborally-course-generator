@@ -5,6 +5,7 @@
   "scripts": {
     "version:stamp": "node ./scripts/stamp-version.cjs",
     "verify:movement": "node ./scripts/verify-movement.js",
+    "verify:transformers": "node ./scripts/verify-transformers.js",
     "score:damage": "node ./scripts/score-damage.js",
     "score:traffic": "node ./scripts/score-traffic.js",
     "golden": "node ./scripts/golden.js",
