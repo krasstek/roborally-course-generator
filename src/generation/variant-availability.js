@@ -26,11 +26,13 @@ import {
 import { generationRandom, sample, shuffle } from "./random.js";
 import { applyVariantAnalysisOptions } from "../../variants.js";
 
-// A checkpoint suppresses the board elements under it except the wall-like
-// ones (walls, ledges, repulsors: official boards anchor lasers to all of
-// them) and lasers. Ramps are not wall-like (user ruling 2026-10-30).
+// Rulebook: a checkpoint disables the board elements under it except walls
+// and lasers. Inferred: lasers anchor to walls, and official boards anchor
+// them to every border element, so ledges, repulsors and buildings count as
+// walls (user rulings 2026-10-30, 2026-11-03; a building stays whole,
+// doorways and turns included). Ramps are not wall-like.
 export const DEFAULT_CHECKPOINT_ACTIVE_FEATURE_TYPES = new Set([
-  "wall", "redWall", "greenWall", "ledge", "repulsor", "laser"
+  "wall", "redWall", "greenWall", "ledge", "repulsor", "building", "laser"
 ]);
 
 export function isCheckpointActiveFeature(feature, options = {}) {

@@ -42,9 +42,14 @@ const KEPT_CHECKPOINT_FEATURE_LABELS = [
   [["wall", "redWall", "greenWall"], "walls"],
   [["ledge"], "ledges"],
   [["repulsor"], "repulsors"],
+  [["building"], "buildings"],
   [["laser"], "lasers"],
   [["belt"], "conveyors carrying moving checkpoints"]
 ];
+const MOVING_CHECKPOINT_CONVEYOR_LABEL = "conveyors carrying moving checkpoints";
+// Kept elements that are not named by the rulebook's checkpoint rule; they
+// count as walls by inference (lasers anchor to them on official boards).
+const INFERRED_WALL_LABELS = new Set(["ledges", "repulsors", "buildings"]);
 
 // Names of the elements a checkpoint keeps that actually sit on this course's
 // checkpoint squares, so the rule text mentions only what is there.
@@ -528,10 +533,19 @@ export function updateRulesNote(scenario) {
   }
 
   if (!scenario.hazardousFlags && hasSuppressedCheckpointFeatures(scenario)) {
+    // Rulebook part first, then what this app infers from it (only the
+    // inferred elements that sit under this course's checkpoints).
     const keptLabels = getKeptCheckpointFeatureLabels(scenario);
-    const suppressionText = keptLabels.length
-      ? `Checkpoint spaces suppress board elements other than ${formatList(keptLabels)}.`
-      : "Checkpoint spaces suppress the board elements under them.";
+    const inferredLabels = keptLabels.filter((label) => INFERRED_WALL_LABELS.has(label));
+    const suppressionText = [
+      "A checkpoint space disables the board elements under it, except walls and lasers.",
+      inferredLabels.length
+        ? `Lasers anchor to walls, so ${formatList(inferredLabels)} on checkpoint spaces count as walls and stay too.`
+        : "",
+      keptLabels.includes(MOVING_CHECKPOINT_CONVEYOR_LABEL)
+        ? "Conveyors carrying moving checkpoints keep running."
+        : ""
+    ].filter(Boolean).join(" ");
     checkpointNotes.push(appendRuleReference(
       suppressionText,
       scenario.movingTargets ? { page: 15, qualifier: "Moving Targets variant" } : { page: 15 }

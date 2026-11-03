@@ -2,7 +2,7 @@
 import { VARIANT_CONTROL_IDS, VARIANT_DEFINITIONS } from "../../variants.js";
 import { cachedAssets } from "../generation/assets.js";
 import { normalizeGenerationMode } from "../generation/generation-modes.js";
-import { getAvailableOverlayIds } from "../generation/overlays.js";
+import { getAvailableOverlayIds, getAvailableOverlayKinds } from "../generation/overlays.js";
 import {
   ACT_FAST_CONTROL_CHOICES,
   ACT_FAST_MODE_IDS,
@@ -154,7 +154,49 @@ export function isOverlayModeAvailable(preferences = {}, pieceMap = cachedAssets
 export function getOverlayUnavailabilityReason(preferences = {}, pieceMap = cachedAssets?.pieceMap ?? null) {
   return isOverlayModeAvailable(preferences, pieceMap)
     ? null
-    : "Requires overlay-capable boards or tokens in the selected sets.";
+    : "Requires overlay tokens or 6x6 boards in the selected sets.";
+}
+
+function getOverlayKinds(preferences = {}, pieceMap = cachedAssets?.pieceMap ?? null) {
+  if (!pieceMap) {
+    return { tokens: true, boards: true };
+  }
+  return getAvailableOverlayKinds(pieceMap, getSelectedExpansionIds(preferences));
+}
+
+// Only the modes that can place something with the selected sets; "Both"
+// appears only when both tokens and 6x6 boards exist.
+function getOverlayModeCycle(kinds) {
+  return OVERLAY_MODE_CYCLE.filter((mode) => (
+    mode === OVERLAY_MODES.no ||
+    (mode === OVERLAY_MODES.tokens && kinds.tokens) ||
+    (mode === OVERLAY_MODES.boards && kinds.boards) ||
+    (mode === OVERLAY_MODES.yes && kinds.tokens && kinds.boards)
+  ));
+}
+
+// The fullest mode the selected sets allow (the "all allowed" state).
+function getFullestOverlayMode(kinds) {
+  const cycle = getOverlayModeCycle(kinds);
+  return cycle[cycle.length - 1];
+}
+
+// The mode that places the same pieces as `mode` among the available ones.
+function fitOverlayModeToKinds(mode, kinds) {
+  const normalized = normalizeOverlayMode(mode);
+  if (getOverlayModeCycle(kinds).includes(normalized)) {
+    return normalized;
+  }
+  if (normalized === OVERLAY_MODES.yes) {
+    return getFullestOverlayMode(kinds);
+  }
+  return OVERLAY_MODES.no;
+}
+
+let currentOverlayModeCycle = OVERLAY_MODE_CYCLE;
+
+function getOverlayModeTitle(mode) {
+  return `Overlays: ${formatOverlayMode(mode)}. Click to cycle ${currentOverlayModeCycle.map(formatOverlayMode).join(", ")}.`;
 }
 
 export function setOverlayModeControl(mode, buttonEl = null) {
@@ -173,13 +215,24 @@ export function setOverlayModeControl(mode, buttonEl = null) {
         ? "forced"
         : "allowed";
     button.textContent = formatOverlayMode(normalized);
-    button.title = `Overlays: ${formatOverlayMode(normalized)}. Click to cycle No, Tokens, Boards, Both.`;
+    button.title = getOverlayModeTitle(normalized);
     button.setAttribute("aria-label", button.title);
   });
 }
 
 export function updateOverlayAvailability(preferences = getPreferencesFromControls()) {
   const reason = getOverlayUnavailabilityReason(preferences);
+  if (!reason) {
+    const kinds = getOverlayKinds(preferences);
+    currentOverlayModeCycle = getOverlayModeCycle(kinds);
+    const primary = document.getElementById("overlay-mode");
+    if (primary) {
+      const fitted = fitOverlayModeToKinds(primary.value, kinds);
+      if (fitted !== normalizeOverlayMode(primary.value)) {
+        setOverlayModeControl(fitted);
+      }
+    }
+  }
   getOverlayControlButtons().forEach((buttonEl) => {
     if (reason) {
       buttonEl.dataset.unavailableReason = reason;
@@ -192,7 +245,7 @@ export function updateOverlayAvailability(preferences = getPreferencesFromContro
       buttonEl.classList.remove("unavailable");
       buttonEl.removeAttribute("aria-disabled");
       const mode = normalizeOverlayMode(buttonEl.value);
-      buttonEl.title = `Overlays: ${formatOverlayMode(mode)}. Click to cycle No, Tokens, Boards, Both.`;
+      buttonEl.title = getOverlayModeTitle(mode);
       buttonEl.setAttribute("aria-label", buttonEl.title);
     }
   });
@@ -209,8 +262,9 @@ export function cycleOverlayModeControl() {
   }
 
   const current = normalizeOverlayMode(buttonEl.value);
-  const currentIndex = OVERLAY_MODE_CYCLE.indexOf(current);
-  const next = OVERLAY_MODE_CYCLE[(currentIndex + 1) % OVERLAY_MODE_CYCLE.length];
+  const cycle = getOverlayModeCycle(getOverlayKinds(getPreferencesFromControls()));
+  const currentIndex = cycle.indexOf(current);
+  const next = cycle[(currentIndex + 1) % cycle.length];
   setOverlayModeControl(next);
   updateOverlayRebootAvailability(getPreferencesFromControls());
   updateVariantSummary();
@@ -299,8 +353,8 @@ export function cycleOverlayRebootControl() {
 
 // Only meaningful when overlay boards can be placed and reboot tokens are used.
 function getOverlayRebootUnavailabilityReason(preferences) {
-  if (getOverlayUnavailabilityReason(preferences)) {
-    return "Requires overlay boards in the selected sets.";
+  if (getOverlayUnavailabilityReason(preferences) || !getOverlayKinds(preferences).boards) {
+    return "Requires 6x6 boards in the selected sets (placed as overlay boards).";
   }
   if (!shouldUseBoardOverlays(preferences)) {
     return "Applies to overlay boards: set Overlays to Boards or Both.";
@@ -708,7 +762,8 @@ export function getVariantCategoryAllAllowed(category, states = getVariantCatego
   if (!isOverlayModeAvailable(preferences)) {
     return variantsAllowed && boardSpreadTight;
   }
-  return variantsAllowed && boardSpreadTight && normalizeOverlayMode(document.getElementById("overlay-mode")?.value) === OVERLAY_MODES.yes;
+  return variantsAllowed && boardSpreadTight &&
+    normalizeOverlayMode(document.getElementById("overlay-mode")?.value) === getFullestOverlayMode(getOverlayKinds(preferences));
 }
 
 export function countSelectedOptionalRules() {
@@ -794,7 +849,7 @@ export function toggleVariantCategoryStates(category) {
     const preferences = getPreferencesFromControls();
     setBoardSpreadControl(allAllowed ? BOARD_SPREAD_MODES.random : BOARD_SPREAD_MODES.tight);
     if (isOverlayModeAvailable(preferences)) {
-      setOverlayModeControl(allAllowed ? OVERLAY_MODES.no : OVERLAY_MODES.yes);
+      setOverlayModeControl(allAllowed ? OVERLAY_MODES.no : getFullestOverlayMode(getOverlayKinds(preferences)));
     }
   }
 

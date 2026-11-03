@@ -38,6 +38,16 @@ export function getAvailableOverlayIds(pieceMap, expansionIds = null) {
     .map((piece) => piece.id);
 }
 
+// Which overlay kinds the selected sets offer: tokens (mini overlays) and/or
+// 6x6 boards.
+export function getAvailableOverlayKinds(pieceMap, expansionIds = null) {
+  const ids = getAvailableOverlayIds(pieceMap, expansionIds);
+  return {
+    tokens: ids.some((id) => isMiniOverlayPiece(pieceMap[id])),
+    boards: ids.some((id) => !isMiniOverlayPiece(pieceMap[id]))
+  };
+}
+
 export function chooseWeightedCount(maxCount, weightForCount) {
   if (maxCount <= 0) {
     return 0;
