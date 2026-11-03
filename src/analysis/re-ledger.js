@@ -296,12 +296,12 @@ export function getRegisterEquivalentLedgerTouchedFeatureEvents(tileMap, transit
   for (const point of points) {
     const tile = tileMap.get(tileKey(point.x, point.y));
     for (const feature of tile?.features || []) {
-      if (feature.type !== "battery" && feature.type !== "chopShop") continue;
+      if (feature.type !== "battery" && feature.type !== "chopShop" && feature.type !== "pitStop") continue;
       const key = `${feature.type}:${point.x},${point.y}`;
       if (seen.has(key)) continue;
       seen.add(key);
       events.push({
-        type: feature.type === "battery" ? "battery" : "chop-shop",
+        type: feature.type === "battery" ? "battery" : feature.type === "chopShop" ? "chop-shop" : "pit-stop",
         weight: 1,
         at: { x: point.x, y: point.y }
       });

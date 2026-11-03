@@ -1437,6 +1437,27 @@ export function isDamageEconomyRepairStationTile(tile) {
   return Boolean(checkpoint && Number(checkpoint.id ?? 1) !== 0);
 }
 
+// Pit stop (Transformers): each pick discards one damage card while the robot
+// is more likely than not to hold one (expected damage cards >= 0.5), using the
+// Repair Stations relief; the remaining picks become Energy. Returns how many
+// picks went to Energy.
+export function applyDamageEconomyPitStopPicks(state, picks) {
+  let energyPicks = 0;
+  for (let pick = 0; pick < picks; pick += 1) {
+    const heldDamage = (Number(state?.pendingSpam) || 0) +
+      (Number(state?.spamTotal) || 0) +
+      (Array.isArray(state?.pendingHaywireRegisterRisks)
+        ? state.pendingHaywireRegisterRisks.reduce((sum, value) => sum + (Number(value) || 0), 0)
+        : 0);
+    if (heldDamage >= 0.5) {
+      applyDamageEconomyRepairStationRelief(state);
+    } else {
+      energyPicks += 1;
+    }
+  }
+  return energyPicks;
+}
+
 export function applyDamageEconomyRepairStationRelief(state) {
   const spamReliefTarget = DAMAGE_ECONOMY_SPAM_SHARE;
   const haywireReliefTarget = DAMAGE_ECONOMY_HAYWIRE_SHARE;
@@ -1801,7 +1822,8 @@ export function replayDamageEconomyShutdownEquivalentScore({
         absoluteAction,
         register,
         randomizerAtRegisterStart,
-        repairStationEligible
+        repairStationEligible,
+        pitStopPicks = 0
       } = record;
       const plannedRelief = reliefPlan.electiveByAbsoluteAction.get(absoluteAction) ?? 0;
       let reliefInitiation = 0;
@@ -1865,6 +1887,10 @@ export function replayDamageEconomyShutdownEquivalentScore({
       );
       if (repairStationEligible) {
         applyDamageEconomyRepairStationRelief(state);
+        spamInHandRemaining = Math.min(spamInHandRemaining, state.spamTotal);
+      }
+      if (pitStopPicks > 0) {
+        applyDamageEconomyPitStopPicks(state, pitStopPicks);
         spamInHandRemaining = Math.min(spamInHandRemaining, state.spamTotal);
       }
     }

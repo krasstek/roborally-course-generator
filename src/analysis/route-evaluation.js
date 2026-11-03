@@ -12,6 +12,7 @@ import {
   DAMAGE_ECONOMY_TELEMETRY,
   DAMAGE_ECONOMY_TRAFFIC_ROUTE_SUMMARY_CACHE,
   advanceDamageEconomyToTurn,
+  applyDamageEconomyPitStopPicks,
   applyDamageEconomyRepairStationRelief,
   applyDamageEconomySpamPlayOutcome,
   applyExpectedDamageToEconomyState,
@@ -36,7 +37,11 @@ import {
   planDamageEconomyTurnSpamRelief,
   replayDamageEconomyShutdownEquivalentScore
 } from "./damage-economy.js";
-import { getInitialRouteEnergyShadowReserve, getRouteEnergyShadowStep } from "./energy-economy.js";
+import {
+  getInitialRouteEnergyShadowReserve,
+  getRouteEnergyShadowStep,
+  PIT_STOP_PICKS
+} from "./energy-economy.js";
 import { average, clamp } from "../shared/math.js";
 import {
   getProgramCardEffectivePreviousCode,
@@ -185,6 +190,11 @@ function getDamageEconomyTransitionRecords(tileMap, route, legs, options) {
         !transition?.crashed &&
         isDamageEconomyRepairStationTile(finalTile)
       );
+      // Pit stop (Transformers): two picks for a robot ending the register on it.
+      const pitStopPicks = !transition?.rebooted && !transition?.crashed &&
+        (finalTile?.features || []).some((feature) => feature.type === "pitStop")
+        ? PIT_STOP_PICKS
+        : 0;
       transitionRecords.push({
         legIndex,
         legAction: legActionIndex + 1,
@@ -195,7 +205,8 @@ function getDamageEconomyTransitionRecords(tileMap, route, legs, options) {
         realized,
         reliefProfile,
         randomizerAtRegisterStart,
-        repairStationEligible
+        repairStationEligible,
+        pitStopPicks
       });
       elapsedAbsoluteActions = transition?.rebooted
         ? getRebootEndedAbsoluteActions(absoluteAction)
@@ -294,6 +305,8 @@ export function summarizeDamageEconomyFoundationForRoute(
   const state = createDamageEconomyState();
   const turns = [];
   const events = [];
+  // Pit stop picks that went to Energy, for the energy ledger.
+  const pitStopEnergyPicksByAbsoluteAction = new Map();
   let totalDamageUnits = 0;
   let deterministicDamageUnits = 0;
   let robotLaserExpectedDamageUnits = 0;
@@ -438,7 +451,8 @@ export function summarizeDamageEconomyFoundationForRoute(
         absoluteAction,
         register,
         randomizerAtRegisterStart,
-        repairStationEligible
+        repairStationEligible,
+        pitStopPicks = 0
       } = record;
       const reliefOpportunity = Math.max(
         0,
@@ -579,6 +593,13 @@ export function summarizeDamageEconomyFoundationForRoute(
         totalRepairStationSpamRemoved += repairStationRelief.spamRemoved;
         totalRepairStationHaywireExpectedRemoved += repairStationRelief.haywireExpectedRemoved;
         repairStationReliefCount += 1;
+      }
+      if (pitStopPicks > 0) {
+        pitStopEnergyPicksByAbsoluteAction.set(
+          absoluteAction,
+          applyDamageEconomyPitStopPicks(state, pitStopPicks)
+        );
+        spamInHandRemaining = Math.min(spamInHandRemaining, state.spamTotal);
       }
 
       const eventSourceTypes = [...(realized.sourceTypes || [])];
@@ -972,6 +993,7 @@ export function summarizeDamageEconomyFoundationForRoute(
     ),
     turns,
     events,
+    pitStopEnergyPicksByAbsoluteAction,
     ...telemetry
   };
   activeRouteSummaryCache.set(route, {
@@ -1120,6 +1142,8 @@ export function summarizeRegisterEquivalentLedger(
     }
 
     if (transition?.to && transition?.action) {
+      // Pit stop picks the damage replay did not spend on discarding damage.
+      const pitStopEnergyPicks = damage?.pitStopEnergyPicksByAbsoluteAction?.get(absoluteAction);
       const energyStep = getRouteEnergyShadowStep(
         tileMap,
         transition.to,
@@ -1128,7 +1152,7 @@ export function summarizeRegisterEquivalentLedger(
         energyReserve,
         0,
         options,
-        transition
+        Number.isInteger(pitStopEnergyPicks) ? { ...transition, pitStopEnergyPicks } : transition
       );
       turn.energyRE -= Math.max(
         0,

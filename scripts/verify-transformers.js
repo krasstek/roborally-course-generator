@@ -1,6 +1,11 @@
 // Checks for the Transformers rules beyond movement (verify-movement.js covers
 // movement): robot lasers and buildings, jump ramps and fire pits.
-import { getDamageEconomyRealizedDamageForTransition } from "../src/analysis/damage-economy.js";
+import {
+  applyDamageEconomyPitStopPicks,
+  createDamageEconomyState,
+  getDamageEconomyRealizedDamageForTransition
+} from "../src/analysis/damage-economy.js";
+import { getRouteEnergyShadowStep } from "../src/analysis/energy-economy.js";
 import { simulateAction } from "../src/analysis/movement.js";
 import { getIncomingRobotLaserDirection, hasLineOfSight } from "../src/analysis/traffic.js";
 
@@ -39,6 +44,14 @@ function damage(map, from, to, traversed, absoluteAction = 2) {
 
 const laser = { type: "laser", dir: "E", damage: 1 };
 const FORWARD = { id: "FORWARD", type: "move", relative: "forward", steps: 1 };
+
+// Energy step for a robot ending the register on square x of the row.
+function energyStep(map, x, transition = {}) {
+  const options = { routeAwareBatteryScoring: true, routeEnergyHorizonTurns: 6, routeEnergyRegisterScore: 6.4 };
+  return getRouteEnergyShadowStep(map, { x, y: 0 }, "FORWARD", 3, 3, 0, options, transition);
+}
+
+const pitStop = [{ type: "pitStop" }];
 
 // Plays Move 1 east for `count` registers from x = 0, register by register
 // (register index runs 0-4 and wraps into the next turn); returns each x.
@@ -141,6 +154,28 @@ const cases = [
       const result = playForward(row(10, { 5: firePit }), 6);
       return result.xs === "1,2,3,4,5,6" && result.cancelled === "";
     }
+  },
+  {
+    name: "pit stop: without damage both picks become Energy",
+    check: () => applyDamageEconomyPitStopPicks(createDamageEconomyState(), 2) === 2
+  },
+  {
+    name: "pit stop: holding damage, the picks discard it",
+    check: () => {
+      const state = createDamageEconomyState();
+      state.spamTotal = 1.2;
+      state.spamHeld = 1.2;
+      return applyDamageEconomyPitStopPicks(state, 2) === 0 && state.spamTotal < 0.1;
+    }
+  },
+  {
+    name: "pit stop: the search credits two Energy",
+    check: () => energyStep(row(2, { 0: pitStop }), 0).pitStopEnergyGain === 2
+  },
+  {
+    name: "pit stop: the course ledger credits only the Energy picks",
+    check: () => energyStep(row(2, { 0: pitStop }), 0, { pitStopEnergyPicks: 1 }).pitStopEnergyGain === 1 &&
+      energyStep(row(2, { 0: pitStop }), 1).pitStopEnergyGain === 0
   },
   {
     name: "fire pit: the lock ends with the turn",

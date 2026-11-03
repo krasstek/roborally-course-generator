@@ -13,9 +13,13 @@ import {
 import { getProgramCardModelProfile } from "./program-availability.js";
 import { isRouteAwareBatteryScoringActive } from "./rule-options.js";
 
+// Pit stop (Transformers): the player picks twice (same allowed).
+export const PIT_STOP_PICKS = 2;
+
 // Shared upgrade-economy defaults.  The legacy DP diagnostics and the v18
 // flattened production scorer intentionally share these assumptions, while
 // production no longer carries fractional upgrade-card state through routes.
+
 export const ROUTE_ENERGY_ECONOMY_DEFAULTS = Object.freeze({
   startingEnergy: 3,
   maxEnergy: 10,
@@ -428,6 +432,10 @@ export function getRouteEnergyDominanceRewardUpperBound(
     // The real step chooses the better of +1 Energy and a free random install.
     rewardUpperBound += Math.max(cubeScore, boundConfig.freeInstallScore ?? cardScore);
   }
+  if (features.some((feature) => feature.type === "pitStop")) {
+    // At most two Energy (each pick may instead discard damage).
+    rewardUpperBound += PIT_STOP_PICKS * cubeScore;
+  }
 
   // Include both the intermediate 1e-6 rounding ceiling and the final 0.001
   // score rounding so this stays an upper bound even with custom score scales.
@@ -495,6 +503,7 @@ export function getRouteEnergyShadowStep(
   const onRadioactiveWaste = features.some(
     (feature) => feature.type === "radioactiveWaste"
   );
+  const onPitStop = features.some((feature) => feature.type === "pitStop");
   const registerScore = Number(options.routeEnergyRegisterScore);
 
   let energy = reserveBefore;
@@ -506,6 +515,8 @@ export function getRouteEnergyShadowStep(
   let radioactiveWasteFreeUpgradeValueR = 0;
   let radioactiveWasteChoice = null;
   let batteryEnergyGain = 0;
+  let pitStopRewardR = 0;
+  let pitStopEnergyGain = 0;
   let powerUpEnergyGain = 0;
   let extraCardDraws = 0;
   let chopShopChoice = null;
@@ -530,6 +541,27 @@ export function getRouteEnergyShadowStep(
         options
       );
       extraCardDraws += 1;
+    }
+  }
+
+  // Pit stop (Transformers), just after batteries: two picks, each a
+  // discarded damage card or +1 Energy. The search has no damage state and
+  // credits both as Energy; the course ledger passes how many went to Energy
+  // after its damage replay (transition.pitStopEnergyPicks).
+  if (onPitStop) {
+    const energyPicks = Number.isInteger(transition?.pitStopEnergyPicks)
+      ? Math.max(0, Math.min(PIT_STOP_PICKS, transition.pitStopEnergyPicks))
+      : PIT_STOP_PICKS;
+    if (energyPicks > 0) {
+      const energyPackage = applyFlattenedRouteEnergyGain(
+        energy,
+        energyPicks,
+        nextAbsoluteActionCount,
+        options
+      );
+      pitStopRewardR += energyPackage.rewardR;
+      pitStopEnergyGain += energyPackage.realizedEnergyGain;
+      energy = energyPackage.energy;
     }
   }
 
@@ -622,13 +654,16 @@ export function getRouteEnergyShadowStep(
   const powerUpRewardScore = powerUpRewardR * registerScore;
   const chopShopRewardScore = chopShopRewardR * registerScore;
   const radioactiveWasteRewardScore = radioactiveWasteRewardR * registerScore;
+  const pitStopRewardScore = pitStopRewardR * registerScore;
   const rewardScore = (
+    pitStopRewardScore +
     batteryRewardScore +
     powerUpRewardScore +
     chopShopRewardScore +
     radioactiveWasteRewardScore
   );
   const rewardRegisterEquivalents = (
+    pitStopRewardR +
     batteryRewardR +
     powerUpRewardR +
     chopShopRewardR +
@@ -658,6 +693,8 @@ export function getRouteEnergyShadowStep(
     usefulCardUnitsAfter: 0,
     energyGain: Math.max(0, energy - reserveBefore),
     batteryEnergyGain,
+    pitStopEnergyGain,
+    pitStop: onPitStop,
     powerUpEnergyGain,
     extraCardDraws,
     battery: onBattery,
