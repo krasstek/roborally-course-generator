@@ -40,6 +40,7 @@ import {
   EDGE_BEHAVIOR,
   OPPOSITE,
   REGISTER_COUNT,
+  REGISTER_TEMPO_COST,
   ROTATION_ORDER
 } from "./constants.js";
 import {
@@ -1144,10 +1145,12 @@ export function moveOneStep(
     ? 0
     : getTilePenalty(nextTile, options) +
       getActiveFlamethrowerEntryPenalty(nextTile, options) +
+      getMineEntryPenalty(nextTile, options) +
       getTimedTraversalFragilityPenalty(nextTile, options)) +
     (portalDestinationTile
       ? getTilePenalty(portalDestinationTile, options) +
         getActiveFlamethrowerEntryPenalty(portalDestinationTile, options) +
+        getMineEntryPenalty(portalDestinationTile, options) +
         getTimedTraversalFragilityPenalty(portalDestinationTile, options)
       : 0);
   if (finishProgrammedStepPhase) finishProgrammedStepPhase("physicalMissProgramHazardMs");
@@ -1295,6 +1298,7 @@ export function resolveTeleporterMove(tileMap, state, action, options = {}) {
     conveyorSteps: [],
     hazard: getTilePenalty(destinationTile, options) +
       getActiveFlamethrowerEntryPenalty(destinationTile, options) +
+      getMineEntryPenalty(destinationTile, options) +
       getTimedTraversalFragilityPenalty(destinationTile, options) +
       getPitPressurePenalty(tileMap, resolvedState, options) +
       getLedgePressurePenalty(tileMap, resolvedState, options),
@@ -1343,6 +1347,7 @@ export function resolveJumpRampMove(tileMap, state, dir, squares, options = {}) 
     conveyorSteps: [],
     hazard: getTilePenalty(destinationTile, options) +
       getActiveFlamethrowerEntryPenalty(destinationTile, options) +
+      getMineEntryPenalty(destinationTile, options) +
       getTimedTraversalFragilityPenalty(destinationTile, options) +
       getPitPressurePenalty(tileMap, resolvedState, options) +
       getLedgePressurePenalty(tileMap, resolvedState, options),
@@ -1586,6 +1591,15 @@ export function getFlamethrowerDamagePenalty(options = {}) {
   // hit on entry/pass-through and another at the end of the register.
   const damagePressure = getDamageDeckPressureMultipliers(options);
   return Number((4 * damagePressure.hazard).toFixed(2));
+}
+
+// Transformers mine (overlay token, square below stays active): every entry
+// deals 1 damage and 1 clog (user model 2026-10-29); priced as a flamethrower
+// hit plus one register for the clog (the clog curve's first unit, 1 RE).
+export function getMineEntryPenalty(tile, options = {}) {
+  return hasFeatureType(tile, "mine")
+    ? getFlamethrowerDamagePenalty(options) + REGISTER_TEMPO_COST
+    : 0;
 }
 
 export function getActiveFlamethrowerEntryPenalty(tile, options = {}) {

@@ -705,7 +705,8 @@ export function summarizeDamageEconomyFoundationForRoute(
       electiveSpamPlayDistribution,
       turnRandomizerStarts,
       reliefPlan.forcedClogWeight,
-      reliefPlan.electiveClogWeight
+      reliefPlan.electiveClogWeight,
+      turnRecords.reduce((sum, record) => sum + (record.realized?.mineDamageUnits || 0), 0)
     );
     const randomizerClogLoad = combinedClog.randomizerClogLoad;
     const randomizerForcedSpamOverlap =

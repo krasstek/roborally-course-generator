@@ -3,6 +3,7 @@
 import {
   applyDamageEconomyPitStopPicks,
   createDamageEconomyState,
+  getDamageEconomyCombinedClogSummary,
   getDamageEconomyRealizedDamageForTransition
 } from "../src/analysis/damage-economy.js";
 import { getRouteEnergyShadowStep } from "../src/analysis/energy-economy.js";
@@ -153,6 +154,19 @@ const cases = [
     check: () => {
       const result = playForward(row(10, { 5: firePit }), 6);
       return result.xs === "1,2,3,4,5,6" && result.cancelled === "";
+    }
+  },
+  {
+    name: "mine: every entry deals 1 damage",
+    check: () => damage(row(3, { 1: [{ type: "mine" }] }), 0, 2, [1, 2]).mineDamageUnits === 1 &&
+      damage(row(3, { 1: [{ type: "mine" }] }), 0, 1, [1]).totalDamageUnits === 1
+  },
+  {
+    name: "mine: its clog adds one unit to the turn (1 RE on an otherwise clean turn)",
+    check: () => {
+      const clean = getDamageEconomyCombinedClogSummary([[1]], [1], 0).clogRegisterEquivalents;
+      const mined = getDamageEconomyCombinedClogSummary([[1]], [1], 0, 2, 2, 1).clogRegisterEquivalents;
+      return clean === 0 && Math.abs(mined - 1) < 1e-9;
     }
   },
   {

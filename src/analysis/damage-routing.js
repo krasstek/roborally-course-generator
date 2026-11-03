@@ -7,7 +7,7 @@ import {
   getDamageEconomyActiveFlamethrowerCount
 } from "./damage-economy.js";
 import { clamp } from "../shared/math.js";
-import { getFlamethrowerDamagePenalty } from "./movement.js";
+import { getFlamethrowerDamagePenalty, getMineEntryPenalty } from "./movement.js";
 import {
   getRebootDamagePenalty,
   getRebootEndedAbsoluteActions,
@@ -60,6 +60,7 @@ export function getLegacyRealizedDirectDamageScoreForRoute(tileMap, route, optio
         score += getDamageEconomyActiveFlamethrowerCount(tile, registerOptions) *
           getFlamethrowerDamagePenalty(registerOptions);
         if (isFirePit(tile)) score += getFlamethrowerDamagePenalty(registerOptions);
+        score += getMineEntryPenalty(tile, registerOptions);
       }
 
       // Ledge direct damage historically entered route.hazard in raw damage units.

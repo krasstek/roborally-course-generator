@@ -906,7 +906,9 @@ export function getDamageEconomyCombinedClogSummary(
   electiveSpamPlayDistribution = [1],
   randomizerStartCount = 0,
   forcedSpamClogWeight = DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT,
-  electiveSpamClogWeight = DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT
+  electiveSpamClogWeight = DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT,
+  // Deterministic extra clog this turn (Transformers mines: 1 per entry).
+  extraClogLoad = 0
 ) {
   const joint = Array.isArray(forcedSpamHaywireJointDistribution) &&
     forcedSpamHaywireJointDistribution.length
@@ -956,7 +958,8 @@ export function getDamageEconomyCombinedClogSummary(
         const spamClogLoad =
           cappedForcedSpamPlays * forcedSpamClogWeight +
           (spamPlayCount - cappedForcedSpamPlays) * electiveSpamClogWeight;
-        const controlClogLoad = haywireCount + spamClogLoad + safeRandomizerClogLoad;
+        const controlClogLoad = haywireCount + spamClogLoad + safeRandomizerClogLoad +
+          Math.max(0, Number(extraClogLoad) || 0);
         spamPlayCountDistribution[spamPlayCount] += probability;
         const loadKey = Number(controlClogLoad.toFixed(6));
         controlClogLoadProbability.set(
@@ -1526,6 +1529,7 @@ export function getDamageEconomyRealizedDamageForTransition(
   let radioactiveWasteDamageUnits = 0;
   let ledgeDamageUnits = 0;
   let firePitDamageUnits = 0;
+  let mineDamageUnits = 0;
   const rebootDamageUnits = transition?.rebooted
     ? (options.moreDeadlyGame ? 3 : 2)
     : 0;
@@ -1544,6 +1548,9 @@ export function getDamageEconomyRealizedDamageForTransition(
       registerOptions
     );
     if (isFirePit(tile)) firePitDamageUnits += 1;
+    // A mine (Transformers token, modelled as never removed) deals 1 damage on
+    // every entry; its +1 clog is added to the turn's clog summary.
+    if (hasFeatureType(tile, "mine")) mineDamageUnits += 1;
   }
 
   // Flaming Oil is never register-specific. It mirrors the flamer's entry/end
@@ -1635,6 +1642,7 @@ export function getDamageEconomyRealizedDamageForTransition(
     radioactiveWasteDamageUnits +
     ledgeDamageUnits +
     firePitDamageUnits +
+    mineDamageUnits +
     rebootDamageUnits
   );
   const sourceTypes = [];
@@ -1645,6 +1653,7 @@ export function getDamageEconomyRealizedDamageForTransition(
   if (radioactiveWasteDamageUnits > 0) sourceTypes.push("radioactive-waste-hit");
   if (ledgeDamageUnits > 0) sourceTypes.push("ledge-damage");
   if (firePitDamageUnits > 0) sourceTypes.push("fire-pit-damage");
+  if (mineDamageUnits > 0) sourceTypes.push("mine-hit");
   if (rebootDamageUnits > 0) sourceTypes.push("reboot-damage");
 
   return {
@@ -1655,6 +1664,7 @@ export function getDamageEconomyRealizedDamageForTransition(
     radioactiveWasteDamageUnits,
     ledgeDamageUnits,
     firePitDamageUnits,
+    mineDamageUnits,
     rebootDamageUnits,
     totalDamageUnits,
     sourceTypes
@@ -1910,7 +1920,8 @@ export function replayDamageEconomyShutdownEquivalentScore({
       electiveSpamPlayDistribution,
       turnRandomizerStarts,
       reliefPlan.forcedClogWeight,
-      reliefPlan.electiveClogWeight
+      reliefPlan.electiveClogWeight,
+      turnRecords.reduce((sum, record) => sum + (record.realized?.mineDamageUnits || 0), 0)
     );
     const turnDamageEconomyRegisterEquivalents =
       programming.spamSupplyRegisterEquivalents + combinedClog.clogRegisterEquivalents;
