@@ -154,7 +154,10 @@ function robotLaserStepBlocked(tileMap, a, b, dir, entersTarget) {
   const toBuilding = getBuilding(toTile);
   const toRamp = getJumpRamp(toTile);
   if (!fromBuilding && !toBuilding && !toRamp && !getJumpRamp(fromTile)) {
-    return !canMoveBetween(tileMap, a, b, dir).ok;
+    // A shot passes over pits and trapdoors (canMoveBetween reports them as a
+    // crash); walls, repulsors, ledges and the course edge still stop it.
+    const move = canMoveBetween(tileMap, a, b, dir);
+    return !(move.ok || (move.crash && !move.offBoard));
   }
   if (!toTile || isBoundaryBlockedByWalls(tileMap, a, b, dir)) return true;
   if (toBuilding && !fromBuilding) return true;

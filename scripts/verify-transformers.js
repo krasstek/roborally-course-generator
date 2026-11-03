@@ -75,6 +75,10 @@ const cases = [
     check: () => hasLineOfSight(row(4), { x: 0, y: 0 }, { x: 3, y: 0 }) === true
   },
   {
+    name: "robot lasers: a shot passes over a pit and an active trapdoor",
+    check: () => hasLineOfSight(row(4, { 1: [{ type: "pit" }], 2: [{ type: "trapdoor", registers: [1, 2, 3, 4, 5] }] }), { x: 0, y: 0 }, { x: 3, y: 0 }) === true
+  },
+  {
     name: "laser: can't shoot into a building, even through a doorway",
     check: () => hasLineOfSight(row(3, { 2: building(["W"]) }), { x: 0, y: 0 }, { x: 2, y: 0 }) === false
   },
