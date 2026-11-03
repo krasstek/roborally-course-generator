@@ -1,6 +1,7 @@
 // Checks for the Transformers rules beyond movement (verify-movement.js covers
 // movement): robot lasers and buildings, jump ramps and fire pits.
 import { getDamageEconomyRealizedDamageForTransition } from "../src/analysis/damage-economy.js";
+import { simulateAction } from "../src/analysis/movement.js";
 import { getIncomingRobotLaserDirection, hasLineOfSight } from "../src/analysis/traffic.js";
 
 function tileKey(x, y) {
@@ -37,6 +38,22 @@ function damage(map, from, to, traversed, absoluteAction = 2) {
 }
 
 const laser = { type: "laser", dir: "E", damage: 1 };
+const FORWARD = { id: "FORWARD", type: "move", relative: "forward", steps: 1 };
+
+// Plays Move 1 east for `count` registers from x = 0, register by register
+// (register index runs 0-4 and wraps into the next turn); returns each x.
+function playForward(map, count) {
+  let state = { x: 0, y: 0, facing: "E" };
+  const xs = [];
+  const cancelled = [];
+  for (let index = 0; index < count; index += 1) {
+    const result = simulateAction(map, state, FORWARD, { registerIndex: index % 5 });
+    state = result.to;
+    xs.push(state.x);
+    if (result.cancelledByFirePit) cancelled.push(index + 1);
+  }
+  return { xs: xs.join(","), cancelled: cancelled.join(",") };
+}
 
 const cases = [
   {
@@ -110,6 +127,27 @@ const cases = [
   {
     name: "fire pit: the same laser hits outside a pit",
     check: () => damage(row(3, { 1: [laser] }), 1, 1, []).boardLaserDamageUnits === 1
+  },
+  {
+    name: "fire pit: entered in register 2, the register-5 card is cancelled even after leaving",
+    check: () => {
+      const result = playForward(row(10, { 2: firePit }), 6);
+      return result.xs === "1,2,3,4,4,5" && result.cancelled === "5";
+    }
+  },
+  {
+    name: "fire pit: entered in register 5, nothing is cancelled",
+    check: () => {
+      const result = playForward(row(10, { 5: firePit }), 6);
+      return result.xs === "1,2,3,4,5,6" && result.cancelled === "";
+    }
+  },
+  {
+    name: "fire pit: the lock ends with the turn",
+    check: () => {
+      const result = playForward(row(12, { 1: firePit }), 10);
+      return result.xs === "1,2,3,4,4,5,6,7,8,9" && result.cancelled === "5";
+    }
   }
 ];
 

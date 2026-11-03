@@ -1921,7 +1921,17 @@ export function simulateAction(tileMap, startState, action, options = {}) {
       analysisTelemetryNow() - programmedStartStartedAt;
   }
 
-  if (action.type === "turn") {
+  // Transformers fire pit: entering one in registers 1-4 cancels the turn's
+  // register-5 card. The card is still played (and used up), but the robot
+  // does not move; board elements still act.
+  const registerPosition = Number.isInteger(options.registerIndex)
+    ? ((options.registerIndex % REGISTER_COUNT) + REGISTER_COUNT) % REGISTER_COUNT
+    : null;
+  const cancelledByFirePit = Boolean(startState.firePitLock) && registerPosition === REGISTER_COUNT - 1;
+
+  if (cancelledByFirePit) {
+    // Stand still for the programmed card.
+  } else if (action.type === "turn") {
     const turnStartedAt = physicalMissProfile ? analysisTelemetryNow() : 0;
     state.facing = rotateFacing(state.facing, action.rotation);
     if (physicalMissProfile) {
@@ -2289,8 +2299,21 @@ export function simulateAction(tileMap, startState, action, options = {}) {
   }
   if (finishPhysicalMissPhase) finishPhysicalMissPhase("physicalMissEndRegisterMs");
 
+  // The lock holds from entering a fire pit until register 5 of the same turn.
+  const firePitLock = !crashed && !rebooted &&
+    registerPosition !== null && registerPosition < REGISTER_COUNT - 1 &&
+    (Boolean(startState.firePitLock) || traversed.some((point) => (
+      point && isFirePit(tileMap.get(tileKey(point.x, point.y)))
+    )));
+  if (firePitLock) {
+    state.firePitLock = true;
+  } else {
+    delete state.firePitLock;
+  }
+
   return {
     action: action.id,
+    ...(cancelledByFirePit ? { cancelledByFirePit: true } : {}),
     randomizerAtRegisterStart,
     from: cloneState(startState),
     to: state,

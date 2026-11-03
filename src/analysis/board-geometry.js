@@ -11,16 +11,21 @@ export function tileKey(x, y) {
   return `${x},${y}`;
 }
 
+// firePitLock (Transformers): the robot entered a fire pit in registers 1-4
+// of this turn, so its register-5 card is cancelled. Present only when set,
+// so ordinary states and keys are unchanged.
 export function stateKey(state) {
-  return `${state.x},${state.y},${state.facing ?? "E"}`;
+  return `${state.x},${state.y},${state.facing ?? "E"}${state.firePitLock ? ",L" : ""}`;
 }
 
 export function cloneState(state) {
-  return {
+  const copy = {
     x: state.x,
     y: state.y,
     facing: state.facing ?? "E"
   };
+  if (state.firePitLock) copy.firePitLock = true;
+  return copy;
 }
 
 export function getWalls(tile) {

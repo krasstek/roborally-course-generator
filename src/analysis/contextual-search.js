@@ -190,6 +190,11 @@ export function getContextualPhysicalRegisterCode(state, absoluteActions) {
   const y = Math.floor(Number(state?.y));
   const facingCode = CONTEXTUAL_FACING_CODE[state?.facing ?? "E"];
   const phase = Math.max(0, Math.floor(Number(absoluteActions) || 0)) % REGISTER_COUNT;
+  // A fire-pit-locked state (register-5 card cancelled) is a different state;
+  // it takes the fallback id with the phase shifted past the ordinary 0-4.
+  if (state?.firePitLock) {
+    return contextualNumericFallbackId(x, y, facingCode ?? -1, phase + REGISTER_COUNT);
+  }
   if (
     Number.isInteger(x) && Number.isInteger(y) &&
     x >= -CONTEXTUAL_COORD_OFFSET && x < CONTEXTUAL_COORD_OFFSET &&

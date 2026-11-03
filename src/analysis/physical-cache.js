@@ -121,6 +121,7 @@ export function getCachedContextualPhysicalTransition(
     state.x,
     state.y,
     state.facing,
+    state.firePitLock ? "L" : "",
     action.id,
     Number.isInteger(options.registerIndex)
       ? `r${((options.registerIndex % REGISTER_COUNT) + REGISTER_COUNT) % REGISTER_COUNT}`

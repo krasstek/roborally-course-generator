@@ -455,7 +455,8 @@ export function getRouteEnergyShadowStep(
     0,
     config.maxEnergy
   );
-  const powerUp = actionId === "WAIT";
+  // A register-5 card cancelled by a fire pit (Transformers) does nothing.
+  const powerUp = actionId === "WAIT" && !transition?.cancelledByFirePit;
 
   if (!isRouteAwareBatteryScoringActive(options)) {
     return {

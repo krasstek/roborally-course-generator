@@ -205,7 +205,7 @@ export function applyFixedRoutePricingTransitionEconomy(tileMap, states, transit
       config
     );
   }
-  if (actionId === "WAIT") {
+  if (actionId === "WAIT" && !transition.cancelledByFirePit) {
     next = applyFixedRoutePricingResourceGain(next, 1, 0, config);
   }
   if (!onChopShop) return next;
