@@ -17,10 +17,14 @@ import { isRouteAwareBatteryScoringActive } from "./rule-options.js";
 export const PIT_STOP_PICKS = 2;
 
 // Energon squares a transition touches (Transformers: +1 Energy on contact,
-// moving through counts), each square once.
+// moving through counts), each square once. The square the robot starts the
+// register on never counts: it took that cube when it arrived, and a robot can
+// claim each cube only once (user 2026-11-03), so standing on it earns nothing.
+// The course ledger also keeps a per-route set for cubes left and re-entered.
 export function getEnergonContactSquares(tileMap, transition, destination = transition?.to) {
   const squares = [];
-  const seen = new Set();
+  const from = transition?.from;
+  const seen = new Set(from && Number.isFinite(from.x) && Number.isFinite(from.y) ? [tileKey(from.x, from.y)] : []);
   for (const point of [...(transition?.traversed || []), destination]) {
     if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
     const key = tileKey(point.x, point.y);

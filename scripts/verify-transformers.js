@@ -185,6 +185,10 @@ const cases = [
     check: () => energyStep(row(3, { 1: [{ type: "energon" }] }), 2, { traversed: [{ x: 1, y: 0 }, { x: 2, y: 0 }] }).energonEnergyGain === 1
   },
   {
+    name: "energon: standing on a cube earns nothing more (one claim per robot)",
+    check: () => energyStep(row(3, { 1: [{ type: "energon" }] }), 1, { from: { x: 1, y: 0, facing: "E" }, traversed: [] }).energonEnergyGain === 0
+  },
+  {
     name: "energon: a contested claim is worth its chance of arriving first",
     check: () => {
       const map = row(3, { 1: [{ type: "energon" }] });
@@ -231,12 +235,37 @@ const cases = [
     check: () => applyDamageEconomyPitStopPicks(createDamageEconomyState(), 2) === 2
   },
   {
+    name: "pit stop: a pending Haywire is discarded whole, the second pick is Energy",
+    check: () => {
+      const state = createDamageEconomyState();
+      state.pendingHaywireRegisterRisks = [0, 1, 0, 0, 0];
+      return applyDamageEconomyPitStopPicks(state, 2) === 1 &&
+        state.pendingHaywireRegisterRisks.every((value) => value < 1e-9);
+    }
+  },
+  {
+    name: "pit stop: Haywire first, then SPAM",
+    check: () => {
+      const state = createDamageEconomyState();
+      state.pendingHaywireRegisterRisks = [0, 0, 1, 0, 0];
+      state.spamTotal = 1;
+      state.spamHeld = 1;
+      return applyDamageEconomyPitStopPicks(state, 1) === 0 &&
+        state.pendingHaywireRegisterRisks.every((value) => value < 1e-9) && state.spamTotal === 1;
+    }
+  },
+  {
     name: "pit stop: holding damage, the picks discard it",
     check: () => {
       const state = createDamageEconomyState();
-      state.spamTotal = 1.2;
-      state.spamHeld = 1.2;
-      return applyDamageEconomyPitStopPicks(state, 2) === 0 && state.spamTotal < 0.1;
+      state.spamTotal = 2;
+      state.spamHeld = 2;
+      const both = applyDamageEconomyPitStopPicks(state, 2) === 0 && state.spamTotal < 1e-9;
+      const partial = createDamageEconomyState();
+      partial.spamTotal = 1.2;
+      partial.spamHeld = 1.2;
+      // One card discarded; the 0.2 left is under half a card, so the second pick is Energy.
+      return both && applyDamageEconomyPitStopPicks(partial, 2) === 1 && Math.abs(partial.spamTotal - 0.2) < 1e-9;
     }
   },
   {
