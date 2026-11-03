@@ -236,6 +236,15 @@ export function getCheckpointPushDirections(tileMap, point, options = {}) {
 }
 
 export function canUseCheckpointTile(candidate, tileMap, starts, preferences = {}) {
+  // A checkpoint keeps the building under it, so a grandstand (a building
+  // without doorways) would be unreachable.
+  const candidateTile = tileMap.get(`${candidate.x},${candidate.y}`);
+  if ((candidateTile?.features || []).some((feature) => (
+    feature.type === "building" && !(feature.sides?.length)
+  ))) {
+    return false;
+  }
+
   if (normalizeCheckpointFloor(preferences.checkpointFloor) === CHECKPOINT_FLOOR_MODES.clear) {
     const tile = tileMap.get(`${candidate.x},${candidate.y}`);
     if ((tile?.features || []).some((feature) => !CLEAR_FLOOR_CHECKPOINT_FEATURES.has(feature.type))) {
