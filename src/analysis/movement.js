@@ -113,11 +113,21 @@ export function getTilePenalty(
   randomizerAtRegisterStart = options.randomizerAtRegisterStart
 ) {
   let penalty = 0;
+  // A fire pit deals 1 damage on entry (and 1 at the end of the register, see
+  // getEndOfRegisterFeaturePenalty), priced like a flamethrower hit; a robot in
+  // it is not hit by board lasers.
+  const firePit = isFirePit(tile);
+  if (firePit) {
+    penalty += getFlamethrowerDamagePenalty(options);
+  }
 
   // Feature penalties are used to approximate local danger/value for route
   // scoring. This intentionally captures many board effects without turning the
   // analyzer into a full combat or timing simulator.
   for (const feature of tile?.features || []) {
+    if (firePit && (feature.type === "laser" || feature.type === "firePit")) {
+      continue;
+    }
     // v42 removes the old static Battery reward from per-tile movement scoring.
     // The route-aware reward is applied once, at the post-register landing
     // boundary, so traversing a Battery does not collect energy.
@@ -1773,6 +1783,11 @@ export function getEndOfRegisterFeaturePenalty(tileMap, state, options = {}) {
   // it can prefer safer witnesses before exact chronological realization.
   if (hasFeatureType(tile, "radiation")) {
     penalty += 4.5 / REGISTER_COUNT;
+  }
+
+  // A fire pit deals 1 more damage just before board lasers.
+  if (isFirePit(tile)) {
+    penalty += getFlamethrowerDamagePenalty(options);
   }
 
   // Repair Stations are an optional rule on ordinary checkpoints, not a

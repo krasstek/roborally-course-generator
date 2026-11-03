@@ -1,5 +1,6 @@
 // Checks for the Transformers rules beyond movement (verify-movement.js covers
 // movement): robot lasers and buildings, jump ramps and fire pits.
+import { getDamageEconomyRealizedDamageForTransition } from "../src/analysis/damage-economy.js";
 import { getIncomingRobotLaserDirection, hasLineOfSight } from "../src/analysis/traffic.js";
 
 function tileKey(x, y) {
@@ -23,6 +24,19 @@ const firePit = [{ type: "firePit" }];
 function point(x, facing) {
   return { after: { x, y: 0, facing }, facing };
 }
+
+// Damage for one register's transition along the row.
+function damage(map, from, to, traversed, absoluteAction = 2) {
+  return getDamageEconomyRealizedDamageForTransition(map, {
+    from: { x: from, y: 0, facing: "E" },
+    to: { x: to, y: 0, facing: "E" },
+    traversed: traversed.map((x) => ({ x, y: 0 })),
+    rebooted: false,
+    crashed: false
+  }, {}, absoluteAction);
+}
+
+const laser = { type: "laser", dir: "E", damage: 1 };
 
 const cases = [
   {
@@ -73,6 +87,29 @@ const cases = [
   {
     name: "laser: a fire pit in between does not block",
     check: () => getIncomingRobotLaserDirection(row(3, { 1: firePit }), point(2, "N"), point(0, "E")) === "E"
+  },
+  {
+    name: "fire pit: entering and ending the register in it deals 1 + 1",
+    check: () => damage(row(3, { 1: firePit }), 0, 1, [1]).firePitDamageUnits === 2
+  },
+  {
+    name: "fire pit: staying in it for a register deals 1",
+    check: () => damage(row(3, { 1: firePit }), 1, 1, []).firePitDamageUnits === 1
+  },
+  {
+    name: "fire pit: carried through it deals 1 for the entry only",
+    check: () => damage(row(3, { 1: firePit }), 0, 2, [1, 2]).firePitDamageUnits === 1
+  },
+  {
+    name: "fire pit: a board laser does not hit a robot in it",
+    check: () => {
+      const result = damage(row(3, { 1: [...firePit, laser] }), 1, 1, []);
+      return result.boardLaserDamageUnits === 0 && result.totalDamageUnits === 1;
+    }
+  },
+  {
+    name: "fire pit: the same laser hits outside a pit",
+    check: () => damage(row(3, { 1: [laser] }), 1, 1, []).boardLaserDamageUnits === 1
   }
 ];
 

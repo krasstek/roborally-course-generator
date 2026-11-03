@@ -6,6 +6,7 @@ import {
   hasRampForDir,
   isBoundaryBlockedByWalls,
   isFeatureActiveThisRegister,
+  isFirePit,
   isOil,
   isWater,
   tileKey
@@ -1503,6 +1504,7 @@ export function getDamageEconomyRealizedDamageForTransition(
   let radiationDamageUnits = 0;
   let radioactiveWasteDamageUnits = 0;
   let ledgeDamageUnits = 0;
+  let firePitDamageUnits = 0;
   const rebootDamageUnits = transition?.rebooted
     ? (options.moreDeadlyGame ? 3 : 2)
     : 0;
@@ -1511,6 +1513,8 @@ export function getDamageEconomyRealizedDamageForTransition(
   // separate +1 if the robot ends the register on the flamethrower space. The
   // final landing square is intentionally present in `traversed`, so an entry
   // that also ends there can correctly become 1 + 1 damage below.
+  // A fire pit (Transformers) also deals 1 on every entry, a jump landing in
+  // it included, and 1 more for ending the register in it (below).
   for (const point of transition?.traversed || []) {
     if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
     const tile = tileMap.get(tileKey(point.x, point.y));
@@ -1518,6 +1522,7 @@ export function getDamageEconomyRealizedDamageForTransition(
       tile,
       registerOptions
     );
+    if (isFirePit(tile)) firePitDamageUnits += 1;
   }
 
   // Flaming Oil is never register-specific. It mirrors the flamer's entry/end
@@ -1566,8 +1571,12 @@ export function getDamageEconomyRealizedDamageForTransition(
   // survives, inspect only the final post-conveyor/pusher/gear/machinery square.
   if (!transition?.rebooted && !transition?.crashed && transition?.to) {
     const finalTile = tileMap.get(tileKey(transition.to.x, transition.to.y));
+    // A robot in a fire pit takes 1 just before board lasers and is not hit by
+    // them.
+    const inFirePit = isFirePit(finalTile);
+    if (inFirePit) firePitDamageUnits += 1;
     for (const feature of finalTile?.features || []) {
-      if (feature.type === "laser") {
+      if (feature.type === "laser" && !inFirePit) {
         boardLaserDamageUnits += getEffectiveLaserDamage(feature, options);
       }
     }
@@ -1604,6 +1613,7 @@ export function getDamageEconomyRealizedDamageForTransition(
     radiationDamageUnits +
     radioactiveWasteDamageUnits +
     ledgeDamageUnits +
+    firePitDamageUnits +
     rebootDamageUnits
   );
   const sourceTypes = [];
@@ -1613,6 +1623,7 @@ export function getDamageEconomyRealizedDamageForTransition(
   if (radiationDamageUnits > 0) sourceTypes.push("radiation-hit");
   if (radioactiveWasteDamageUnits > 0) sourceTypes.push("radioactive-waste-hit");
   if (ledgeDamageUnits > 0) sourceTypes.push("ledge-damage");
+  if (firePitDamageUnits > 0) sourceTypes.push("fire-pit-damage");
   if (rebootDamageUnits > 0) sourceTypes.push("reboot-damage");
 
   return {
@@ -1622,6 +1633,7 @@ export function getDamageEconomyRealizedDamageForTransition(
     radiationDamageUnits,
     radioactiveWasteDamageUnits,
     ledgeDamageUnits,
+    firePitDamageUnits,
     rebootDamageUnits,
     totalDamageUnits,
     sourceTypes
