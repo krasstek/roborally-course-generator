@@ -1246,7 +1246,8 @@ function drawStarts(
   startLateUnavailable = [],
   startEnergyIsSubsidy = false,
   noDockStarts = false,
-  hideUnusableStarts = false
+  hideUnusableStarts = false,
+  showPlayableStartMarkers = false
 ) {
   if (visibleFeatureTypes && !visibleFeatureTypes.has("start")) {
     return;
@@ -1326,8 +1327,9 @@ function drawStarts(
       ctx.strokeStyle = startEnergyIsSubsidy ? "#245b7b" : "#0c4f35";
       ctx.lineWidth = 1.35;
       ctx.strokeRect(badgeLeft, badgeTop, badgeSize, badgeSize);
-    } else if (noDockStarts) {
-      // Dockless setup: player-facing available starts are white circles.
+    } else if (noDockStarts || (showPlayableStartMarkers && !showAllStartMarkers)) {
+      // Player-facing available starts are white circles: dockless setups,
+      // and dock starts in icon view (photos have them printed on the dock).
       ctx.fillStyle = "rgba(255, 255, 255, 0.96)";
       ctx.strokeStyle = "#111111";
       ctx.lineWidth = 1.8;
@@ -1365,7 +1367,7 @@ function drawStarts(
           : "";
 
     if (startLabel) {
-      ctx.fillStyle = noDockStarts && !hasEnergyCost && !startIsUnusable
+      ctx.fillStyle = (noDockStarts || showPlayableStartMarkers) && !hasEnergyCost && !startIsUnusable
         ? "#111111"
         : "#ffffff";
       ctx.font = hasEnergyCost && !hasExplicitStartLabel && hasSecondaryCostDisplay
@@ -1823,6 +1825,7 @@ export function render(canvas, pieces, imageMap = {}, options = {}) {
   const startEnergyIsSubsidy = Boolean(options.startEnergyIsSubsidy);
   const noDockStarts = Boolean(options.noDockStarts);
   const hideUnusableStarts = Boolean(options.hideUnusableStarts);
+  const showPlayableStartMarkers = Boolean(options.showPlayableStartMarkers);
   const edgeOutlineColor = options.edgeOutlineColor ?? null;
   const visibleFeatureTypes = options.visibleFeatureTypes
     ? new Set(options.visibleFeatureTypes)
@@ -1870,7 +1873,8 @@ export function render(canvas, pieces, imageMap = {}, options = {}) {
     startLateUnavailable,
     startEnergyIsSubsidy,
     noDockStarts,
-    hideUnusableStarts
+    hideUnusableStarts,
+    showPlayableStartMarkers
   );
   drawRebootTokens(ctx, options.rebootTokens || [], bounds, tileSize, margin);
   drawVirtualBotEntry(ctx, options.virtualBotEntry || null, bounds, tileSize, margin, showStartFacing);

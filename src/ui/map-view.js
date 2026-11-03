@@ -456,6 +456,8 @@ export function drawScenarioCanvas(scenario, options = {}) {
     showBoardLabels: false,
     showStartFacing: devViewEnabled,
     showAllStartMarkers: devViewEnabled && !scenario.virtualBots,
+    // Icon view has no printed dock, so usable starts need their own marker.
+    showPlayableStartMarkers: iconBoardView && !scenario.virtualBots,
     noDockStarts: Boolean(scenario.noDocks),
     // No-Docks normal view shows only playable starting spaces. Pricing labels belong
     // on the retained choices; prohibited/pruned physical edge spaces remain Dev-only.
