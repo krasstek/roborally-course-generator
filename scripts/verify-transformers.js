@@ -2,6 +2,7 @@
 // movement): robot lasers and buildings, jump ramps and fire pits.
 import {
   applyDamageEconomyPitStopPicks,
+  applyDamageEconomyRepairStationRelief,
   createDamageEconomyState,
   getDamageEconomyCombinedClogSummary,
   getDamageEconomyRealizedDamageForTransition
@@ -235,39 +236,35 @@ const cases = [
     check: () => applyDamageEconomyPitStopPicks(createDamageEconomyState(), 2) === 2
   },
   {
-    name: "pit stop: a pending Haywire is discarded whole, the second pick is Energy",
+    name: "pit stop: a pick is a Repair Station relief (deck mix, Haywire share too)",
     check: () => {
       const state = createDamageEconomyState();
       state.pendingHaywireRegisterRisks = [0, 1, 0, 0, 0];
-      return applyDamageEconomyPitStopPicks(state, 2) === 1 &&
-        state.pendingHaywireRegisterRisks.every((value) => value < 1e-9);
-    }
-  },
-  {
-    name: "pit stop: Haywire first, then SPAM",
-    check: () => {
-      const state = createDamageEconomyState();
-      state.pendingHaywireRegisterRisks = [0, 0, 1, 0, 0];
       state.spamTotal = 1;
       state.spamHeld = 1;
-      return applyDamageEconomyPitStopPicks(state, 1) === 0 &&
-        state.pendingHaywireRegisterRisks.every((value) => value < 1e-9) && state.spamTotal === 1;
+      const reference = createDamageEconomyState();
+      reference.pendingHaywireRegisterRisks = [0, 1, 0, 0, 0];
+      reference.spamTotal = 1;
+      reference.spamHeld = 1;
+      applyDamageEconomyRepairStationRelief(reference);
+      const energy = applyDamageEconomyPitStopPicks(state, 1);
+      return energy === 0 && Math.abs(state.spamTotal - reference.spamTotal) < 1e-9 &&
+        state.pendingHaywireRegisterRisks.every((value, index) => Math.abs(value - reference.pendingHaywireRegisterRisks[index]) < 1e-9);
     }
   },
   {
-    name: "pit stop: holding damage, the picks discard it",
+    name: "pit stop: badly damaged repairs twice, lightly damaged repairs once then Energy",
     check: () => {
-      const state = createDamageEconomyState();
-      state.spamTotal = 2;
-      state.spamHeld = 2;
-      const both = applyDamageEconomyPitStopPicks(state, 2) === 0 && state.spamTotal < 1e-9;
-      const partial = createDamageEconomyState();
-      partial.spamTotal = 1.2;
-      partial.spamHeld = 1.2;
-      // One card discarded; the 0.2 left is under half a card, so the second pick is Energy.
-      return both && applyDamageEconomyPitStopPicks(partial, 2) === 1 && Math.abs(partial.spamTotal - 0.2) < 1e-9;
+      const heavy = createDamageEconomyState();
+      heavy.spamTotal = 3;
+      heavy.spamHeld = 3;
+      const light = createDamageEconomyState();
+      light.spamTotal = 0.7;
+      light.spamHeld = 0.7;
+      return applyDamageEconomyPitStopPicks(heavy, 2) === 0 && applyDamageEconomyPitStopPicks(light, 2) === 1;
     }
   },
+
   {
     name: "pit stop: the search credits two Energy",
     check: () => energyStep(row(2, { 0: pitStop }), 0).pitStopEnergyGain === 2

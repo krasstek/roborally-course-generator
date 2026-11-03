@@ -1452,35 +1452,15 @@ export function applyDamageEconomyPitStopPicks(state, picks) {
       (Array.isArray(state?.pendingHaywireRegisterRisks)
         ? state.pendingHaywireRegisterRisks.reduce((sum, value) => sum + (Number(value) || 0), 0)
         : 0);
+    // Each pick works like a Repair Station (user 2026-11-03: deck-mix
+    // relief, SPAM and Haywire); a badly damaged robot repairs twice.
     if (heldDamage >= 0.5) {
-      applyDamageEconomyPitStopDiscard(state);
+      applyDamageEconomyRepairStationRelief(state);
     } else {
       energyPicks += 1;
     }
   }
   return energyPicks;
-}
-
-// A pit stop pick discards one whole damage card of the player's choice (user
-// 2026-11-03: Haywire too), unlike the Repair Station's deck-mix split. The
-// worst first: next turn's pending Haywire, then same-turn SPAM, then older SPAM.
-function applyDamageEconomyPitStopDiscard(state) {
-  let remaining = 1;
-  const risks = Array.isArray(state?.pendingHaywireRegisterRisks)
-    ? state.pendingHaywireRegisterRisks.map((value) => clamp(Number(value) || 0, 0, 1))
-    : Array(REGISTER_COUNT).fill(0);
-  const haywireRiskBefore = risks.reduce((sum, value) => sum + value, 0);
-  const haywireRemoved = Math.min(haywireRiskBefore, remaining);
-  const scale = haywireRiskBefore > 0.000001 ? (haywireRiskBefore - haywireRemoved) / haywireRiskBefore : 0;
-  state.pendingHaywireRegisterRisks = risks.map((value) => clamp(value * scale, 0, 1));
-  remaining -= haywireRemoved;
-  const pendingSpamRemoved = Math.min(Math.max(0, Number(state?.pendingSpam) || 0), remaining);
-  state.pendingSpam = Math.max(0, (Number(state?.pendingSpam) || 0) - pendingSpamRemoved);
-  remaining -= pendingSpamRemoved;
-  const persistentSpamRemoved = Math.min(Math.max(0, Number(state?.spamTotal) || 0), remaining);
-  state.spamTotal = Math.max(0, (Number(state?.spamTotal) || 0) - persistentSpamRemoved);
-  state.spamHeld = Math.min(Math.max(0, Number(state?.spamHeld) || 0), Math.max(0, Number(state?.spamTotal) || 0));
-  return { haywireExpectedRemoved: haywireRemoved, spamRemoved: pendingSpamRemoved + persistentSpamRemoved };
 }
 
 export function applyDamageEconomyRepairStationRelief(state) {
