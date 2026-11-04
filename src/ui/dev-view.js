@@ -119,7 +119,61 @@ export function formatBoardTraceEvent(event) {
   if (event.type === "oil") return `oil slide ${event.dir} ${formatTraceState(event.from)}→${formatTraceState(event.to)}`;
   if (event.type === "pusher") return `pusher ${formatTraceState(event.from)}→${formatTraceState(event.to)}`;
   if (event.type === "gear") return `gear at (${event.at.x},${event.at.y}); facing ${event.facingBefore}→${event.facingAfter}`;
+  if (event.type === "space-bridge") return `space bridge ${formatTraceState(event.from)}→${formatTraceState(event.to)}`;
   return null;
+}
+
+const TRACE_DAMAGE_SOURCE_LABELS = {
+  "board-laser-hit": "board laser",
+  "flamethrower-hit": "flamethrower",
+  "flaming-oil-hit": "flaming oil",
+  "radiation-hit": "radiation",
+  "radioactive-waste-hit": "radioactive waste",
+  "ledge-damage": "ledge",
+  "fire-pit-damage": "fire pit",
+  "mine-hit": "mine",
+  "reboot-damage": "reboot",
+  "robot-laser-expected": "robot lasers, expected"
+};
+
+function formatTraceAmount(value) {
+  const rounded = Math.round((Number(value) || 0) * 100) / 100;
+  return String(rounded);
+}
+
+// Energy and damage of one register, from the RE replay (Dev View only).
+export function formatRegisterLedgerEvent(event) {
+  if (!event) return [];
+  const parts = [];
+  const energy = event.energy;
+  if (energy?.gain > 0) {
+    const sources = [
+      ["battery", energy.battery],
+      ["pit stop", energy.pitStop],
+      ["Energon", energy.energon],
+      ["Power Up", energy.powerUp],
+      ["radioactive waste", energy.radioactiveWaste]
+    ].filter(([, amount]) => amount > 0).map(([label]) => label);
+    parts.push(`+${formatTraceAmount(energy.gain)} Energy${sources.length ? ` (${sources.join(", ")})` : ""} → ${formatTraceAmount(energy.reserveAfter)}`);
+  }
+  const damage = event.damage;
+  // Expected robot-laser hits below 0.05 would fill every row; only show
+  // them when they matter or come with other damage.
+  const onlyFaintRobotLasers = damage?.deterministicUnits <= 0.0005 && damage?.units < 0.05;
+  if (damage?.units > 0.0005 && !onlyFaintRobotLasers) {
+    const sources = (damage.sources || []).map((source) => TRACE_DAMAGE_SOURCE_LABELS[source] ?? source);
+    parts.push(`damage ${formatTraceAmount(damage.units)}${sources.length ? ` (${sources.join(", ")})` : ""}`);
+  }
+  const shed = (damage?.spamShed || 0) + (damage?.rebootSpamRemoved || 0) + (damage?.repairSpamRemoved || 0);
+  if (shed > 0.0005) {
+    const how = [
+      damage.spamShed > 0.0005 ? "played" : null,
+      damage.rebootSpamRemoved > 0.0005 ? "reboot" : null,
+      damage.repairSpamRemoved > 0.0005 ? "repair" : null
+    ].filter(Boolean);
+    parts.push(`SPAM removed ${formatTraceAmount(shed)} (${how.join(", ")})`);
+  }
+  return parts;
 }
 
 export const ROUTE_TRACE_REGISTER_COUNT = 5;
@@ -842,14 +896,36 @@ export function getInspectionRouteLedger(scenario, route, startIndex) {
     () => summarizeRegisterEquivalentLedger(
       traceTileMap,
       route,
-      getDamageFoundationScenarioOptions(scenario),
+      { ...getDamageFoundationScenarioOptions(scenario), includeRegisterEvents: true },
       getDamageFoundationTrafficContext(scenario, startIndex)
     )
   );
 }
 
-export function buildInspectionTraceRows(route, tileMap) {
+// The route on its own, without other robots: the replay Normal fairness
+// uses as a start's intrinsic RE (route-selection.js), so its parts add up
+// to that value.
+export function getInspectionIntrinsicLedger(scenario, route) {
+  const traceTileMap = scenario?.goalTileMap ?? null;
+  if (!traceTileMap || !route || typeof summarizeRegisterEquivalentLedger !== "function") return null;
+  const replayCache = getScenarioDevReplayCache(scenario);
+  return getCachedRouteReplay(
+    replayCache?.intrinsicLedgerByRoute,
+    route,
+    () => summarizeRegisterEquivalentLedger(
+      traceTileMap,
+      route,
+      getDamageFoundationScenarioOptions(scenario),
+      null
+    )
+  );
+}
+
+export function buildInspectionTraceRows(route, tileMap, ledger = null) {
   if (!route?.transitions?.length) return [];
+  const ledgerEventsByAction = new Map(
+    (ledger?.registerEvents || []).map((event) => [event.absoluteAction, event])
+  );
   const startAction = route.absoluteStartAction ?? 0;
   const checkpointHits = Array.isArray(route.checkpointHits)
     ? route.checkpointHits
@@ -887,8 +963,11 @@ export function buildInspectionTraceRows(route, tileMap) {
     }
     const hits = hitsByAction.get(absoluteRegister) ?? [];
     const effects = [
+      ...(transition?.cancelledByFirePit ? ["in a fire pit: card cancelled"] : []),
+      ...(transition?.repulsed ? ["repulsor bounce"] : []),
       ...boardParts,
       ...timedParts,
+      ...formatRegisterLedgerEvent(ledgerEventsByAction.get(absoluteRegister)),
       ...hits.map((hit) => `FLAG ${hit.checkpointId ?? hit.checkpointIndex + 1}`),
       ...(transition?.rebooted ? ["REBOOT → turn ends"] : [])
     ];
@@ -1021,7 +1100,7 @@ export function renderStructuredRouteInspection(detailEl, scenario, entry) {
   ], { fontSize: "0.86em" });
 
   const traceDetails = appendInspectionDetails(detailEl, "Register trace", { open: true });
-  const traceRows = buildInspectionTraceRows(route, scenario?.goalTileMap ?? null);
+  const traceRows = buildInspectionTraceRows(route, scenario?.goalTileMap ?? null, ledger);
   renderInspectionTraceTable(traceDetails, traceRows);
 
   if (ledger) {
@@ -1121,45 +1200,80 @@ export function getSelectedInspectionStartIndices(scenario) {
 
 export function renderMultiStartInspectionSummary(detailEl, scenario, selectedLegIndices, startIndices) {
   const normalizedLegs = normalizeSelectedLegIndices(scenario, selectedLegIndices);
-  const scopeLabel = normalizedLegs.length === 1
+  const singleLeg = normalizedLegs.length === 1;
+  const scopeLabel = singleLeg
     ? formatLegLabel(scenario.sequence.legs[normalizedLegs[0]])
-    : "Selected full-course routes";
+    : "Full course";
 
   const title = document.createElement("div");
   const strong = document.createElement("strong");
-  strong.textContent = `${startIndices.length} visible starts — comparison summary`;
+  strong.textContent = `${startIndices.length} visible starts — comparison (${scopeLabel})`;
   title.append(strong);
   detailEl.append(title);
 
-  const note = document.createElement("div");
-  note.style.fontSize = "0.88em";
-  note.style.margin = "0.3rem 0 0.5rem";
-  note.textContent = `${scopeLabel}. Round-by-round detail is shown automatically when exactly one start is visible.`;
-  detailEl.append(note);
-
-  const rows = startIndices.map((startIndex) => {
+  // Columns add up from left to right. "Own route" is the route on its own
+  // (no other robots); effective RE adds what the other robots cost, and is
+  // what start balancing compares. Single-leg scope has no traffic split, so
+  // it stops at the leg's own-route total.
+  const round = (value) => (Number.isFinite(Number(value)) ? Number(value).toFixed(1) : "n/a");
+  const sum = (...values) => values.reduce((total, value) => total + (Number(value) || 0), 0);
+  const entries = startIndices.map((startIndex) => {
     const entry = getRouteInspectionEntryForStart(scenario, selectedLegIndices, startIndex);
     if (!entry?.route) return null;
-    const ledger = getInspectionRouteLedger(scenario, entry.route, startIndex);
+    const own = getInspectionIntrinsicLedger(scenario, entry.route);
+    const components = entry.startAnalysis?.normalFairnessComponents ?? {};
+    const ownRE = sum(
+      own?.programmedRegisterRE, own?.lostRegisterTempoRE, own?.cleanCardPlausibilityRE,
+      own?.damageCardSupplyRE, own?.clogRE, own?.energyRE, own?.mentalRegisterEquivalents
+    ) - (singleLeg ? 0 : Number(components.homingMissileStrategicCreditRE) || 0);
     const effectiveRE = Number(entry.startAnalysis?.normalFairnessEffectiveRE);
+    return { startIndex, entry, own, components, ownRE, effectiveRE };
+  }).filter(Boolean);
+  const bestTotal = Math.min(...entries.map((item) => (
+    singleLeg ? item.ownRE : item.effectiveRE
+  )).filter(Number.isFinite));
+
+  const headers = [
+    "Start", "Registers", "Card", "Damage", "Energy", "Planning", "= Own route",
+    ...(singleLeg ? [] : ["Robot lasers", "Crowding", "Competition", "Traffic planning", "= Effective RE"]),
+    "vs best"
+  ];
+  const rows = entries.map(({ startIndex, entry, own, components, ownRE, effectiveRE }) => {
+    const total = singleLeg ? ownRE : effectiveRE;
     return [
       `#${startIndex + 1}`,
-      entry.singleLegIndex === null ? "Full course" : formatLegLabel(scenario.sequence.legs[entry.singleLegIndex]),
-      entry.route.actions ?? "n/a",
-      entry.route.distance ?? "n/a",
-      ledger?.cleanCardPlausibilityRE ?? "n/a",
-      ledger?.mentalRegisterEquivalents ?? "n/a",
-      ledger?.observationalSubtotalWithMentalRE ?? "n/a",
-      Number.isFinite(effectiveRE) ? effectiveRE.toFixed(3) : "n/a"
+      `${round(sum(own?.programmedRegisterRE, own?.lostRegisterTempoRE))}${own?.lostRegisterTempoRE ? ` (${own.lostRegisterTempoRE} lost)` : ""}`,
+      round(own?.cleanCardPlausibilityRE),
+      round(sum(own?.damageCardSupplyRE, own?.clogRE)),
+      round(own?.energyRE),
+      round(own?.mentalRegisterEquivalents),
+      round(ownRE),
+      ...(singleLeg ? [] : [
+        round(components.robotLaserDamageRE ?? 0),
+        round(components.nearbyControlRE ?? 0),
+        round(components.competitionRE ?? 0),
+        round(components.trafficMentalRE ?? 0),
+        round(effectiveRE)
+      ]),
+      Number.isFinite(total) && Number.isFinite(bestTotal) ? `+${(total - bestTotal).toFixed(1)}` : "n/a"
     ];
-  }).filter(Boolean);
+  });
 
-  appendInspectionTable(
-    detailEl,
-    ["Start", "Scope", "Reg", "Dist", "Card RE", "Mental RE", "Detailed replay RE", "Full-course effective RE"],
-    rows,
-    { fontSize: "0.84em" }
-  );
+  appendInspectionTable(detailEl, headers, rows, { fontSize: "0.84em" });
+
+  const legend = document.createElement("div");
+  legend.style.fontSize = "0.84em";
+  legend.style.margin = "0.3rem 0 0.5rem";
+  legend.textContent = [
+    "All values in RE (register equivalents: the cost of one programmed register).",
+    "Registers: programmed registers, plus registers lost to reboots. Card: how hard the needed cards are to draw. Damage: SPAM in the deck and clogged hands. Energy: what the Energy gained is worth (negative = a gain). Planning: mental load of busy turns.",
+    "Own route: the sum so far, the route as if no other robots were on the course.",
+    singleLeg
+      ? "Leg scope: other robots are only split out for the full course; select every leg to see effective RE."
+      : "Robot lasers, Crowding (pushes and blocking nearby), Competition and Traffic planning are what the other robots cost; Effective RE is the total, and start balancing compares it.",
+    "vs best: distance from the lowest total among these starts. Select one start for its register-by-register detail."
+  ].join(" ");
+  detailEl.append(legend);
 }
 
 export function updateInspectionDetail(scenario, selectedLegIndices) {

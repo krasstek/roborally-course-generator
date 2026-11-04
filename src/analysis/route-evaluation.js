@@ -1140,6 +1140,14 @@ export function summarizeRegisterEquivalentLedger(
     ? Math.floor((initialAbsoluteAction - 1) / REGISTER_COUNT) + 1
     : 1;
 
+  // Dev View only: what happened in each register (energy, damage), for the
+  // register trace. Off in generation, which never reads it.
+  const registerEvents = options.includeRegisterEvents ? new Map() : null;
+  const registerEventFor = (absoluteAction) => {
+    if (!registerEvents.has(absoluteAction)) registerEvents.set(absoluteAction, { absoluteAction });
+    return registerEvents.get(absoluteAction);
+  };
+
   transitions.forEach((transition, index) => {
     const absoluteAction = getRegisterEquivalentLedgerAbsoluteAction(
       transition,
@@ -1194,9 +1202,36 @@ export function summarizeRegisterEquivalentLedger(
         Number(energyStep.rewardRegisterEquivalents) || 0
       );
       energyReserve = energyStep.reserveAfter;
+      if (registerEvents && energyStep.energyGain > 0) {
+        registerEventFor(absoluteAction).energy = {
+          gain: energyStep.energyGain,
+          battery: Number(energyStep.batteryEnergyGain) || 0,
+          pitStop: Number(energyStep.pitStopEnergyGain) || 0,
+          energon: Number(energyStep.energonEnergyGain) || 0,
+          powerUp: Number(energyStep.powerUpEnergyGain) || 0,
+          radioactiveWaste: Number(energyStep.radioactiveWasteEnergyGain) || 0,
+          reserveAfter: energyStep.reserveAfter
+        };
+      }
     }
 
     const damageEvent = damageEventByAbsoluteAction.get(absoluteAction) ?? null;
+    if (registerEvents && damageEvent) {
+      const removed = (Number(damageEvent.spamRemoved) || 0) +
+        (Number(damageEvent.rebootSpamRemoved) || 0) +
+        (Number(damageEvent.repairStationSpamRemoved) || 0);
+      if ((Number(damageEvent.damageUnits) || 0) > 0.0005 || removed > 0.0005) {
+        registerEventFor(absoluteAction).damage = {
+          units: Number(damageEvent.damageUnits) || 0,
+          deterministicUnits: Number(damageEvent.deterministicDamageUnits) || 0,
+          robotLaserExpectedUnits: Number(damageEvent.robotLaserExpectedDamageUnits) || 0,
+          sources: damageEvent.sourceTypes || [],
+          spamShed: Number(damageEvent.spamRemoved) || 0,
+          rebootSpamRemoved: Number(damageEvent.rebootSpamRemoved) || 0,
+          repairSpamRemoved: Number(damageEvent.repairStationSpamRemoved) || 0
+        };
+      }
+    }
     const planningEvents = getRegisterEquivalentLedgerPlanningEventsForTransition(
       tileMap,
       transition,
@@ -1383,7 +1418,8 @@ export function summarizeRegisterEquivalentLedger(
       damage?.shutdownReferenceRegisterEquivalents ?? null,
     rawDamageEconomyRE: damage?.totalDamageEconomyRegisterEquivalents ?? null,
     damageModel: damage?.method ?? null,
-    turns: orderedTurns
+    turns: orderedTurns,
+    ...(registerEvents ? { registerEvents: [...registerEvents.values()] } : {})
   };
 }
 
