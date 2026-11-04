@@ -36,8 +36,13 @@ import {
   tileKey
 } from "./board-geometry.js";
 import {
+  DYNAMIC_ARCHIVE_PRESSURE_SETBACK_CAP,
+  DYNAMIC_ARCHIVE_PRESSURE_SETBACK_WEIGHT,
+  AUTO_KILL_PRESSURE_SETBACK_CAP,
   AUTO_KILL_PRESSURE_SETBACK_WEIGHT,
   AUTO_KILL_SETBACK_TEMPO_PER_STEP,
+  REBOOT_RISK_PUSH_SHARE_PER_ROBOT,
+  REBOOT_RISK_REFERENCE_PLAYERS,
   DIRS,
   EDGE_BEHAVIOR,
   OPPOSITE,
@@ -186,21 +191,77 @@ export function getTilePenalty(
   return penalty;
 }
 
-export function isExposedToPitOrEdge(tileMap, point, dir, options = {}) {
+// How lethal the neighbour in `dir` is for a robot pushed (or slipping) into
+// it: 1 for a pit or an open board edge, the share of registers it is active
+// for a timed trapdoor or crusher, 0 otherwise or behind a wall. One shared
+// definition of reboot squares for every recovery rule; a future element that
+// destroys robots belongs here. Teleporters are left out: they act only on a
+// move card started on them, which the route itself simulates.
+export function getRebootExposureWeight(tileMap, point, dir, options = {}) {
   const next = {
     x: point.x + DIRS[dir].dx,
     y: point.y + DIRS[dir].dy
   };
-  const toTile = tileMap.get(tileKey(next.x, next.y));
   if (isBoundaryBlockedByWalls(tileMap, point, next, dir)) {
-    return false;
+    return 0;
   }
-
-  if (!toTile && options.lessDeadlyGame) {
-    return false;
+  const toTile = tileMap.get(tileKey(next.x, next.y));
+  if (!toTile) {
+    return options.lessDeadlyGame ? 0 : 1;
   }
+  if (isPit(toTile)) return 1;
+  let weight = 0;
+  for (const feature of toTile.features || []) {
+    if (feature.type === "trapdoor" || feature.type === "crusher") {
+      weight = Math.max(weight, getFeatureDutyCycle(feature));
+    }
+  }
+  return weight;
+}
 
-  return !toTile || isPit(toTile);
+export function isExposedToPitOrEdge(tileMap, point, dir, options = {}) {
+  return getRebootExposureWeight(tileMap, point, dir, options) > 0;
+}
+
+// Sum of the four sides' exposure weights. It depends only on the board and
+// Walled In, and route scoring asks for it at every step, so it is computed
+// once per square and board (tile maps are not mutated once built).
+const REBOOT_EXPOSURE_SUM_CACHE = new WeakMap();
+
+export function getRebootExposureSum(tileMap, point, options = {}) {
+  let byRule = REBOOT_EXPOSURE_SUM_CACHE.get(tileMap);
+  if (!byRule) {
+    byRule = [new Map(), new Map()];
+    REBOOT_EXPOSURE_SUM_CACHE.set(tileMap, byRule);
+  }
+  const cache = byRule[options.lessDeadlyGame ? 1 : 0];
+  const key = tileKey(point.x, point.y);
+  let sum = cache.get(key);
+  if (sum === undefined) {
+    sum = 0;
+    for (const dir of ROTATION_ORDER) {
+      sum += getRebootExposureWeight(tileMap, point, dir, options);
+    }
+    cache.set(key, sum);
+  }
+  return sum;
+}
+
+// More robots, more pushes into reboot squares: 1 at the reference player
+// count (the level before 2026-11-04).
+export function getRebootRiskTrafficFactor(options = {}) {
+  const players = Math.max(1, Math.floor(Number(options.playerCount) || REBOOT_RISK_REFERENCE_PLAYERS));
+  return (1 + REBOOT_RISK_PUSH_SHARE_PER_ROBOT * (players - 1)) /
+    (1 + REBOOT_RISK_PUSH_SHARE_PER_ROBOT * (REBOOT_RISK_REFERENCE_PLAYERS - 1));
+}
+
+function getRecoveryAwarePressureExtra(setback, options = {}) {
+  const archiving = options.recoveryRule === "dynamic_archiving";
+  return Math.min(
+    archiving ? DYNAMIC_ARCHIVE_PRESSURE_SETBACK_CAP : AUTO_KILL_PRESSURE_SETBACK_CAP,
+    setback * AUTO_KILL_SETBACK_TEMPO_PER_STEP *
+      (archiving ? DYNAMIC_ARCHIVE_PRESSURE_SETBACK_WEIGHT : AUTO_KILL_PRESSURE_SETBACK_WEIGHT)
+  );
 }
 
 export function getCheapDynamicArchiveLandingPoints(tileMap) {
@@ -346,7 +407,7 @@ export function collectContextualRecoveryPressurePoints(tileMap, transition, opt
       x: point.x,
       y: point.y,
       basePressure,
-      exposureCount: Math.max(1, Math.round(basePressure / 0.5))
+      exposure: getRebootExposureSum(tileMap, point, options)
     });
   }
   return points;
@@ -409,19 +470,13 @@ export function getContextualPitPressureAdjustment(tileMap, transition, options 
       options.goal,
       recoveryPoint
     );
-    const setbackCost = setback * AUTO_KILL_SETBACK_TEMPO_PER_STEP;
-    const recoveryAwareExtra = Math.min(
-      2.5,
-      setbackCost * AUTO_KILL_PRESSURE_SETBACK_WEIGHT
-    );
-    const exposureCount = Math.max(
-      0,
-      Math.floor(Number(point.exposureCount) || 0)
-    );
-    // Match getPitPressurePenalty's two-decimal rounding before subtracting the
-    // cached local term; this keeps route scores/fingerprints bit-for-bit stable.
+    const recoveryAwareExtra = getRecoveryAwarePressureExtra(setback, options);
+    // Match getPitPressurePenalty's formula and two-decimal rounding before
+    // subtracting the cached local term, so contextual and direct scoring agree.
     const contextualPressure = Number((
-      exposureCount * (0.5 + recoveryAwareExtra)
+      getRebootRiskTrafficFactor(options) *
+      (Number(point.exposure) || 0) *
+      (0.5 + recoveryAwareExtra)
     ).toFixed(2));
     adjustment += contextualPressure - point.basePressure;
   }
@@ -546,34 +601,25 @@ export function getPitPressurePenalty(
   options = {},
   skipRecoveryAwarePressureOverride = undefined
 ) {
-  let penalty = 0;
+  const exposure = getRebootExposureSum(tileMap, point, options);
+  if (!(exposure > 0)) return 0;
   let recoveryAwareExtra = 0;
   const skipRecoveryAwarePressure = skipRecoveryAwarePressureOverride ??
     Boolean(options.contextualSkipRecoveryAwarePressure);
   if (!skipRecoveryAwarePressure) {
     const { setback } = getAutoKillRecoveryProgress(point, options);
-    const setbackCost = setback * AUTO_KILL_SETBACK_TEMPO_PER_STEP;
-    recoveryAwareExtra = Math.min(
-      2.5,
-      setbackCost * AUTO_KILL_PRESSURE_SETBACK_WEIGHT
-    );
+    recoveryAwareExtra = getRecoveryAwarePressureExtra(setback, options);
   }
 
-  for (const dir of ROTATION_ORDER) {
-    if (!isExposedToPitOrEdge(tileMap, point, dir, options)) {
-      continue;
-    }
-
-    // This is accidental-death pressure, not deliberate reboot mobility.
-    // A recovery point that is behind the current leg makes nearby pits/edges
-    // more consequential; a forward recovery point gets no extra credit here
-    // because intentional entry is already represented by exact route physics.
-    // v48zd physical templates keep only the 0.5 local exposure term; the
-    // recovery-aware addition is restored after the cached movement is known.
-    penalty += 0.5 + recoveryAwareExtra;
-  }
-
-  return Number(penalty.toFixed(2));
+  // This is accidental-death pressure, not deliberate reboot mobility.
+  // A recovery point that is behind the current leg makes nearby reboot
+  // squares more consequential; a forward recovery point gets no extra credit
+  // here because intentional entry is already represented by exact route
+  // physics. v48zd physical templates keep only the 0.5 local exposure term;
+  // the recovery-aware addition is restored after the cached movement is known.
+  return Number((
+    getRebootRiskTrafficFactor(options) * exposure * (0.5 + recoveryAwareExtra)
+  ).toFixed(2));
 }
 
 export function isExposedToLedge(tileMap, point, dir, options = {}) {

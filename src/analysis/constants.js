@@ -46,6 +46,23 @@ export const REGISTER_COUNT = 5;
 // or (for token-based recovery only) can sometimes be exploited as mobility.
 export const AUTO_KILL_SETBACK_TEMPO_PER_STEP = REGISTER_TEMPO_COST * 0.5;
 export const AUTO_KILL_PRESSURE_SETBACK_WEIGHT = 0.08;
+// Cap on the setback-dependent part per exposed side (score units). It stops
+// the pull of a recovery point from growing past this setback.
+export const AUTO_KILL_PRESSURE_SETBACK_CAP = 2.5;
+// Dynamic Archiving: the setback is to the robot's own archive, which it can
+// move by landing on a battery or checkpoint, so the risk is weighted twice as
+// much and keeps growing up to about 20 squares since the last archive. Routes
+// then archive closer before risky squares (probe 2026-11-04: mean setback at
+// exposed squares 6.9 -> 5.5, exposure at 10+ squares setback 27% -> 18%).
+export const DYNAMIC_ARCHIVE_PRESSURE_SETBACK_WEIGHT = 0.16;
+export const DYNAMIC_ARCHIVE_PRESSURE_SETBACK_CAP = 5;
+// Squares next to reboot squares (pits, open trapdoors, crushers, open board
+// edges) cost more with more robots around to push you in. HAND-PICKED
+// (2026-11-04, user: archiving matters more with more players): each other
+// robot adds this share of the risk; scaled so 4 players reproduce the old
+// level. MODEL-REVIEW.md lists it.
+export const REBOOT_RISK_PUSH_SHARE_PER_ROBOT = 0.25;
+export const REBOOT_RISK_REFERENCE_PLAYERS = 4;
 // The programming decks the card model can use. Everything deck-dependent is
 // derived from these counts (program-availability.js getProgramDeck): deck size,
 // the four-copy availability baseline, the Energy exchange rate and which card
