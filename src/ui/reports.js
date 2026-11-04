@@ -82,6 +82,7 @@ import {
   MIN_WALL_CLOCK_TURN_INDEX,
   WALL_CLOCK_LENGTH_FIT_POINTS_PER_TURN
 } from "../generation/targets.js";
+import { VARIANT_DEFINITIONS } from "../../variants.js";
 import { MAIN_BUILD_ID } from "./build-info.js";
 import { formatRegisterEquivalentLedgerLines, normalizeSelectedLegIndices } from "./dev-view.js";
 import { describeAllowedVariants, getVariantImpactSummary } from "./rules-notes.js";
@@ -1259,27 +1260,9 @@ export function buildScenarioReport(scenario, selectedLegIndices = null) {
     `Allowed variants: ${describeAllowedVariants(scenario.preferences)}`,
     `Optional variant complexity: ${scenario.variantComplexityUsed ?? 0}/${scenario.variantComplexityBudget ?? 0} (forced/must-like selections excluded)`,
     `Variant impact: ${getVariantImpactSummary(scenario) || "none"}`,
-    `Act Fast used: ${scenario.actFast ? scenario.actFastMode ?? "yes" : "no"}`,
-    `Competitive Mode used: ${scenario.competitiveMode ? "yes" : "no"}`,
-    `Virtual Bots used: ${scenario.virtualBots ? "yes" : "no"}`,
-    `Pay to Win used: ${scenario.payToWin ? "yes" : "no"}`,
-    `Subsidized Starts used: ${scenario.subsidizedStarts ? "yes" : "no"}`,
-    `Extra Docks used: ${scenario.extraDocks ? "yes" : "no"}`,
-    `No Docks used: ${scenario.noDocks ? "yes" : "no"}${scenario.noDocks && (scenario.noDockEdges?.length ?? 0) ? ` (${scenario.noDockEdges.map((edge) => `${edge.pieceId} ${edge.side} full edge${edge.edgeLength ? ` ${edge.edgeLength}-wide` : ""} facing ${edge.facing}`).join("; ")})` : scenario.noDockEdge ? ` (${scenario.noDockEdge.pieceId} ${scenario.noDockEdge.side} full edge, facing ${scenario.noDockEdge.facing})` : ""}`,
-    `Factory Rejects used: ${scenario.factoryRejects ? "yes" : "no"}`,
+    // One line per registry variant, so a new rule can't be left out.
+    ...VARIANT_DEFINITIONS.map((variant) => `${variant.label} used: ${formatVariantUsedForSummary(scenario, variant.id)}`),
     `Recovery used: ${scenario.recoveryRule}`,
-    `Energy Crisis / A Lighter Game used: ${scenario.lighterGame ? "yes" : "no"}`,
-    `SPAM Filter / A Less SPAM-Y Game used: ${scenario.lessSpammyGame ? "yes" : "no"}`,
-    `Walled In / A Less Deadly Game used: ${scenario.lessDeadlyGame ? "yes" : "no"}`,
-    `Hard Reboot / A More Deadly Game used: ${scenario.moreDeadlyGame ? "yes" : "no"}`,
-    `Flaming Oil used: ${scenario.flamingOil ? "yes" : "no"}`,
-    `Shared Deck used: ${scenario.classicSharedDeck ? "yes" : "no"}`,
-    `Hazardous Checkpoints used: ${scenario.hazardousFlags ? "yes" : "no"}`,
-    `Repair Stations used: ${scenario.repairStations ? "yes" : "no"}`,
-    `Moving Targets used: ${scenario.movingTargets ? "yes" : "no"}`,
-    `Less Foreshadowing used: ${scenario.lessForeshadowing ? "yes" : "no"}`,
-    `Drift Deck used: ${scenario.driftDeck ? "yes" : "no"}`,
-    `Staggered Boards used: ${scenario.staggeredBoards ? "yes" : "no"}`,
     scenario.generationBestMatch
       ? ((scenario.metrics?.difficultyFit ?? 0) > 0 || (scenario.metrics?.lengthFit ?? 0) > 0
         ? `Closest match after ${scenario.attempts} / ${getScenarioGenerationMaxAttempts(scenario)} attempt(s)`
@@ -1850,4 +1833,20 @@ export function buildScenarioReport(scenario, selectedLegIndices = null) {
   );
 
   return lines.map(roundCourseEvaluationNumbers).join("\n");
+}
+
+function formatVariantUsedForSummary(scenario, variantId) {
+  if (variantId === "dynamicArchiving") return scenario.recoveryRule === "dynamic_archiving" ? "yes" : "no";
+  if (variantId === "homeReboot") return scenario.recoveryRule === "home_reboot" ? "yes" : "no";
+  if (variantId === "actFast") return scenario.actFast ? scenario.actFastMode ?? "yes" : "no";
+  if (variantId === "noDocks") {
+    if (!scenario.noDocks) return "no";
+    if (scenario.noDockEdges?.length) {
+      return `yes (${scenario.noDockEdges.map((edge) => `${edge.pieceId} ${edge.side} full edge${edge.edgeLength ? ` ${edge.edgeLength}-wide` : ""} facing ${edge.facing}`).join("; ")})`;
+    }
+    return scenario.noDockEdge
+      ? `yes (${scenario.noDockEdge.pieceId} ${scenario.noDockEdge.side} full edge, facing ${scenario.noDockEdge.facing})`
+      : "yes";
+  }
+  return scenario[variantId] ? "yes" : "no";
 }
