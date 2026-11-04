@@ -1,4 +1,4 @@
-const APP_VERSION = "20261104140046";
+const APP_VERSION = "20261104170311";
 const STATIC_CACHE = `roborally-static-${APP_VERSION}`;
 const RUNTIME_CACHE = `roborally-runtime-${APP_VERSION}`;
 
@@ -123,6 +123,7 @@ const VERSIONED_ASSETS = [
   "./data/concentric.json",
   "./data/confusion.json",
   "./data/convergence.json",
+  "./data/diablo-desert.json",
   "./data/dirt-boss-derby.json",
   "./data/discovery.json",
   "./data/docking-bay-a.json",
@@ -185,6 +186,7 @@ const VERSIONED_ASSETS = [
   "./data/portal-palace.json",
   "./data/pushy.json",
   "./data/reactor-core.json",
+  "./data/renegade-run.json",
   "./data/sampler.json",
   "./data/shake-n-bake.json",
   "./data/sidewinder.json",
@@ -220,6 +222,7 @@ const VERSIONED_ASSETS = [
   "./data/transition.json",
   "./data/trench-run.json",
   "./data/vacancy.json",
+  "./data/vortex-valley.json",
   "./data/water-park.json",
   "./data/whirlpool.json",
   "./data/winding.json",

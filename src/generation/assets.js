@@ -28,6 +28,7 @@ export const PIECE_DATA_FILES = [
   "concentric",
   "confusion",
   "convergence",
+  "diablo-desert",
   "dirt-boss-derby",
   "discovery",
   "docking-bay-a",
@@ -91,6 +92,7 @@ export const PIECE_DATA_FILES = [
   "portal-palace",
   "pushy",
   "reactor-core",
+  "renegade-run",
   "sampler",
   "shake-n-bake",
   "sidewinder",
@@ -126,6 +128,7 @@ export const PIECE_DATA_FILES = [
   "transition",
   "trench-run",
   "vacancy",
+  "vortex-valley",
   "water-park",
   "winding",
   "whirlpool"
