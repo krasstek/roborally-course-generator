@@ -223,11 +223,26 @@ export function isExposedToPitOrEdge(tileMap, point, dir, options = {}) {
   return getRebootExposureWeight(tileMap, point, dir, options) > 0;
 }
 
-// Sum of the four sides' exposure weights.
+// Sum of the four sides' exposure weights. It depends only on the board and
+// Walled In, and route scoring asks for it at every step, so it is computed
+// once per square and board (tile maps are not mutated once built).
+const REBOOT_EXPOSURE_SUM_CACHE = new WeakMap();
+
 export function getRebootExposureSum(tileMap, point, options = {}) {
-  let sum = 0;
-  for (const dir of ROTATION_ORDER) {
-    sum += getRebootExposureWeight(tileMap, point, dir, options);
+  let byRule = REBOOT_EXPOSURE_SUM_CACHE.get(tileMap);
+  if (!byRule) {
+    byRule = [new Map(), new Map()];
+    REBOOT_EXPOSURE_SUM_CACHE.set(tileMap, byRule);
+  }
+  const cache = byRule[options.lessDeadlyGame ? 1 : 0];
+  const key = tileKey(point.x, point.y);
+  let sum = cache.get(key);
+  if (sum === undefined) {
+    sum = 0;
+    for (const dir of ROTATION_ORDER) {
+      sum += getRebootExposureWeight(tileMap, point, dir, options);
+    }
+    cache.set(key, sum);
   }
   return sum;
 }
