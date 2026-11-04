@@ -279,13 +279,11 @@ export function placeHomeRebootTokens(dockPlacements, pieceMap, starts = [], til
       .filter((point) => {
         const tile = tileMap?.get(`${point.x},${point.y}`) ?? { features: [] };
         return !(tile.features || []).some((feature) => feature.type === "pit");
-      })
-      .filter((point) => canTraceRouteFromHomeRebootTile(tileMap, point, checkpoints, options));
+      });
 
-    if (!candidatePoints.length) {
-      return;
-    }
-
+    // The token is the square nearest the dock centre from which a route
+    // exists. Check squares in that order and stop at the first one, instead
+    // of route-checking every square first (same token, far fewer searches).
     const dims = rotatedDimensions(piece, dockPlacement.rotation ?? 0);
     const center = {
       x: dockPlacement.x + (dims.width - 1) / 2,
@@ -296,7 +294,12 @@ export function placeHomeRebootTokens(dockPlacements, pieceMap, starts = [], til
         const leftDistance = Math.abs(left.x - center.x) + Math.abs(left.y - center.y);
         const rightDistance = Math.abs(right.x - center.x) + Math.abs(right.y - center.y);
         return leftDistance - rightDistance || left.y - right.y || left.x - right.x;
-      })[0];
+      })
+      .find((point) => canTraceRouteFromHomeRebootTile(tileMap, point, checkpoints, options));
+
+    if (!token) {
+      return;
+    }
 
     tokens.push({
       dockIndex,

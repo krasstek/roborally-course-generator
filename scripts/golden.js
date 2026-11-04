@@ -91,6 +91,7 @@ const CASES = [
   { name: "sets-chaos-contamination", expansions: ["roborally", "chaos-and-carnage", "contamination"] },
   { name: "variants-all-allowed", variants: "all-allowed", expansions: ALL_EXPANSIONS },
   { name: "forced-dynamic-archiving", variants: { dynamicArchiving: "forced" } },
+  { name: "forced-home-reboot", variants: { homeReboot: "forced" } },
   { name: "forced-no-docks", variants: { noDocks: "forced" } },
   { name: "forced-virtual-bots", variants: { virtualBots: "forced" } },
   { name: "forced-pay-to-win", variants: { payToWin: "forced" } },
