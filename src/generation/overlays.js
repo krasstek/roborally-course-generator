@@ -507,9 +507,16 @@ export function placeMiniOverlaysOnBoards(targetBoards, groupedMiniOverlayIds, p
         continue;
       }
 
-      const chooseTokenPlacement = (overlayPiece, tileMap, occupiedTiles, placementsSoFar) => {
+      const chooseTokenPlacement = (
+        overlayPiece,
+        tileMap,
+        occupiedTiles,
+        placementsSoFar,
+        boardSupportTiles = supportTiles,
+        boardAllowsDensePacking = allowDensePacking
+      ) => {
         const legalPlacements = shuffle(
-          getOverlayPlacementsForSupportTiles(overlayPiece, supportTiles, dockTiles)
+          getOverlayPlacementsForSupportTiles(overlayPiece, boardSupportTiles, dockTiles)
         ).filter((placement) => {
           if (!getPlacementOccupiedTiles(overlayPiece, placement).every((key) => !occupiedTiles.has(key))) {
             return false;
@@ -517,7 +524,7 @@ export function placeMiniOverlaysOnBoards(targetBoards, groupedMiniOverlayIds, p
           if (placementSuppresssTrackedHazard(placement, overlayPiece, tileMap)) {
             return false;
           }
-          if (!placementHasValidLaserSupport(placement, overlayPiece, tileMap, supportTiles)) {
+          if (!placementHasValidLaserSupport(placement, overlayPiece, tileMap, boardSupportTiles)) {
             return false;
           }
           return true;
@@ -527,13 +534,13 @@ export function placeMiniOverlaysOnBoards(targetBoards, groupedMiniOverlayIds, p
           return null;
         }
 
-        const preferredPlacements = allowDensePacking
+        const preferredPlacements = boardAllowsDensePacking
           ? legalPlacements
           : legalPlacements.filter((placement) => (
-            !placementTouchesSupportEdge(placement, overlayPiece, supportTiles) &&
+            !placementTouchesSupportEdge(placement, overlayPiece, boardSupportTiles) &&
             !placementTouchesOccupiedNeighbors(placement, overlayPiece, occupiedTiles)
           ));
-        const fallbackPlacements = allowDensePacking
+        const fallbackPlacements = boardAllowsDensePacking
           ? legalPlacements
           : legalPlacements.filter((placement) => (
             !placementTouchesOccupiedNeighbors(placement, overlayPiece, occupiedTiles)
@@ -549,24 +556,25 @@ export function placeMiniOverlaysOnBoards(targetBoards, groupedMiniOverlayIds, p
           !placementPointsIntoBlockedEdge([placement], placementsSoFar, pieceMap)
         )) || null;
       };
-      const commitTokenPlacement = (physicalBoardId, overlayPiece, placement) => {
+      const commitTokenPlacement = (physicalBoardId, overlayPiece, placement, countsOnThisBoard = true) => {
         getPlacementOccupiedTiles(overlayPiece, placement).forEach((key) => occupiedMiniOverlayTiles.add(key));
         placements.push(placement);
         currentPlacements.push(placement);
         groupedMiniOverlayIds.delete(physicalBoardId);
-        placedCount += 1;
+        if (countsOnThisBoard) placedCount += 1;
       };
 
       for (const [physicalBoardId, overlayIds] of shuffle([...groupedMiniOverlayIds.entries()])) {
-        // Space bridges (Transformers, user rule 2026-11-03): a bridge whose
-        // colour is not yet on the course comes with a second bridge of that
-        // colour, from another physical token, on this board; if no partner
-        // fits, the bridge is not placed and another token is tried.
+        // Space bridges (Transformers, user rules 2026-11-03/04): a bridge
+        // whose colour is not yet on the course comes with a second bridge of
+        // that colour, from another physical token, anywhere on the course
+        // (any target board, this one included); if no partner fits, the
+        // bridge is not placed and another token is tried.
         const placedBridgeColours = getPlacedSpaceBridgeColours(currentPlacements, pieceMap);
         const viableOverlayIds = overlayIds.filter((overlayId) => {
           const colour = getSpaceBridgeColour(pieceMap[overlayId]);
           if (!colour || placedBridgeColours.has(colour)) return true;
-          return remainingSlots >= 2 && getSpaceBridgePartnerGroups(groupedMiniOverlayIds, pieceMap, physicalBoardId, colour).length > 0;
+          return getSpaceBridgePartnerGroups(groupedMiniOverlayIds, pieceMap, physicalBoardId, colour).length > 0;
         });
         if (!viableOverlayIds.length) {
           continue;
@@ -584,22 +592,42 @@ export function placeMiniOverlaysOnBoards(targetBoards, groupedMiniOverlayIds, p
           const occupiedWithFirst = new Set(occupiedMiniOverlayTiles);
           getPlacementOccupiedTiles(overlayPiece, chosenPlacement).forEach((key) => occupiedWithFirst.add(key));
           const tileMapWithFirst = buildResolvedMap(withFirst, pieceMap).tileMap;
+          // The partner may sit on any target board; this board only while it
+          // still has a slot for it.
+          const partnerBoards = shuffle(targetBoards.filter((board) => (
+            board !== targetPlacement || remainingSlots >= 2
+          )));
           let partner = null;
           for (const [partnerBoardId, partnerIds] of shuffle(
             getSpaceBridgePartnerGroups(groupedMiniOverlayIds, pieceMap, physicalBoardId, bridgeColour)
           )) {
             const partnerPiece = pieceMap[partnerIds.find((overlayId) => getSpaceBridgeColour(pieceMap[overlayId]) === bridgeColour)];
-            const partnerPlacement = chooseTokenPlacement(partnerPiece, tileMapWithFirst, occupiedWithFirst, withFirst);
-            if (partnerPlacement) {
-              partner = { physicalBoardId: partnerBoardId, piece: partnerPiece, placement: partnerPlacement };
-              break;
+            for (const partnerBoard of partnerBoards) {
+              const onThisBoard = partnerBoard === targetPlacement;
+              const partnerSupportTiles = onThisBoard
+                ? supportTiles
+                : getTargetSupportTiles(partnerBoard, boardOverlayPlacements, pieceMap);
+              if (!partnerSupportTiles.size) continue;
+              const partnerPlacement = chooseTokenPlacement(
+                partnerPiece,
+                tileMapWithFirst,
+                occupiedWithFirst,
+                withFirst,
+                partnerSupportTiles,
+                onThisBoard ? allowDensePacking : isBlankCustomBoardPiece(pieceMap[partnerBoard.pieceId])
+              );
+              if (partnerPlacement) {
+                partner = { physicalBoardId: partnerBoardId, piece: partnerPiece, placement: partnerPlacement, onThisBoard };
+                break;
+              }
             }
+            if (partner) break;
           }
           if (!partner) {
             continue;
           }
           commitTokenPlacement(physicalBoardId, overlayPiece, chosenPlacement);
-          commitTokenPlacement(partner.physicalBoardId, partner.piece, partner.placement);
+          commitTokenPlacement(partner.physicalBoardId, partner.piece, partner.placement, partner.onThisBoard);
         } else {
           commitTokenPlacement(physicalBoardId, overlayPiece, chosenPlacement);
         }
