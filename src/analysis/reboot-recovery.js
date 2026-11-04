@@ -176,6 +176,18 @@ export function getHomeRebootTokensForStart(start, rebootTokens = []) {
   return rebootTokens.filter((token) => (token.startKeys || []).includes(startKeyValue));
 }
 
+// Route caches are shared between starts unless the recovery rule makes a
+// search depend on the start. Under Home Reboot it depends only on the start's
+// home token set (one token per dock, used by every start on that dock), so
+// starts with the same tokens share their cached legs.
+export function getRecoveryCacheNamespace(options = {}, start = null) {
+  if (options.recoveryRule !== "home_reboot") return "shared";
+  const tokens = start ? getHomeRebootTokensForStart(start, options.rebootTokens) : [];
+  return tokens.length
+    ? `home:${tokens.map((token) => `${token.x},${token.y}`).join(";")}`
+    : "home:none";
+}
+
 export function getRebootDamagePenalty(options = {}) {
   const basePenalty = options.moreDeadlyGame ? MORE_DEADLY_REBOOT_DAMAGE_PENALTY : REBOOT_DAMAGE_PENALTY;
   return Number((basePenalty * getDamageDeckPressureMultipliers(options).reboot).toFixed(2));

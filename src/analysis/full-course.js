@@ -63,6 +63,7 @@ import {
 import {
   getElapsedAbsoluteActionsAfterTransitions,
   getHomeRebootTokensForStart,
+  getRecoveryCacheNamespace,
   getRebootEndedAbsoluteActions,
   getTransitionAbsoluteAction,
   getTurnEndAfterActionIndexes
@@ -802,9 +803,7 @@ export function* analyzeFullCourseContextualSteps(
     searchEffortScale = 1
   ) {
     const dynamicGoal = dynamicGoals[legIndex] ?? null;
-    const namespace = options.recoveryRule === "home_reboot"
-      ? `start${startIndex}`
-      : "shared";
+    const namespace = getRecoveryCacheNamespace(options, start);
     const cacheKey = getEstimatedLegCacheKey(
       context,
       legIndex,
@@ -1371,9 +1370,7 @@ export function* analyzeFullCourseContextualSteps(
     searchControl = {}
   ) => {
     const dynamicGoal = dynamicGoals[legIndex] ?? null;
-    const namespace = options.recoveryRule === "home_reboot"
-      ? `start${startIndex}`
-      : "shared";
+    const namespace = getRecoveryCacheNamespace(options, start);
     const cacheKey = getContextualLegCacheKey(
       context,
       legIndex,
@@ -2403,9 +2400,7 @@ export function* analyzeFullCourseContextualSteps(
         for (let legIndex = 0; legIndex < estimated.legs.length; legIndex += 1) {
           if (legIndex > 0) {
             const dynamicGoal = dynamicGoals[legIndex] ?? null;
-            const namespace = options.recoveryRule === "home_reboot"
-              ? `start${sourceIndex}`
-              : "shared";
+            const namespace = getRecoveryCacheNamespace(options, start);
             const arrivalClassKey = getContextualSharedLegCatalogueKey(
               arrivalContext,
               legIndex,
@@ -3096,9 +3091,7 @@ export function* analyzeFullCourseContextualSteps(
           forbiddenFirstActions = []
         ) {
           const dynamicGoal = dynamicGoals[legIndex] ?? null;
-          const namespace = options.recoveryRule === "home_reboot"
-            ? `start${startIndex}`
-            : "shared";
+          const namespace = getRecoveryCacheNamespace(options, start);
           const cacheKey = getEstimatedLegCacheKey(
             context,
             legIndex,
@@ -3751,9 +3744,7 @@ export function* analyzeFullCourseContextualSteps(
               initialContext
             );
             const dynamicGoal = dynamicGoals[legIndex] ?? null;
-            const namespace = options.recoveryRule === "home_reboot"
-              ? `start${analysis.index}`
-              : "shared";
+            const namespace = getRecoveryCacheNamespace(options, startEntry.start);
             const baseCacheKey = getEstimatedLegCacheKey(
               legStartContext,
               legIndex,

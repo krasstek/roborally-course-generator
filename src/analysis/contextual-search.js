@@ -356,8 +356,9 @@ export function getContextualTemplateCacheKey(
 // repriced after a trace is discovered. v48zb also treats exact Dynamic Archive
 // position as replay baggage here: cheap templates use a leg-local recovery proxy,
 // while exact replay reconstructs the actual checkpoint/Battery marker. Moving goals
-// contribute their physical phase. Home Reboot keeps a start namespace because its
-// legal reboot token set really is start-specific rather than historical bookkeeping.
+// contribute their physical phase. Home Reboot keeps a home-token namespace
+// (getRecoveryCacheNamespace) because its legal reboot token set depends on the
+// start's dock rather than on historical bookkeeping.
 export function getContextualSharedLegCatalogueKey(
   context,
   legIndex,
