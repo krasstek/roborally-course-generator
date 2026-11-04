@@ -55,7 +55,8 @@ import {
 import {
   getActionPenalty,
   isBatteryActive,
-  isRouteAwareBatteryScoringActive
+  isRouteAwareBatteryScoringActive,
+  pickRouteRuleOptions
 } from "./rule-options.js";
 import { analysisTelemetryNow } from "./telemetry.js";
 
@@ -178,18 +179,7 @@ export function getTilePenalty(
       batteryActive: isBatteryActive(options),
       rebootDamagePenalty: getRebootDamagePenalty(options),
       playerCount: options.playerCount,
-      cuttingFloor: options.cuttingFloor,
-      flamingOil: options.flamingOil,
-      repulsorOverdrive: options.repulsorOverdrive,
-      upgradeWorld: options.upgradeWorld,
-      factoryRejects: Boolean(options.factoryRejects),
-      classicSharedDeck: Boolean(options.classicSharedDeck),
-      driftDeck: Boolean(options.driftDeck),
-      lessForeshadowing: Boolean(options.lessForeshadowing),
-      lessSpammyGame: options.lessSpammyGame,
-      criticalSpam: options.criticalSpam,
-      criticalHaywire: options.criticalHaywire,
-      permanentShutdown: options.permanentShutdown
+      ...pickRouteRuleOptions(options),
     });
   }
 

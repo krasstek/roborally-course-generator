@@ -49,3 +49,97 @@ export function isRouteAwareBatteryScoringActive(options = {}) {
 export function getActionPenalty(action, options = {}) {
   return REGISTER_TEMPO_COST;
 }
+
+// The rule and economy options every route
+// search receives. Route searches used to copy these keys by hand in several
+// places (full-course.js x3, course-analysis.js, movement.js), and new rules
+// were silently dropped from some copies (Drift Deck, 2026-10-22). Keep the
+// keys here; `npm run verify:rule-options` checks that every variant option
+// is either listed here or explicitly marked as not route-relevant.
+
+// Rule switches, passed as given.
+export const ROUTE_RULE_RAW_KEYS = Object.freeze([
+  "recoveryRule",
+  "lessDeadlyGame",
+  "moreDeadlyGame",
+  "lighterGame",
+  "upgradeWorld",
+  "lessSpammyGame",
+  "criticalSpam",
+  "criticalHaywire",
+  "permanentShutdown",
+  "cuttingFloor",
+  "flamingOil",
+  "repulsorOverdrive"
+]);
+
+// Rule switches normalised to booleans.
+export const ROUTE_RULE_BOOLEAN_KEYS = Object.freeze([
+  "factoryRejects",
+  "classicSharedDeck",
+  "driftDeck",
+  "lessForeshadowing",
+  "setToKill",
+  "setToStun",
+  "repairStations"
+]);
+
+// Energy and upgrade economy settings, passed as given.
+export const ROUTE_ECONOMY_RAW_KEYS = Object.freeze([
+  "routeEnergyHorizonTurns",
+  "routeEnergyRegisterScore",
+  "routeEnergyReferenceReserve",
+  "startingEnergy",
+  "startingEnergyDelta",
+  "startingUpgradeCards",
+  "startingUpgradeCardDelta",
+  "maxEnergy",
+  "upgradeDrawsPerTurn",
+  "upgradeInstallsPerTurn",
+  "upgradeDrawEnergyCost",
+  "upgradeUsefulCardRate",
+  "upgradeUsefulEnergyPerInstall",
+  "upgradePowerRegistersPerEnergy",
+  "routeRegistersPerTurn"
+]);
+
+// Variant options that route searches deliberately do not take from this
+// helper: handled per leg or per start by the caller (Startup Spin-Up only on
+// the opening leg; Virtual Bots and its grace registers per call site), set
+// up the layout or the map before routing (docks, boards, checkpoints), reach
+// routing through another key (Dynamic Archiving and Home Reboot through
+// recoveryRule), or are not used by route search at all (pricing, timing,
+// variant bookkeeping).
+export const ROUTE_RULE_EXCLUDED_KEYS = Object.freeze([
+  "startupSpinUp",
+  "virtualBots",
+  "trafficGraceRegisters",
+  "actFast",
+  "competitiveMode",
+  "payToWin",
+  "subsidizedStarts",
+  "hazardousFlags",
+  "movingTargets",
+  "dynamicArchiving",
+  "homeReboot",
+  "noDocks",
+  "extraDocks",
+  "sandwichedDock",
+  "staggeredBoards",
+  "alignedLayout",
+  "variantComplexityBudget",
+  "variantComplexityUsed"
+]);
+
+export function pickRouteRuleOptions(options = {}) {
+  const picked = {};
+  for (const key of ROUTE_RULE_RAW_KEYS) picked[key] = options[key];
+  for (const key of ROUTE_RULE_BOOLEAN_KEYS) picked[key] = Boolean(options[key]);
+  return picked;
+}
+
+export function pickRouteEconomyOptions(options = {}) {
+  const picked = { routeAwareBatteryScoring: Boolean(options.routeAwareBatteryScoring) };
+  for (const key of ROUTE_ECONOMY_RAW_KEYS) picked[key] = options[key];
+  return picked;
+}

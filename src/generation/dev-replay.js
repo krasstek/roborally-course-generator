@@ -127,6 +127,7 @@ export function getScenarioDevReplayCache(scenario) {
   if (!cache) {
     cache = {
       ledgerByRoute: new WeakMap(),
+      intrinsicLedgerByRoute: new WeakMap(),
       cheapShadowByRoute: new WeakMap(),
       damageFoundationByRoute: new WeakMap(),
       reDifficultyShadow: undefined,

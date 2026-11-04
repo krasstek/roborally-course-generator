@@ -9,7 +9,7 @@ import {
   getFlagCandidateApproachStats
 } from "./calibration-features.js";
 import { applyConstructionGuidanceRanking } from "./construction-guidance.js";
-import { cloneTileMap, manhattanDistance } from "./layout-geometry.js";
+import { cloneTileMap, isMiniOverlayPiece, manhattanDistance } from "./layout-geometry.js";
 import { getMovingCheckpointTrace } from "./moving-targets.js";
 import { CHECKPOINT_FLOOR_MODES, getTuningDifficulty, normalizeCheckpointFloor } from "./preferences.js";
 import { sample, sampleManyWeighted } from "./random.js";
@@ -37,9 +37,13 @@ export function getFlagCandidates(placements, pieceMap) {
       const y = tile.y;
       const key = `${x},${y}`;
       const weight = piece.kind === "dock" ? 0.45 : 1;
+      // Overlay tokens (not 6x6 overlay boards) take no checkpoint unless
+      // Hazardous Checkpoints keeps them active (user 2026-11-04).
+      const coveredByToken = Boolean(placement.overlay && isMiniOverlayPiece(piece));
       const existing = byCoordinate.get(key);
       if (existing) {
         existing.weight = Math.max(existing.weight, weight);
+        if (coveredByToken) existing.coveredByToken = true;
         continue;
       }
       byCoordinate.set(key, {
@@ -47,7 +51,8 @@ export function getFlagCandidates(placements, pieceMap) {
         y,
         pieceId: placement.pieceId,
         placementIndex,
-        weight
+        weight,
+        ...(coveredByToken ? { coveredByToken: true } : {})
       });
     }
   }
@@ -236,6 +241,10 @@ export function getCheckpointPushDirections(tileMap, point, options = {}) {
 }
 
 export function canUseCheckpointTile(candidate, tileMap, starts, preferences = {}) {
+  if (candidate.coveredByToken && !preferences.hazardousFlags) {
+    return false;
+  }
+
   // A checkpoint keeps the building under it, so a grandstand (a building
   // without doorways) would be unreachable.
   const candidateTile = tileMap.get(`${candidate.x},${candidate.y}`);
