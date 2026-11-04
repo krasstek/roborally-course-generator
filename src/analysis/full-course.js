@@ -782,9 +782,7 @@ export function* analyzeFullCourseContextualSteps(
     `leg${legIndex}`,
     stateKey(context.state),
     `r${Math.max(0, Number(context.absoluteActions) || 0) % REGISTER_COUNT}`,
-    options.recoveryRule === "dynamic_archiving"
-      ? "archive-cheap-proxy"
-      : (getDynamicArchiveStateKey(context.dynamicArchivePoint, baseRouteOptions) || "archive-"),
+    getDynamicArchiveStateKey(context.dynamicArchivePoint, baseRouteOptions) || "archive-",
     `g${getDynamicGoalCachePhase(dynamicGoal, context.absoluteActions)}`,
     startupSpinUp ? "spin1" : "spin0",
     `ban${[...forbiddenFirstActions].sort().join(",") || "-"}`,

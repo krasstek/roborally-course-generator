@@ -371,8 +371,9 @@ export function getContextualSharedLegCatalogueKey(
     `leg${legIndex}`,
     stateKey(context.state),
     `r${context.absoluteActions % REGISTER_COUNT}`,
+    getDynamicArchiveStateKey(context.dynamicArchivePoint, options) || null,
     `g${getDynamicGoalCachePhase(dynamicGoal, context.absoluteActions)}`
-  ].join("|");
+  ].filter(Boolean).join("|");
 }
 
 export function getContextualProgramCacheSignature(context, options = {}) {
@@ -723,13 +724,15 @@ export function getPhysicalTimingTemplateStateKey(
   dynamicArchivePoint = null,
   options = {}
 ) {
-  // Physical timing templates are cheap discovery, not authoritative Dynamic
-  // Archive chronology. Position/facing/register/goal phase define dominance;
-  // exact archive history is reconstructed when the selected witness is replayed.
-  return getContextualPhysicalGoalCode(
+  // Position/facing/register/goal phase define dominance. Under Dynamic
+  // Archiving the reached archive is part of it too: two paths to one square
+  // with different archives face different reboot setbacks (2026-11-04).
+  return getContextualArchiveAwarePhysicalGoalCode(
     state,
     absoluteActions,
-    dynamicGoal
+    dynamicGoal,
+    dynamicArchivePoint,
+    options
   );
 }
 
@@ -884,7 +887,11 @@ export function* enumeratePhysicalTimingLegTemplatesSteps(
   let activeMaxExpansions = initialMaxExpansions;
   let activeMaxActions = initialMaxActions;
   const portalMap = options.portalMap ?? buildPortalMap(tileMap);
-  const cheapDynamicArchiveApproximation = options.recoveryRule === "dynamic_archiving";
+  // Dynamic Archiving prices reboot risk against the archive this search path
+  // has actually reached (current.dynamicArchivePoint), so landing on a battery
+  // or checkpoint before risky squares pays off (2026-11-04). The old geometric
+  // stand-in assumed the nearest plausible archive was reached either way.
+  const cheapDynamicArchiveApproximation = false;
   const cheapDynamicArchiveOrigin = cheapDynamicArchiveApproximation
     ? { x: context.state.x, y: context.state.y }
     : null;

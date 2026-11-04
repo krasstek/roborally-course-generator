@@ -119,11 +119,14 @@ export function routeTouchesPit(tileMap, route) {
 }
 
 export const DYNAMIC_ARCHIVING_ROUTE_UTILITY = Object.freeze({
-  // v48zz: keep the established small DA attraction scale, but make eligibility
-  // state-relative. A landing earns credit only for recovery setback that the new
-  // archive actually removes versus the robot's currently archived point.
-  setbackImprovementWeight: 0.08,
-  maxRouteReward: 4.5
+  // Retired 2026-11-04 (weight 0): a flat bonus per archive landing, whatever
+  // lay ahead. Archives now pull through the search itself: the archive point is
+  // part of the search state, and landing on one lowers the setback-dependent
+  // risk of every reboot square after it (getPitPressurePenalty), so the pull
+  // grows with the risk ahead and the distance since the last archive. The
+  // landing counts stay as diagnostics.
+  setbackImprovementWeight: 0,
+  maxRouteReward: 0
 });
 
 export function isDynamicArchiveLanding(tileMap, point, options = {}) {
