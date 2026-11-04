@@ -13,10 +13,10 @@ import {
   getProductionLengthTurnIndex,
   getScenarioPresentationMetrics
 } from "../generation/labels.js";
-import { isMiniOverlayPiece } from "../generation/layout-geometry.js";
+import { getReverseSideName, isMiniOverlayPiece } from "../generation/layout-geometry.js";
+import { formatExpansionName } from "../generation/preferences.js";
 import { getReloadRequestedTargetLabel } from "../generation/persistence.js";
 import { getProductionLengthThresholds } from "../generation/targets.js";
-import { formatBoardLabel } from "./board-audit.js";
 
 export let courseExplanationState = {
   scenarioRef: null,
@@ -218,25 +218,30 @@ export function updateSetupSummary(scenario) {
     ? `${actualLengthLabel} (${estimatedTurnsLabel})`
     : actualLengthLabel;
 
-  const boardLabels = scenario.mainBoardIds.map((pieceId) => (
-    formatBoardLabel(pieceId, scenario.pieceMap)
-  ));
-  const overlayBoardLabels = (scenario.overlayPlacements || [])
-    .filter((placement) => !isMiniOverlayPiece(scenario.pieceMap[placement.pieceId]))
-    .map((placement) => formatBoardLabel(placement.pieceId, scenario.pieceMap));
-  const overlayTileLabels = (scenario.overlayPlacements || [])
-    .filter((placement) => isMiniOverlayPiece(scenario.pieceMap[placement.pieceId]))
-    .map((placement) => formatBoardLabel(placement.pieceId, scenario.pieceMap));
-  boardsEl.textContent = boardLabels.join(", ");
+  const boardLabels = formatGroupedPieceList(scenario.mainBoardIds, scenario.pieceMap, { reverseSide: true });
+  const overlayBoardLabels = formatGroupedPieceList(
+    (scenario.overlayPlacements || [])
+      .filter((placement) => !isMiniOverlayPiece(scenario.pieceMap[placement.pieceId]))
+      .map((placement) => placement.pieceId),
+    scenario.pieceMap,
+    { reverseSide: true }
+  );
+  const overlayTileLabels = formatGroupedPieceList(
+    (scenario.overlayPlacements || [])
+      .filter((placement) => isMiniOverlayPiece(scenario.pieceMap[placement.pieceId]))
+      .map((placement) => placement.pieceId),
+    scenario.pieceMap
+  );
+  boardsEl.textContent = boardLabels.join("; ");
   if (overlayBoardLabels.length) {
-    overlayBoardsEl.textContent = overlayBoardLabels.join(", ");
+    overlayBoardsEl.textContent = overlayBoardLabels.join("; ");
     overlayBoardsRowEl.classList.remove("hidden");
   } else {
     overlayBoardsRowEl.classList.add("hidden");
     overlayBoardsEl.textContent = "";
   }
   if (overlayTileLabels.length) {
-    overlayTilesEl.textContent = overlayTileLabels.join(", ");
+    overlayTilesEl.textContent = overlayTileLabels.join("; ");
     overlayTilesRowEl.classList.remove("hidden");
   } else {
     overlayTilesRowEl.classList.add("hidden");
@@ -451,4 +456,27 @@ export function updateSetupSummary(scenario) {
 
 export function formatLegLabel(leg) {
   return leg.from === "dock" ? "Dock -> 1" : `${leg.from} -> ${leg.to}`;
+}
+
+// One entry per set ("Robo Rally: Transformers — Space Bridge (blue) ×2, ..."), in order
+// of first appearance; identical pieces of a set are counted, not repeated.
+// Boards keep their reverse side name (it identifies the physical board);
+// overlay tiles show only the side in use (user 2026-11-04).
+export function formatGroupedPieceList(pieceIds = [], pieceMap = {}, { reverseSide = false } = {}) {
+  const groups = new Map();
+  for (const pieceId of pieceIds) {
+    const piece = pieceMap[pieceId];
+    const expansion = formatExpansionName(piece?.expansionId ?? "unknown");
+    const name = piece?.name ?? pieceId;
+    const reverseName = reverseSide ? getReverseSideName(pieceId, pieceMap) : null;
+    const label = reverseName ? `${name} (reverse side: ${reverseName})` : name;
+    if (!groups.has(expansion)) groups.set(expansion, new Map());
+    const counts = groups.get(expansion);
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  return [...groups.entries()].map(([expansion, counts]) => (
+    `${expansion} — ${[...counts.entries()].map(([label, count]) => (
+      count > 1 ? `${label} ×${count}` : label
+    )).join(", ")}`
+  ));
 }
