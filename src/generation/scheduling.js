@@ -1,9 +1,11 @@
 // Robo Rally Course Randomizer - yielding to the page during long work, and generation timing
 export function nextFrame() {
   return new Promise((resolve) => {
-    // Headless runs have no animation frames; a timer turn is the equivalent yield.
+    // Headless runs have no animation frames; a timer turn is the equivalent
+    // yield (a message turn in the generation worker, see nextWorkerTask).
     if (typeof requestAnimationFrame !== "function") {
-      globalThis.setTimeout(resolve, 0);
+      if (IN_WORKER) nextWorkerTask().then(resolve);
+      else globalThis.setTimeout(resolve, 0);
       return;
     }
     requestAnimationFrame(() => {
@@ -12,7 +14,29 @@ export function nextFrame() {
   });
 }
 
+// In the generation worker a yield exists to let the Stop message in.
+// scheduler.yield() resumes ahead of queued messages, and nested timers are
+// clamped to 4 ms, so the worker yields through a MessageChannel instead: a
+// plain task, queued behind messages already waiting, with no clamp.
+const IN_WORKER = typeof globalThis !== "undefined" &&
+  typeof globalThis.WorkerGlobalScope !== "undefined" &&
+  typeof MessageChannel === "function";
+let workerYieldChannel = null;
+const workerYieldResolvers = [];
+
+function nextWorkerTask() {
+  if (!workerYieldChannel) {
+    workerYieldChannel = new MessageChannel();
+    workerYieldChannel.port1.onmessage = () => workerYieldResolvers.shift()?.();
+  }
+  return new Promise((resolve) => {
+    workerYieldResolvers.push(resolve);
+    workerYieldChannel.port2.postMessage(0);
+  });
+}
+
 export function nextEventLoopTurn() {
+  if (IN_WORKER) return nextWorkerTask();
   if (
     typeof globalThis !== "undefined" &&
     typeof globalThis.scheduler?.yield === "function"
