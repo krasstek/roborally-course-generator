@@ -1,4 +1,5 @@
 // Robo Rally Course Randomizer - app start-up: page wiring, generation runs, saved course, diagnostics
+import { runGenerationInWorker } from "./generation-worker-client.js";
 import {
   clearAnalysisCaches,
   resetAnalysisTelemetry
@@ -16,8 +17,7 @@ import { isDevViewEnabled, registerGenerationEnvironment } from "../generation/e
 import {
   buildDiagnosticsCases,
   detectScenarioExplanationIssues,
-  generateScenarioForPreferences,
-  runProductionGeneration
+  generateScenarioForPreferences
 } from "../generation/generation-loop.js";
 import { getGenerationModeProfile } from "../generation/generation-modes.js";
 import { getScenarioPresentationMetrics } from "../generation/labels.js";
@@ -322,51 +322,28 @@ async function start() {
     const frozenTestSeed = Number.isInteger(devFrozenGenerationSeed)
       ? devFrozenGenerationSeed
       : null;
-    let lastGenerationUiYieldAt = 0;
-    const generation = await runProductionGeneration(assets, preferences, {
+    // Generation runs in a worker (generation-worker-client.js), so the page
+    // stays responsive and draws progress on its own; it falls back to the
+    // page thread when a module worker cannot start.
+    const generation = await runGenerationInWorker(assets, preferences, {
       seed: frozenTestSeed,
       maxAttempts,
-      generationOptions: {
-        shouldStopRequested: () => generationStopRequested,
-        onRetainableCandidate: async ({ found, target }) => {
-          setGenerationRetainedCandidateProgress(found, target);
-          await nextFrame();
-          lastGenerationUiYieldAt = generationNow();
-        },
-        onCooperativeProgress: (attempt, maxAttempts, stage = "", stageContext = null) => {
-          setGeneratingOverlay(
-            true,
-            "",
-            {
-              attempt,
-              maxAttempts,
-              stage,
-              preferences,
-              stageContext
-            }
-          );
-        },
-        onProgress: async (attempt, maxAttempts, stage = "", stageContext = null) => {
-          setGeneratingOverlay(
-            true,
-            "",
-            {
-              attempt,
-              maxAttempts,
-              stage,
-              preferences,
-              stageContext
-            }
-          );
-          // v12: stage messages can arrive much faster than the display can use
-          // them. Keep the DOM text current, but only force a render/yield at a
-          // bounded cadence instead of pausing the CPU search for every message.
-          const now = generationNow();
-          if (now - lastGenerationUiYieldAt >= 300) {
-            lastGenerationUiYieldAt = now;
-            await nextFrame();
+      shouldStopRequested: () => generationStopRequested,
+      onRetainableCandidate: ({ found, target }) => {
+        setGenerationRetainedCandidateProgress(found, target);
+      },
+      onProgress: (attempt, maxAttempts, stage = "", stageContext = null) => {
+        setGeneratingOverlay(
+          true,
+          "",
+          {
+            attempt,
+            maxAttempts,
+            stage,
+            preferences,
+            stageContext
           }
-        }
+        );
       }
     });
 

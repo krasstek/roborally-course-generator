@@ -1044,9 +1044,11 @@ export function buildDamageFoundationReportLines(scenario, options = {}) {
   const implementedHooks = [...new Set(entries.flatMap(
     (entry) => entry.foundation?.implementedVariantHooks ?? []
   ))];
-  const telemetry = typeof getDamageEconomyTelemetrySnapshot === "function"
-    ? getDamageEconomyTelemetrySnapshot()
-    : entries.at(-1)?.foundation ?? {};
+  // Generated in the worker: its telemetry came back with the course.
+  const telemetry = scenario.generationDamageEconomyTelemetry ??
+    (typeof getDamageEconomyTelemetrySnapshot === "function"
+      ? getDamageEconomyTelemetrySnapshot()
+      : entries.at(-1)?.foundation ?? {});
   const selectedRouteMean = (key) => Number((starts.reduce(
     (total, entry) => total + (Number(entry?.fullCourseRoute?.[key]) || 0),
     0
