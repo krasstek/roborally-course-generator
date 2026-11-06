@@ -1,4 +1,4 @@
-const APP_VERSION = "20261106115627";
+const APP_VERSION = "20261106124303";
 const STATIC_CACHE = `roborally-static-${APP_VERSION}`;
 const RUNTIME_CACHE = `roborally-runtime-${APP_VERSION}`;
 
