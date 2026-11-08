@@ -244,6 +244,17 @@
       ]
     },
     {
+      "x": 11,
+      "y": 1,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
+        }
+      ]
+    },
+    {
       "x": 0,
       "y": 2,
       "features": [
@@ -353,6 +364,17 @@
         {
           "type": "road",
           "dir": "S"
+        }
+      ]
+    },
+    {
+      "x": 11,
+      "y": 2,
+      "features": [
+        {
+          "type": "belt",
+          "dir": "S",
+          "speed": 1
         }
       ]
     },

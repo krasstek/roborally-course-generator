@@ -169,7 +169,7 @@
       "features": [
         {
           "type": "road",
-          "dir": "E"
+          "dir": "W"
         }
       ]
     },
@@ -179,7 +179,7 @@
       "features": [
         {
           "type": "road",
-          "dir": "E"
+          "dir": "W"
         }
       ]
     },
@@ -189,7 +189,7 @@
       "features": [
         {
           "type": "road",
-          "dir": "E"
+          "dir": "W"
         }
       ]
     },
@@ -208,7 +208,7 @@
       "features": [
         {
           "type": "road",
-          "dir": "E"
+          "dir": "W"
         }
       ]
     },
@@ -261,7 +261,7 @@
       "features": [
         {
           "type": "road",
-          "dir": "E"
+          "dir": "W"
         }
       ]
     },
@@ -271,7 +271,7 @@
       "features": [
         {
           "type": "road",
-          "dir": "E"
+          "dir": "W"
         }
       ]
     },
@@ -281,7 +281,7 @@
       "features": [
         {
           "type": "road",
-          "dir": "E"
+          "dir": "W"
         }
       ]
     },
@@ -291,7 +291,7 @@
       "features": [
         {
           "type": "road",
-          "dir": "E"
+          "dir": "W"
         }
       ]
     },
@@ -380,7 +380,7 @@
       "features": [
         {
           "type": "road",
-          "dir": "E"
+          "dir": "W"
         }
       ]
     },
@@ -390,7 +390,7 @@
       "features": [
         {
           "type": "road",
-          "dir": "E"
+          "dir": "W"
         }
       ]
     },
@@ -400,7 +400,7 @@
       "features": [
         {
           "type": "road",
-          "dir": "E"
+          "dir": "W"
         }
       ]
     },
@@ -628,7 +628,7 @@
       "features": [
         {
           "type": "road",
-          "dir": "E"
+          "dir": "W"
         }
       ]
     },
@@ -638,7 +638,7 @@
       "features": [
         {
           "type": "road",
-          "dir": "E"
+          "dir": "W"
         }
       ]
     },
@@ -648,7 +648,7 @@
       "features": [
         {
           "type": "road",
-          "dir": "E"
+          "dir": "W"
         }
       ]
     },
@@ -658,7 +658,7 @@
       "features": [
         {
           "type": "road",
-          "dir": "E"
+          "dir": "W"
         }
       ]
     },
@@ -668,8 +668,8 @@
       "features": [
         {
           "type": "road",
-          "dir": "E",
-          "turn": "right"
+          "dir": "W",
+          "turn": "left"
         }
       ]
     },
@@ -749,7 +749,7 @@
       "features": [
         {
           "type": "road",
-          "dir": "E"
+          "dir": "W"
         }
       ]
     },
@@ -769,7 +769,7 @@
       "features": [
         {
           "type": "road",
-          "dir": "E"
+          "dir": "W"
         }
       ]
     },
@@ -779,8 +779,8 @@
       "features": [
         {
           "type": "road",
-          "dir": "E",
-          "turn": "right"
+          "dir": "W",
+          "turn": "left"
         }
       ]
     },
@@ -841,7 +841,7 @@
       "features": [
         {
           "type": "road",
-          "dir": "E"
+          "dir": "W"
         }
       ]
     },
@@ -851,7 +851,7 @@
       "features": [
         {
           "type": "road",
-          "dir": "E"
+          "dir": "W"
         }
       ]
     },
@@ -861,7 +861,7 @@
       "features": [
         {
           "type": "road",
-          "dir": "E"
+          "dir": "W"
         }
       ]
     },
@@ -880,8 +880,8 @@
       "features": [
         {
           "type": "road",
-          "dir": "E",
-          "turn": "right"
+          "dir": "W",
+          "turn": "left"
         }
       ]
     },
