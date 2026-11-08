@@ -73,6 +73,7 @@ const VERSIONED_ASSETS = [
   "./src/generation/fingerprints.js",
   "./src/generation/generation-loop.js",
   "./src/generation/generation-modes.js",
+  "./src/generation/generation-worker.js",
   "./src/generation/guidance-calibration.js",
   "./src/generation/labels.js",
   "./src/generation/layout-geometry.js",
@@ -101,6 +102,7 @@ const VERSIONED_ASSETS = [
   "./src/ui/dev-view.js",
   "./src/ui/dialogs.js",
   "./src/ui/generation-overlay.js",
+  "./src/ui/generation-worker-client.js",
   "./src/ui/map-view.js",
   "./src/ui/reports.js",
   "./src/ui/rules-notes.js",
@@ -291,8 +293,18 @@ self.addEventListener("fetch", (event) => {
 // so they are served straight from the precache. Everything else (board photos)
 // goes through the runtime cache.
 async function precachedOrStaleWhileRevalidate(request) {
-  const precached = await caches.match(request, { cacheName: STATIC_CACHE });
+  const precached = await caches.match(request, { cacheName: STATIC_CACHE }) ||
+    await matchUnversionedModule(request);
   return precached || staleWhileRevalidate(request, RUNTIME_CACHE);
+}
+
+// The generation worker cannot use the page's import map, so its module
+// imports arrive without ?v=. Serve them from this version's precache (one
+// entry per file), which keeps the worker on the same version as the page.
+async function matchUnversionedModule(request) {
+  const url = new URL(request.url);
+  if (url.search || !url.pathname.endsWith(".js")) return undefined;
+  return caches.match(request, { cacheName: STATIC_CACHE, ignoreSearch: true });
 }
 
 async function networkFirst(request, cacheName) {
