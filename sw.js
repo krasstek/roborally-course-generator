@@ -1,4 +1,4 @@
-const APP_VERSION = "20261104170311";
+const APP_VERSION = "20261108084846";
 const STATIC_CACHE = `roborally-static-${APP_VERSION}`;
 const RUNTIME_CACHE = `roborally-runtime-${APP_VERSION}`;
 
@@ -131,6 +131,7 @@ const VERSIONED_ASSETS = [
   "./data/double-helix.json",
   "./data/double-zap.json",
   "./data/doubles.json",
+  "./data/downtown-delta.json",
   "./data/energize.json",
   "./data/falling.json",
   "./data/fireball-factory.json",
@@ -182,6 +183,14 @@ const VERSIONED_ASSETS = [
   "./data/meeple.json",
   "./data/mergers.json",
   "./data/merry-go-round.json",
+  "./data/mine-a.json",
+  "./data/mine-b.json",
+  "./data/mine-c.json",
+  "./data/mine-d.json",
+  "./data/mine-e.json",
+  "./data/mine-f.json",
+  "./data/mine-g.json",
+  "./data/mine-h.json",
   "./data/misdirection.json",
   "./data/portal-palace.json",
   "./data/pushy.json",
@@ -210,6 +219,7 @@ const VERSIONED_ASSETS = [
   "./data/tabula-rasa.json",
   "./data/tempest.json",
   "./data/the-abyss.json",
+  "./data/the-crumplezone.json",
   "./data/the-h.json",
   "./data/the-keep.json",
   "./data/the-o-ring.json",

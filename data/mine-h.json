@@ -1,0 +1,23 @@
+{
+  "id": "mine-h",
+  "name": "Mine",
+  "kind": "overlay",
+  "width": 1,
+  "height": 1,
+  "mergeMode": "add",
+  "starts": [],
+  "tiles": [
+    {
+      "x": 0,
+      "y": 0,
+      "features": [
+        {
+          "type": "mine"
+        }
+      ]
+    }
+  ],
+  "expansionId": "transformers",
+  "physicalBoardId": "mine-h",
+  "image": "./assets/boards/tile-mine.jpeg"
+}
