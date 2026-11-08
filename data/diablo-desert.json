@@ -669,7 +669,7 @@
         {
           "type": "road",
           "dir": "W",
-          "turn": "left"
+          "turn": "right"
         }
       ]
     },
@@ -780,7 +780,7 @@
         {
           "type": "road",
           "dir": "W",
-          "turn": "left"
+          "turn": "right"
         }
       ]
     },
@@ -881,7 +881,7 @@
         {
           "type": "road",
           "dir": "W",
-          "turn": "left"
+          "turn": "right"
         }
       ]
     },
