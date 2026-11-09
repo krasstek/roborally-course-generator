@@ -1,4 +1,4 @@
-const APP_VERSION = "20261109085837";
+const APP_VERSION = "20261109124234";
 const STATIC_CACHE = `roborally-static-${APP_VERSION}`;
 const RUNTIME_CACHE = `roborally-runtime-${APP_VERSION}`;
 
@@ -85,6 +85,7 @@ const VERSIONED_ASSETS = [
   "./src/generation/persistence.js",
   "./src/generation/play-time.js",
   "./src/generation/preferences.js",
+  "./src/generation/preflight-gate.js",
   "./src/generation/random.js",
   "./src/generation/reboot-tokens.js",
   "./src/generation/route-field.js",
@@ -225,7 +226,8 @@ const VERSIONED_ASSETS = [
   "./data/water-park.json",
   "./data/whirlpool.json",
   "./data/winding.json",
-  "./calibration/construction-guidance.json"
+  "./calibration/construction-guidance.json",
+  "./calibration/preflight-gate.json"
 ];
 // PRECACHE LIST END
 

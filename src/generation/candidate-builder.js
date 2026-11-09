@@ -1,4 +1,5 @@
 // Robo Rally Course Randomizer - candidate builder: one course candidate from layout to classified, routed result (createRandomCandidate), with inventory validation, retry and route-work budgets
+import { evaluatePreflightGate } from "./preflight-gate.js";
 import {
   analyzeFullCourse,
   analyzeFullCourseCooperative,
@@ -1281,6 +1282,44 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
                 openingUnresolvedCount: coursePreflight.opening?.summary?.capacityShortCircuit?.unresolvedStarts ?? 0,
                 difficultyRaw: coursePreflight.metrics?.difficultyRaw ?? null,
                 lengthRaw: coursePreflight.metrics?.lengthRaw ?? null,
+                work: coursePreflight.work
+              }
+            };
+            sequence = null;
+            break;
+          }
+
+          // Preflight gate (D5): stop before full routing when the fitted model
+          // gives this attempt almost no chance of ending acceptable. Same
+          // exclusions as the gross check above, and never on an emergency
+          // attempt (no course exists yet).
+          const preflightGate = evaluatePreflightGate(assets.preflightGate, {
+            preferences: generationPreferences,
+            preflightMetrics: coursePreflight.metrics,
+            preflight: coursePreflight,
+            guidance: checkpointsKnownGuidance,
+            boards: scenarioBoardPlacements.length,
+            checkpoints: playableCheckpoints.length,
+            sourceStarts: indexedActiveStarts.length,
+            variantCount: Object.keys(effectiveVariantBundle ?? {}).filter((key) => effectiveVariantBundle[key] === true).length
+          });
+          if (
+            preflightGate?.stop &&
+            !observesTargetMisses(generationPreferences) &&
+            !generationPreferences.generationEmergencyAttempt &&
+            !estimateThenRealizeSharedCandidate && !competitiveMode && !startEnergyPricing
+          ) {
+            const reason = `preflight gate: ${Math.round(preflightGate.probability * 1000) / 10}% chance of an acceptable course (predicted difficulty ${preflightGate.predictedDifficulty.toFixed(2)}, length ${preflightGate.predictedLength.toFixed(1)} turns)`;
+            console.debug(`Early course retry: ${reason}`);
+            await reportStage(`Trying another checkpoint layout — ${reason}`, evaluationsUsed);
+            sequenceFailureCategory = "preflight-gate";
+            sequenceFailureReason = reason;
+            sequenceFailureDiagnostics = {
+              preflight: {
+                difficultyRaw: coursePreflight.metrics?.difficultyRaw ?? null,
+                lengthRaw: coursePreflight.metrics?.lengthRaw ?? null,
+                gateProbability: Number(preflightGate.probability.toFixed(4)),
+                gateThreshold: preflightGate.threshold,
                 work: coursePreflight.work
               }
             };

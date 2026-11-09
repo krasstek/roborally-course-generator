@@ -55,9 +55,9 @@ function buildPrecacheLists() {
     .filter((name) => name.endsWith(".json"))
     .sort()
     .map((name) => `./data/${name}`);
-  const calibration = fs.existsSync(path.join(rootDir, "calibration", "construction-guidance.json"))
-    ? ["./calibration/construction-guidance.json"]
-    : [];
+  const calibration = ["construction-guidance.json", "preflight-gate.json"]
+    .filter((name) => fs.existsSync(path.join(rootDir, "calibration", name)))
+    .map((name) => `./calibration/${name}`);
 
   const iconPattern = /\.\/assets\/icons\/[^"'\s)]+/g;
   const icons = [

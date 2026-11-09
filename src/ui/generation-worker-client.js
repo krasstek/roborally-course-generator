@@ -98,7 +98,8 @@ export async function runGenerationInWorker(assets, preferences, options = {}) {
       type: "start",
       assets: {
         pieceMap: assets.pieceMap,
-        constructionGuidance: assets.constructionGuidance
+        constructionGuidance: assets.constructionGuidance,
+        preflightGate: assets.preflightGate ?? null
       },
       preferences,
       seed: options.seed,

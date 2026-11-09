@@ -260,11 +260,13 @@ export async function loadAssets() {
     return cachedAssets;
   }
 
-  const [pieces, rawConstructionGuidance] = await Promise.all([
+  const [pieces, rawConstructionGuidance, preflightGate] = await Promise.all([
     Promise.all(
       PIECE_DATA_FILES.map(async (pieceId) => loadJSON(`./data/${pieceId}.json`))
     ),
-    loadOptionalJSON("./calibration/construction-guidance.json")
+    loadOptionalJSON("./calibration/construction-guidance.json"),
+    // Optional like the guidance: without it, attempts are never stopped early.
+    loadOptionalJSON("./calibration/preflight-gate.json")
   ]);
   const pieceMap = Object.fromEntries(
     pieces.flatMap(expandCountedPiece).map((piece) => [piece.id, piece])
@@ -287,7 +289,8 @@ export async function loadAssets() {
     pieceMap,
     imageMap: {},
     imageLoadPromises: new Map(),
-    constructionGuidance
+    constructionGuidance,
+    preflightGate
   };
   return cachedAssets;
 }
