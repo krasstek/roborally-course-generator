@@ -53,14 +53,7 @@ export const PIECE_DATA_FILES = [
   "meeple",
   "mergers",
   "merry-go-round",
-  "mine-a",
-  "mine-b",
-  "mine-c",
-  "mine-d",
-  "mine-e",
-  "mine-f",
-  "mine-g",
-  "mine-h",
+  "mine",
   "mb-docking-bay-a",
   "mb-docking-bay-b",
   "mb-tile-1a",
@@ -105,14 +98,8 @@ export const PIECE_DATA_FILES = [
   "sampler",
   "shake-n-bake",
   "sidewinder",
-  "space-bridge-red-a",
-  "space-bridge-red-b",
-  "space-bridge-red-c",
-  "space-bridge-red-d",
-  "space-bridge-blue-a",
-  "space-bridge-blue-b",
-  "space-bridge-blue-c",
-  "space-bridge-blue-d",
+  "space-bridge-red",
+  "space-bridge-blue",
   "speedia-qualifier",
   "spill",
   "spin-class",
@@ -234,6 +221,40 @@ export function pruneImageCache(assets, keepPieceIds = []) {
   }
 }
 
+// A data file with "count": n describes n identical physical pieces (mines,
+// space bridges). They load as n copies with ids "<id>-a", "<id>-b", ... and
+// physical ids "<physicalBoardId>-a", ...: the ids the separate files used to
+// have, so saved courses keep loading. Both sides of a double-sided token
+// (space-bridge-red / -blue, physical id space-bridge) expand to matching
+// letters, so copy "a" of each colour is one physical token. Copies carry a
+// non-enumerable copyOf / copyCount for the board audit.
+const COPY_LETTERS = "abcdefghijklmnopqrstuvwxyz";
+
+export function expandCountedPiece(piece) {
+  const count = Math.floor(Number(piece?.count) || 0);
+  if (!(count > 1)) {
+    if (piece && "count" in piece) {
+      const { count: _count, ...single } = piece;
+      return [single];
+    }
+    return [piece];
+  }
+  if (count > COPY_LETTERS.length) {
+    throw new Error(`${piece.id}: count ${count} is more than ${COPY_LETTERS.length}`);
+  }
+  const { count: _count, ...base } = piece;
+  return [...COPY_LETTERS.slice(0, count)].map((letter) => {
+    const copy = {
+      ...base,
+      id: `${base.id}-${letter}`,
+      physicalBoardId: `${base.physicalBoardId ?? base.id}-${letter}`
+    };
+    Object.defineProperty(copy, "copyOf", { value: base.id, enumerable: false });
+    Object.defineProperty(copy, "copyCount", { value: count, enumerable: false });
+    return copy;
+  });
+}
+
 export async function loadAssets() {
   if (cachedAssets) {
     return cachedAssets;
@@ -246,7 +267,7 @@ export async function loadAssets() {
     loadOptionalJSON("./calibration/construction-guidance.json")
   ]);
   const pieceMap = Object.fromEntries(
-    pieces.map((piece) => [piece.id, piece])
+    pieces.flatMap(expandCountedPiece).map((piece) => [piece.id, piece])
   );
   const constructionGuidance = normalizeConstructionGuidanceCalibration(rawConstructionGuidance);
 

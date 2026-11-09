@@ -1,5 +1,5 @@
 {
-  "id": "mine-h",
+  "id": "mine",
   "name": "Mine",
   "kind": "overlay",
   "width": 1,
@@ -18,6 +18,7 @@
     }
   ],
   "expansionId": "transformers",
-  "physicalBoardId": "mine-h",
-  "image": "./assets/boards/tile-mine.jpeg"
+  "physicalBoardId": "mine",
+  "image": "./assets/boards/tile-mine.jpeg",
+  "count": 8
 }

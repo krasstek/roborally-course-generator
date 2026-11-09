@@ -1,4 +1,4 @@
-const APP_VERSION = "20261108173821";
+const APP_VERSION = "20261109084404";
 const STATIC_CACHE = `roborally-static-${APP_VERSION}`;
 const RUNTIME_CACHE = `roborally-runtime-${APP_VERSION}`;
 
@@ -185,14 +185,7 @@ const VERSIONED_ASSETS = [
   "./data/meeple.json",
   "./data/mergers.json",
   "./data/merry-go-round.json",
-  "./data/mine-a.json",
-  "./data/mine-b.json",
-  "./data/mine-c.json",
-  "./data/mine-d.json",
-  "./data/mine-e.json",
-  "./data/mine-f.json",
-  "./data/mine-g.json",
-  "./data/mine-h.json",
+  "./data/mine.json",
   "./data/misdirection.json",
   "./data/portal-palace.json",
   "./data/pushy.json",
@@ -201,14 +194,8 @@ const VERSIONED_ASSETS = [
   "./data/sampler.json",
   "./data/shake-n-bake.json",
   "./data/sidewinder.json",
-  "./data/space-bridge-blue-a.json",
-  "./data/space-bridge-blue-b.json",
-  "./data/space-bridge-blue-c.json",
-  "./data/space-bridge-blue-d.json",
-  "./data/space-bridge-red-a.json",
-  "./data/space-bridge-red-b.json",
-  "./data/space-bridge-red-c.json",
-  "./data/space-bridge-red-d.json",
+  "./data/space-bridge-blue.json",
+  "./data/space-bridge-red.json",
   "./data/speedia-qualifier.json",
   "./data/spill.json",
   "./data/spin-class.json",

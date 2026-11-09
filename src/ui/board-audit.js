@@ -128,7 +128,8 @@ const AUDIT_EXPANSION_ORDER = [
 function formatGroupedBoardLabel(piece, pieceMap) {
   const name = piece.name ?? titleCaseWords(piece.id);
   const reverseSide = getReverseSideName(piece.id, pieceMap);
-  return reverseSide ? `${name} (reverse side: ${reverseSide})` : name;
+  const label = reverseSide ? `${name} (reverse side: ${reverseSide})` : name;
+  return piece.copyCount > 1 ? `${label} ×${piece.copyCount}` : label;
 }
 
 // Boards grouped by expansion: [{ expansionId, label, pieces }].
@@ -157,6 +158,8 @@ export function getAuditBoardGroups(pieceMap) {
 export function getAuditBoardOptions(pieceMap) {
   return Object.values(pieceMap)
     .filter((piece) => piece.image && piece.width > 0 && piece.height > 0)
+    // Identical copies (a data file with "count") are one row: the first copy.
+    .filter((piece) => !piece.copyOf || piece.id === `${piece.copyOf}-a`)
     .sort((left, right) => formatBoardLabel(left.id, pieceMap).localeCompare(formatBoardLabel(right.id, pieceMap)));
 }
 
