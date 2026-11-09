@@ -1,4 +1,5 @@
 // Robo Rally Course Randomizer - candidate builder: one course candidate from layout to classified, routed result (createRandomCandidate), with inventory validation, retry and route-work budgets
+import { evaluatePreflightGate } from "./preflight-gate.js";
 import {
   analyzeFullCourse,
   analyzeFullCourseCooperative,
@@ -213,6 +214,14 @@ export const CANDIDATE_ROUTE_WORK_BUDGET_FLOOR = 200000;
 export const CANDIDATE_ROUTE_WORK_BUDGET_PREDICTION_MULTIPLIER = 10;
 export const EXTRA_CANDIDATE_ROUTE_WORK_BUDGET_FLOOR = 60000;
 export const EXTRA_CANDIDATE_ROUTE_WORK_BUDGET_PREDICTION_MULTIPLIER = 3;
+
+// Calibration and the preflight study (scripts/preflight-study.mjs) let a
+// course that misses its targets run to the end, so its real outcome is known.
+// The study flag changes nothing else; the calibration flag also changes how
+// constructions are chosen (isCalibrationHarnessGeneration).
+function observesTargetMisses(preferences = {}) {
+  return Boolean(preferences.calibrationObserveTargetMisses || preferences.studyObserveTargetMisses);
+}
 
 export async function createRandomCandidate(assets, preferences, attempt = 1, remainingEvaluations = 1, onEvaluation = null, onStage = null, shouldStopBeforeRetry = null, shouldStopDuringAnalysis = null, onCooperativeProgress = null, sharedEstimatedCardTransitionMemoContext = null, hasAcceptableCandidate = null) {
   if (preferences?.difficulty === "any" || preferences?.length === "any") {
@@ -908,7 +917,7 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
     };
     const constructionGuidanceExploration = (
       constructionGuidanceMismatch.abort &&
-      !generationPreferences.calibrationObserveTargetMisses
+      !observesTargetMisses(generationPreferences)
     )
       ? generationRandom() <
         getConstructionGuidanceModePolicy(generationPreferences).grossMismatchExplorationRate
@@ -916,7 +925,7 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
     if (
       constructionGuidanceMismatch.abort &&
       !constructionGuidanceExploration &&
-      !generationPreferences.calibrationObserveTargetMisses
+      !observesTargetMisses(generationPreferences)
     ) {
       const mismatchText = constructionGuidanceMismatch.mismatches
         .map((entry) => (
@@ -1231,11 +1240,33 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
               goalTileMap
             }
           );
+          // Preflight study only (scripts/preflight-study.mjs, Node): the numbers
+          // known at this point, also for courses rejected later.
+          if (typeof generationPreferences.studyPreflightSink === "function") {
+            generationPreferences.studyPreflightSink({
+              difficultyRaw: coursePreflight.metrics?.difficultyRaw ?? null,
+              lengthRaw: coursePreflight.metrics?.lengthRaw ?? null,
+              openingRoutedCount: coursePreflight.openingRoutedCount,
+              requiredOpeningCount: coursePreflight.requiredOpeningCount,
+              openingSearchedCount: coursePreflight.opening?.summary?.capacityShortCircuit?.searchedStarts ?? indexedActiveStarts.length,
+              openingUnresolvedCount: coursePreflight.opening?.summary?.capacityShortCircuit?.unresolvedStarts ?? 0,
+              intrinsicPruned: (coursePreflight.intrinsicOutliers ?? []).map((entry) => entry.index),
+              routeExpansions: coursePreflight.work?.expansions ?? 0,
+              cappedRouteSearches: coursePreflight.work?.capped ?? 0,
+              sourceStartCount: indexedActiveStarts.length,
+              guidanceDifficultyLog: checkpointsKnownGuidance?.difficulty?.logPrediction ?? null,
+              guidanceLengthLog: checkpointsKnownGuidance?.length?.logPrediction ?? null,
+              guidancePredictedExpansions: checkpointsKnownGuidance?.routeCost?.predictedExpansions ?? null,
+              boards: scenarioBoardPlacements.length,
+              checkpoints: playableCheckpoints.length,
+              variants: Object.keys(effectiveVariantBundle ?? {}).filter((key) => effectiveVariantBundle[key] === true)
+            });
+          }
           const preflightMismatch = getPreflightGrossCourseMismatch(
             coursePreflight.metrics,
             generationPreferences
           );
-          if (preflightMismatch.abort && !generationPreferences.calibrationObserveTargetMisses && !estimateThenRealizeSharedCandidate && !competitiveMode && !startEnergyPricing) {
+          if (preflightMismatch.abort && !observesTargetMisses(generationPreferences) && !estimateThenRealizeSharedCandidate && !competitiveMode && !startEnergyPricing) {
             const mismatchText = formatGrossCourseMismatch(preflightMismatch);
             const reason = `preflight gross mismatch: ${mismatchText}`;
             console.debug(`Early course retry: ${reason}`);
@@ -1251,6 +1282,49 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
                 openingUnresolvedCount: coursePreflight.opening?.summary?.capacityShortCircuit?.unresolvedStarts ?? 0,
                 difficultyRaw: coursePreflight.metrics?.difficultyRaw ?? null,
                 lengthRaw: coursePreflight.metrics?.lengthRaw ?? null,
+                work: coursePreflight.work
+              }
+            };
+            sequence = null;
+            break;
+          }
+
+          // Preflight gate (D5): stop before full routing when the fitted model
+          // gives this attempt almost no chance of ending acceptable. Unlike the
+          // gross check above it changes no start eligibility, only whether the
+          // attempt continues, and it was fitted on all kinds of attempts (single
+          // dock, Competitive, priced starts), so it applies to all of them.
+          // It runs from the first attempt; the generation loop switches it off
+          // (generationPreflightGateOff) once half the attempts are used without
+          // any finished course, so a hard setup still ends with a fallback.
+          // Never on an emergency attempt.
+          const preflightGate = evaluatePreflightGate(assets.preflightGate, {
+            preferences: generationPreferences,
+            preflightMetrics: coursePreflight.metrics,
+            preflight: coursePreflight,
+            guidance: checkpointsKnownGuidance,
+            boards: scenarioBoardPlacements.length,
+            checkpoints: playableCheckpoints.length,
+            sourceStarts: indexedActiveStarts.length,
+            variantCount: Object.keys(effectiveVariantBundle ?? {}).filter((key) => effectiveVariantBundle[key] === true).length
+          });
+          if (
+            preflightGate?.stop &&
+            !observesTargetMisses(generationPreferences) &&
+            !generationPreferences.generationEmergencyAttempt &&
+            !generationPreferences.generationPreflightGateOff
+          ) {
+            const reason = `preflight gate: ${Math.round(preflightGate.probability * 1000) / 10}% chance of an acceptable course (predicted difficulty ${preflightGate.predictedDifficulty.toFixed(2)}, length ${preflightGate.predictedLength.toFixed(1)} turns)`;
+            console.debug(`Early course retry: ${reason}`);
+            await reportStage(`Trying another checkpoint layout — ${reason}`, evaluationsUsed);
+            sequenceFailureCategory = "preflight-gate";
+            sequenceFailureReason = reason;
+            sequenceFailureDiagnostics = {
+              preflight: {
+                difficultyRaw: coursePreflight.metrics?.difficultyRaw ?? null,
+                lengthRaw: coursePreflight.metrics?.lengthRaw ?? null,
+                gateProbability: Number(preflightGate.probability.toFixed(4)),
+                gateThreshold: preflightGate.threshold,
                 work: coursePreflight.work
               }
             };
@@ -1778,7 +1852,7 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
         // the analysis so a setup that always lands off-target still yields one.
         if (
           grossMismatch.abort &&
-          !generationPreferences.calibrationObserveTargetMisses &&
+          !observesTargetMisses(generationPreferences) &&
           !generationPreferences.generationEmergencyAttempt
         ) {
           const mismatchText = formatGrossCourseMismatch(grossMismatch);
@@ -2327,6 +2401,7 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
         // Run-local construction feedback; not part of the saved course.
         generationGuidanceFeedback: undefined,
         generationEmergencyAttempt: undefined,
+        generationPreflightGateOff: undefined,
         classicSharedDeck,
         criticalSpam,
         criticalHaywire,

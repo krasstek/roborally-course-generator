@@ -470,13 +470,18 @@ export async function generateScenarioForPreferences(assets, preferences, option
 
     let result;
     try {
+      // The preflight gate stops hopeless attempts from the first one; once
+      // half the attempts are used with no finished course at all, it steps
+      // aside so later attempts finish and leave a fallback course.
+      const preflightGateOff = !bestScenario && attempt >= maxAttempts / 2;
       result = await createRandomCandidate(
         assets,
-        guidanceFeedback || emergencyActivated
+        guidanceFeedback || emergencyActivated || preflightGateOff
           ? {
             ...preferences,
             ...(guidanceFeedback ? { generationGuidanceFeedback: guidanceFeedback } : {}),
-            ...(emergencyActivated ? { generationEmergencyAttempt: true } : {})
+            ...(emergencyActivated ? { generationEmergencyAttempt: true } : {}),
+            ...(preflightGateOff ? { generationPreflightGateOff: true } : {})
           }
           : preferences,
         attemptLabel,
