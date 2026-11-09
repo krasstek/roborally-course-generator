@@ -72,13 +72,19 @@ export function evaluatePreflightGate(gate, inputs) {
   };
   const predictedDifficulty = linear(gate.difficulty, features);
   const predictedLength = linear(gate.length, features);
-  features.gap_d = bandGap(predictedDifficulty, getDifficultyThresholds()[preferences.difficulty]);
+  // A target the user left at "Any" only steers construction; acceptance does
+  // not hold the course to it (targetGuidanceOnly...), so it is never missed.
+  features.gap_d = preferences.targetGuidanceOnlyDifficulty
+    ? 0
+    : bandGap(predictedDifficulty, getDifficultyThresholds()[preferences.difficulty]);
   // As in tools/preflight-fit.R, the short band is open below.
   const lengthBand = getProductionLengthThresholds()[preferences.length];
-  features.gap_l = bandGap(
-    predictedLength,
-    lengthBand && preferences.length === "short" ? [0, lengthBand[1]] : lengthBand
-  );
+  features.gap_l = preferences.targetGuidanceOnlyLength
+    ? 0
+    : bandGap(
+      predictedLength,
+      lengthBand && preferences.length === "short" ? [0, lengthBand[1]] : lengthBand
+    );
   const logit = linear(gate.acceptable, features);
   if (!Number.isFinite(logit)) return null;
   const probability = 1 / (1 + Math.exp(-logit));
