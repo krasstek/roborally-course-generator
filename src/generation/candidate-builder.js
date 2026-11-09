@@ -1290,9 +1290,11 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
           }
 
           // Preflight gate (D5): stop before full routing when the fitted model
-          // gives this attempt almost no chance of ending acceptable. Same
-          // exclusions as the gross check above, and never on an emergency
-          // attempt (no course exists yet).
+          // gives this attempt almost no chance of ending acceptable. Unlike the
+          // gross check above it changes no start eligibility, only whether the
+          // attempt continues, and it was fitted on all kinds of attempts (single
+          // dock, Competitive, priced starts), so it applies to all of them.
+          // Never on an emergency attempt (no course exists yet).
           const preflightGate = evaluatePreflightGate(assets.preflightGate, {
             preferences: generationPreferences,
             preflightMetrics: coursePreflight.metrics,
@@ -1306,8 +1308,7 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
           if (
             preflightGate?.stop &&
             !observesTargetMisses(generationPreferences) &&
-            !generationPreferences.generationEmergencyAttempt &&
-            !estimateThenRealizeSharedCandidate && !competitiveMode && !startEnergyPricing
+            !generationPreferences.generationEmergencyAttempt
           ) {
             const reason = `preflight gate: ${Math.round(preflightGate.probability * 1000) / 10}% chance of an acceptable course (predicted difficulty ${preflightGate.predictedDifficulty.toFixed(2)}, length ${preflightGate.predictedLength.toFixed(1)} turns)`;
             console.debug(`Early course retry: ${reason}`);
