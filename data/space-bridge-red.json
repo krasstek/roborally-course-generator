@@ -1,5 +1,5 @@
 {
-  "id": "space-bridge-red-c",
+  "id": "space-bridge-red",
   "name": "Space Bridge (red)",
   "kind": "overlay",
   "width": 1,
@@ -19,6 +19,7 @@
     }
   ],
   "expansionId": "transformers",
-  "physicalBoardId": "space-bridge-c",
-  "image": "./assets/boards/tile-space-bridge-red.jpeg"
+  "physicalBoardId": "space-bridge",
+  "image": "./assets/boards/tile-space-bridge-red.jpeg",
+  "count": 4
 }
