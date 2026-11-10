@@ -141,7 +141,7 @@ export async function generateScenarioForPreferences(assets, preferences, option
       trafficAlternateUncertaintyEffortFloor: generationProfile.trafficAlternateUncertaintyEffortFloor,
       trafficAlternateUncertaintyEffortExponent: generationProfile.trafficAlternateUncertaintyEffortExponent,
       normalPruneBatchSize: NORMAL_PRUNE_BATCH_SIZE,
-      normalPruneBatchPolicy: "adaptive-2-above-2x-players-else-1",
+      normalPruneBatchPolicy: "half-surplus-per-pass",
       fullCourseTrafficPasses: NORMAL_FULL_COURSE_TRAFFIC_PASSES
     }
   };

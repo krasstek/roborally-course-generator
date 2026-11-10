@@ -33,6 +33,7 @@ import {
   medianValue,
   normalizeStartBalance,
   rankNormalEffectiveREOutliers,
+  getNormalStartPruneBatchSize,
   runIterativeStartBalancing,
   runIterativeStartBalancingCooperative,
   summarizeNormalRetainedREBalance
@@ -3140,7 +3141,7 @@ export function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, option
       playerCount,
       analysisOptions,
       choosePayToWinBalancingRemoval,
-      { maxPasses: 12 },
+      { maxPasses: 12, pruneBatchSize: getNormalStartPruneBatchSize },
       options.cooperativeStartBalanceBoundary
     )
     : runIterativeStartBalancing(
@@ -3149,7 +3150,7 @@ export function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, option
       playerCount,
       analysisOptions,
       choosePayToWinBalancingRemoval,
-      { maxPasses: 12 }
+      { maxPasses: 12, pruneBatchSize: getNormalStartPruneBatchSize }
     );
 
   return mapMaybePromise(balancingResult, (result) => {
