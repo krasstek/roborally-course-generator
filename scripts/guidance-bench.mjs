@@ -116,6 +116,16 @@ async function run() {
         })),
       rejections: (scenario?.generationDiagnostics?.rejectionEvents ?? generation?.generationDiagnostics?.rejectionEvents ?? [])
         .reduce((counts, event) => ({ ...counts, [event.category ?? "other"]: (counts[event.category ?? "other"] ?? 0) + 1 }), {}),
+      // Trim rescues: tried, kept (acceptable), and their time.
+      trims: (() => {
+        const trims = (scenario?.generationDiagnostics?.finalEvaluations ?? generation?.generationDiagnostics?.finalEvaluations ?? [])
+          .filter((entry) => entry.trimmedLastCheckpoint);
+        return {
+          tried: trims.length,
+          kept: trims.filter((entry) => entry.acceptable).length,
+          ms: Math.round(trims.reduce((sum, entry) => sum + (Number(entry.elapsedMs) || 0), 0))
+        };
+      })(),
       error
     };
     appendFileSync(out, `${JSON.stringify(record)}\n`);
