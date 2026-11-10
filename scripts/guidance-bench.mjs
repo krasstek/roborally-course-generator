@@ -116,6 +116,28 @@ async function run() {
         })),
       rejections: (scenario?.generationDiagnostics?.rejectionEvents ?? generation?.generationDiagnostics?.rejectionEvents ?? [])
         .reduce((counts, event) => ({ ...counts, [event.category ?? "other"]: (counts[event.category ?? "other"] ?? 0) + 1 }), {}),
+      // Offered starts: how many, and the gap between the best and worst
+      // effective RE among them (start balance).
+      starts: (() => {
+        const usable = new Set((metrics.usableStarts ?? []).map((entry) => (typeof entry === "object" ? entry.index : entry)));
+        const values = (scenario?.sequence?.firstLeg?.starts ?? [])
+          .filter((entry) => usable.has(entry.index))
+          .map((entry) => Number(entry.normalFairnessEffectiveRE))
+          .filter(Number.isFinite);
+        return values.length
+          ? { offered: values.length, spreadRE: Number((Math.max(...values) - Math.min(...values)).toFixed(2)) }
+          : null;
+      })(),
+      // Trim rescues: tried, kept (acceptable), and their time.
+      trims: (() => {
+        const trims = (scenario?.generationDiagnostics?.finalEvaluations ?? generation?.generationDiagnostics?.finalEvaluations ?? [])
+          .filter((entry) => entry.trimmedLastCheckpoint);
+        return {
+          tried: trims.length,
+          kept: trims.filter((entry) => entry.acceptable).length,
+          ms: Math.round(trims.reduce((sum, entry) => sum + (Number(entry.elapsedMs) || 0), 0))
+        };
+      })(),
       error
     };
     appendFileSync(out, `${JSON.stringify(record)}\n`);

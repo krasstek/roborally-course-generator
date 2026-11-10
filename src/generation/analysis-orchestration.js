@@ -1067,7 +1067,7 @@ export function analyzeFlagSequence(tileMap, starts, flags, playerCount, options
         options.normalPruneBatchSize !== undefined &&
         Number.isFinite(Number(options.normalPruneBatchSize))
         ? "fixed"
-        : "adaptive-2-above-2x-players-else-1",
+        : "half-surplus-per-pass",
       sharedLaterLegCatalogue: Boolean(options.contextualSharedLaterLegCatalogue),
       estimatedPrimaryRouting: Boolean(options.contextualEstimatedPrimaryRouting),
       openingExpansions: contextualOpeningExpansions,

@@ -93,13 +93,26 @@ export function getNormalStartFairnessStdDevLimit(startCount, playerCount) {
 }
 
 export function getNormalStartPruneBatchSize(startCount, playerCount) {
-  // Make coarse progress while the field has abundant surplus, then recompute
-  // after each individual removal once we reach 2x the requested player count.
-  // Example: 4 players with 12 starts prunes 12 -> 10 -> 8 in batches of two,
-  // then uses single-start passes only if the recomputed field still needs work.
+  // Each pass may remove up to half the surplus over the player count
+  // (user direction, 2026-10-28; at least one), recomputing traffic once per
+  // pass instead of once per one or two starts. The chooser still stops a pass
+  // as soon as the field is balanced. Example: 4 players, 12 starts: up to
+  // 4, then 2, then 1 per pass.
   const players = Math.max(1, Math.floor(Number(playerCount) || 1));
   const starts = Math.max(players, Math.floor(Number(startCount) || players));
-  return starts > players * 2 ? 2 : 1;
+  return Math.max(1, Math.floor((starts - players) / 2));
+}
+
+// The first Normal pruning pass judges starts on their own routes only
+// (intrinsic RE, no other robots), so the starts that remain read as fair on
+// their own; later passes use effective RE with traffic (user direction,
+// 2026-10-28). Copies, so the field itself is unchanged.
+export function withIntrinsicFairness(entries) {
+  return entries.map((entry) => (
+    Number.isFinite(Number(entry?.normalFairnessIntrinsicRE))
+      ? { ...entry, normalFairnessEffectiveRE: Number(entry.normalFairnessIntrinsicRE) }
+      : entry
+  ));
 }
 
 export function getActivePruningStarts(firstLeg, excludedIndices = new Set()) {
@@ -1125,8 +1138,8 @@ export function adjustStartOutliersForCourseLength(firstLeg, totalLength, tileMa
       tileMap,
       playerCount,
       analysisOptions,
-      ({ activeStarts }) => chooseNormalStartBalanceRemoval(
-        activeStarts,
+      ({ activeStarts, pass }) => chooseNormalStartBalanceRemoval(
+        pass === 1 ? withIntrinsicFairness(activeStarts) : activeStarts,
         playerCount,
         options
       ),
@@ -1142,8 +1155,8 @@ export function adjustStartOutliersForCourseLength(firstLeg, totalLength, tileMa
       tileMap,
       playerCount,
       analysisOptions,
-      ({ activeStarts }) => chooseNormalStartBalanceRemoval(
-        activeStarts,
+      ({ activeStarts, pass }) => chooseNormalStartBalanceRemoval(
+        pass === 1 ? withIntrinsicFairness(activeStarts) : activeStarts,
         playerCount,
         options
       ),
@@ -1323,7 +1336,7 @@ export function adjustStartOutliersForCourseLength(firstLeg, totalLength, tileMa
           options.normalPruneBatchSize !== undefined &&
           Number.isFinite(Number(options.normalPruneBatchSize))
           ? "fixed"
-          : "adaptive-2-above-2x-players-else-1",
+          : "half-surplus-per-pass",
         balanceStdDevBefore: Number(initialStdDev.toFixed(2)),
         balanceStdDevAfter: Number(remainingStdDev.toFixed(2)),
         balanceStdDevLimit: finalBalanceStdDevLimit,
