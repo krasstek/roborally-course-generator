@@ -1260,7 +1260,7 @@ export function buildScenarioReport(scenario, selectedLegIndices = null) {
     `Board spread: ${normalizeBoardSpread(scenario.preferences.boardSpread)}`,
     `Sets: ${[...getSelectedExpansionIds(scenario.preferences)].map((id) => formatExpansionName(id)).join(", ") || "none"}`,
     `Allowed variants: ${describeAllowedVariants(scenario.preferences)}`,
-    `Optional variant complexity: ${scenario.variantComplexityUsed ?? 0}/${scenario.variantComplexityBudget ?? 0} (forced/must-like selections excluded)`,
+    `Drawn optional rules: ${scenario.variantComplexityUsed ?? 0}/${scenario.variantComplexityBudget ?? 0} (Must rules and layout preferences excluded; setting ${scenario.preferences?.optionalRuleCount ?? 1})`,
     `Variant impact: ${getVariantImpactSummary(scenario) || "none"}`,
     // One line per registry variant, so a new rule can't be left out.
     ...VARIANT_DEFINITIONS.map((variant) => `${variant.label} used: ${formatVariantUsedForSummary(scenario, variant.id)}`),

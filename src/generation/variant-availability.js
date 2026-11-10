@@ -7,7 +7,8 @@ import {
   getVariantConstructionRequirement,
   getVariantDefinition,
   getVariantExclusiveGroupConflict,
-  getVariantRequirementIds
+  getVariantRequirementIds,
+  isLayoutPreferenceVariant
 } from "../../variants.js";
 import { cachedAssets } from "./assets.js";
 import { countFeatureTypeInTileMap } from "./board-profile.js";
@@ -21,7 +22,8 @@ import {
   CHECKPOINT_FLOOR_MODES,
   getSelectedExpansionIds,
   getTuningDifficulty,
-  normalizeCheckpointFloor
+  normalizeCheckpointFloor,
+  normalizeOptionalRuleCount
 } from "./preferences.js";
 import { generationRandom, sample, shuffle } from "./random.js";
 import { applyVariantAnalysisOptions } from "../../variants.js";
@@ -348,18 +350,28 @@ export function normalizeVariantState(value) {
   return value === "forced" || value === "allowed" || value === "off" ? value : "off";
 }
 
-export function sampleVariantComplexityBudget(preferences = {}) {
-  // Production resolves Difficulty=Any to a concrete target before candidate
-  // construction/variant sampling, so this budget follows that resolved target.
-  // The moderate fallback exists only for defensive/direct callers.
-  const difficulty = getTuningDifficulty(preferences.difficulty);
-  const budgets = {
-    easy: [0, 0, 0, 0, 1, 1, 1, 2],
-    moderate: [0, 0, 1, 1, 1, 2, 2, 3],
-    hard: [0, 1, 2, 2, 3, 3, 4, 4, 5, 6]
-  };
+// How many optional rules this course may draw (2026-11-10). The player sets the
+// maximum (default one, as in official courses); difficulty leans within it:
+// Beginner toward one rule, Advanced toward the maximum. Production resolves
+// Difficulty=Any to a concrete target before this runs.
+const DRAWN_RULE_DIFFICULTY_LEAN = Object.freeze({ easy: -1, moderate: 0, hard: 1 });
 
-  return sample(budgets[difficulty] || budgets.moderate);
+export function sampleDrawnRuleCap(preferences = {}) {
+  const maxCount = normalizeOptionalRuleCount(preferences.optionalRuleCount);
+  if (maxCount <= 1) {
+    return maxCount;
+  }
+  const lean = DRAWN_RULE_DIFFICULTY_LEAN[getTuningDifficulty(preferences.difficulty)] ?? 0;
+  const weights = Array.from({ length: maxCount }, (_, index) => Math.exp(lean * index));
+  const total = weights.reduce((sum, weight) => sum + weight, 0);
+  let roll = generationRandom() * total;
+  for (let index = 0; index < weights.length; index += 1) {
+    roll -= weights[index];
+    if (roll < 0) {
+      return index + 1;
+    }
+  }
+  return maxCount;
 }
 
 // How often each optional variant is drawn when calibration has no opinion: the
@@ -418,8 +430,8 @@ export function chooseVariantBundle(preferences = {}, options = {}) {
     variantIsAvailable(entry.id, normalizedPreferences, pieceMap)
   ));
 
-  // Forced / Must / must-like selections are explicit user decisions. They are
-  // activated outside the OPTIONAL complexity budget and never consume/reduce it.
+  // Forced / Must / must-like selections are the players' own table rules. They
+  // are activated outside the drawn-rule count and never consume/reduce it.
   const forcedEntries = collectionAvailableEntries.filter((entry) => getVariantPreferenceState(normalizedPreferences, entry.id) === "forced");
   forcedEntries.forEach((entry) => {
     if (getCourseConflictingVariantIds(entry.id).some((conflictId) => active[conflictId])) {
@@ -428,8 +440,9 @@ export function chooseVariantBundle(preferences = {}, options = {}) {
     active[entry.id] = true;
   });
 
-  const sampledBudget = sampleVariantComplexityBudget(normalizedPreferences);
-  const budget = sampledBudget;
+  // Each drawn optional rule counts one; layout preferences (Staggered Boards,
+  // Extra Docks, Sandwiched Dock) are drawn by their own chance outside the count.
+  const budget = sampleDrawnRuleCap(normalizedPreferences);
   const allowedCandidates = collectionAvailableEntries
     .filter((entry) => getVariantPreferenceState(normalizedPreferences, entry.id) === "allowed");
   // Calibrated tilt toward the requested bands, judged with the Must variants
@@ -465,7 +478,8 @@ export function chooseVariantBundle(preferences = {}, options = {}) {
   });
 
   for (const entry of orderedEntries) {
-    if (usedBudget + entry.cost > budget) {
+    const countsAsRule = !isLayoutPreferenceVariant(entry.id);
+    if (countsAsRule && usedBudget >= budget) {
       continue;
     }
 
@@ -483,7 +497,9 @@ export function chooseVariantBundle(preferences = {}, options = {}) {
 
     if (generationRandom() < chance) {
       active[entry.id] = true;
-      usedBudget += entry.cost;
+      if (countsAsRule) {
+        usedBudget += 1;
+      }
     }
   }
 

@@ -4,12 +4,14 @@ export const VARIANT_STATES = {
   forced: { label: "Always on", shortLabel: "Must" }
 };
 
-// Variant complexity is ONLY the OPTIONAL generation budget used to avoid
-// generated courses becoming long lists of special rules. It is not difficulty,
-// RE, or mental-event count. User-forced / Must / must-like selections are
-// deliberate user choices and NEVER consume this optional budget.
+// Variant complexity (cost) no longer limits how many rules a course gets: since
+// 2026-11-10 each drawn optional rule counts one against the player's "Drawn
+// Rules" setting (sampleDrawnRuleCap), and Must rules never count. The cost now
+// only decides what happens when a drawn rule turns out inert on the finished
+// course: a rule with cost > 0 rejects the course (applyCourseVariantAvailability),
+// a cost-0 setup choice is silently switched off.
 //
-// Scale semantics (v49em):
+// Scale semantics (v49em, kept for that gate):
 //   0 = essentially self-executing setup/simplification: no meaningful extra
 //       scenario procedure or rule-state burden needs to be carried through play;
 //   1 = one additional rule/procedure/strategic setup evaluation, whether it is
@@ -17,14 +19,7 @@ export const VARIANT_STATES = {
 //   2 = unusually stateful / programming-complex rule that materially increases
 //       the amount of special-rule state players must track.
 //
-// Complexity is deliberately broader than per-turn mental RE. For example,
-// Pay to Win has setup price evaluation (complexity 1) but no programming-turn
-// memory event; Home Reboot is effectively ordinary reboot play with a friendlier
-// destination (complexity 0).
-//
-// Mental burden is modeled separately by per-variant metadata below. A complexity
-// cost does not imply a mental event, and a rule may have complexity 1 while its
-// physical setup/card state makes a separate remember-the-rule event unnecessary.
+// Mental burden is modeled separately by per-variant metadata below.
 const VARIANT_COMPLEXITY = {
   actFast: 1,
   lighterGame: 0,
@@ -59,6 +54,16 @@ const VARIANT_COMPLEXITY = {
   sandwichedDock: 0,
   repairStations: 1
 };
+
+// Layout preferences (2026-11-10): Staggered Boards, Extra Docks and Sandwiched
+// Dock shape the physical layout only; they sit in the Layout picker with Board
+// Spread, Overlays and Checkpoint Squares and never count as optional rules.
+export function isLayoutPreferenceVariant(variantOrId) {
+  const variant = typeof variantOrId === "string"
+    ? VARIANT_DEFINITION_ROWS.find((entry) => entry.id === variantOrId)
+    : variantOrId;
+  return variant?.category === VARIANT_CATEGORIES.boardLayout;
+}
 
 const VARIANT_CATEGORIES = {
   factoryFloor: "factory-floor",
@@ -456,7 +461,7 @@ const VARIANT_DEFINITION_ROWS = [
   {
     id: "extraDocks",
     label: "Extra Docks",
-    category: VARIANT_CATEGORIES.setup,
+    category: VARIANT_CATEGORIES.boardLayout,
     controlId: "variant-extra-docks",
     defaultState: "off",
     description: "Use more than one physical docking bay.",
@@ -491,7 +496,7 @@ const VARIANT_DEFINITION_ROWS = [
   {
     id: "sandwichedDock",
     label: "Sandwiched Dock",
-    category: VARIANT_CATEGORIES.setup,
+    category: VARIANT_CATEGORIES.boardLayout,
     controlId: "variant-sandwiched-dock",
     defaultState: "off",
     description: "Place a physical docking bay between factory boards, with factory boards adjoining both long sides.",

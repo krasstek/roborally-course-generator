@@ -1,21 +1,23 @@
 // Robo Rally Course Randomizer - option controls: expansions, variant pickers and the optional rules dialog, preferences to and from controls, availability updates
-import { VARIANT_CONTROL_IDS, VARIANT_DEFINITIONS } from "../../variants.js";
+import { VARIANT_CONTROL_IDS, VARIANT_DEFINITIONS, isLayoutPreferenceVariant } from "../../variants.js";
 import { cachedAssets } from "../generation/assets.js";
 import { normalizeGenerationMode } from "../generation/generation-modes.js";
 import { getAvailableOverlayIds, getAvailableOverlayKinds } from "../generation/overlays.js";
 import {
   ACT_FAST_CONTROL_CHOICES,
   ACT_FAST_MODE_IDS,
-  BOARD_SPREAD_MODES,
+  BOARD_SPREAD_CHOICES,
   OVERLAY_MODES,
   OVERLAY_MODE_CYCLE,
   OVERLAY_REBOOT_MODES,
   CHECKPOINT_FLOOR_MODES,
   formatActFastMode,
   formatExpansionName,
+  applyBoardSpreadChoice,
   formatOverlayMode,
+  getBoardSpreadChoice,
   getSelectedExpansionIds,
-  normalizeBoardSpread,
+  normalizeOptionalRuleCount,
   normalizeOverlayMode,
   normalizeOverlayReboot,
   normalizeCheckpointFloor,
@@ -65,23 +67,45 @@ export function getBoardSpreadControlButtons() {
   return Array.from(document.querySelectorAll("[data-board-spread-control]"));
 }
 
-export function formatBoardSpreadMode(mode) {
-  return normalizeBoardSpread(mode) === BOARD_SPREAD_MODES.tight ? "Tight" : "Random";
+const BOARD_SPREAD_CHOICE_CYCLE = [
+  BOARD_SPREAD_CHOICES.spread,
+  BOARD_SPREAD_CHOICES.staggered,
+  BOARD_SPREAD_CHOICES.tight
+];
+
+function normalizeBoardSpreadChoice(value) {
+  return BOARD_SPREAD_CHOICE_CYCLE.includes(value) ? value : BOARD_SPREAD_CHOICES.spread;
 }
 
-export function setBoardSpreadControl(mode, buttonEl = null) {
+export function formatBoardSpreadMode(choice) {
+  return {
+    tight: "Tight",
+    spread: "Spread",
+    staggered: "Staggered"
+  }[normalizeBoardSpreadChoice(choice)];
+}
+
+function getBoardSpreadTitle(choice) {
+  return {
+    tight: "Board Spread: Tight. Compact, aligned arrangements. Click for Spread.",
+    spread: "Board Spread: Spread. Aligned boards, gaps allowed; may still come out tight. Click for Staggered.",
+    staggered: "Board Spread: Staggered. Boards may also be offset; may still come out aligned or tight. Click for Tight."
+  }[normalizeBoardSpreadChoice(choice)];
+}
+
+export function setBoardSpreadControl(choice, buttonEl = null) {
   const targets = buttonEl ? [buttonEl] : getBoardSpreadControlButtons();
   if (!targets.length) {
     return;
   }
 
-  const normalized = normalizeBoardSpread(mode);
+  const normalized = normalizeBoardSpreadChoice(choice);
   targets.forEach((button) => {
     button.value = normalized;
     button.dataset.boardSpread = normalized;
-    button.dataset.state = normalized === BOARD_SPREAD_MODES.tight ? "allowed" : "off";
+    button.dataset.state = normalized === BOARD_SPREAD_CHOICES.spread ? "off" : "allowed";
     button.textContent = formatBoardSpreadMode(normalized);
-    button.title = `Board Spread: ${formatBoardSpreadMode(normalized)}. Click to cycle Random and Tight.`;
+    button.title = getBoardSpreadTitle(normalized);
     button.setAttribute("aria-label", button.title);
   });
 }
@@ -91,10 +115,8 @@ export function cycleBoardSpreadControl() {
   if (!buttonEl) {
     return;
   }
-  const current = normalizeBoardSpread(buttonEl.value);
-  const next = current === BOARD_SPREAD_MODES.tight
-    ? BOARD_SPREAD_MODES.random
-    : BOARD_SPREAD_MODES.tight;
+  const current = normalizeBoardSpreadChoice(buttonEl.value);
+  const next = BOARD_SPREAD_CHOICE_CYCLE[(BOARD_SPREAD_CHOICE_CYCLE.indexOf(current) + 1) % BOARD_SPREAD_CHOICE_CYCLE.length];
   setBoardSpreadControl(next);
   updateVariantSummary();
 }
@@ -102,8 +124,8 @@ export function cycleBoardSpreadControl() {
 export function createBoardSpreadRow(options = {}) {
   const rowEl = document.createElement("div");
   rowEl.className = "variant-rule";
-  rowEl.title = "Tight prefers more compact board arrangements without excluding large boards. With only a few boards, it usually makes little difference.";
-  rowEl.dataset.ruleSearch = "board spread random tight compact layout setup layout board arrangement";
+  rowEl.title = "How freely the boards may be arranged: Tight, Spread or Staggered. Each step allows everything the previous one does.";
+  rowEl.dataset.ruleSearch = "board spread tight staggered offset compact layout board arrangement";
 
   const nameWrapEl = document.createElement("div");
   nameWrapEl.className = "variant-rule-name-wrap";
@@ -114,13 +136,13 @@ export function createBoardSpreadRow(options = {}) {
   if (options.showCategory) {
     const categoryEl = document.createElement("div");
     categoryEl.className = "variant-rule-category";
-    categoryEl.textContent = "Setup & Layout";
+    categoryEl.textContent = "Layout";
     nameWrapEl.appendChild(categoryEl);
   }
   if (options.showDescription) {
     const descriptionEl = document.createElement("div");
     descriptionEl.className = "variant-rule-description";
-    descriptionEl.textContent = "Random keeps the ordinary layout mix. Tight prefers more compact arrangements without excluding large boards. With only a few boards, it usually makes little difference.";
+    descriptionEl.textContent = "Tight prefers compact, aligned arrangements without excluding large boards. Spread keeps boards aligned but allows gaps. Staggered also allows offset boards. Each choice may still come out like the stricter ones.";
     nameWrapEl.appendChild(descriptionEl);
   }
 
@@ -135,7 +157,7 @@ export function createBoardSpreadRow(options = {}) {
   rowEl.append(nameWrapEl, buttonEl);
 
   const primary = document.getElementById("board-spread");
-  setBoardSpreadControl(primary?.value ?? BOARD_SPREAD_MODES.random, buttonEl);
+  setBoardSpreadControl(primary?.value ?? BOARD_SPREAD_CHOICES.spread, buttonEl);
   return rowEl;
 }
 
@@ -274,7 +296,7 @@ export function createOverlayModeRow(options = {}) {
   const rowEl = document.createElement("div");
   rowEl.className = "variant-rule";
   rowEl.title = "Controls whether available overlay-capable boards and tokens may be placed as overlays.";
-  rowEl.dataset.ruleSearch = "overlays board layout setup layout master builder tokens boards";
+  rowEl.dataset.ruleSearch = "overlays board layout layout master builder tokens boards";
 
   const nameWrapEl = document.createElement("div");
   nameWrapEl.className = "variant-rule-name-wrap";
@@ -285,7 +307,7 @@ export function createOverlayModeRow(options = {}) {
   if (options.showCategory) {
     const categoryEl = document.createElement("div");
     categoryEl.className = "variant-rule-category";
-    categoryEl.textContent = "Setup & Layout";
+    categoryEl.textContent = "Layout";
     nameWrapEl.appendChild(categoryEl);
   }
   if (options.showDescription) {
@@ -365,6 +387,8 @@ function getOverlayRebootUnavailabilityReason(preferences) {
 function updateOverlayRebootAvailability(preferences) {
   const reason = getOverlayRebootUnavailabilityReason(preferences);
   getOverlayRebootControlButtons().forEach((buttonEl) => {
+    // Shown only when overlay boards can be placed (2026-11-10).
+    buttonEl.closest(".variant-rule")?.classList.toggle("hidden", Boolean(reason));
     if (reason) {
       buttonEl.dataset.unavailableReason = reason;
       buttonEl.classList.add("unavailable");
@@ -385,7 +409,7 @@ export function createOverlayRebootRow(options = {}) {
   const rowEl = document.createElement("div");
   rowEl.className = "variant-rule";
   rowEl.title = "Whether each overlay board has its own reboot token, or robots destroyed on it use the token of the board underneath.";
-  rowEl.dataset.ruleSearch = "overlay reboot tokens boards master builder setup layout";
+  rowEl.dataset.ruleSearch = "overlay reboot tokens boards master builder layout";
 
   const nameWrapEl = document.createElement("div");
   nameWrapEl.className = "variant-rule-name-wrap";
@@ -396,7 +420,7 @@ export function createOverlayRebootRow(options = {}) {
   if (options.showCategory) {
     const categoryEl = document.createElement("div");
     categoryEl.className = "variant-rule-category";
-    categoryEl.textContent = "Setup & Layout";
+    categoryEl.textContent = "Layout";
     nameWrapEl.appendChild(categoryEl);
   }
   if (options.showDescription) {
@@ -465,7 +489,7 @@ export function createCheckpointFloorRow(options = {}) {
   const rowEl = document.createElement("div");
   rowEl.className = "variant-rule";
   rowEl.title = "Whether checkpoints may sit on board elements, or only on plain floor as in the 1994 first edition.";
-  rowEl.dataset.ruleSearch = "checkpoint squares clear floor plain 1994 first edition setup layout";
+  rowEl.dataset.ruleSearch = "checkpoint squares clear floor plain 1994 first edition layout";
 
   const nameWrapEl = document.createElement("div");
   nameWrapEl.className = "variant-rule-name-wrap";
@@ -476,7 +500,7 @@ export function createCheckpointFloorRow(options = {}) {
   if (options.showCategory) {
     const categoryEl = document.createElement("div");
     categoryEl.className = "variant-rule-category";
-    categoryEl.textContent = "Setup & Layout";
+    categoryEl.textContent = "Layout";
     nameWrapEl.appendChild(categoryEl);
   }
   if (options.showDescription) {
@@ -622,33 +646,13 @@ export function renderOptionalRulesIndex() {
     return;
   }
   listEl.replaceChildren();
-  const entries = [
-    { type: "board-spread", label: "Board Spread" },
-    { type: "overlay", label: "Overlays" },
-    { type: "overlay-reboot", label: "Overlay Reboot Tokens" },
-    { type: "checkpoint-floor", label: "Checkpoint Squares" },
-    ...VARIANT_DEFINITIONS.map((variant) => ({ type: "variant", label: variant.label, variant }))
-  ].sort((left, right) => left.label.localeCompare(right.label));
-
-  entries.forEach((entry) => {
-    if (entry.type === "board-spread") {
-      listEl.appendChild(createBoardSpreadRow({ mirror: true, showCategory: true, showDescription: true }));
-      return;
-    }
-    if (entry.type === "overlay") {
-      listEl.appendChild(createOverlayModeRow({ mirror: true, showCategory: true, showDescription: true }));
-      return;
-    }
-    if (entry.type === "overlay-reboot") {
-      listEl.appendChild(createOverlayRebootRow({ mirror: true, showCategory: true, showDescription: true }));
-      return;
-    }
-    if (entry.type === "checkpoint-floor") {
-      listEl.appendChild(createCheckpointFloorRow({ mirror: true, showCategory: true, showDescription: true }));
-      return;
-    }
-    listEl.appendChild(createVariantRuleRow(entry.variant, { mirror: true, showCategory: true, showDescription: true }));
-  });
+  // Rules only; the layout preferences live in the Layout picker.
+  VARIANT_DEFINITIONS
+    .filter((variant) => !isLayoutPreferenceVariant(variant))
+    .sort((left, right) => left.label.localeCompare(right.label))
+    .forEach((variant) => {
+      listEl.appendChild(createVariantRuleRow(variant, { mirror: true, showCategory: true, showDescription: true }));
+    });
   updateVariantAvailability();
 }
 
@@ -701,14 +705,13 @@ export function renderVariantControls() {
     const variants = getVariantsForUiCategory(category);
     menuEl.replaceChildren();
 
-    const bulkRowEl = createVariantCategoryBulkRow(category);
-    menuEl.appendChild(bulkRowEl);
-
-    if (category === UI_SETUP_LAYOUT_CATEGORY) {
+    if (category === UI_LAYOUT_CATEGORY) {
       menuEl.appendChild(createBoardSpreadRow());
       menuEl.appendChild(createOverlayModeRow());
       menuEl.appendChild(createOverlayRebootRow());
       menuEl.appendChild(createCheckpointFloorRow());
+    } else {
+      menuEl.appendChild(createVariantCategoryBulkRow(category));
     }
 
     variants.forEach((variant) => {
@@ -720,27 +723,30 @@ export function renderVariantControls() {
   updateVariantSummary();
 }
 
-export const UI_SETUP_LAYOUT_CATEGORY = "setup-layout";
+// The Layout picker (outside Optional Rules) holds the layout preferences:
+// Board Spread (incl. Staggered Boards), Overlays, Overlay Reboot Tokens,
+// Checkpoint Squares, Extra Docks and Sandwiched Dock (2026-11-10).
+export const UI_LAYOUT_CATEGORY = "layout";
 
 export function getVariantUiCategory(variantOrCategory) {
   const category = typeof variantOrCategory === "string"
     ? variantOrCategory
     : variantOrCategory?.category;
 
-  return category === "setup" || category === "board-layout" || category === UI_SETUP_LAYOUT_CATEGORY
-    ? UI_SETUP_LAYOUT_CATEGORY
-    : category;
+  return category === "board-layout" ? UI_LAYOUT_CATEGORY : category;
 }
 
 export function getVariantUiCategoryLabel(variantOrCategory) {
-  const category = getVariantUiCategory(variantOrCategory);
-  return category === UI_SETUP_LAYOUT_CATEGORY
-    ? "Setup & Layout"
-    : String(category ?? "").replaceAll("-", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+  return String(getVariantUiCategory(variantOrCategory) ?? "")
+    .replaceAll("-", " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+// Staggered Boards has no row of its own: it is the Staggered choice of Board Spread.
 export function getVariantsForUiCategory(category) {
-  return VARIANT_DEFINITIONS.filter((variant) => getVariantUiCategory(variant) === category);
+  return VARIANT_DEFINITIONS.filter((variant) => (
+    getVariantUiCategory(variant) === category && variant.id !== "staggeredBoards"
+  ));
 }
 
 export function getVariantCategoryStates(category) {
@@ -753,25 +759,35 @@ export function getVariantCategoryStates(category) {
 }
 
 export function getVariantCategoryAllAllowed(category, states = getVariantCategoryStates(category)) {
-  const variantsAllowed = states.every((entry) => entry.state === "allowed" || entry.state === "forced");
-  if (category !== UI_SETUP_LAYOUT_CATEGORY) {
-    return variantsAllowed;
-  }
-  const preferences = getPreferencesFromControls();
-  const boardSpreadTight = normalizeBoardSpread(preferences.boardSpread) === BOARD_SPREAD_MODES.tight;
-  if (!isOverlayModeAvailable(preferences)) {
-    return variantsAllowed && boardSpreadTight;
-  }
-  return variantsAllowed && boardSpreadTight &&
-    normalizeOverlayMode(document.getElementById("overlay-mode")?.value) === getFullestOverlayMode(getOverlayKinds(preferences));
+  return states.every((entry) => entry.state === "allowed" || entry.state === "forced");
 }
 
+// Optional rules only: layout preferences are not rules.
 export function countSelectedOptionalRules() {
-  const variantCount = VARIANT_DEFINITIONS.filter((variant) => getVariantControlState(variant.id) !== "off").length;
+  return VARIANT_DEFINITIONS.filter((variant) => (
+    !isLayoutPreferenceVariant(variant) && getVariantControlState(variant.id) !== "off"
+  )).length;
+}
+
+export function updateLayoutSummary() {
+  const summaryEl = document.getElementById("layout-summary");
+  if (!summaryEl) {
+    return;
+  }
   const preferences = getPreferencesFromControls();
-  const overlayCount = isOverlayModeAvailable(preferences) && normalizeOverlayMode(preferences.overlayMode) !== OVERLAY_MODES.no ? 1 : 0;
-  const boardSpreadCount = normalizeBoardSpread(preferences.boardSpread) === BOARD_SPREAD_MODES.tight ? 1 : 0;
-  return variantCount + overlayCount + boardSpreadCount;
+  const spreadLabel = formatBoardSpreadMode(document.getElementById("board-spread")?.value);
+  const overlayAvailable = isOverlayModeAvailable(preferences);
+  const overlaysOn = overlayAvailable && normalizeOverlayMode(preferences.overlayMode) !== OVERLAY_MODES.no;
+  summaryEl.textContent = overlaysOn ? `${spreadLabel} · Overlays` : spreadLabel;
+  summaryEl.title = [
+    `Board Spread: ${spreadLabel}`,
+    `Overlays: ${formatOverlayMode(preferences.overlayMode)}${overlayAvailable ? "" : " (unavailable)"}`,
+    ...(shouldUseBoardOverlays(preferences) && overlayAvailable ? [`Overlay Reboot Tokens: ${formatOverlayRebootMode(preferences.overlayReboot)}`] : []),
+    `Checkpoint Squares: ${formatCheckpointFloorMode(preferences.checkpointFloor)}`,
+    ...getVariantsForUiCategory(UI_LAYOUT_CATEGORY).map((variant) => (
+      `${variant.label}: ${getVariantStateCopy(variant.id, getVariantControlState(variant.id)).label}`
+    ))
+  ].join(", ");
 }
 
 export function updateVariantSummary() {
@@ -781,22 +797,7 @@ export function updateVariantSummary() {
     const enabled = states.filter((entry) => entry.state !== "off");
     let selectedCount = enabled.length;
 
-    if (category === UI_SETUP_LAYOUT_CATEGORY) {
-      const preferences = getPreferencesFromControls();
-      const overlayAvailable = isOverlayModeAvailable(preferences);
-      const overlayLabel = formatOverlayMode(preferences.overlayMode);
-      if (normalizeBoardSpread(preferences.boardSpread) === BOARD_SPREAD_MODES.tight) {
-        selectedCount += 1;
-      }
-      if (overlayAvailable && normalizeOverlayMode(preferences.overlayMode) !== OVERLAY_MODES.no) {
-        selectedCount += 1;
-      }
-      summaryEl.title = [
-        ...states.map((entry) => `${entry.label}: ${getVariantStateCopy(entry.id, entry.state).label}`),
-        `Board Spread: ${formatBoardSpreadMode(preferences.boardSpread)}`,
-        `Overlays: ${overlayLabel}${overlayAvailable ? "" : " (unavailable)"}`
-      ].join(", ");
-    } else {
+    {
       summaryEl.title = states.map((entry) => `${entry.label}: ${entry.id === "actFast" && getActFastModeFromControls() ? formatActFastMode(getActFastModeFromControls()) : getVariantStateCopy(entry.id, entry.state).label}`).join(", ");
     }
     summaryEl.textContent = `${selectedCount} selected`;
@@ -819,6 +820,8 @@ export function updateVariantSummary() {
       bulkName.textContent = allAllowed ? "Allow none" : "Allow all";
     }
   });
+
+  updateLayoutSummary();
 
   const indexButton = document.getElementById("optional-rules-title");
   if (indexButton) {
@@ -844,14 +847,6 @@ export function toggleVariantCategoryStates(category) {
       setVariantControlState(id, "allowed");
     }
   });
-
-  if (category === UI_SETUP_LAYOUT_CATEGORY) {
-    const preferences = getPreferencesFromControls();
-    setBoardSpreadControl(allAllowed ? BOARD_SPREAD_MODES.random : BOARD_SPREAD_MODES.tight);
-    if (isOverlayModeAvailable(preferences)) {
-      setOverlayModeControl(allAllowed ? OVERLAY_MODES.no : getFullestOverlayMode(getOverlayKinds(preferences)));
-    }
-  }
 
   updateVariantAvailability();
   updateVariantSummary();
@@ -935,7 +930,7 @@ export function setVariantControlState(variantId, state, buttonEl = null) {
 
 export function cycleVariantControlState(variantId) {
   const current = getVariantControlState(variantId);
-  const next = variantId === "staggeredBoards"
+  const next = isLayoutPreferenceVariant(variantId)
     ? (current === "off" ? "allowed" : "off")
     : current === "off"
       ? "allowed"
@@ -978,13 +973,17 @@ export function pageGetAvailableConcretePreferenceValues(selectId) {
 }
 
 export function getPreferencesFromControls() {
+  const boardSpreadPreferences = applyBoardSpreadChoice(
+    normalizeBoardSpreadChoice(document.getElementById("board-spread")?.value)
+  );
   return {
     playerCount: Number(document.getElementById("player-count").value),
     difficulty: document.getElementById("difficulty").value,
     length: document.getElementById("length").value,
     startBalance: normalizeStartBalance(document.getElementById("start-balance")?.value),
     generationMode: normalizeGenerationMode(document.getElementById("generation-mode")?.value),
-    boardSpread: normalizeBoardSpread(document.getElementById("board-spread")?.value),
+    boardSpread: boardSpreadPreferences.boardSpread,
+    optionalRuleCount: normalizeOptionalRuleCount(document.getElementById("optional-rule-count")?.value),
     overlayMode: normalizeOverlayMode(document.getElementById("overlay-mode")?.value),
     overlayReboot: normalizeOverlayReboot(document.getElementById("overlay-reboot")?.value),
     checkpointFloor: normalizeCheckpointFloor(document.getElementById("checkpoint-floor")?.value),
@@ -1000,9 +999,12 @@ export function getPreferencesFromControls() {
       "contamination": document.getElementById("expansion-contamination").checked,
       "transformers": document.getElementById("expansion-transformers").checked
     },
-    allowedVariantRules: Object.fromEntries(
-      VARIANT_DEFINITIONS.map((variant) => [variant.id, getVariantControlState(variant.id)])
-    )
+    allowedVariantRules: {
+      ...Object.fromEntries(
+        VARIANT_DEFINITIONS.map((variant) => [variant.id, getVariantControlState(variant.id)])
+      ),
+      staggeredBoards: boardSpreadPreferences.staggeredBoards
+    }
   };
 }
 
@@ -1031,7 +1033,15 @@ export function applyPreferencesToControls(preferences) {
       ? normalizeGenerationMode(normalizedPreferences.generationMode)
       : "balanced";
   }
-  setBoardSpreadControl(normalizedPreferences.boardSpread);
+  // Older saves keep Staggered Boards as its own rule: Yes or Must reads as Staggered.
+  setBoardSpreadControl(getBoardSpreadChoice(
+    normalizedPreferences,
+    getVariantPreferenceState(normalizedPreferences, "staggeredBoards")
+  ));
+  const ruleCountEl = document.getElementById("optional-rule-count");
+  if (ruleCountEl) {
+    ruleCountEl.value = String(normalizeOptionalRuleCount(normalizedPreferences.optionalRuleCount));
+  }
   setOverlayModeControl(normalizedPreferences.overlayMode);
   setOverlayRebootControl(normalizedPreferences.overlayReboot);
   setCheckpointFloorControl(normalizedPreferences.checkpointFloor);
@@ -1048,7 +1058,9 @@ export function applyPreferencesToControls(preferences) {
     if (variant.id === "actFast") {
       return;
     }
-    setVariantControlState(variant.id, getVariantPreferenceState(normalizedPreferences, variant.id));
+    const state = getVariantPreferenceState(normalizedPreferences, variant.id);
+    // Layout preferences have no Must: a saved Must reads as Yes.
+    setVariantControlState(variant.id, isLayoutPreferenceVariant(variant) && state === "forced" ? "allowed" : state);
   });
   const actFastState = getVariantPreferenceState(normalizedPreferences, "actFast");
   const actFastChoice = actFastState === "forced"

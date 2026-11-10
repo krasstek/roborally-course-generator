@@ -1714,15 +1714,6 @@
             <option value="8">8</option>
           </select>
         </label>
-        <label title="Controls how similar the available starting positions should be. Strict removes more uneven positions; Relaxed allows more variation; Off keeps all otherwise valid positions.">
-          Start Balance
-          <select id="start-balance" aria-label="Start balance">
-            <option value="strict">Strict</option>
-            <option value="standard" selected>Standard</option>
-            <option value="relaxed">Relaxed</option>
-            <option value="off">Off</option>
-          </select>
-        </label>
         <label>
           Difficulty
           <select id="difficulty">
@@ -1741,6 +1732,15 @@
             <option value="moderate">Medium</option>
             <option value="long">Long</option>
             <option value="epic">Epic</option>
+          </select>
+        </label>
+        <label title="How similar the starting positions should be. Strict removes more uneven positions; Relaxed allows more variation; Off keeps all otherwise valid positions.">
+          Balance
+          <select id="start-balance" aria-label="Start balance">
+            <option value="strict">Strict</option>
+            <option value="standard" selected>Standard</option>
+            <option value="relaxed">Relaxed</option>
+            <option value="off">Off</option>
           </select>
         </label>
         <label title="Controls how much time the generator spends looking for a course. It does not change the game rules or what the difficulty and length choices mean.">
@@ -1804,9 +1804,25 @@
             </div>
           </details>
         </label>
+        <label class="variant-field">
+          Layout
+          <details class="variant-picker">
+            <summary id="layout-summary">Loading…</summary>
+            <div class="variant-menu" data-variant-menu data-variant-category="layout"></div>
+          </details>
+        </label>
         <div class="optional-rules-group" role="group" aria-labelledby="optional-rules-title">
           <button id="optional-rules-title" class="optional-rules-title" type="button" aria-haspopup="dialog" aria-controls="optional-rules-dialog">Optional Rules</button>
           <div class="optional-rules-fields">
+            <label title="How many of the rules set to Yes the generator may add to one course. Must rules are always on and come on top. Official courses use one special rule.">
+              Drawn Rules
+              <select id="optional-rule-count" aria-label="Drawn rules">
+                <option value="0">None</option>
+                <option value="1" selected>One</option>
+                <option value="2">Up to two</option>
+                <option value="3">Up to three</option>
+              </select>
+            </label>
             <label class="variant-field">
               Factory Floor
               <details class="variant-picker">
@@ -1829,10 +1845,10 @@
               </details>
             </label>
             <label class="variant-field">
-              Setup &amp; Layout
+              Setup
               <details class="variant-picker">
-                <summary data-variant-summary data-variant-category="setup-layout">Loading…</summary>
-                <div class="variant-menu" data-variant-menu data-variant-category="setup-layout"></div>
+                <summary data-variant-summary data-variant-category="setup">Loading…</summary>
+                <div class="variant-menu" data-variant-menu data-variant-category="setup"></div>
               </details>
             </label>
           </div>
