@@ -1,6 +1,6 @@
 export const VARIANT_STATES = {
   off: { label: "Not allowed", shortLabel: "No" },
-  allowed: { label: "Allowed", shortLabel: "Yes" },
+  allowed: { label: "Allowed", shortLabel: "Allow" },
   forced: { label: "Always on", shortLabel: "Must" }
 };
 
@@ -464,7 +464,7 @@ const VARIANT_DEFINITION_ROWS = [
     category: VARIANT_CATEGORIES.boardLayout,
     controlId: "variant-extra-docks",
     defaultState: "off",
-    description: "Use more than one physical docking bay.",
+    description: "Allows more than one physical docking bay.",
     cost: VARIANT_COMPLEXITY.extraDocks,
     complexityRationale: "Setup-only dock-layout choice; once robots start, no additional rule remains in play.",
     exclusiveGroups: ["dockLayout"],
@@ -475,7 +475,7 @@ const VARIANT_DEFINITION_ROWS = [
     },
     stateLabels: {
       off: { label: "No", shortLabel: "No" },
-      allowed: { label: "Yes", shortLabel: "Yes" },
+      allowed: { label: "Allow", shortLabel: "Allow" },
       forced: { label: "Must", shortLabel: "Must" }
     },
     applyBundle: applyBooleanField("extraDocks")
@@ -499,7 +499,7 @@ const VARIANT_DEFINITION_ROWS = [
     category: VARIANT_CATEGORIES.boardLayout,
     controlId: "variant-sandwiched-dock",
     defaultState: "off",
-    description: "Place a physical docking bay between factory boards, with factory boards adjoining both long sides.",
+    description: "Allows a docking bay placed between factory boards, with boards along both of its long sides.",
     cost: VARIANT_COMPLEXITY.sandwichedDock,
     complexityRationale: "Setup-only dock placement; once robots start, no additional rule remains in play.",
     exclusiveGroups: ["dockLayout"],

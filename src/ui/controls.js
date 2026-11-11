@@ -706,16 +706,17 @@ export function renderVariantControls() {
     menuEl.replaceChildren();
 
     if (category === UI_LAYOUT_CATEGORY) {
-      menuEl.appendChild(createBoardSpreadRow());
-      menuEl.appendChild(createOverlayModeRow());
-      menuEl.appendChild(createOverlayRebootRow());
-      menuEl.appendChild(createCheckpointFloorRow());
+      // Descriptions shown inline: phones never display hover titles.
+      menuEl.appendChild(createBoardSpreadRow({ showDescription: true }));
+      menuEl.appendChild(createOverlayModeRow({ showDescription: true }));
+      menuEl.appendChild(createOverlayRebootRow({ showDescription: true }));
+      menuEl.appendChild(createCheckpointFloorRow({ showDescription: true }));
     } else {
       menuEl.appendChild(createVariantCategoryBulkRow(category));
     }
 
     variants.forEach((variant) => {
-      menuEl.appendChild(createVariantRuleRow(variant));
+      menuEl.appendChild(createVariantRuleRow(variant, { showDescription: category === UI_LAYOUT_CATEGORY }));
     });
   });
 
@@ -809,11 +810,11 @@ export function updateVariantSummary() {
     }
 
     const allAllowed = getVariantCategoryAllAllowed(category, states);
-    bulkButton.textContent = allAllowed ? "No" : "Yes";
+    bulkButton.textContent = allAllowed ? "No" : "Allow";
     const categoryLabel = getVariantUiCategoryLabel(category);
     bulkButton.title = allAllowed
       ? `Set optional ${categoryLabel} rules to No`
-      : `Set ${categoryLabel} rules to Yes`;
+      : `Set ${categoryLabel} rules to Allow`;
     bulkButton.setAttribute("aria-label", bulkButton.title);
     const bulkName = bulkButton.parentElement?.querySelector(".variant-rule-name");
     if (bulkName) {
@@ -1073,7 +1074,7 @@ export function applyPreferencesToControls(preferences) {
 
   if (relaxedIds.length) {
     showToast(
-      `Conflicting saved Must rules were normalized. ${relaxedIds.map((id) => getVariantDefinitionLabel(id)).join(", ")} changed to Yes.`
+      `Conflicting saved Must rules were normalized. ${relaxedIds.map((id) => getVariantDefinitionLabel(id)).join(", ")} changed to Allow.`
     );
   }
 }
@@ -1179,7 +1180,7 @@ export function updateVariantAvailability() {
     if (currentCapacity < requiredStarts && relaxedCapacity >= requiredStarts) {
       setVariantControlState("extraDocks", "allowed");
       showToast(
-        `Extra Docks was set to Yes because Competitive Mode with ${preferences.playerCount} players needs ${requiredStarts} starting spaces.`
+        `Extra Docks was set to Allow because Competitive Mode with ${preferences.playerCount} players needs ${requiredStarts} starting spaces.`
       );
       preferences = getPreferencesFromControls();
     }
@@ -1210,7 +1211,7 @@ export function updateVariantAvailability() {
       });
       if (previousState === "forced") {
         showToast(
-          `${variant.label} was relaxed to Yes. ${reason}`
+          `${variant.label} was relaxed to Allow. ${reason}`
         );
       }
     } else {

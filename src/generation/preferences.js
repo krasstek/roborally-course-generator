@@ -58,7 +58,7 @@ export function normalizeOptionalRuleCount(value) {
 }
 
 export function formatOptionalRuleCount(count) {
-  return ["None", "One", "Up to two", "Up to three"][normalizeOptionalRuleCount(count)];
+  return ["None", "Max 1", "Max 2", "Max 3"][normalizeOptionalRuleCount(count)];
 }
 
 export const OVERLAY_MODES = {
@@ -77,7 +77,7 @@ export const OVERLAY_MODE_CYCLE = [
 
 export const ACT_FAST_CONTROL_CHOICES = [
   { id: "off", variantState: "off", mode: null, shortLabel: "No", label: "Not allowed" },
-  { id: "allowed", variantState: "allowed", mode: null, shortLabel: "Yes", label: "Allowed; timer mode is chosen if Act Fast is used" },
+  { id: "allowed", variantState: "allowed", mode: null, shortLabel: "Allow", label: "Allowed; timer mode is chosen if Act Fast is used" },
   { id: "forced_random", variantState: "forced", mode: null, shortLabel: "Must", label: "Always on; choose a timer mode randomly" },
   { id: "countdown_3m", variantState: "forced", mode: "countdown_3m", shortLabel: "3 min", label: "Always on: 3-minute programming timer" },
   { id: "countdown_2m", variantState: "forced", mode: "countdown_2m", shortLabel: "2 min", label: "Always on: 2-minute programming timer" },
