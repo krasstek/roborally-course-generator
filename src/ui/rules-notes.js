@@ -659,15 +659,8 @@ export function updateRulesNote(scenario) {
     }
   }
 
-  if (scenario.sandwichedDock) {
-    if (scenario.startupSpinUp) {
-      notes.push("Sandwiched Dock: robots start on the docking bay.");
-    } else if (scenario.sandwichedDockFacing) {
-      notes.push(`Sandwiched Dock: robots start on the docking bay, facing ${scenario.sandwichedDockFacing} toward checkpoint 1 on the displayed map.`);
-    } else {
-      notes.push("Sandwiched Dock: robots start on the docking bay, facing toward checkpoint 1.");
-    }
-  }
+  // Sandwiched Dock is a layout preference (2026-11-11), so no Special Rules
+  // note; its start facing belongs in the course text (ROADMAP §13 E18).
 
   if (scenario.competitiveMode) {
     notes.push(
