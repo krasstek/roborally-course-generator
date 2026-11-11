@@ -695,6 +695,31 @@ export function getConstructionGuidanceVariantTilts(calibration, preferences = {
   return tilts;
 }
 
+// Beginner prefers rules the model expects to make the course easier
+// (2026-11-11): a fixed lean on each rule's difficulty effect, in model errors,
+// regardless of how far the course is from the band (the tilt above handles
+// that). Returns chance multipliers, or null without a calibration.
+const BEGINNER_EASIER_RULE_STRENGTH = 1;
+
+export function getBeginnerVariantLean(calibration, candidateIds = []) {
+  const model = calibration?.stages?.countsKnown?.difficulty;
+  if (!model || !candidateIds.length) return null;
+  const error = Math.max(1e-2, model.evidence.heldOutRmse);
+  const lean = {};
+  for (const variantId of candidateIds) {
+    const rule = calibration.ruleVariantEffects?.[variantId]?.difficultyLog;
+    const effect = rule && rule.n >= MIN_RULE_VARIANT_EFFECT_SAMPLES
+      ? rule.mean
+      : Number(model.numeric[`v_${variantId}`]) || 0;
+    lean[variantId] = clamp(
+      Math.exp(-BEGINNER_EASIER_RULE_STRENGTH * effect / error),
+      VARIANT_TILT_RANGE[0],
+      VARIANT_TILT_RANGE[1]
+    );
+  }
+  return lean;
+}
+
 export function guidanceLevelForAttempt(attempt) {
   if (attempt >= 36) return 2;
   if (attempt >= 13) return 1;

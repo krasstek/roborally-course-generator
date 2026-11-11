@@ -4,7 +4,7 @@
 // and whether the course landed in the requested bands. Point --repo at another
 // checkout (e.g. a git worktree of main) to compare two versions on the same grid.
 //
-//   node scripts/guidance-bench.mjs --repo <dir> --out <file.jsonl> [--seeds 3] [--shard 0/4]
+//   node scripts/guidance-bench.mjs --repo <dir> --out <file.jsonl> [--seeds 3] [--shard 0/4] [--difficulty easy,hard]
 //
 // One JSON line per run. Summarize with --summarize <file.jsonl> [...].
 
@@ -32,7 +32,7 @@ const SETUPS = [
 function buildCases() {
   const cases = [];
   for (const setup of SETUPS) {
-    for (const difficulty of DIFFICULTIES) {
+    for (const difficulty of DIFFICULTIES.filter((value) => !option("difficulty") || option("difficulty").split(",").includes(value))) {
       for (const length of LENGTHS) cases.push({ ...setup, difficulty, length, name: `${setup.name}-${difficulty}-${length}` });
     }
   }

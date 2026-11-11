@@ -18,6 +18,49 @@ export function normalizeBoardSpread(value) {
     : BOARD_SPREAD_MODES.random;
 }
 
+// Board Spread as the player picks it (2026-11-10): a permissiveness scale.
+// Tight = compact and aligned; Spread = aligned, gaps allowed (today's random);
+// Staggered = offsets allowed too, stored as Staggered Boards at Must (offsets
+// allowed on every attempt, never required). The model only ever sees the
+// two-value boardSpread above plus the Staggered Boards rule.
+export const BOARD_SPREAD_CHOICES = Object.freeze({
+  tight: "tight",
+  spread: "spread",
+  staggered: "staggered"
+});
+
+export function getBoardSpreadChoice(preferences = {}, staggeredState = "off") {
+  if (normalizeBoardSpread(preferences.boardSpread) === BOARD_SPREAD_MODES.tight) {
+    return BOARD_SPREAD_CHOICES.tight;
+  }
+  return staggeredState === "off" ? BOARD_SPREAD_CHOICES.spread : BOARD_SPREAD_CHOICES.staggered;
+}
+
+export function applyBoardSpreadChoice(choice) {
+  if (choice === BOARD_SPREAD_CHOICES.tight) {
+    return { boardSpread: BOARD_SPREAD_MODES.tight, staggeredBoards: "off" };
+  }
+  return {
+    boardSpread: BOARD_SPREAD_MODES.random,
+    staggeredBoards: choice === BOARD_SPREAD_CHOICES.staggered ? "forced" : "off"
+  };
+}
+
+// How many of the Yes (Allowed) optional rules the generator may draw for one
+// course (2026-11-10). Must rules are the table's own and come on top. Official
+// courses use one special rule, hence the default. Missing (older saves) = 1.
+export const OPTIONAL_RULE_COUNT_CHOICES = Object.freeze([0, 1, 2, 3]);
+export const DEFAULT_OPTIONAL_RULE_COUNT = 1;
+
+export function normalizeOptionalRuleCount(value) {
+  const count = Number(value);
+  return OPTIONAL_RULE_COUNT_CHOICES.includes(count) ? count : DEFAULT_OPTIONAL_RULE_COUNT;
+}
+
+export function formatOptionalRuleCount(count) {
+  return ["None", "Max 1", "Max 2", "Max 3"][normalizeOptionalRuleCount(count)];
+}
+
 export const OVERLAY_MODES = {
   no: "no",
   tokens: "tokens",
@@ -34,7 +77,7 @@ export const OVERLAY_MODE_CYCLE = [
 
 export const ACT_FAST_CONTROL_CHOICES = [
   { id: "off", variantState: "off", mode: null, shortLabel: "No", label: "Not allowed" },
-  { id: "allowed", variantState: "allowed", mode: null, shortLabel: "Yes", label: "Allowed; timer mode is chosen if Act Fast is used" },
+  { id: "allowed", variantState: "allowed", mode: null, shortLabel: "Allow", label: "Allowed; timer mode is chosen if Act Fast is used" },
   { id: "forced_random", variantState: "forced", mode: null, shortLabel: "Must", label: "Always on; choose a timer mode randomly" },
   { id: "countdown_3m", variantState: "forced", mode: "countdown_3m", shortLabel: "3 min", label: "Always on: 3-minute programming timer" },
   { id: "countdown_2m", variantState: "forced", mode: "countdown_2m", shortLabel: "2 min", label: "Always on: 2-minute programming timer" },
