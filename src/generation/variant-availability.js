@@ -13,7 +13,7 @@ import {
 import { cachedAssets } from "./assets.js";
 import { countFeatureTypeInTileMap } from "./board-profile.js";
 import { MAX_DOCK_COUNT } from "./config.js";
-import { getConstructionGuidanceVariantTilts } from "./construction-guidance.js";
+import { getBeginnerVariantLean, getConstructionGuidanceVariantTilts } from "./construction-guidance.js";
 import { getSlowVariantChanceMultiplier } from "./generation-modes.js";
 import { clamp } from "../shared/math.js";
 import { getMovingCheckpointTrace } from "./moving-targets.js";
@@ -352,23 +352,26 @@ export function normalizeVariantState(value) {
 
 // How many optional rules this course may draw (2026-11-10). The player sets the
 // maximum (default one, as in official courses); difficulty leans within it:
-// Beginner toward one rule, Advanced toward the maximum. Production resolves
-// Difficulty=Any to a concrete target before this runs.
+// Beginner toward none (2026-11-11), Standard evenly over one..max, Advanced
+// toward the maximum. Production resolves Difficulty=Any before this runs.
 const DRAWN_RULE_DIFFICULTY_LEAN = Object.freeze({ easy: -1, moderate: 0, hard: 1 });
 
 export function sampleDrawnRuleCap(preferences = {}) {
   const maxCount = normalizeOptionalRuleCount(preferences.optionalRuleCount);
-  if (maxCount <= 1) {
+  const difficulty = getTuningDifficulty(preferences.difficulty);
+  const minCount = difficulty === "easy" ? 0 : Math.min(1, maxCount);
+  if (maxCount <= minCount) {
     return maxCount;
   }
-  const lean = DRAWN_RULE_DIFFICULTY_LEAN[getTuningDifficulty(preferences.difficulty)] ?? 0;
-  const weights = Array.from({ length: maxCount }, (_, index) => Math.exp(lean * index));
+  const lean = DRAWN_RULE_DIFFICULTY_LEAN[difficulty] ?? 0;
+  const counts = Array.from({ length: maxCount - minCount + 1 }, (_, index) => minCount + index);
+  const weights = counts.map((count) => Math.exp(lean * (count - minCount)));
   const total = weights.reduce((sum, weight) => sum + weight, 0);
   let roll = generationRandom() * total;
   for (let index = 0; index < weights.length; index += 1) {
     roll -= weights[index];
     if (roll < 0) {
-      return index + 1;
+      return counts[index];
     }
   }
   return maxCount;
@@ -454,11 +457,19 @@ export function chooseVariantBundle(preferences = {}, options = {}) {
     allowedCandidates.map((entry) => entry.id),
     pieceMap ?? {}
   );
+  // Beginner also prefers rules the model expects to make courses easier.
+  const beginnerLean = getTuningDifficulty(normalizedPreferences.difficulty) === "easy"
+    ? getBeginnerVariantLean(
+      options.calibration ?? cachedAssets?.constructionGuidance ?? null,
+      allowedCandidates.map((entry) => entry.id)
+    )
+    : null;
   const allowedEntries = allowedCandidates.map((entry) => ({
     ...entry,
     chance: clamp(
       getVariantBaseChance(entry.id) *
         (tilts?.[entry.id] ?? 1) *
+        (beginnerLean?.[entry.id] ?? 1) *
         getSlowVariantChanceMultiplier(normalizedPreferences, entry.id),
       0,
       0.95
