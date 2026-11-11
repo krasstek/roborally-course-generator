@@ -87,9 +87,9 @@ export function formatBoardSpreadMode(choice) {
 
 function getBoardSpreadTitle(choice) {
   return {
-    tight: "Board Spread: Tight. Compact, aligned arrangements. Click for Spread.",
-    spread: "Board Spread: Spread. Aligned boards, gaps allowed; may still come out tight. Click for Staggered.",
-    staggered: "Board Spread: Staggered. Boards may also be offset; may still come out aligned or tight. Click for Tight."
+    tight: "Board Spread: Tight. The most compact arrangement of the boards. Click for Spread.",
+    spread: "Board Spread: Spread. Any shape with board edges lined up, such as a long row or an L; may still come out tight. Click for Staggered.",
+    staggered: "Board Spread: Staggered. Boards may also sit shifted along a shared edge; may still come out lined up or tight. Click for Tight."
   }[normalizeBoardSpreadChoice(choice)];
 }
 
@@ -142,7 +142,7 @@ export function createBoardSpreadRow(options = {}) {
   if (options.showDescription) {
     const descriptionEl = document.createElement("div");
     descriptionEl.className = "variant-rule-description";
-    descriptionEl.textContent = "Tight prefers compact, aligned arrangements without excluding large boards. Spread keeps boards aligned but allows gaps. Staggered also allows offset boards. Each choice may still come out like the stricter ones.";
+    descriptionEl.textContent = "Tight picks the most compact arrangement of the boards. Spread allows any shape with board edges lined up, such as a long row or an L. Staggered also lets a board sit shifted along the edge it shares with another. Each choice may still come out like the stricter ones.";
     nameWrapEl.appendChild(descriptionEl);
   }
 
