@@ -1238,3 +1238,35 @@ export function updateVariantAvailability() {
   updateOverlayRebootAvailability(preferences);
   updateVariantSummary();
 }
+
+// Phones never show hover titles (user 2026-11-11): a "?" after each field title
+// that has one toggles the same text under the field. Desktop keeps the hover.
+export function installFieldHelp() {
+  document.querySelectorAll(".controls > label[title], .optional-rules-fields > label[title]").forEach((labelEl) => {
+    const titleNode = [...labelEl.childNodes].find((node) => node.nodeType === Node.TEXT_NODE && node.textContent.trim());
+    if (!titleNode || labelEl.querySelector(".field-help-toggle")) return;
+    const titleText = titleNode.textContent.trim();
+    const rowEl = document.createElement("span");
+    rowEl.className = "field-title";
+    rowEl.append(titleText);
+    const buttonEl = document.createElement("button");
+    buttonEl.type = "button";
+    buttonEl.className = "field-help-toggle";
+    buttonEl.textContent = "?";
+    buttonEl.setAttribute("aria-label", `About ${titleText}`);
+    buttonEl.setAttribute("aria-expanded", "false");
+    rowEl.append(buttonEl);
+    titleNode.replaceWith(rowEl);
+    const helpEl = document.createElement("span");
+    helpEl.className = "field-help";
+    helpEl.hidden = true;
+    helpEl.textContent = labelEl.title;
+    labelEl.append(helpEl);
+    buttonEl.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      helpEl.hidden = !helpEl.hidden;
+      buttonEl.setAttribute("aria-expanded", String(!helpEl.hidden));
+    });
+  });
+}

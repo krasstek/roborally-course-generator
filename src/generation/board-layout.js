@@ -796,11 +796,17 @@ export function getSandwichedDockSideBoardGroups(boardPlacements, dockPlacements
   return null;
 }
 
+// Both sides of a sandwich must be used (user 2026-11-11: a hard gate, which
+// replaced the soft penalty): a side counts as used when a selected route enters
+// one of its boards, passing through is enough, or a checkpoint sits on it.
+// routedBoardIndices: indices of boards any selected route enters; null = no
+// route data, so only checkpoints count.
 export function getSandwichedDockUseProfile(
   boardPlacements,
   dockPlacements,
   pieceMap,
-  checkpoints
+  checkpoints,
+  routedBoardIndices = null
 ) {
   const sides = getSandwichedDockSideBoardGroups(boardPlacements, dockPlacements, pieceMap);
   if (!sides) {
@@ -808,6 +814,8 @@ export function getSandwichedDockUseProfile(
       active: false,
       sideACheckpoints: 0,
       sideBCheckpoints: 0,
+      sideARouted: false,
+      sideBRouted: false,
       missingSideCount: 0,
       missingSideBoardIndices: [],
       penalty: 0
@@ -823,14 +831,17 @@ export function getSandwichedDockUseProfile(
       if (sides.sideB.has(index)) sideBCheckpoints += 1;
     });
   });
+  const routed = (side) => Boolean(routedBoardIndices) && [...side].some((index) => routedBoardIndices.has(index));
+  const sideARouted = routed(sides.sideA);
+  const sideBRouted = routed(sides.sideB);
 
   const missingSideBoardIndices = [];
   let missingSideCount = 0;
-  if (sideACheckpoints === 0) {
+  if (sideACheckpoints === 0 && !sideARouted) {
     missingSideCount += 1;
     missingSideBoardIndices.push(...sides.sideA);
   }
-  if (sideBCheckpoints === 0) {
+  if (sideBCheckpoints === 0 && !sideBRouted) {
     missingSideCount += 1;
     missingSideBoardIndices.push(...sides.sideB);
   }
@@ -839,11 +850,10 @@ export function getSandwichedDockUseProfile(
     active: true,
     sideACheckpoints,
     sideBCheckpoints,
+    sideARouted,
+    sideBRouted,
     missingSideCount,
     missingSideBoardIndices: [...new Set(missingSideBoardIndices)].sort((a, b) => a - b),
-    // A physically valid sandwich with a flagless side is playable, but it
-    // misses the setup's intended two-sided race use. Keep this as a large soft
-    // mismatch so it can survive only when the search cannot find a better one.
     penalty: missingSideCount * 20
   };
 }

@@ -353,17 +353,11 @@ export function updateSetupSummary(scenario) {
   const checkpointPlacementSentence = checkpointPlacementAdvisory?.active
     ? ` ${checkpointPlacementAdvisory.bannerText}`
     : "";
-  const sandwichedMissingSideCount = courseNoteFacts.boardUse.sandwichedMissingSideCount;
   const lightlyUsedBoardCount = Number(courseNoteFacts.boardUse.weakTraversedCount) || 0;
   const notEnteredBoardCount = Number(courseNoteFacts.boardUse.zeroRouteInfluenceCount) || 0;
-  const weakBoardCount = lightlyUsedBoardCount + notEnteredBoardCount + sandwichedMissingSideCount;
-  const sandwichedUseSentence = sandwichedMissingSideCount > 0
-    ? ` ${sandwichedMissingSideCount === 1
-      ? "One side of the Sandwiched Dock uses only a small part of its board area. It is kept to preserve the intended sandwich."
-      : "The Sandwiched Dock sides use only a small part of their board area. They are kept to preserve the intended sandwich."}`
-    : "";
+  // Sandwiched Dock sides are a hard gate (both sides routed), so no sentence here.
+  const weakBoardCount = lightlyUsedBoardCount + notEnteredBoardCount;
   const boardUseSentence = [
-    sandwichedUseSentence,
     ...getBoardFootprintSentences(notEnteredBoardCount, lightlyUsedBoardCount).map((text) => ` ${text}`)
   ].join("");
   const extraDocksRequestMismatch = courseNoteFacts.extraDocksRequestMismatch;

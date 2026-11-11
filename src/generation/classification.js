@@ -395,11 +395,14 @@ export function classifyCandidate(sequence, preferences, context = {}) {
       context.boardPlacements ?? [],
       context.dockPlacements ?? [],
       context.pieceMap ?? {},
-      context.checkpoints ?? []
+      context.checkpoints ?? [],
+      new Set((boardFootprintUse.boards ?? [])
+        .filter((board) => board.uniqueRouteTiles > 0)
+        .map((board) => board.boardIndex))
     )
     : { active: false, missingSideCount: 0, missingSideBoardIndices: [], penalty: 0 };
   if ((sandwichedDockUse.missingSideCount ?? 0) > 0) {
-    softFailures.push("sandwiched-side-use");
+    hardFailures.push("sandwiched-side-use");
   }
   const routeDrama = getRouteDramaProfile(sequence);
   // Checkpoints no robot can be pushed off (a wall corner) are not fun; one

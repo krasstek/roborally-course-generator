@@ -4,7 +4,7 @@
 // and whether the course landed in the requested bands. Point --repo at another
 // checkout (e.g. a git worktree of main) to compare two versions on the same grid.
 //
-//   node scripts/guidance-bench.mjs --repo <dir> --out <file.jsonl> [--seeds 3] [--shard 0/4] [--difficulty easy,hard]
+//   node scripts/guidance-bench.mjs --repo <dir> --out <file.jsonl> [--seeds 3] [--shard 0/4] [--difficulty easy,hard] [--force sandwichedDock]
 //
 // One JSON line per run. Summarize with --summarize <file.jsonl> [...].
 
@@ -82,6 +82,10 @@ async function run() {
         ? Object.fromEntries(VARIANT_DEFINITIONS.map((variant) => [variant.id, "allowed"]))
         : defaults
     };
+    // --force a,b: those variants at Must in every case (e.g. sandwichedDock).
+    for (const variantId of String(option("force", "")).split(",").filter(Boolean)) {
+      preferences.allowedVariantRules = { ...preferences.allowedVariantRules, [variantId]: "forced" };
+    }
     console.log = console.warn = console.debug = console.info = () => {};
     const startedAt = performance.now();
     let generation = null;
