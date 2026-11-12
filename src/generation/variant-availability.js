@@ -377,6 +377,8 @@ export function sampleDrawnRuleCap(preferences = {}) {
   return maxCount;
 }
 
+const FLAT_CHANCE_VARIANT_IDS = new Set(["sandwichedDock"]);
+
 // How often each optional variant is drawn when calibration has no opinion: the
 // old per-difficulty chances averaged over Beginner..R.M.D. Which way a course
 // should lean is left to the calibrated tilt in chooseVariantBundle.
@@ -466,7 +468,9 @@ export function chooseVariantBundle(preferences = {}, options = {}) {
     : null;
   const allowedEntries = allowedCandidates.map((entry) => ({
     ...entry,
-    chance: clamp(
+    // Sandwiched Dock: a flat chance whatever the difficulty or mode (user
+    // 2026-11-11); players who don't want it switch it off.
+    chance: FLAT_CHANCE_VARIANT_IDS.has(entry.id) ? getVariantBaseChance(entry.id) : clamp(
       getVariantBaseChance(entry.id) *
         (tilts?.[entry.id] ?? 1) *
         (beginnerLean?.[entry.id] ?? 1) *

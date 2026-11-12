@@ -218,7 +218,7 @@ export function getGenerationRejectionCategory(scenario, fallbackReason = "") {
   if (failures.includes("unused-board") || softFailures.includes("unused-board")) return "unused-board";
   if (failures.includes("too-short") || softFailures.includes("too-short")) return "too-short";
   if (failures.includes("extra-docks")) return "extra-docks";
-  if (softFailures.includes("sandwiched-side-use")) return "sandwiched-layout";
+  if (failures.includes("sandwiched-side-use") || softFailures.includes("sandwiched-side-use")) return "sandwiched-layout";
   if (failures.some((failure) => String(failure).startsWith("leg-"))) return "later-leg";
   if ((scenario?.metrics?.difficultyFit ?? 0) > 0) return "difficulty";
   if ((scenario?.metrics?.lengthFit ?? 0) > 0) return "length";

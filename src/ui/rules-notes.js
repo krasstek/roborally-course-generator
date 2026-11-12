@@ -90,8 +90,42 @@ export function hasHazardousFlagsEffect(scenario) {
   );
 }
 
+// Startup Spin-Up matters only when some offered start's route begins with a
+// facing other than the printed one (ROADMAP E8). Shown anyway when the players
+// set it to Must, and when the course carries no route data (older saves).
+export function hasStartupSpinUpEffect(scenario) {
+  if (!scenario?.startupSpinUp) return false;
+  if (isVariantExplicitlyForced(scenario.preferences ?? {}, "startupSpinUp")) return true;
+  // Virtual Bots share one entry space; their facing note stays as it is.
+  if (scenario.virtualBots) return true;
+  const starts = scenario.metrics?.usableStarts;
+  if (!Array.isArray(starts) || !starts.length) return true;
+  let routed = false;
+  for (const entry of starts) {
+    const facing = entry?.fullCourseRoute?.startFacing;
+    if (!facing || !entry?.start?.facing) continue;
+    routed = true;
+    if (facing !== entry.start.facing) return true;
+  }
+  return !routed;
+}
+
 export function hasMovingTargetsEffect(scenario) {
   return Boolean(scenario?.movingTargets && scenario?.movingTargetStats?.activeCount);
+}
+
+// The course's Energy spaces, in one list shared by the Special Rules texts;
+// the same feature types the energy model reads (energy-economy.js).
+const ENERGY_SPACE_KINDS = Object.freeze([
+  { id: "battery", label: "battery spaces" },
+  { id: "chopShop", label: "chop shops" },
+  { id: "pitStop", label: "pit stops" },
+  { id: "radioactiveWaste", label: "radioactive waste" },
+  { id: "energon", label: "Energon" }
+]);
+
+export function getCourseEnergySpaceKinds(scenario) {
+  return ENERGY_SPACE_KINDS.filter((kind) => countFeatureTypeInTileMap(scenario?.goalTileMap, kind.id) > 0);
 }
 
 export function getVariantImpactSummary(scenario) {
@@ -220,7 +254,11 @@ export function getVariantImpactSummary(scenario) {
     addImpact("factoryRejects");
   }
   if (scenario.startupSpinUp) {
-    addImpact("startupSpinUp");
+    if (hasStartupSpinUpEffect(scenario)) {
+      addImpact("startupSpinUp");
+    } else {
+      addIdle("startupSpinUp", "no offered start turns at setup");
+    }
   }
   if (scenario.virtualBots) {
     addImpact("virtualBots");
@@ -513,6 +551,7 @@ export function updateRulesNote(scenario) {
   const checkpointNotes = [];
   const photoNotes = [];
   const notes = [];
+  const showStartupSpinUp = hasStartupSpinUpEffect(scenario);
 
   if (!scenario) {
     topAnchorEl?.appendChild(topRulesBlockEl);
@@ -553,8 +592,16 @@ export function updateRulesNote(scenario) {
   }
 
   if (scenario.recoveryRule === "dynamic_archiving") {
+    // Only checkpoints and batteries archive (isDynamicArchiveLanding); name the
+    // battery-like spaces on this course that don't.
+    const nonArchiveLabels = getCourseEnergySpaceKinds(scenario)
+      .filter((kind) => kind.id !== "battery")
+      .map((kind) => kind.label);
+    const nonArchiveText = nonArchiveLabels.length
+      ? ` ${capitalizeRuleNoteBody(formatList(nonArchiveLabels))} ${nonArchiveLabels.length === 1 && !/s$/.test(nonArchiveLabels[0]) ? "is not an archive space" : "are not archive spaces"}.`
+      : "";
     notes.push(appendRuleReference(
-      "Dynamic Archiving: do not use reboot tokens. A robot archives when it ends a register on a checkpoint or battery space.",
+      `Dynamic Archiving: do not use reboot tokens. A robot archives when it ends a register on a checkpoint or battery space.${nonArchiveText}`,
       { page: 32 }
     ));
   }
@@ -644,14 +691,14 @@ export function updateRulesNote(scenario) {
     } else {
       noDockText = "No Docks: do not use a docking bay. White circles along the indicated outer board edge are the available starting spaces.";
     }
-    if (!scenario.startupSpinUp) {
+    if (!showStartupSpinUp) {
       const noDockFacing = scenario.noDockEdge?.facing ?? scenario.noDockEdges?.[0]?.facing ?? null;
       if (noDockFacing) {
         noDockText += ` Robots start facing ${noDockFacing} on the displayed map.`;
       }
     }
     notes.push(noDockText);
-    if (scenario.startupSpinUp) {
+    if (showStartupSpinUp) {
       notes.push(appendRuleReference(
         "Startup Spin-Up: players may choose their robots' initial facing freely.",
         { source: "previous-editions", relation: "patterned" }
@@ -659,8 +706,13 @@ export function updateRulesNote(scenario) {
     }
   }
 
-  // Sandwiched Dock is a layout preference (2026-11-11), so no Special Rules
-  // note; its start facing belongs in the course text (ROADMAP §13 E18).
+  // Sandwiched Dock is a layout preference, not a rule; the line only gives the
+  // start facing (user 2026-11-11), so nothing when facing is free.
+  if (scenario.sandwichedDock && !showStartupSpinUp) {
+    notes.push(scenario.sandwichedDockFacing
+      ? `Sandwiched Dock: robots start on the docking bay, facing ${scenario.sandwichedDockFacing} toward checkpoint 1 on the displayed map.`
+      : "Sandwiched Dock: robots start on the docking bay, facing toward checkpoint 1.");
+  }
 
   if (scenario.competitiveMode) {
     notes.push(
@@ -840,7 +892,7 @@ export function updateRulesNote(scenario) {
     }
   }
 
-  if (scenario.startupSpinUp && !scenario.virtualBots && !scenario.noDocks) {
+  if (showStartupSpinUp && !scenario.virtualBots && !scenario.noDocks) {
     notes.push(appendRuleReference(
       "Startup Spin-Up: during setup, robots can start with any facing.",
       { source: "previous-editions", relation: "patterned" }
@@ -862,12 +914,21 @@ export function updateRulesNote(scenario) {
   }
 
   if (scenario.lighterGame) {
-    notes.push(appendRuleReference(
-      scenario.recoveryRule === "dynamic_archiving"
-        ? "Energy Crisis: remove upgrade cards from the game; Battery and Chop Shop spaces provide no Energy or upgrade effects. Battery spaces are still used for archiving."
-        : "Energy Crisis: remove upgrade cards from the game; Battery and Chop Shop spaces provide no Energy or upgrade effects.",
-      { section: "A Lighter Game", page: 32 }
-    ));
+    // Name only the Energy spaces on this course (user 2026-11-11).
+    const energyKinds = getCourseEnergySpaceKinds(scenario);
+    const noEnergyLabels = energyKinds.filter((kind) => kind.id !== "pitStop").map((kind) => kind.label);
+    const crisisText = [
+      noEnergyLabels.length
+        ? `Energy Crisis: remove upgrade cards from the game; ${formatList(noEnergyLabels)} ${noEnergyLabels.length === 1 && !/s$/.test(noEnergyLabels[0]) ? "provides" : "provide"} no Energy or upgrade effects.`
+        : "Energy Crisis: remove upgrade cards from the game.",
+      energyKinds.some((kind) => kind.id === "pitStop")
+        ? "Pit stops give no Energy but still repair damage."
+        : "",
+      scenario.recoveryRule === "dynamic_archiving" && energyKinds.some((kind) => kind.id === "battery")
+        ? "Battery spaces are still used for archiving."
+        : ""
+    ].filter(Boolean).join(" ");
+    notes.push(appendRuleReference(crisisText, { section: "A Lighter Game", page: 32 }));
   }
 
   if (scenario.lessForeshadowing) {

@@ -51,6 +51,7 @@ import {
   cycleVariantControlState,
   filterOptionalRulesIndex,
   getPreferencesFromControls,
+  installFieldHelp,
   openOptionalRulesDialog,
   pageGetAvailableConcretePreferenceValues,
   renderVariantControls,
@@ -638,6 +639,7 @@ document.querySelectorAll("[data-variant-menu]").forEach((menuEl) => {
   menuEl.addEventListener("click", handleOptionalRuleControlClick);
 });
 
+installFieldHelp();
 document.getElementById("optional-rules-index-list")?.addEventListener("click", handleOptionalRuleControlClick);
 document.getElementById("optional-rules-title")?.addEventListener("click", openOptionalRulesDialog);
 document.getElementById("optional-rules-close-icon")?.addEventListener("click", closeOptionalRulesDialog);
