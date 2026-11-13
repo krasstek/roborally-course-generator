@@ -1,4 +1,4 @@
-const APP_VERSION = "20261113122945";
+const APP_VERSION = "20261113143906";
 const STATIC_CACHE = `roborally-static-${APP_VERSION}`;
 const RUNTIME_CACHE = `roborally-runtime-${APP_VERSION}`;
 
@@ -90,6 +90,7 @@ const VERSIONED_ASSETS = [
   "./src/generation/reboot-tokens.js",
   "./src/generation/route-field.js",
   "./src/generation/scheduling.js",
+  "./src/generation/square-swaps.js",
   "./src/generation/start-balance.js",
   "./src/generation/start-pricing.js",
   "./src/generation/target-selection.js",
