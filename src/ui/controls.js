@@ -1296,8 +1296,9 @@ function updateTargetPickerSummary(axis) {
   if (!summaryEl) return;
   const picked = parseTargetSelection(document.getElementById(axis)?.value, axis);
   const labels = picked.map((band) => TARGET_SUMMARY_LABELS[axis][band]);
-  // Closed picker: the name when one is picked, otherwise a count (as Sets).
-  summaryEl.textContent = !picked.length
+  // Closed picker: the name when one is picked, otherwise a count (as Sets);
+  // none or all picked reads "Any".
+  summaryEl.textContent = !picked.length || picked.length === TARGET_BAND_ORDER[axis].length
     ? "Any"
     : picked.length === 1
       ? labels[0]
