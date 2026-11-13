@@ -33,6 +33,14 @@ const VARIANT_COMPLEXITY = {
   cuttingFloor: 1,
   flamingOil: 1,
   repulsorOverdrive: 1,
+  coldStorage: 1,
+  radioactiveGunk: 1,
+  factoryStoodStill: 1,
+  lavaPits: 1,
+  batteryPitStops: 1,
+  spaceBridgeNetwork: 1,
+  napalmDeath: 1,
+  pistonCup: 1,
   setToKill: 1,
   setToStun: 1,
   classicSharedDeck: 1,
@@ -345,6 +353,90 @@ const VARIANT_DEFINITION_ROWS = [
     },
     applyBundle: applyBooleanField("repulsorOverdrive")
   },
+  // Square swaps (variant batch 1, 2026-11-13): each turns a printed element
+  // into another for the whole game (src/generation/square-swaps.js). The
+  // requirement and the "does nothing" check look at the printed squares
+  // (`printedSquares`), since the swap removes or renames what they count.
+  ...[
+    {
+      id: "coldStorage",
+      label: "Cold Storage",
+      description: "All water is frozen into ice, which works like an oil slick (not for Flaming Oil). Currents in water stop; pits in water stay.",
+      featureTypes: ["water"],
+      incompatibleWith: ["flamingOil", "radioactiveGunk"],
+      reason: "Requires water in the selected sets."
+    },
+    {
+      id: "radioactiveGunk",
+      label: "Radioactive Gunk",
+      description: "Water and radioactive waste count as both: water squares also act as radioactive waste, and waste squares also act as water.",
+      featureTypes: ["water", "radioactiveWaste"],
+      reason: "Requires water or radioactive waste in the selected sets."
+    },
+    {
+      id: "factoryStoodStill",
+      label: "The Day the Factory Stood Still",
+      description: "Conveyor belts do not move. Water and radioactive waste currents still do, and every other board element works as usual.",
+      featureTypes: ["belt"],
+      incompatibleWith: ["movingTargets"],
+      reason: "Requires conveyor belts in the selected sets."
+    },
+    {
+      id: "lavaPits",
+      label: "Lava Pits",
+      description: "Fire pits are ordinary pits.",
+      featureTypes: ["firePit"],
+      reason: "Requires fire pits in the selected sets."
+    },
+    {
+      id: "batteryPitStops",
+      label: "Batteries Are Pit Stops",
+      description: "Batteries work as pit stops. With Dynamic Archiving they still archive.",
+      featureTypes: ["battery"],
+      reason: "Requires batteries in the selected sets."
+    },
+    {
+      id: "spaceBridgeNetwork",
+      label: "Space Bridge Network",
+      description: "Every teleporter is a space bridge, all of one colour: a robot ending a register on one may move to any other.",
+      featureTypes: ["teleporter"],
+      reason: "Requires teleporters in the selected sets."
+    },
+    {
+      id: "napalmDeath",
+      label: "Napalm Death",
+      description: "Flamethrowers fire in every register.",
+      featureTypes: ["flamethrower"],
+      reason: "Requires flamethrowers in the selected sets."
+    },
+    {
+      id: "pistonCup",
+      label: "Piston Cup",
+      description: "Pushers push in every register.",
+      featureTypes: ["push"],
+      reason: "Requires pushers in the selected sets."
+    }
+  ].map((swap) => ({
+    id: swap.id,
+    label: swap.label,
+    category: VARIANT_CATEGORIES.factoryFloor,
+    controlId: `variant-${swap.id.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}`,
+    defaultState: "off",
+    description: swap.description,
+    cost: VARIANT_COMPLEXITY[swap.id],
+    complexityRationale: "One persistent rule changes how a printed board element works.",
+    printedSquares: true,
+    ...(swap.incompatibleWith ? { incompatibleWith: swap.incompatibleWith } : {}),
+    availability: swap.featureTypes.length === 1
+      ? { type: "featureTypeAvailable", featureType: swap.featureTypes[0], reason: swap.reason }
+      : { type: "featureTypesAnyAvailable", featureTypes: swap.featureTypes, reason: swap.reason },
+    constructionRequirement: {
+      type: "boardFeatureAnyOf",
+      featureTypes: swap.featureTypes,
+      reason: `${swap.label} needs at least one selected board with ${swap.reason.replace(/^Requires | in the selected sets\.$/g, "")}.`
+    },
+    applyBundle: applyBooleanField(swap.id)
+  })),
   {
     id: "setToKill",
     label: "Set to Kill",

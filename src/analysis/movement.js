@@ -271,7 +271,7 @@ export function getCheapDynamicArchiveLandingPoints(tileMap) {
   for (const tile of tileMap?.values?.() || []) {
     if (!Number.isFinite(Number(tile?.x)) || !Number.isFinite(Number(tile?.y))) continue;
     if ((tile.features || []).some((feature) => (
-      feature?.type === "checkpoint" || feature?.type === "battery"
+      feature?.type === "checkpoint" || feature?.type === "battery" || feature?.printedType === "battery"
     ))) {
       points.push({ x: Number(tile.x), y: Number(tile.y) });
     }

@@ -114,6 +114,27 @@ export function hasMovingTargetsEffect(scenario) {
   return Boolean(scenario?.movingTargets && scenario?.movingTargetStats?.activeCount);
 }
 
+// Square-swap rules (square-swaps.js) and the printed elements they change.
+const SQUARE_SWAP_IMPACT = Object.freeze([
+  { id: "coldStorage", types: ["water"], one: "water square", many: "water squares" },
+  { id: "radioactiveGunk", types: ["water", "radioactiveWaste"], one: "water or waste square", many: "water or waste squares" },
+  {
+    id: "factoryStoodStill",
+    // Currents in water and waste keep running, so only count other belts.
+    count: (tileMap) => [...tileMap.values()].filter((tile) => {
+      const types = new Set((tile.features || []).map((feature) => feature.type));
+      return types.has("belt") && !types.has("water") && !types.has("radioactiveWaste");
+    }).length,
+    one: "conveyor square",
+    many: "conveyor squares"
+  },
+  { id: "lavaPits", types: ["firePit"], one: "fire pit", many: "fire pits" },
+  { id: "batteryPitStops", types: ["battery"], one: "battery", many: "batteries" },
+  { id: "spaceBridgeNetwork", types: ["teleporter"], one: "teleporter", many: "teleporters" },
+  { id: "napalmDeath", types: ["flamethrower"], one: "flamethrower", many: "flamethrowers" },
+  { id: "pistonCup", types: ["push"], one: "pusher", many: "pushers" }
+]);
+
 // The course's Energy spaces, in one list shared by the Special Rules texts;
 // the same feature types the energy model reads (energy-economy.js).
 const ENERGY_SPACE_KINDS = Object.freeze([
@@ -209,6 +230,22 @@ export function getVariantImpactSummary(scenario) {
       addImpact("repulsorOverdrive", `${repulsorCount} repulsor field${repulsorCount === 1 ? "" : "s"}`);
     } else {
       addIdle("repulsorOverdrive", "no repulsor fields on this course");
+    }
+  }
+  // Square swaps count the printed elements they change (scenario.pieceMap is
+  // the printed one; goalTileMap already carries the swap).
+  const activeSquareSwaps = SQUARE_SWAP_IMPACT.filter((entry) => scenario[entry.id]);
+  if (activeSquareSwaps.length) {
+    const printedTileMap = buildResolvedMap(scenario.placements, scenario.pieceMap).tileMap;
+    for (const entry of activeSquareSwaps) {
+      const count = entry.count
+        ? entry.count(printedTileMap)
+        : entry.types.reduce((sum, type) => sum + countFeatureTypeInTileMap(printedTileMap, type), 0);
+      if (count > 0) {
+        addImpact(entry.id, `${count} ${count === 1 ? entry.one : entry.many}`);
+      } else {
+        addIdle(entry.id, `no ${entry.many} on this course`);
+      }
     }
   }
   if (scenario.setToKill) {
@@ -594,14 +631,20 @@ export function updateRulesNote(scenario) {
   if (scenario.recoveryRule === "dynamic_archiving") {
     // Only checkpoints and batteries archive (isDynamicArchiveLanding); name the
     // battery-like spaces on this course that don't.
+    // Batteries Are Pit Stops: the printed batteries still archive; only
+    // printed pit stops (if any) don't.
+    const printedPitStops = [...(scenario.goalTileMap?.values?.() ?? [])].some((tile) => (
+      (tile.features || []).some((feature) => feature.type === "pitStop" && !feature.printedType)
+    ));
     const nonArchiveLabels = getCourseEnergySpaceKinds(scenario)
       .filter((kind) => kind.id !== "battery")
+      .filter((kind) => kind.id !== "pitStop" || !scenario.batteryPitStops || printedPitStops)
       .map((kind) => kind.label);
     const nonArchiveText = nonArchiveLabels.length
       ? ` ${capitalizeRuleNoteBody(formatList(nonArchiveLabels))} ${nonArchiveLabels.length === 1 && !/s$/.test(nonArchiveLabels[0]) ? "is not an archive space" : "are not archive spaces"}.`
       : "";
     notes.push(appendRuleReference(
-      `Dynamic Archiving: do not use reboot tokens. A robot archives when it ends a register on a checkpoint or battery space.${nonArchiveText}`,
+      `Dynamic Archiving: do not use reboot tokens. A robot archives when it ends a register on a checkpoint or battery space${scenario.batteryPitStops ? " (batteries working as pit stops included)" : ""}.${nonArchiveText}`,
       { page: 32 }
     ));
   }
@@ -852,6 +895,13 @@ export function updateRulesNote(scenario) {
 
   if (scenario.repulsorOverdrive) {
     notes.push("Repulsor Overdrive: repulsors push robots twice the full distance of the triggering Move card.");
+  }
+
+  for (const entry of SQUARE_SWAP_IMPACT) {
+    if (scenario[entry.id]) {
+      const variant = getVariantDefinition(entry.id);
+      notes.push(`${variant?.label ?? entry.id}: ${variant?.description ?? ""}`);
+    }
   }
 
   if (scenario.setToKill) {

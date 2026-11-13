@@ -133,7 +133,9 @@ export function isDynamicArchiveLanding(tileMap, point, options = {}) {
   if (options.recoveryRule !== "dynamic_archiving" || !point) return false;
   const tile = tileMap?.get(tileKey(point.x, point.y));
   return (tile?.features || []).some((feature) => (
-    feature.type === "checkpoint" || feature.type === "battery"
+    feature.type === "checkpoint" || feature.type === "battery" ||
+    // Batteries Are Pit Stops: a printed battery still archives (user 2026-11-13).
+    feature.printedType === "battery"
   ));
 }
 

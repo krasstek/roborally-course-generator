@@ -60,9 +60,10 @@ import {
   summarizeNormalRetainedREBalance,
   summarizePostBalanceStartResiduals
 } from "./start-balance.js";
-import { getRouteAnalysisVariantOptions, isVariantForced } from "./variant-availability.js";
+import { getRouteAnalysisVariantOptions, getVariantCourseUnavailabilityReason, isVariantForced } from "./variant-availability.js";
 import { buildVirtualRobotStarts, hideVirtualFlagZeroFeature } from "./virtual-bots.js";
 import { formatTargetSelection, isMultiTargetSelection, parseTargetSelection } from "./target-selection.js";
+import { applySquareSwapsToPieceMap } from "./square-swaps.js";
 
 export const SAVED_SCENARIO_APP_ID = "roborally-course-generator";
 export const SAVED_SCENARIO_SCHEMA_VERSION = 1;
@@ -304,7 +305,10 @@ export function buildSavedScenarioPresentationShell(assets, snapshot, status = "
   if (!snapshot?.placements?.length || !snapshot?.checkpoints?.length || !snapshot?.preferences) {
     return null;
   }
-  const { pieceMap, imageMap } = assets;
+  const { imageMap } = assets;
+  // Analysis plays on the square-swapped boards; the scenario keeps the printed
+  // pieceMap for the map and texts (square-swaps.js).
+  const pieceMap = applySquareSwapsToPieceMap(assets.pieceMap, snapshot);
   const placements = snapshot.placements;
   const checkpoints = snapshot.checkpoints;
   const boardPlacements = placements.filter((placement) => {
@@ -418,7 +422,7 @@ export function buildSavedScenarioPresentationShell(assets, snapshot, status = "
   const savedGenerationDisposition = getSavedGenerationDisposition(snapshot);
 
   return {
-    pieceMap,
+    pieceMap: assets.pieceMap,
     imageMap,
     placements,
     overlayPlacements,
@@ -769,7 +773,10 @@ export async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}
     targetGuidanceOnlyLength: snapshot.preferences.length === "any"
   };
 
-  const { pieceMap, imageMap } = assets;
+  const { imageMap } = assets;
+  // Analysis plays on the square-swapped boards; the scenario keeps the printed
+  // pieceMap for the map and texts (square-swaps.js).
+  const pieceMap = applySquareSwapsToPieceMap(assets.pieceMap, snapshot);
   const actFast = Boolean(snapshot.actFast);
   const actFastMode = snapshot.actFastMode ?? null;
   const recoveryRule = snapshot.recoveryRule ?? "reboot_tokens";
@@ -1179,7 +1186,7 @@ export async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}
   const hydratedAnalysisStartIndices = activeStarts.map((_, index) => index);
 
   return {
-    pieceMap,
+    pieceMap: assets.pieceMap,
     imageMap,
     placements,
     overlayPlacements,
@@ -1384,6 +1391,28 @@ export function getUnusedBoardIndices(evaluated, snapshot, pieceMap) {
   });
 }
 
+// Rules on in both courses that can matter on `before` but not on `after`
+// (same test as generation's applyCourseVariantAvailability).
+export function getRulesLosingApplicability(assets, before, after) {
+  const courseContext = (course) => ({
+    rawTileMap: buildResolvedMap(course.placements, applySquareSwapsToPieceMap(assets.pieceMap, course)).tileMap,
+    printedTileMap: buildResolvedMap(course.placements, assets.pieceMap).tileMap,
+    checkpoints: getPlayableCheckpoints(course.checkpoints ?? [], course.virtualBots),
+    movingTargets: Boolean(course.movingTargets)
+  });
+  let beforeContext = null;
+  let afterContext = null;
+  return VARIANT_DEFINITIONS
+    .filter((variant) => before[variant.id] === true && after[variant.id] === true)
+    .filter((variant) => {
+      afterContext ??= courseContext(after);
+      if (!getVariantCourseUnavailabilityReason(variant.id, after.goalTileMap, afterContext)) return false;
+      beforeContext ??= courseContext(before);
+      return !getVariantCourseUnavailabilityReason(variant.id, before.goalTileMap, beforeContext);
+    })
+    .map((variant) => variant.id);
+}
+
 export function removeBoardsFromSnapshot(snapshot, boardIndices, pieceMap) {
   const boardPlacements = snapshot.placements.filter((placement) => (
     pieceMap[placement.pieceId]?.kind !== "dock" && !placement.overlay
@@ -1467,6 +1496,10 @@ async function evaluateFinalSnapshot(assets, snapshot, candidate, preferences, r
   if (!reducedSnapshot) return evaluated;
   const reduced = await evaluate(reducedSnapshot, null);
   if (!reduced) return evaluated;
+  // The dropped board may hold the only element a drawn rule acts on (oil for
+  // Flaming Oil, fire pits for Lava Pits...); generation never accepts a rule
+  // that does nothing, so the board stays.
+  if (getRulesLosingApplicability(assets, evaluated, reduced).length) return evaluated;
   const comparison = compareWholeCourseBoardAblationStates(
     summarizeWholeCourseBoardAblationState(evaluated.sequence, evaluated.metrics),
     summarizeWholeCourseBoardAblationState(reduced.sequence, reduced.metrics)

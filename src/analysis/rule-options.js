@@ -128,7 +128,16 @@ export const ROUTE_RULE_EXCLUDED_KEYS = Object.freeze([
   "staggeredBoards",
   "alignedLayout",
   "variantComplexityBudget",
-  "variantComplexityUsed"
+  "variantComplexityUsed",
+  // Square swaps change the boards before routing (square-swaps.js).
+  "coldStorage",
+  "radioactiveGunk",
+  "factoryStoodStill",
+  "lavaPits",
+  "batteryPitStops",
+  "spaceBridgeNetwork",
+  "napalmDeath",
+  "pistonCup"
 ]);
 
 export function pickRouteRuleOptions(options = {}) {

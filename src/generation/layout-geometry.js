@@ -217,7 +217,9 @@ export function getPlacementOccupiedTiles(piece, placement) {
 // Space bridge tokens (Transformers): the bridge colour, or null for other pieces.
 export function getSpaceBridgeColour(piece) {
   for (const tile of piece?.tiles || []) {
-    const bridge = (tile.features || []).find((feature) => feature.type === "spaceBridge");
+    // Teleporters turned into bridges (Space Bridge Network) are printed on
+    // main boards, not bridge tokens to keep in colour groups.
+    const bridge = (tile.features || []).find((feature) => feature.type === "spaceBridge" && !feature.printedType);
     if (bridge) return bridge.id ?? null;
   }
   return null;

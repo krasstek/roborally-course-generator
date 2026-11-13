@@ -138,6 +138,7 @@ import {
   neutralFlagCount,
   weightedOrder
 } from "./variant-availability.js";
+import { applySquareSwapsToPieceMap } from "./square-swaps.js";
 import {
   buildVirtualRobotStarts,
   hideVirtualFlagZeroFeature,
@@ -240,11 +241,14 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
     estimatedCardTransitionMemoContext.byRuleSignature = new Map();
   }
 
-  const { pieceMap } = assets;
   let calibrationConstructionSnapshot = null;
   const expansionIds = getSelectedExpansionIds(preferences);
-  const availableDockIds = getEligibleDockIds(pieceMap, expansionIds);
-  const variantBundle = chooseVariantBundle(preferences, { pieceMap, calibration: assets.constructionGuidance });
+  const availableDockIds = getEligibleDockIds(assets.pieceMap, expansionIds);
+  const variantBundle = chooseVariantBundle(preferences, { pieceMap: assets.pieceMap, calibration: assets.constructionGuidance });
+  // Square-swap rules (Cold Storage, Lava Pits, ...) are applied to the boards
+  // the whole construction and analysis play on; the course keeps the printed
+  // pieceMap for the map and texts (square-swaps.js).
+  const pieceMap = applySquareSwapsToPieceMap(assets.pieceMap, variantBundle);
   const {
     actFast,
     competitiveMode,
@@ -1084,6 +1088,9 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
       }
       const courseAvailability = applyCourseVariantAvailability(variantBundle, goalTileMap, preferences, {
         rawTileMap: scenarioTileMap,
+        printedTileMap: pieceMap === assets.pieceMap
+          ? scenarioTileMap
+          : buildResolvedMap(scenarioPlacements, assets.pieceMap).tileMap,
         checkpoints: playableCheckpoints,
         movingTargets: Boolean(variantBundle.movingTargets)
       });
