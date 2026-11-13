@@ -2041,7 +2041,7 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
         sequence,
         usableStarts,
         checkpoints,
-        { hazardousFlags }
+        { hazardousFlags, basePlacements: [...scenarioBoardPlacements, ...scenarioDockPlacements] }
       );
       if (prunedOverlays.pruned) {
         scenarioOverlayPlacements = prunedOverlays.overlayPlacements;

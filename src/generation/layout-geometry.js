@@ -317,11 +317,23 @@ export function tileHasLaserInDirection(features = [], dir) {
   return features.some((feature) => feature.type === "laser" && feature.dir === dir);
 }
 
+// A neighbouring laser continues a beam when it lies on the same line (pointing
+// either way) and has the same strength (user rule 2026-11-10).
+export function tileContinuesLaserBeam(features = [], laser) {
+  const opposite = getOppositeSide(laser.dir);
+  const damage = Number(laser.damage) || 1;
+  return features.some((feature) => (
+    feature.type === "laser" &&
+    (feature.dir === laser.dir || feature.dir === opposite) &&
+    (Number(feature.damage) || 1) === damage
+  ));
+}
+
 // Every cardinal laser beam must start and end at an anchor: a wall-type block
 // (wall, repulsor, red/green wall, or a ledge seen from its lower square) or the
 // edge of the course (no square beyond). Returns each laser tile whose beam is
 // open on one side, i.e. the neighbour has no anchor and does not continue the
-// beam. An overlay's own border is not an edge: the board underneath continues.
+// beam (a same-strength laser on the same line, either way). An overlay's own border is not an edge: the board underneath continues.
 // Diagonal lasers (Robo Rally Dice) are exempt.
 export function findUnanchoredLaserEnds(tileMap) {
   const openEnds = [];
@@ -336,7 +348,7 @@ export function findUnanchoredLaserEnds(tileMap) {
         if (!neighbor) continue;
         const neighborFeatures = neighbor.features || [];
         if (tileHasLaserSupportBlock(neighborFeatures, getOppositeSide(side), { includeLowerLedge: false })) continue;
-        if (tileHasLaserInDirection(neighborFeatures, laser.dir)) continue;
+        if (tileContinuesLaserBeam(neighborFeatures, laser)) continue;
         openEnds.push({ x: tile.x, y: tile.y, dir: laser.dir, side });
       }
     }

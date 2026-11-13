@@ -6,6 +6,7 @@ import {
   manhattanDistance,
   pointOnPlacement,
   dropUnpairedSpaceBridges,
+  findUnanchoredLaserEnds,
   keepSpaceBridgeColourGroups
 } from "./layout-geometry.js";
 import { isCheckpointActiveFeature } from "./variant-availability.js";
@@ -202,6 +203,43 @@ export function overlayHasCheckpointActiveFeatures(overlayPlacement, pieceMap, c
   ));
 }
 
+// Dropping overlays must not leave a laser end attached to nothing (user rule
+// 2026-11-10): put back each dropped overlay that covers a newly opened beam
+// end or the square beyond it, until no new end is open. `basePlacements` are
+// the course's boards and docks; without them nothing is checked.
+export function keepLaserAnchors(keptPlacements, allPlacements, basePlacements, pieceMap) {
+  if (!basePlacements?.length || keptPlacements.length === allPlacements.length) return keptPlacements;
+  const endKey = (end) => `${end.x},${end.y},${end.dir},${end.side}`;
+  const openBefore = new Set(
+    findUnanchoredLaserEnds(buildResolvedMap([...basePlacements, ...allPlacements], pieceMap).tileMap).map(endKey)
+  );
+  const coverage = new Map(allPlacements.map((placement) => [
+    placement,
+    new Set(buildResolvedMap([placement], pieceMap).tileMap.keys())
+  ]));
+  const kept = new Set(keptPlacements);
+  for (let guard = 0; guard < allPlacements.length; guard += 1) {
+    const ordered = allPlacements.filter((placement) => kept.has(placement));
+    const newlyOpen = findUnanchoredLaserEnds(buildResolvedMap([...basePlacements, ...ordered], pieceMap).tileMap)
+      .filter((end) => !openBefore.has(endKey(end)));
+    if (!newlyOpen.length) break;
+    let restored = false;
+    for (const end of newlyOpen) {
+      const delta = { N: [0, -1], S: [0, 1], E: [1, 0], W: [-1, 0] }[end.side];
+      const squares = [`${end.x},${end.y}`, `${end.x + delta[0]},${end.y + delta[1]}`];
+      for (const placement of allPlacements) {
+        if (kept.has(placement)) continue;
+        if (squares.some((square) => coverage.get(placement).has(square))) {
+          kept.add(placement);
+          restored = true;
+        }
+      }
+    }
+    if (!restored) break;
+  }
+  return allPlacements.filter((placement) => kept.has(placement));
+}
+
 export function pruneIrrelevantOverlayPlacements(overlayPlacements, pieceMap, sequence, usableStarts, checkpoints, options = {}) {
   if (!overlayPlacements?.length) {
     return {
@@ -220,7 +258,12 @@ export function pruneIrrelevantOverlayPlacements(overlayPlacements, pieceMap, se
     ) &&
     overlayTouchesTrackedPlay(placement, pieceMap, routeTileKeys, checkpoints, 2)
   ));
-  const kept = keepSpaceBridgeColourGroups(initiallyKept, overlayPlacements, pieceMap);
+  const kept = keepLaserAnchors(
+    keepSpaceBridgeColourGroups(initiallyKept, overlayPlacements, pieceMap),
+    overlayPlacements,
+    options.basePlacements,
+    pieceMap
+  );
   return {
     overlayPlacements: kept,
     pruned: kept.length !== overlayPlacements.length

@@ -20,7 +20,7 @@ import {
   getPlacementOccupiedTiles,
   isBlankCustomBoardPiece,
   isMiniOverlayPiece,
-  tileHasLaserInDirection,
+  tileContinuesLaserBeam,
   tileHasLaserSupportBlock
 } from "./layout-geometry.js";
 import {
@@ -194,6 +194,38 @@ export function placementSuppresssTrackedHazard(placement, piece, currentTileMap
   });
 }
 
+// Stable text for a square's features: key order and side order do not matter.
+function canonicalFeatures(features = []) {
+  const stable = (value) => {
+    if (Array.isArray(value)) {
+      const items = value.map(stable);
+      return value.every((entry) => typeof entry === "string") ? `[${[...items].sort().join(",")}]` : `[${items.join(",")}]`;
+    }
+    if (value && typeof value === "object") {
+      return `{${Object.keys(value).sort().map((key) => `${key}:${stable(value[key])}`).join(",")}}`;
+    }
+    return JSON.stringify(value);
+  };
+  return features.map(stable).sort().join("|");
+}
+
+// A token that leaves every square it covers exactly as it was is not placed
+// (user 2026-11-10). A token on the same feature still counts when anything
+// else differs (walls, other features it replaces, extra features on it).
+function pieceHasLaser(piece) {
+  return (piece?.tiles || []).some((tile) => (tile.features || []).some((feature) => feature.type === "laser"));
+}
+
+export function placementChangesNothing(placement, piece, currentTileMap) {
+  const own = buildResolvedMap([placement], { [placement.pieceId]: piece }).tileMap;
+  for (const [key, tile] of own) {
+    const current = currentTileMap.get(key)?.features ?? [];
+    const after = piece.mergeMode === "add" ? [...current, ...(tile.features || [])] : (tile.features || []);
+    if (canonicalFeatures(after) !== canonicalFeatures(current)) return false;
+  }
+  return true;
+}
+
 export function laserTileHasValidContinuation(tile, laser, candidateFeatureMap, currentTileMap, supportTiles) {
   const sideChecks = [laser.dir, getOppositeSide(laser.dir)];
 
@@ -216,7 +248,7 @@ export function laserTileHasValidContinuation(tile, laser, candidateFeatureMap, 
       return true;
     }
 
-    return tileHasLaserInDirection(neighborFeatures, laser.dir);
+    return tileContinuesLaserBeam(neighborFeatures, laser);
   });
 }
 
@@ -345,8 +377,85 @@ function sampleKeepingLasersAnchored(candidates, keepsLasersAnchored) {
   return null;
 }
 
+// Closing tokens (user 2026-11-13): when new laser tokens leave a beam end open
+// onto a free square of the same board, look for other tokens to put on those
+// squares that anchor the beam (a wall facing it, or a same-strength laser
+// end), as laser tokens already extend each other. Returns the closing
+// placements ([] when nothing is open), or null when some end cannot be closed
+// within `maxClosers` tokens. Space bridges never close a beam.
+export function findLaserEndClosers(newPlacements, {
+  pieceMap,
+  groupedMiniOverlayIds,
+  excludedPhysicalIds = new Set(),
+  supportTiles,
+  dockTiles,
+  occupiedTiles,
+  placementsSoFar,
+  maxClosers
+}) {
+  const endKey = (end) => `${end.x},${end.y},${end.dir},${end.side}`;
+  const openBefore = new Set(findUnanchoredLaserEnds(buildResolvedMap(placementsSoFar, pieceMap).tileMap).map(endKey));
+  const newlyOpen = (extra) => findUnanchoredLaserEnds(
+    buildResolvedMap([...placementsSoFar, ...newPlacements, ...extra], pieceMap).tileMap
+  ).filter((end) => !openBefore.has(endKey(end)));
+  const taken = new Set(occupiedTiles);
+  newPlacements.forEach((placement) => getPlacementOccupiedTiles(pieceMap[placement.pieceId], placement).forEach((key) => taken.add(key)));
+  const usedPhysical = new Set(excludedPhysicalIds);
+  const closers = [];
+  for (let guard = 0; guard <= maxClosers; guard += 1) {
+    const open = newlyOpen(closers);
+    if (!open.length) break;
+    if (closers.length >= maxClosers) return null;
+    const end = open[0];
+    const delta = CARDINAL_DIRS[end.side];
+    const targetKey = `${end.x + delta.dx},${end.y + delta.dy}`;
+    if (!supportTiles.has(targetKey) || dockTiles.has(targetKey) || taken.has(targetKey)) return null;
+    const currentTileMap = buildResolvedMap([...placementsSoFar, ...newPlacements, ...closers], pieceMap).tileMap;
+    let closer = null;
+    for (const [physicalId, overlayIds] of shuffle([...groupedMiniOverlayIds.entries()])) {
+      if (usedPhysical.has(physicalId)) continue;
+      for (const overlayId of shuffle([...overlayIds])) {
+        const piece = pieceMap[overlayId];
+        if (getSpaceBridgeColour(piece)) continue;
+        for (const rotation of ROTATIONS) {
+          for (const offset of getPlacementOccupiedOffsets(piece, rotation)) {
+            const [tx, ty] = targetKey.split(",").map(Number);
+            const placement = { pieceId: overlayId, x: tx - offset.x, y: ty - offset.y, rotation, overlay: true };
+            const keys = getPlacementOccupiedTiles(piece, placement);
+            if (!keys.every((key) => supportTiles.has(key) && !dockTiles.has(key) && !taken.has(key))) continue;
+            if (placementSuppresssTrackedHazard(placement, piece, currentTileMap)) continue;
+            if (placementChangesNothing(placement, piece, currentTileMap)) continue;
+            if (newlyOpen([...closers, placement]).some((entry) => endKey(entry) === endKey(end))) continue;
+            closer = { physicalId, placement };
+            break;
+          }
+          if (closer) break;
+        }
+        if (closer) break;
+      }
+      if (closer) break;
+    }
+    if (!closer) return null;
+    usedPhysical.add(closer.physicalId);
+    getPlacementOccupiedTiles(pieceMap[closer.placement.pieceId], closer.placement).forEach((key) => taken.add(key));
+    closers.push(closer.placement);
+  }
+  const all = [...newPlacements, ...closers];
+  if (!placementsKeepLasersAnchored(all, placementsSoFar, pieceMap)) return null;
+  if (placementPointsIntoBlockedEdge(all, placementsSoFar, pieceMap)) return null;
+  return closers;
+}
+
+// Laser tokens that could only go where a beam end stays open are tried with
+// closing tokens; at most this many positions per token, to bound the work,
+// and one closer per beam end.
+const LASER_CLOSER_PLACEMENT_TRIES = 12;
+const LASER_CLOSERS_PER_PLACEMENT = 2;
+
 export function tryPlaceLaserBundleOnBoard(groupedMiniOverlayIds, pieceMap, supportTiles, dockTiles, occupiedMiniOverlayTiles, currentTileMap, remainingSlots, currentPlacements) {
-  const bundlePattern = sampleWeightedLaserBundle(getAvailableLaserBundlePatterns(groupedMiniOverlayIds, remainingSlots));
+  // A laser and the tokens that extend or close it count as one placement
+  // (user 2026-11-13), so the bundle length is not limited by the board's slots.
+  const bundlePattern = sampleWeightedLaserBundle(getAvailableLaserBundlePatterns(groupedMiniOverlayIds, Infinity));
   if (!bundlePattern) {
     return null;
   }
@@ -364,6 +473,7 @@ export function tryPlaceLaserBundleOnBoard(groupedMiniOverlayIds, pieceMap, supp
   const maxY = Math.max(...ys);
   const bundleLength = bundlePattern.ids.length;
   const candidateBundles = [];
+  const openEndedBundles = [];
 
   for (const rotation of ROTATIONS) {
     const width = rotation === 90 || rotation === 270 ? 1 : bundleLength;
@@ -386,7 +496,10 @@ export function tryPlaceLaserBundleOnBoard(groupedMiniOverlayIds, pieceMap, supp
         if (!occupiedKeys.every((key) => supportTiles.has(key) && !dockTiles.has(key) && !occupiedMiniOverlayTiles.has(key))) {
           continue;
         }
-        if (placements.some((placement) => placementSuppresssTrackedHazard(placement, pieceMap[placement.pieceId], currentTileMap))) {
+        if (placements.some((placement) => (
+          placementSuppresssTrackedHazard(placement, pieceMap[placement.pieceId], currentTileMap) ||
+          placementChangesNothing(placement, pieceMap[placement.pieceId], currentTileMap)
+        ))) {
           continue;
         }
 
@@ -394,6 +507,7 @@ export function tryPlaceLaserBundleOnBoard(groupedMiniOverlayIds, pieceMap, supp
         if (!placements.every((placement) => (
           placementHasValidLaserSupport(placement, pieceMap[placement.pieceId], currentTileMap, supportTiles, candidateFeatureMap)
         ))) {
+          openEndedBundles.push(placements);
           continue;
         }
 
@@ -402,14 +516,35 @@ export function tryPlaceLaserBundleOnBoard(groupedMiniOverlayIds, pieceMap, supp
     }
   }
 
-  if (!candidateBundles.length) {
-    return null;
+  const anchored = candidateBundles.length
+    ? sampleKeepingLasersAnchored(
+      candidateBundles,
+      (bundle) => placementsKeepLasersAnchored(bundle, currentPlacements, pieceMap)
+    )
+    : null;
+  if (anchored) {
+    return anchored;
   }
 
-  return sampleKeepingLasersAnchored(
-    candidateBundles,
-    (bundle) => placementsKeepLasersAnchored(bundle, currentPlacements, pieceMap)
-  );
+  // No bundle fits with both ends anchored: try ones whose open ends other
+  // tokens can close (at most one per beam end).
+  const bundlePhysicalIds = new Set(bundlePattern.ids.map((pieceId) => getPhysicalBoardId(pieceMap[pieceId])));
+  for (const bundle of shuffle(openEndedBundles).slice(0, LASER_CLOSER_PLACEMENT_TRIES)) {
+    const closers = findLaserEndClosers(bundle, {
+      pieceMap,
+      groupedMiniOverlayIds,
+      excludedPhysicalIds: bundlePhysicalIds,
+      supportTiles,
+      dockTiles,
+      occupiedTiles: occupiedMiniOverlayTiles,
+      placementsSoFar: currentPlacements,
+      maxClosers: LASER_CLOSERS_PER_PLACEMENT
+    });
+    if (closers) {
+      return [...bundle, ...closers];
+    }
+  }
+  return null;
 }
 
 export function placementTouchesSupportEdge(placement, piece, supportTiles) {
@@ -503,7 +638,8 @@ export function placeMiniOverlaysOnBoards(targetBoards, groupedMiniOverlayIds, p
           groupedMiniOverlayIds.delete(getPhysicalBoardId(pieceMap[placement.pieceId]));
         });
         currentTileMap = buildResolvedMap(currentPlacements, pieceMap).tileMap;
-        placedCount += laserBundlePlacements.length;
+        // The laser with its extending and closing tokens is one placement.
+        placedCount += 1;
         continue;
       }
 
@@ -522,6 +658,9 @@ export function placeMiniOverlaysOnBoards(targetBoards, groupedMiniOverlayIds, p
             return false;
           }
           if (placementSuppresssTrackedHazard(placement, overlayPiece, tileMap)) {
+            return false;
+          }
+          if (placementChangesNothing(placement, overlayPiece, tileMap)) {
             return false;
           }
           if (!placementHasValidLaserSupport(placement, overlayPiece, tileMap, boardSupportTiles)) {
@@ -556,6 +695,30 @@ export function placeMiniOverlaysOnBoards(targetBoards, groupedMiniOverlayIds, p
           !placementPointsIntoBlockedEdge([placement], placementsSoFar, pieceMap)
         )) || null;
       };
+      const placeLaserTokenWithClosers = (physicalBoardId, overlayPiece, maxClosers) => {
+        const openEnded = shuffle(
+          getOverlayPlacementsForSupportTiles(overlayPiece, supportTiles, dockTiles)
+        ).filter((placement) => (
+          getPlacementOccupiedTiles(overlayPiece, placement).every((key) => !occupiedMiniOverlayTiles.has(key)) &&
+          !placementSuppresssTrackedHazard(placement, overlayPiece, currentTileMap) &&
+          !placementChangesNothing(placement, overlayPiece, currentTileMap) &&
+          !placementHasValidLaserSupport(placement, overlayPiece, currentTileMap, supportTiles)
+        )).slice(0, LASER_CLOSER_PLACEMENT_TRIES);
+        for (const placement of openEnded) {
+          const closers = findLaserEndClosers([placement], {
+            pieceMap,
+            groupedMiniOverlayIds,
+            excludedPhysicalIds: new Set([physicalBoardId]),
+            supportTiles,
+            dockTiles,
+            occupiedTiles: occupiedMiniOverlayTiles,
+            placementsSoFar: currentPlacements,
+            maxClosers
+          });
+          if (closers?.length) return { placement, closers };
+        }
+        return null;
+      };
       const commitTokenPlacement = (physicalBoardId, overlayPiece, placement, countsOnThisBoard = true) => {
         getPlacementOccupiedTiles(overlayPiece, placement).forEach((key) => occupiedMiniOverlayTiles.add(key));
         placements.push(placement);
@@ -583,7 +746,22 @@ export function placeMiniOverlaysOnBoards(targetBoards, groupedMiniOverlayIds, p
         const overlayPiece = pieceMap[chosenOverlayId];
         const chosenPlacement = chooseTokenPlacement(overlayPiece, currentTileMap, occupiedMiniOverlayTiles, currentPlacements);
         if (!chosenPlacement) {
-          continue;
+          // A laser token that fits only with an open beam end: close the end
+          // with other tokens when the board has slots for them.
+          const withClosers = pieceHasLaser(overlayPiece)
+            ? placeLaserTokenWithClosers(physicalBoardId, overlayPiece, LASER_CLOSERS_PER_PLACEMENT)
+            : null;
+          if (!withClosers) {
+            continue;
+          }
+          commitTokenPlacement(physicalBoardId, overlayPiece, withClosers.placement);
+          // Closers belong to the laser's placement: no extra slot.
+          withClosers.closers.forEach((closer) => {
+            commitTokenPlacement(getPhysicalBoardId(pieceMap[closer.pieceId]), pieceMap[closer.pieceId], closer, false);
+          });
+          currentTileMap = buildResolvedMap(currentPlacements, pieceMap).tileMap;
+          placed = true;
+          break;
         }
 
         const bridgeColour = getSpaceBridgeColour(overlayPiece);
