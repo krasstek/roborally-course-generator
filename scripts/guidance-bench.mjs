@@ -25,7 +25,7 @@ const DIFFICULTIES = ["easy", "moderate", "hard", "brutal"];
 const LENGTHS = ["short", "moderate", "long"];
 const ALL_SETS = [
   "roborally", "rr-dice", "30th-anniversary", "master-builder",
-  "thrills-and-spills", "chaos-and-carnage", "wet-and-wild", "contamination"
+  "thrills-and-spills", "chaos-and-carnage", "wet-and-wild", "contamination", "turn-and-burn"
 ];
 const SETUPS = [
   { name: "core-4p", playerCount: 4, sets: ["roborally"], variants: "default" },

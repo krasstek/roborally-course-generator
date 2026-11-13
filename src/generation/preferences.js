@@ -164,6 +164,7 @@ export function formatExpansionName(expansionId) {
     "wet-and-wild": "Wet & Wild",
     "chaos-and-carnage": "Chaos & Carnage",
     "contamination": "Contamination",
+    "turn-and-burn": "Turn & Burn",
     "transformers": "Robo Rally: Transformers",
     "rr-dice": "Robo Rally Dice"
   };

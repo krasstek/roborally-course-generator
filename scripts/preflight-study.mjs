@@ -40,7 +40,7 @@ const assets = await hooks.loadCalibrationAssets();
 
 const EXTRA_SETS = [
   "rr-dice", "30th-anniversary", "master-builder", "thrills-and-spills",
-  "chaos-and-carnage", "wet-and-wild", "contamination", "transformers"
+  "chaos-and-carnage", "wet-and-wild", "contamination", "turn-and-burn", "transformers"
 ];
 const ALL_SETS = ["roborally", ...EXTRA_SETS];
 const DIFFICULTIES = ["easy", "moderate", "hard", "brutal"];

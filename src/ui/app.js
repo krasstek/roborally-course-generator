@@ -691,6 +691,10 @@ document.getElementById("expansion-contamination").addEventListener("change", ()
   updateExpansionSummary();
 });
 
+document.getElementById("expansion-turn-and-burn").addEventListener("change", () => {
+  updateExpansionSummary();
+});
+
 document.getElementById("expansion-transformers").addEventListener("change", () => {
   updateExpansionSummary();
 });

@@ -121,7 +121,7 @@ export function countBoardLasers(tileMap) {
 // Board list groups, in the order of the set checkboxes on the page.
 const AUDIT_EXPANSION_ORDER = [
   "roborally", "30th-anniversary", "chaos-and-carnage", "master-builder", "thrills-and-spills",
-  "wet-and-wild", "contamination", "transformers", "rr-dice"
+  "wet-and-wild", "contamination", "turn-and-burn", "transformers", "rr-dice"
 ];
 
 // Label inside an expansion group: the name, plus the reverse side when known.

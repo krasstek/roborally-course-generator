@@ -1,4 +1,4 @@
-const APP_VERSION = "20261113143906";
+const APP_VERSION = "20261113230608";
 const STATIC_CACHE = `roborally-static-${APP_VERSION}`;
 const RUNTIME_CACHE = `roborally-runtime-${APP_VERSION}`;
 
@@ -117,10 +117,13 @@ const VERSIONED_ASSETS = [
   "./data/30th-docking-bay-b.json",
   "./data/all-roads.json",
   "./data/assembly.json",
+  "./data/back-stretch.json",
   "./data/black-gold.json",
   "./data/blueprint.json",
+  "./data/bounce-house.json",
   "./data/cactus.json",
   "./data/chasm.json",
+  "./data/check-in.json",
   "./data/circles.json",
   "./data/circuit-trap.json",
   "./data/coliseum.json",
