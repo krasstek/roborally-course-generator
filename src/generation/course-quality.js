@@ -16,6 +16,7 @@ import {
 import { dropUnpairedSpaceBridges, getPlacementOccupiedOffsets, pointOnPlacement } from "./layout-geometry.js";
 import { getTuningDifficulty } from "./preferences.js";
 import { getDifficultyThresholds } from "./targets.js";
+import { getNearestTargetBand } from "./target-selection.js";
 
 export function nonOverlappingDifficultyBandDistance(value, band, thresholds) {
   if (band === "any") return 0;
@@ -39,7 +40,8 @@ export function getTargetAxisAcceptanceGate({
   preferences = {},
   difficultyThresholds = getDifficultyThresholds()
 } = {}) {
-  const requestedDifficulty = preferences.difficulty ?? "any";
+  // Several picked bands: the one nearest to the course (target-selection.js).
+  const requestedDifficulty = getNearestTargetBand(preferences, "difficulty", difficultyValue, difficultyThresholds) ?? "any";
   const requestedLength = preferences.length ?? "any";
   const difficultyGuidanceOnly = Boolean(preferences.targetGuidanceOnlyDifficulty);
   const lengthGuidanceOnly = Boolean(preferences.targetGuidanceOnlyLength);

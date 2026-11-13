@@ -6,6 +6,7 @@ import {
   getBoardFootprintSentences
 } from "../../course-notes.js";
 import { normalizeGenerationMode, VARIANT_GENERATION_TIME_FACTORS as VARIANT_FACTORS } from "../generation/generation-modes.js";
+import { parseTargetSelection } from "../generation/target-selection.js";
 import {
   formatPresentedDifficultyLabel,
   formatPresentedLengthLabel,
@@ -62,7 +63,11 @@ function getGenerationTimeFactorIds(preferences = {}, stageContext = null) {
   const ids = [];
   const mode = normalizeGenerationMode(preferences.generationMode);
   if (["fastest", "fast", "balanced", "thorough"].includes(mode)) ids.push(mode);
-  if (["short", "long", "epic"].includes(preferences.length)) ids.push(preferences.length);
+  // Several lengths picked: the slowest of them sets the hint.
+  const pickedLengths = parseTargetSelection(preferences.length, "length");
+  const lengthFactorId = ["epic", "long"].find((band) => pickedLengths.includes(band)) ??
+    (pickedLengths.length === 1 && pickedLengths[0] === "short" ? "short" : null);
+  if (lengthFactorId) ids.push(lengthFactorId);
   if ((Number(preferences.playerCount) || 4) >= 7) ids.push("manyPlayers");
   for (const variantId of TIME_FACTOR_VARIANT_IDS) {
     const active = stageContext
@@ -296,7 +301,7 @@ export function updateSetupSummary(scenario) {
   const epicUpperLength = getProductionLengthThresholds().epic[1];
   const presentedWallClockTurnIndex = getProductionLengthTurnIndex(presentationMetrics);
   const epicVeryLong = (
-    scenario.preferences.length === "epic" &&
+    parseTargetSelection(scenario.preferences.length, "length").includes("epic") &&
     presentationMetrics.lengthDirection === "high" &&
     Number.isFinite(presentedWallClockTurnIndex) &&
     presentedWallClockTurnIndex > epicUpperLength

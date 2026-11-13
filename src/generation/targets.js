@@ -1,5 +1,6 @@
 // Robo Rally Course Randomizer - requested difficulty/length targets: thresholds, production length bands and gross-mismatch abort bands
 import { MIN_LENGTH_RAW } from "./config.js";
+import { checkAgainstEveryPickedBand } from "./target-selection.js";
 
 // v49dp production difficulty owner. These are deliberately non-overlapping
 // bands on completed non-tempo RE per programming turn. Intermediate,
@@ -82,7 +83,12 @@ export const GROSS_LENGTH_ABORT_BANDS = {
   epic: { min: 140, max: 520 }
 };
 
+// Several picked bands: stopped only when far off all of them (target-selection.js).
 export function getGrossCourseMismatch(metrics, preferences = {}) {
+  return checkAgainstEveryPickedBand(getSingleBandGrossCourseMismatch, metrics, preferences);
+}
+
+function getSingleBandGrossCourseMismatch(metrics, preferences = {}) {
   const difficultyBand = preferences.targetGuidanceOnlyDifficulty
     ? null
     : GROSS_DIFFICULTY_ABORT_BANDS[preferences.difficulty];

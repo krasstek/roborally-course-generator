@@ -48,6 +48,7 @@ import {
 } from "./generation-modes.js";
 import { evaluateFinishedCourse, evaluateTrimmedFinishedCourse } from "./persistence.js";
 import { resolveAnyPreferencesForGeneration } from "./preferences.js";
+import { getNearestTargetBand } from "./target-selection.js";
 import { getDifficultyThresholds, getProductionLengthThresholds } from "./targets.js";
 import { withGenerationRandomSeed } from "./random.js";
 import {
@@ -278,13 +279,16 @@ export async function generateScenarioForPreferences(assets, preferences, option
     ) {
       return null;
     }
-    const lengthBand = getProductionLengthThresholds()[preferences.length];
+    // Several picked bands: the ones nearest to this course.
     const length = Number(evaluated.metrics?.lengthWallClockTurnIndex);
+    const lengthBand = getProductionLengthThresholds()[
+      getNearestTargetBand(preferences, "length", length, getProductionLengthThresholds())
+    ];
     const playableCheckpoints = (evaluated.checkpoints?.length ?? 0) - (evaluated.virtualBots ? 1 : 0);
+    const difficulty = Number(evaluated.metrics?.difficultyTurnRE);
     const difficultyBand = preferences.targetGuidanceOnlyDifficulty
       ? null
-      : getDifficultyThresholds()[preferences.difficulty];
-    const difficulty = Number(evaluated.metrics?.difficultyTurnRE);
+      : getDifficultyThresholds()[getNearestTargetBand(preferences, "difficulty", difficulty, getDifficultyThresholds())];
     const difficultyInBand = !difficultyBand || (difficulty >= difficultyBand[0] && difficulty < difficultyBand[1]);
     if (!lengthBand || !(length >= lengthBand[1]) || !difficultyInBand || playableCheckpoints < 3) return null;
 

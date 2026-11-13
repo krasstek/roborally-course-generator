@@ -62,6 +62,7 @@ import {
 } from "./start-balance.js";
 import { getRouteAnalysisVariantOptions, isVariantForced } from "./variant-availability.js";
 import { buildVirtualRobotStarts, hideVirtualFlagZeroFeature } from "./virtual-bots.js";
+import { formatTargetSelection, isMultiTargetSelection, parseTargetSelection } from "./target-selection.js";
 
 export const SAVED_SCENARIO_APP_ID = "roborally-course-generator";
 export const SAVED_SCENARIO_SCHEMA_VERSION = 1;
@@ -757,6 +758,13 @@ export async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}
   const hydrationPreferences = {
     ...snapshot.preferences,
     ...effectiveTargetPreferences,
+    // Several picked bands: held to any of them, as at generation.
+    difficultyTargets: isMultiTargetSelection(snapshot.preferences.difficulty, "difficulty")
+      ? parseTargetSelection(snapshot.preferences.difficulty, "difficulty")
+      : undefined,
+    lengthTargets: isMultiTargetSelection(snapshot.preferences.length, "length")
+      ? parseTargetSelection(snapshot.preferences.length, "length")
+      : undefined,
     targetGuidanceOnlyDifficulty: snapshot.preferences.difficulty === "any",
     targetGuidanceOnlyLength: snapshot.preferences.length === "any"
   };
@@ -1409,8 +1417,16 @@ function buildFinalEvaluationSnapshot(candidate, preferences) {
   };
   snapshot.preferences = {
     ...snapshot.preferences,
-    difficulty: preferences.targetGuidanceOnlyDifficulty ? "any" : preferences.difficulty,
-    length: preferences.targetGuidanceOnlyLength ? "any" : preferences.length
+    difficulty: preferences.targetGuidanceOnlyDifficulty
+      ? "any"
+      : preferences.difficultyTargets?.length > 1
+        ? formatTargetSelection(preferences.difficultyTargets, "difficulty")
+        : preferences.difficulty,
+    length: preferences.targetGuidanceOnlyLength
+      ? "any"
+      : preferences.lengthTargets?.length > 1
+        ? formatTargetSelection(preferences.lengthTargets, "length")
+        : preferences.length
   };
   return snapshot;
 }

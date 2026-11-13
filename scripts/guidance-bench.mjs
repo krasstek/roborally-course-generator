@@ -4,7 +4,10 @@
 // and whether the course landed in the requested bands. Point --repo at another
 // checkout (e.g. a git worktree of main) to compare two versions on the same grid.
 //
-//   node scripts/guidance-bench.mjs --repo <dir> --out <file.jsonl> [--seeds 3] [--shard 0/4] [--difficulty easy,hard] [--force sandwichedDock]
+//   node scripts/guidance-bench.mjs --repo <dir> --out <file.jsonl> [--seeds 3] [--shard 0/4] [--difficulty easy,hard] [--force sandwichedDock] [--pick next]
+//
+// --pick next: each case asks for its band and the next one up ("moderate,hard";
+// the top band pairs with the one below); a hit is a course in either.
 //
 // One JSON line per run. Summarize with --summarize <file.jsonl> [...].
 
@@ -58,9 +61,14 @@ async function run() {
   const { VARIANT_DEFINITIONS } = await import(join(repo, "variants.js"));
   const { getDifficultyThresholds, getProductionLengthThresholds } = await import(join(repo, "src/generation/targets.js"));
   const assets = await hooks.loadCalibrationAssets();
-  const inBand = (value, thresholds, band) => {
-    const [low, high] = thresholds[band];
+  const inBand = (value, thresholds, band) => String(band).split(",").some((entry) => {
+    const [low, high] = thresholds[entry];
     return Number.isFinite(value) && value >= low && value < high;
+  });
+  const pickNext = option("pick") === "next";
+  const withNext = (band, order) => {
+    const index = order.indexOf(band);
+    return index < order.length - 1 ? `${band},${order[index + 1]}` : `${order[index - 1]},${band}`;
   };
 
   const runs = buildCases().flatMap((testCase) => Array.from({ length: seeds }, (_, index) => ({ testCase, seed: hash32(`${testCase.name}#${index}`) })));
@@ -70,8 +78,8 @@ async function run() {
     const defaults = Object.fromEntries(VARIANT_DEFINITIONS.map((variant) => [variant.id, variant.defaultState]));
     const preferences = {
       playerCount: testCase.playerCount,
-      difficulty: testCase.difficulty,
-      length: testCase.length,
+      difficulty: pickNext ? withNext(testCase.difficulty, DIFFICULTIES) : testCase.difficulty,
+      length: pickNext ? withNext(testCase.length, LENGTHS) : testCase.length,
       startBalance: "standard",
       generationMode: "fast",
       boardSpread: "random",
@@ -108,15 +116,19 @@ async function run() {
       acceptable: Boolean(metrics.acceptable),
       difficulty: metrics.difficultyTurnRE ?? null,
       length: metrics.lengthWallClockTurnIndex ?? null,
-      difficultyHit: inBand(metrics.difficultyTurnRE, getDifficultyThresholds(), testCase.difficulty),
-      lengthHit: inBand(metrics.lengthWallClockTurnIndex, getProductionLengthThresholds(), testCase.length),
+      difficultyHit: inBand(metrics.difficultyTurnRE, getDifficultyThresholds(), preferences.difficulty),
+      lengthHit: inBand(metrics.lengthWallClockTurnIndex, getProductionLengthThresholds(), preferences.length),
+      // Single-band hits too, so --pick next runs compare with plain runs.
+      singleDifficultyHit: inBand(metrics.difficultyTurnRE, getDifficultyThresholds(), testCase.difficulty),
+      singleLengthHit: inBand(metrics.lengthWallClockTurnIndex, getProductionLengthThresholds(), testCase.length),
+      drawn: scenario?.effectiveTargetPreferences ?? null,
       variants: scenario ? VARIANT_DEFINITIONS.map((variant) => variant.id).filter((id) => scenario[id] === true) : [],
       acceptableFound: scenario?.generationDiagnostics?.acceptableCandidatesFound ?? null,
       candidates: (scenario?.generationDiagnostics?.attempts ?? generation?.generationDiagnostics?.attempts ?? [])
         .filter((entry) => Number.isFinite(entry.difficultyTurnRE))
         .map((entry) => ({
-          difficultyHit: inBand(entry.difficultyTurnRE, getDifficultyThresholds(), testCase.difficulty),
-          lengthHit: inBand(entry.lengthWallClockTurnIndex, getProductionLengthThresholds(), testCase.length)
+          difficultyHit: inBand(entry.difficultyTurnRE, getDifficultyThresholds(), preferences.difficulty),
+          lengthHit: inBand(entry.lengthWallClockTurnIndex, getProductionLengthThresholds(), preferences.length)
         })),
       rejections: (scenario?.generationDiagnostics?.rejectionEvents ?? generation?.generationDiagnostics?.rejectionEvents ?? [])
         .reduce((counts, event) => ({ ...counts, [event.category ?? "other"]: (counts[event.category ?? "other"] ?? 0) + 1 }), {}),

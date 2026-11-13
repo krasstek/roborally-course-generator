@@ -57,6 +57,7 @@ import {
   getProductionLengthThresholds
 } from "./targets.js";
 import { isVariantForced } from "./variant-availability.js";
+import { getNearestTargetBand } from "./target-selection.js";
 
 export function classifyCandidate(sequence, preferences, context = {}) {
   const reachableStarts = computeCourseReachableStarts(sequence.firstLeg);
@@ -268,16 +269,20 @@ export function classifyCandidate(sequence, preferences, context = {}) {
   if (!context.skipProductionDifficulty && !Number.isFinite(difficultyTurnRE)) {
     hardFailures.push("re-turn-difficulty-unavailable");
   }
+  // Several picked bands: judge against the picked band nearest to the course
+  // (one picked band: that band, as before).
+  const difficultyBandId = getNearestTargetBand(preferences, "difficulty", difficultyTurnRE, difficultyThresholds);
+  const lengthBandId = getNearestTargetBand(preferences, "length", lengthSemanticValue, lengthThresholds);
   const difficultyDistanceRE = context.skipProductionDifficulty
     ? 0
     : Number.isFinite(difficultyTurnRE)
-      ? nonOverlappingDifficultyBandDistance(difficultyTurnRE, preferences.difficulty, difficultyThresholds)
+      ? nonOverlappingDifficultyBandDistance(difficultyTurnRE, difficultyBandId, difficultyThresholds)
       : Infinity;
   const difficultyGuidanceFit = Number.isFinite(difficultyDistanceRE)
     ? difficultyDistanceRE * RE_TURN_DIFFICULTY_FIT_POINTS_PER_RE
     : Infinity;
   const lengthGuidanceFit =
-    bandDistance(lengthSemanticValue, preferences.length, lengthThresholds) *
+    bandDistance(lengthSemanticValue, lengthBandId, lengthThresholds) *
     lengthFitPointScale;
   const difficultyFit = preferences.targetGuidanceOnlyDifficulty ? 0 : difficultyGuidanceFit;
   const lengthFit = preferences.targetGuidanceOnlyLength ? 0 : lengthGuidanceFit;
@@ -291,32 +296,32 @@ export function classifyCandidate(sequence, preferences, context = {}) {
     ? "matched"
     : !Number.isFinite(difficultyTurnRE)
       ? "unavailable"
-      : difficultyTurnRE < difficultyThresholds[preferences.difficulty][0]
+      : difficultyTurnRE < difficultyThresholds[difficultyBandId][0]
         ? "low"
-        : difficultyTurnRE >= difficultyThresholds[preferences.difficulty][1]
+        : difficultyTurnRE >= difficultyThresholds[difficultyBandId][1]
           ? "high"
           : "matched";
   const lengthDirection = (preferences.length === "any" || preferences.targetGuidanceOnlyLength)
     ? "matched"
-    : lengthSemanticValue < lengthThresholds[preferences.length][0]
+    : lengthSemanticValue < lengthThresholds[lengthBandId][0]
       ? "low"
-      : lengthSemanticValue >= lengthThresholds[preferences.length][1]
+      : lengthSemanticValue >= lengthThresholds[lengthBandId][1]
         ? "high"
         : "matched";
   const difficultyTargetBand = preferences.difficulty === "any"
     ? null
     : {
-      min: difficultyThresholds[preferences.difficulty][0],
-      maxExclusive: Number.isFinite(difficultyThresholds[preferences.difficulty][1])
-        ? difficultyThresholds[preferences.difficulty][1]
+      min: difficultyThresholds[difficultyBandId][0],
+      maxExclusive: Number.isFinite(difficultyThresholds[difficultyBandId][1])
+        ? difficultyThresholds[difficultyBandId][1]
         : null
     };
   const lengthTargetBand = preferences.length === "any"
     ? null
     : {
-      min: lengthThresholds[preferences.length][0],
-      maxExclusive: Number.isFinite(lengthThresholds[preferences.length][1])
-        ? lengthThresholds[preferences.length][1]
+      min: lengthThresholds[lengthBandId][0],
+      maxExclusive: Number.isFinite(lengthThresholds[lengthBandId][1])
+        ? lengthThresholds[lengthBandId][1]
         : null,
       unit: productionLengthOwnerActive ? "wall-clock-turn-index" : "legacy-raw"
     };

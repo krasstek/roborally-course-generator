@@ -1745,25 +1745,55 @@
             <option value="8">8</option>
           </select>
         </label>
-        <label>
+        <label class="variant-field" title="Pick one or more. The course lands in one of them. None picked means any difficulty.">
           Difficulty
-          <select id="difficulty">
-            <option value="any" selected>Any</option>
-            <option value="easy">Beginner</option>
-            <option value="moderate">Intermediate</option>
-            <option value="hard">Advanced</option>
-            <option value="brutal">Robots. Must. Die.</option>
-          </select>
+          <details class="variant-picker target-picker">
+            <summary id="difficulty-summary">Any</summary>
+            <div class="variant-menu" data-target-axis="difficulty">
+              <label class="variant-option">
+                <input type="checkbox" value="easy" />
+                Beginner
+              </label>
+              <label class="variant-option">
+                <input type="checkbox" value="moderate" />
+                Intermediate
+              </label>
+              <label class="variant-option">
+                <input type="checkbox" value="hard" />
+                Advanced
+              </label>
+              <label class="variant-option">
+                <input type="checkbox" value="brutal" />
+                Robots. Must. Die.
+              </label>
+            </div>
+          </details>
+          <input id="difficulty" type="hidden" value="any" />
         </label>
-        <label>
+        <label class="variant-field" title="Pick one or more. The course lands in one of them. None picked means any length.">
           Length
-          <select id="length">
-            <option value="any" selected>Any</option>
-            <option value="short">Short</option>
-            <option value="moderate">Medium</option>
-            <option value="long">Long</option>
-            <option value="epic">Epic</option>
-          </select>
+          <details class="variant-picker target-picker">
+            <summary id="length-summary">Any</summary>
+            <div class="variant-menu" data-target-axis="length">
+              <label class="variant-option">
+                <input type="checkbox" value="short" />
+                Short
+              </label>
+              <label class="variant-option">
+                <input type="checkbox" value="moderate" />
+                Medium
+              </label>
+              <label class="variant-option">
+                <input type="checkbox" value="long" />
+                Long
+              </label>
+              <label class="variant-option">
+                <input type="checkbox" value="epic" />
+                Epic
+              </label>
+            </div>
+          </details>
+          <input id="length" type="hidden" value="any" />
         </label>
         <label title="How similar the starting positions should be. Strict removes more uneven positions; Relaxed allows more variation; Off keeps all otherwise valid positions.">
           Balance
