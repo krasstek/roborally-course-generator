@@ -6,14 +6,19 @@
 // and Special Rules text keep the printed pieceMap (players set up the printed
 // boards and apply the rule), so a swapped piece keeps its id and images and
 // points back to the printed piece (`printed`). A swapped feature records the
-// printed element it came from (`printedType`) where a rule must still see it
-// (a battery played as a pit stop still archives).
+// printed element it came from (`printedType`; a battery played as a pit stop
+// still archives) and the rule that changed it (`swappedBy`, for the rule's
+// memory event).
 
 const ALL_REGISTERS = Object.freeze([1, 2, 3, 4, 5]);
 
 // One colour for every teleporter under Space Bridge Network; printed space
 // bridge tokens keep their own colours.
 export const TELEPORTER_NETWORK_BRIDGE_ID = "teleporter-network";
+
+// What a stopped conveyor leaves under The Day the Factory Stood Still: no
+// effect on robots, only a record of the printed conveyor.
+export const STOPPED_CONVEYOR_TYPE = "stoppedConveyor";
 
 const hasType = (features, type) => features.some((feature) => feature.type === type);
 
@@ -28,8 +33,8 @@ export const SQUARE_SWAP_RULES = Object.freeze([
       const waste = hasType(features, "radioactiveWaste");
       if (water === waste) return features;
       return water
-        ? [...features, { type: "radioactiveWaste", printedType: "water" }]
-        : [...features, { type: "water", printedType: "radioactiveWaste" }];
+        ? [...features, { type: "radioactiveWaste", printedType: "water", swappedBy: "radioactiveGunk" }]
+        : [...features, { type: "water", printedType: "radioactiveWaste", swappedBy: "radioactiveGunk" }];
     }
   },
   {
@@ -40,42 +45,48 @@ export const SQUARE_SWAP_RULES = Object.freeze([
       if (!hasType(features, "water")) return features;
       return [
         ...features.filter((feature) => feature.type !== "water" && feature.type !== "belt"),
-        { type: "oil", printedType: "water" }
+        { type: "oil", printedType: "water", swappedBy: "coldStorage" }
       ];
     }
   },
   {
     id: "factoryStoodStill",
-    // Conveyors stop; water and waste currents keep running.
+    // Conveyors stop; water and waste currents keep running. A stopped
+    // conveyor leaves an inert marker: the printed floor is still a conveyor
+    // (Clear Floor checkpoints avoid it) and the rule's memory event sees it.
     swap(features) {
       if (!hasType(features, "belt")) return features;
       if (hasType(features, "water") || hasType(features, "radioactiveWaste")) return features;
-      return features.filter((feature) => feature.type !== "belt");
+      return [
+        ...features.filter((feature) => feature.type !== "belt"),
+        { type: STOPPED_CONVEYOR_TYPE, printedType: "belt", swappedBy: "factoryStoodStill" }
+      ];
     }
   },
   {
     id: "lavaPits",
-    swap: (features) => replaceType(features, "firePit", () => ({ type: "pit" }))
+    swap: (features) => replaceType(features, "firePit", () => ({ type: "pit", printedType: "firePit", swappedBy: "lavaPits" }))
   },
   {
     id: "batteryPitStops",
-    swap: (features) => replaceType(features, "battery", () => ({ type: "pitStop", printedType: "battery" }))
+    swap: (features) => replaceType(features, "battery", () => ({ type: "pitStop", printedType: "battery", swappedBy: "batteryPitStops" }))
   },
   {
     id: "spaceBridgeNetwork",
     swap: (features) => replaceType(features, "teleporter", () => ({
       type: "spaceBridge",
       id: TELEPORTER_NETWORK_BRIDGE_ID,
-      printedType: "teleporter"
+      printedType: "teleporter",
+      swappedBy: "spaceBridgeNetwork"
     }))
   },
   {
     id: "napalmDeath",
-    swap: (features) => replaceType(features, "flamethrower", (feature) => ({ ...feature, timing: [...ALL_REGISTERS] }))
+    swap: (features) => replaceType(features, "flamethrower", (feature) => ({ ...feature, timing: [...ALL_REGISTERS], swappedBy: "napalmDeath" }))
   },
   {
     id: "pistonCup",
-    swap: (features) => replaceType(features, "push", (feature) => ({ ...feature, timing: [...ALL_REGISTERS] }))
+    swap: (features) => replaceType(features, "push", (feature) => ({ ...feature, timing: [...ALL_REGISTERS], swappedBy: "pistonCup" }))
   }
 ]);
 

@@ -100,7 +100,8 @@ export function countFeatureTypeInSelectedSets(featureType, pieceMap = cachedAss
 }
 
 export function isHazardousFlagEligibleUnderlyingFeature(feature, options = {}) {
-  if (!feature || feature.type === "checkpoint" || feature.type === "pit") {
+  // A stopped conveyor (The Day the Factory Stood Still) does nothing to suppress.
+  if (!feature || feature.type === "checkpoint" || feature.type === "pit" || feature.type === "stoppedConveyor") {
     return false;
   }
   return !isCheckpointActiveFeature(feature, { movingTargets: Boolean(options.movingTargets) });

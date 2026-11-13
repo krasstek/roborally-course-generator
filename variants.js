@@ -425,6 +425,14 @@ const VARIANT_DEFINITION_ROWS = [
     description: swap.description,
     cost: VARIANT_COMPLEXITY[swap.id],
     complexityRationale: "One persistent rule changes how a printed board element works.",
+    // Same trigger style as the other factory-floor rules (user 2026-11-13):
+    // remember the rule once in a turn whose route touches a changed square.
+    mentalEvent: {
+      cadence: "once-per-game-turn",
+      trigger: "square-swap-relevant",
+      eventType: `variant-rule:${swap.id}`,
+      rationale: "Remember once in a turn that the rule changes this element when the route enters, passes or ends on a changed square."
+    },
     printedSquares: true,
     ...(swap.incompatibleWith ? { incompatibleWith: swap.incompatibleWith } : {}),
     availability: swap.featureTypes.length === 1
