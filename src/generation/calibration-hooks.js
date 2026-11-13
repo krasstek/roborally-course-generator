@@ -63,6 +63,7 @@ import {
   getAvailableMainBoardIds,
   getRouteAnalysisVariantOptions
 } from "./variant-availability.js";
+import { applySquareSwapsToPieceMap } from "./square-swaps.js";
 
 export function normalizeCalibrationExpansionIds(pieceMap = {}, requestedIds = null) {
   const available = new Set(getCalibrationExpansionIds(pieceMap));
@@ -177,7 +178,7 @@ export function getCalibrationActiveVariantIds(scenario) {
 
 export function summarizeCalibrationScenario(assets, scenario) {
   if (!scenario) return null;
-  const { pieceMap } = assets;
+  const pieceMap = applySquareSwapsToPieceMap(assets.pieceMap, scenario);
   const boardPlacements = scenario.placements.filter((placement) => {
     const piece = pieceMap[placement.pieceId];
     return !placement.overlay && piece?.kind !== "dock";
@@ -514,7 +515,7 @@ export async function generateCalibrationObservation(assets, options = {}) {
 
 export function analyzeCalibrationPlacements(assets, sourceScenario, placements, options = {}) {
   if (!placements?.length || !sourceScenario?.checkpoints?.length) return null;
-  const { pieceMap } = assets;
+  let pieceMap = assets.pieceMap;
   const playerCount = Math.max(2, Math.floor(Number(options.playerCount ?? sourceScenario.playerCount) || 4));
   const generationMode = normalizeGenerationMode(options.generationMode ?? sourceScenario.preferences?.generationMode ?? "balanced");
   const difficulty = DIAGNOSTIC_DIFFICULTIES.includes(sourceScenario.preferences?.difficulty)
@@ -530,6 +531,7 @@ export function analyzeCalibrationPlacements(assets, sourceScenario, placements,
     Object.fromEntries(VARIANT_DEFINITIONS.map((variant) => [variant.id, forcedVariantIds.includes(variant.id)])),
     { pieceMap }
   );
+  pieceMap = applySquareSwapsToPieceMap(pieceMap, variantBundle);
   const recoveryRule = variantBundle.recoveryRule ?? "reboot_tokens";
   const checkpoints = getPlayableCheckpoints(sourceScenario.checkpoints, sourceScenario.virtualBots);
   const boardPlacements = placements.filter((placement) => {
@@ -694,7 +696,8 @@ export function chooseCalibrationVariantToggle(scenario, order = CALIBRATION_TOG
   let courseContext = null;
   const canMatter = (variantId) => {
     courseContext ??= {
-      rawTileMap: buildResolvedMap(scenario.placements, scenario.pieceMap).tileMap,
+      rawTileMap: buildResolvedMap(scenario.placements, applySquareSwapsToPieceMap(scenario.pieceMap, scenario)).tileMap,
+      printedTileMap: buildResolvedMap(scenario.placements, scenario.pieceMap).tileMap,
       checkpoints: getPlayableCheckpoints(scenario.checkpoints ?? [], scenario.virtualBots),
       movingTargets: Boolean(scenario.movingTargets)
     };

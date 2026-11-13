@@ -100,7 +100,8 @@ export function countFeatureTypeInSelectedSets(featureType, pieceMap = cachedAss
 }
 
 export function isHazardousFlagEligibleUnderlyingFeature(feature, options = {}) {
-  if (!feature || feature.type === "checkpoint" || feature.type === "pit") {
+  // A stopped conveyor (The Day the Factory Stood Still) does nothing to suppress.
+  if (!feature || feature.type === "checkpoint" || feature.type === "pit" || feature.type === "stoppedConveyor") {
     return false;
   }
   return !isCheckpointActiveFeature(feature, { movingTargets: Boolean(options.movingTargets) });
@@ -108,7 +109,9 @@ export function isHazardousFlagEligibleUnderlyingFeature(feature, options = {}) 
 
 export function boardPieceSatisfiesConstructionRequirement(piece, requirement, options = {}) {
   if (!piece || !requirement) return false;
-  const features = (piece.tiles || []).flatMap((tile) => tile.features || []);
+  // Requirements name printed elements; a square-swapped piece keeps its
+  // printed original (square-swaps.js).
+  const features = ((piece.printed ?? piece).tiles || []).flatMap((tile) => tile.features || []);
 
   if (requirement.type === "boardFeatureAnyOf") {
     const featureTypes = new Set(requirement.featureTypes || []);
@@ -393,6 +396,14 @@ const NEUTRAL_VARIANT_CHANCE = Object.freeze({
   moreDeadlyGame: 0.15,
   cuttingFloor: 0.12,
   flamingOil: 0.11,
+  coldStorage: 0.1,
+  radioactiveGunk: 0.1,
+  factoryStoodStill: 0.1,
+  lavaPits: 0.1,
+  batteryPitStops: 0.1,
+  spaceBridgeNetwork: 0.1,
+  napalmDeath: 0.1,
+  pistonCup: 0.1,
   repulsorOverdrive: 0.03,
   setToKill: 0.14,
   setToStun: 0.11,
@@ -684,6 +695,11 @@ export function getVariantCourseUnavailabilityReason(variantId, tileMap, context
   const availabilityRule = getVariantAvailabilityRule(variantId);
   if (!availabilityRule) {
     return null;
+  }
+  // Square swaps rename or remove what they need, so they look at the printed
+  // course (a Cold Storage course has no water left after the swap).
+  if (getVariantDefinition(variantId)?.printedSquares && context.printedTileMap) {
+    tileMap = context.printedTileMap;
   }
 
   if (availabilityRule.type === "featureTypeAvailable") {

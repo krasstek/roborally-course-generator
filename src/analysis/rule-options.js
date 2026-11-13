@@ -81,7 +81,17 @@ export const ROUTE_RULE_BOOLEAN_KEYS = Object.freeze([
   "lessForeshadowing",
   "setToKill",
   "setToStun",
-  "repairStations"
+  "repairStations",
+  // Square swaps change the boards before routing (square-swaps.js); the
+  // route replay still needs them for their "remember the rule" event.
+  "coldStorage",
+  "radioactiveGunk",
+  "factoryStoodStill",
+  "lavaPits",
+  "batteryPitStops",
+  "spaceBridgeNetwork",
+  "napalmDeath",
+  "pistonCup"
 ]);
 
 // Energy and upgrade economy settings, passed as given.

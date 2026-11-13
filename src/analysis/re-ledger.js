@@ -121,6 +121,26 @@ export function transitionTouchesHazardousFlagFeature(tileMap, transition, optio
   return false;
 }
 
+// Square-swap rules (src/generation/square-swaps.js) mark every square they
+// change with `swappedBy`; a step that starts on, passes or ends on one makes
+// that rule relevant this turn.
+function getSquareSwapRulesTouched(tileMap, transition) {
+  const touched = new Set();
+  if (!tileMap || !transition) return touched;
+  const points = [
+    transition.from,
+    ...(Array.isArray(transition.traversed) ? transition.traversed : []),
+    transition.to
+  ];
+  for (const point of points) {
+    if (!Number.isFinite(point?.x) || !Number.isFinite(point?.y)) continue;
+    for (const feature of tileMap.get(tileKey(point.x, point.y))?.features || []) {
+      if (feature.swappedBy) touched.add(feature.swappedBy);
+    }
+  }
+  return touched;
+}
+
 export function getVariantMentalPlanningEventsForTransition(
   options = {},
   damageEvent = null,
@@ -151,6 +171,8 @@ export function getVariantMentalPlanningEventsForTransition(
       applicable = Boolean(mechanicContext?.movingTargetTrackingRelevant);
     } else if (rule.trigger === "walled-in-relevant") {
       applicable = Boolean(mechanicContext?.walledInRelevant);
+    } else if (rule.trigger === "square-swap-relevant") {
+      applicable = Boolean(mechanicContext?.squareSwapRulesTouched?.has(rule.variantId));
     }
     if (!applicable) continue;
 
@@ -514,6 +536,7 @@ export function getRegisterEquivalentLedgerPlanningEventsForTransition(
   const walledInRelevant = Boolean(
     options.lessDeadlyGame && transition?.walledInRelevant
   );
+  const squareSwapRulesTouched = getSquareSwapRulesTouched(tileMap, transition);
   events.push(...getVariantMentalPlanningEventsForTransition(
     options,
     damageEvent,
@@ -523,7 +546,8 @@ export function getRegisterEquivalentLedgerPlanningEventsForTransition(
       repulsorOverdriveRelevant,
       hazardousFlagRelevant,
       movingTargetTrackingRelevant,
-      walledInRelevant
+      walledInRelevant,
+      squareSwapRulesTouched
     }
   ));
 

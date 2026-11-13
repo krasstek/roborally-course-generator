@@ -20,6 +20,7 @@ import { buildBoardRects } from "./layout-geometry.js";
 import { clamp } from "../shared/math.js";
 import { getActFastPressureWeight, getActFastREPressureMultiplier } from "./play-time.js";
 import { computeUsableStarts } from "./start-balance.js";
+import { SQUARE_SWAP_RULE_IDS } from "./square-swaps.js";
 
 export function computeLaterCheckpointPressure(tileMap, checkpoints = [], preferences = {}) {
   if (!tileMap || checkpoints.length <= 1) {
@@ -526,6 +527,9 @@ export function computeRETurnVariantDifficultyAccounting(rawTurnRE, preferences 
     "flamingOil",
     "damage economy: +1 on first oil entry in a register +1 on end-on-oil; once-per-turn rule-memory event"
   );
+  for (const swapId of SQUARE_SWAP_RULE_IDS) {
+    if (preferences[swapId]) mechanical(swapId, "square swap: boards analysed with the swapped elements; once-per-turn rule-memory event when the route touches a changed square");
+  }
   if (preferences.setToKill) mechanical(
     "setToKill",
     "robot-laser damage economy: two damage-card draws per successful main-laser hit"
@@ -1045,6 +1049,9 @@ export function computeVariantDifficultyAccounting(raw, preferences = {}, sequen
   );
   if (preferences.cuttingFloor) mechanical("cuttingFloor", "laser damage model");
   if (preferences.flamingOil) mechanical("flamingOil", "oil hazard model");
+  for (const swapId of SQUARE_SWAP_RULE_IDS) {
+    if (preferences[swapId]) mechanical(swapId, "square swap: boards analysed with the swapped elements; once-per-turn rule-memory event when the route touches a changed square");
+  }
   if (preferences.setToKill) mechanical("setToKill", "robot-laser damage economy: double damage per hit");
   if (preferences.setToStun) mechanical("setToStun", "robot-laser damage economy: SPAM suppressed, Haywire unchanged");
   if (preferences.repairStations) mechanical("repairStations", "checkpoint repair route value");
