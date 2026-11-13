@@ -957,7 +957,7 @@
           "type": "building",
           "sides": [
             "E",
-            "N"
+            "S"
           ]
         }
       ]
@@ -1264,7 +1264,7 @@
           "type": "building",
           "sides": [
             "N",
-            "W"
+            "E"
           ]
         }
       ]
