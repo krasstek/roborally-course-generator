@@ -59,6 +59,7 @@ import {
 import { normalizeRoutedFirstLeg, replayStartEnergyRescues } from "./route-field.js";
 import { applyPayToWinStartPricing } from "./start-pricing.js";
 import { GROSS_DIFFICULTY_ABORT_BANDS, GROSS_LENGTH_ABORT_BANDS } from "./targets.js";
+import { checkAgainstEveryPickedBand } from "./target-selection.js";
 import { getRouteAnalysisVariantOptions } from "./variant-availability.js";
 
 export function getCoursePreflightOpeningMinimum(startCount, playerCount, preferences = {}) {
@@ -337,7 +338,12 @@ export function buildRouteAwareBatteryScoringOptions(coursePreflight, options = 
   };
 }
 
+// Several picked bands: stopped only when far off all of them (target-selection.js).
 export function getPreflightGrossCourseMismatch(metrics, preferences = {}) {
+  return checkAgainstEveryPickedBand(getSingleBandPreflightGrossCourseMismatch, metrics, preferences);
+}
+
+function getSingleBandPreflightGrossCourseMismatch(metrics, preferences = {}) {
   const difficultyBand = GROSS_DIFFICULTY_ABORT_BANDS[preferences.difficulty];
   const lengthBand = GROSS_LENGTH_ABORT_BANDS[preferences.length];
 

@@ -5,6 +5,7 @@ import {
   getLengthThresholds,
   getProductionLengthThresholds
 } from "./targets.js";
+import { parseTargetSelection } from "./target-selection.js";
 
 export function titleCaseWords(value) {
   return String(value)
@@ -14,14 +15,23 @@ export function titleCaseWords(value) {
     .join(" ");
 }
 
+// "a", "a or b", "a, b or c" for several picked bands (target-selection.js).
+function joinAlternatives(parts) {
+  return parts.length > 1 ? `${parts.slice(0, -1).join(", ")} or ${parts[parts.length - 1]}` : (parts[0] ?? "");
+}
+
 export function formatLengthLabel(lengthPreference) {
   if (lengthPreference === "any") {
     return "any";
   }
+  const picked = parseTargetSelection(lengthPreference, "length");
+  if (picked.length > 1) return joinAlternatives(picked.map(formatLengthLabel));
   return lengthPreference === "moderate" ? "medium" : String(lengthPreference ?? "medium");
 }
 
 export function formatDifficultyLabel(difficultyPreference) {
+  const picked = parseTargetSelection(difficultyPreference, "difficulty");
+  if (picked.length > 1) return joinAlternatives(picked.map(formatDifficultyLabel));
   const labels = {
     any: "any",
     easy: "beginner",

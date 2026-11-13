@@ -52,6 +52,7 @@ import {
   filterOptionalRulesIndex,
   getPreferencesFromControls,
   installFieldHelp,
+  installTargetPickers,
   openOptionalRulesDialog,
   pageGetAvailableConcretePreferenceValues,
   renderVariantControls,
@@ -639,6 +640,7 @@ document.querySelectorAll("[data-variant-menu]").forEach((menuEl) => {
   menuEl.addEventListener("click", handleOptionalRuleControlClick);
 });
 
+installTargetPickers();
 installFieldHelp();
 document.getElementById("optional-rules-index-list")?.addEventListener("click", handleOptionalRuleControlClick);
 document.getElementById("optional-rules-title")?.addEventListener("click", openOptionalRulesDialog);

@@ -26,6 +26,7 @@ import { clamp } from "../shared/math.js";
 import { getSelectedExpansionIds, normalizeBoardSpread } from "./preferences.js";
 import { sample, sampleManyWeighted } from "./random.js";
 import { getDifficultyThresholds, getProductionLengthThresholds } from "./targets.js";
+import { getNearestTargetBand, getNearestTargetBandForLog } from "./target-selection.js";
 import { getMinimumSmallOnlyBoardCount } from "./variant-availability.js";
 
 // Rule variants need this many paired observations before their effect is used.
@@ -238,7 +239,10 @@ export function updateConstructionGuidanceFeedback(feedback = null, prediction =
     next.lengthResidualSum += Math.log(actual.length) - predictedLength;
   }
   const missed = Object.entries(OUTCOMES).some(([outcome, thresholds]) => {
-    const band = targetPreference(preferences, outcome);
+    // Several picked bands: a miss is a course outside all of them.
+    const band = targetPreference(preferences, outcome) === "any"
+      ? "any"
+      : getNearestTargetBand(preferences, outcome, actual[outcome], thresholds());
     if (!band || band === "any" || !thresholds()[band]) return false;
     const [low, high] = thresholds()[band];
     return actual[outcome] < low || actual[outcome] >= high;
@@ -404,8 +408,17 @@ export function getConstructionGuidancePredictionSignals(prediction, preferences
       routeSignedP95LogResidual: null
     };
   }
-  const lengthDesirability = getConstructionGuidanceBandScore(prediction.length, preferences.length, getProductionLengthThresholds());
-  const difficultyDesirability = getConstructionGuidanceBandScore(prediction.difficulty, preferences.difficulty, getDifficultyThresholds());
+  // Several picked bands: the fit to the nearest one (the best of them).
+  const lengthDesirability = getConstructionGuidanceBandScore(
+    prediction.length,
+    getNearestTargetBandForLog(preferences, "length", prediction.length?.logPrediction, getProductionLengthThresholds()),
+    getProductionLengthThresholds()
+  );
+  const difficultyDesirability = getConstructionGuidanceBandScore(
+    prediction.difficulty,
+    getNearestTargetBandForLog(preferences, "difficulty", prediction.difficulty?.logPrediction, getDifficultyThresholds()),
+    getDifficultyThresholds()
+  );
   const structuralSuccessModifier = Number.isFinite(prediction.structuralSuccessProbability)
     ? 0.55 + prediction.structuralSuccessProbability * 0.45
     : 1;
@@ -526,9 +539,15 @@ export function getConstructionGuidanceGrossMismatch(prediction, preferences = {
   if (!prediction || !(preferences.generationGuidanceFeedback?.observations > 0)) {
     return { abort: false, mismatches: [] };
   }
-  const mismatches = Object.entries(OUTCOMES).map(([outcome, thresholds]) => (
-    getConstructionGuidanceIntervalMismatch(prediction[outcome], targetPreference(preferences, outcome), thresholds(), outcome)
-  )).filter(Boolean);
+  // Several picked bands: a mismatch only when the interval misses all of them.
+  const mismatches = Object.entries(OUTCOMES).map(([outcome, thresholds]) => {
+    const preference = targetPreference(preferences, outcome);
+    const picked = preference !== "any" && preferences[`${outcome}Targets`]?.length > 1
+      ? preferences[`${outcome}Targets`]
+      : [preference];
+    const perBand = picked.map((band) => getConstructionGuidanceIntervalMismatch(prediction[outcome], band, thresholds(), outcome));
+    return perBand.every(Boolean) ? perBand[0] : null;
+  }).filter(Boolean);
   return { abort: mismatches.length > 0, mismatches };
 }
 
@@ -660,7 +679,6 @@ export function getConstructionGuidanceVariantTilts(calibration, preferences = {
   const gaps = {};
   const variances = {};
   for (const outcome of outcomes) {
-    const centre = getLogBandCentre(OUTCOMES[outcome](), preferences[outcome]);
     const predictions = [];
     for (const boardCount of calibration.domain.boardCounts) {
       for (const flagCount of calibration.domain.flagCounts) {
@@ -670,6 +688,14 @@ export function getConstructionGuidanceVariantTilts(calibration, preferences = {
         if (prediction) predictions.push(prediction[outcome].logPrediction);
       }
     }
+    // Several picked bands: the centre of the one nearest to the mean prediction.
+    const meanPrediction = predictions.length
+      ? predictions.reduce((sum, value) => sum + value, 0) / predictions.length
+      : NaN;
+    const centre = getLogBandCentre(
+      OUTCOMES[outcome](),
+      getNearestTargetBandForLog(preferences, outcome, meanPrediction, OUTCOMES[outcome]())
+    );
     if (!predictions.length || !Number.isFinite(centre)) return null;
     gaps[outcome] = centre - predictions.reduce((sum, value) => sum + value, 0) / predictions.length;
     variances[outcome] = Math.max(1e-4, models[outcome].evidence.heldOutRmse ** 2);

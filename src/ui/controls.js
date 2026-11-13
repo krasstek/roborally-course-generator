@@ -38,6 +38,7 @@ import {
   variantIsAvailable
 } from "../generation/variant-availability.js";
 import { showToast } from "./toast.js";
+import { TARGET_BAND_ORDER, formatTargetSelection, parseTargetSelection } from "../generation/target-selection.js";
 
 export function createVariantRuleNameElement(variant) {
   const nameEl = document.createElement("div");
@@ -952,6 +953,11 @@ export function cycleVariantControlState(variantId) {
 }
 
 export function pageGetAvailableConcretePreferenceValues(selectId) {
+  // Difficulty / Length pickers: every band offered by the picker.
+  const pickerInputs = getTargetPickerInputs(selectId);
+  if (pickerInputs.length) {
+    return pickerInputs.filter((inputEl) => !inputEl.disabled).map((inputEl) => inputEl.value);
+  }
   const select = document.getElementById(selectId);
   if (!select) {
     return [];
@@ -1020,8 +1026,10 @@ export function applyPreferencesToControls(preferences) {
   } = normalizeForcedVariantPreferenceConflicts(preferences);
 
   document.getElementById("player-count").value = String(normalizedPreferences.playerCount ?? 4);
-  document.getElementById("difficulty").value = normalizedPreferences.difficulty ?? "any";
-  document.getElementById("length").value = normalizedPreferences.length ?? "any";
+  document.getElementById("difficulty").value = formatTargetSelection(normalizedPreferences.difficulty ?? "any", "difficulty");
+  document.getElementById("length").value = formatTargetSelection(normalizedPreferences.length ?? "any", "length");
+  syncTargetPickerFromValue("difficulty");
+  syncTargetPickerFromValue("length");
   const startBalanceEl = document.getElementById("start-balance");
   if (startBalanceEl) {
     startBalanceEl.value = normalizeStartBalance(normalizedPreferences.startBalance);
@@ -1269,4 +1277,56 @@ export function installFieldHelp() {
       buttonEl.setAttribute("aria-expanded", String(!helpEl.hidden));
     });
   });
+}
+
+// Difficulty and Length pickers: checkboxes in a picker like Sets; a hidden
+// input with the same id keeps the saved value ("any", "hard" or
+// "moderate,hard"; target-selection.js) so the rest of the page reads it as before.
+const TARGET_SUMMARY_LABELS = {
+  difficulty: { easy: "Beginner", moderate: "Intermediate", hard: "Advanced", brutal: "Robots. Must. Die." },
+  length: { short: "Short", moderate: "Medium", long: "Long", epic: "Epic" }
+};
+
+function getTargetPickerInputs(axis) {
+  return [...document.querySelectorAll(`[data-target-axis="${axis}"] input[type="checkbox"]`)];
+}
+
+function updateTargetPickerSummary(axis) {
+  const summaryEl = document.getElementById(`${axis}-summary`);
+  if (!summaryEl) return;
+  const picked = parseTargetSelection(document.getElementById(axis)?.value, axis);
+  const labels = picked.map((band) => TARGET_SUMMARY_LABELS[axis][band]);
+  // Closed picker: the name when one is picked, otherwise a count (as Sets);
+  // none or all picked reads "Any".
+  summaryEl.textContent = !picked.length || picked.length === TARGET_BAND_ORDER[axis].length
+    ? "Any"
+    : picked.length === 1
+      ? labels[0]
+      : `${picked.length} selected`;
+  summaryEl.title = picked.length ? labels.join(", ") : "Any";
+}
+
+export function syncTargetPickerFromValue(axis) {
+  const picked = new Set(parseTargetSelection(document.getElementById(axis)?.value, axis));
+  getTargetPickerInputs(axis).forEach((inputEl) => {
+    inputEl.checked = picked.has(inputEl.value);
+  });
+  updateTargetPickerSummary(axis);
+}
+
+export function installTargetPickers() {
+  for (const axis of Object.keys(TARGET_BAND_ORDER)) {
+    getTargetPickerInputs(axis).forEach((inputEl) => {
+      inputEl.addEventListener("change", () => {
+        const hiddenEl = document.getElementById(axis);
+        if (!hiddenEl) return;
+        hiddenEl.value = formatTargetSelection(
+          getTargetPickerInputs(axis).filter((entry) => entry.checked).map((entry) => entry.value),
+          axis
+        );
+        updateTargetPickerSummary(axis);
+      });
+    });
+    syncTargetPickerFromValue(axis);
+  }
 }

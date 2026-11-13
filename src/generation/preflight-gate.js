@@ -5,6 +5,7 @@
 // mode's threshold stop there, before full routing, which is where most of a
 // rejected attempt's time goes. The features must match tools/preflight-fit.R.
 import { getDifficultyThresholds, getProductionLengthThresholds } from "./targets.js";
+import { getNearestTargetBandForLog } from "./target-selection.js";
 
 // Chance below which an attempt stops after the preflight. Fit 2026-11-09
 // (900 attempts, out-of-fold): 0.02 stops ~47% of attempts and saves ~31% of
@@ -76,14 +77,18 @@ export function evaluatePreflightGate(gate, inputs) {
   // not hold the course to it (targetGuidanceOnly...), so it is never missed.
   features.gap_d = preferences.targetGuidanceOnlyDifficulty
     ? 0
-    : bandGap(predictedDifficulty, getDifficultyThresholds()[preferences.difficulty]);
-  // As in tools/preflight-fit.R, the short band is open below.
-  const lengthBand = getProductionLengthThresholds()[preferences.length];
+    : bandGap(predictedDifficulty, getDifficultyThresholds()[
+      getNearestTargetBandForLog(preferences, "difficulty", predictedDifficulty, getDifficultyThresholds())
+    ]);
+  // As in tools/preflight-fit.R, the short band is open below. Several picked
+  // bands: the gap to the nearest one.
+  const lengthBandId = getNearestTargetBandForLog(preferences, "length", predictedLength, getProductionLengthThresholds());
+  const lengthBand = getProductionLengthThresholds()[lengthBandId];
   features.gap_l = preferences.targetGuidanceOnlyLength
     ? 0
     : bandGap(
       predictedLength,
-      lengthBand && preferences.length === "short" ? [0, lengthBand[1]] : lengthBand
+      lengthBand && lengthBandId === "short" ? [0, lengthBand[1]] : lengthBand
     );
   const logit = linear(gate.acceptable, features);
   if (!Number.isFinite(logit)) return null;

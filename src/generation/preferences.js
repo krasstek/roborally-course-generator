@@ -2,6 +2,7 @@
 import { titleCaseWords } from "./labels.js";
 import { getAvailableConcretePreferenceValues } from "./environment.js";
 import { generationRandom } from "./random.js";
+import { resolveTargetSelection } from "./target-selection.js";
 
 export function getTuningDifficulty(difficultyPreference) {
   return difficultyPreference === "brutal" ? "hard" : (difficultyPreference ?? "moderate");
@@ -175,6 +176,17 @@ export function resolveAnyPreferencesForGeneration(preferences = {}) {
   const resolution = {};
 
   for (const [key, selectId] of [["difficulty", "difficulty"], ["length", "length"]]) {
+    // Several bands picked: generation tunes for one drawn from the pick and
+    // accepts a course in any of them (target-selection.js).
+    const multi = resolveTargetSelection(effectivePreferences, key, (pool) => pool[
+      Math.min(pool.length - 1, Math.floor(generationRandom() * pool.length))
+    ]);
+    if (multi) {
+      effectivePreferences[key] = multi.concrete;
+      effectivePreferences[`${key}Targets`] = multi.targets;
+      resolution[key] = multi.concrete;
+      continue;
+    }
     if (effectivePreferences[key] !== "any") {
       continue;
     }
