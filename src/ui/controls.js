@@ -1294,18 +1294,14 @@ function getTargetPickerInputs(axis) {
 function updateTargetPickerSummary(axis) {
   const summaryEl = document.getElementById(`${axis}-summary`);
   if (!summaryEl) return;
-  const order = TARGET_BAND_ORDER[axis];
   const picked = parseTargetSelection(document.getElementById(axis)?.value, axis);
   const labels = picked.map((band) => TARGET_SUMMARY_LABELS[axis][band]);
-  const contiguous = picked.length > 1 &&
-    order.indexOf(picked[picked.length - 1]) - order.indexOf(picked[0]) === picked.length - 1;
+  // Closed picker: the name when one is picked, otherwise a count (as Sets).
   summaryEl.textContent = !picked.length
     ? "Any"
     : picked.length === 1
       ? labels[0]
-      : contiguous
-        ? `${labels[0]} – ${labels[labels.length - 1]}`
-        : `${picked.length} picked`;
+      : `${picked.length} selected`;
   summaryEl.title = picked.length ? labels.join(", ") : "Any";
 }
 
