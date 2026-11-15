@@ -1,4 +1,4 @@
-const APP_VERSION = "20261113230608";
+const APP_VERSION = "20261114092202";
 const STATIC_CACHE = `roborally-static-${APP_VERSION}`;
 const RUNTIME_CACHE = `roborally-runtime-${APP_VERSION}`;
 
@@ -122,6 +122,7 @@ const VERSIONED_ASSETS = [
   "./data/blueprint.json",
   "./data/bounce-house.json",
   "./data/cactus.json",
+  "./data/canyon.json",
   "./data/chasm.json",
   "./data/check-in.json",
   "./data/circles.json",
@@ -193,9 +194,13 @@ const VERSIONED_ASSETS = [
   "./data/merry-go-round.json",
   "./data/mine.json",
   "./data/misdirection.json",
+  "./data/open-circuit.json",
+  "./data/pinwheel.json",
+  "./data/pit-row.json",
   "./data/portal-palace.json",
   "./data/pushy.json",
   "./data/reactor-core.json",
+  "./data/reactor-leak.json",
   "./data/renegade-run.json",
   "./data/sampler.json",
   "./data/shake-n-bake.json",
