@@ -166,7 +166,8 @@ export function formatExpansionName(expansionId) {
     "contamination": "Contamination",
     "turn-and-burn": "Turn & Burn",
     "transformers": "Robo Rally: Transformers",
-    "rr-dice": "Robo Rally Dice"
+    "rr-dice": "Robo Rally Dice",
+    "rr-2016": "Robo Rally (2016)"
   };
 
   return labels[expansionId] ?? titleCaseWords(expansionId);

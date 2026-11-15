@@ -63,7 +63,7 @@ const BASE = Object.freeze({
 
 const ALL_EXPANSIONS = [
   "roborally", "rr-dice", "30th-anniversary", "master-builder",
-  "thrills-and-spills", "chaos-and-carnage", "wet-and-wild", "contamination", "turn-and-burn"
+  "thrills-and-spills", "chaos-and-carnage", "wet-and-wild", "contamination", "turn-and-burn", "rr-2016"
 ];
 
 const CASES = [

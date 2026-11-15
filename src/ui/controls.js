@@ -890,6 +890,10 @@ export function updateExpansionSummary() {
     enabled.push(formatExpansionName("transformers"));
   }
 
+  if (document.getElementById("expansion-rr-2016").checked) {
+    enabled.push(formatExpansionName("rr-2016"));
+  }
+
   summaryEl.textContent = `${enabled.length} selected`;
   summaryEl.title = enabled.length ? enabled.join(", ") : "None";
   updateVariantAvailability();
@@ -1009,7 +1013,8 @@ export function getPreferencesFromControls() {
       "wet-and-wild": document.getElementById("expansion-wet-and-wild").checked,
       "contamination": document.getElementById("expansion-contamination").checked,
       "turn-and-burn": document.getElementById("expansion-turn-and-burn").checked,
-      "transformers": document.getElementById("expansion-transformers").checked
+      "transformers": document.getElementById("expansion-transformers").checked,
+      "rr-2016": document.getElementById("expansion-rr-2016").checked
     },
     allowedVariantRules: {
       ...Object.fromEntries(
@@ -1069,6 +1074,7 @@ export function applyPreferencesToControls(preferences) {
   document.getElementById("expansion-contamination").checked = normalizedPreferences.selectedExpansions?.["contamination"] ?? false;
   document.getElementById("expansion-turn-and-burn").checked = normalizedPreferences.selectedExpansions?.["turn-and-burn"] ?? false;
   document.getElementById("expansion-transformers").checked = normalizedPreferences.selectedExpansions?.["transformers"] ?? false;
+  document.getElementById("expansion-rr-2016").checked = normalizedPreferences.selectedExpansions?.["rr-2016"] ?? false;
   VARIANT_DEFINITIONS.forEach((variant) => {
     if (variant.id === "actFast") {
       return;

@@ -316,7 +316,7 @@ export function updateSetupSummary(scenario) {
     fairnessAcceptance?.active && fairnessOverflowRE > 1e-9
   );
   const fairnessOverflowSentence = fairnessOverflowWarning
-    ? ` Starting positions are ${fairnessAcceptance?.ordinaryAcceptable ? "slightly" : "more"} uneven than the usual balance range for a course this length.`
+    ? ` Starting positions are ${fairnessAcceptance?.ordinaryAcceptable ? "slightly more" : "more"} uneven than the usual balance range for a course this length.`
     : "";
   const forcedEconomyEffect = presentationMetrics?.forcedEconomyEffect ?? null;
   const forcedEconomyNoEffect = Boolean(
