@@ -106,9 +106,8 @@ const has = (card, tag) => card.tags.includes(tag);
 
 // One game's random setup (which cards pay off, deck order), shared by every
 // variant compared on it. Per-card values are fixed per game.
-function dealGame(gameIndex) {
+function dealGame(gameIndex, w = SETTINGS.disruptionWeight) {
   const rng = mulberry32(SETTINGS.seed + gameIndex * 7919);
-  const w = SETTINGS.disruptionWeight;
   const cards = DECK.map((card) => {
     const pays = rng() < (has(card, "c") ? SETTINGS.payoffCourseSpecific : SETTINGS.payoff);
     const weight = (has(card, "d") ? w : 1) * (has(card, "poor") ? SETTINGS.poorCardFactor : 1);
@@ -214,11 +213,32 @@ function playGame(cards, energyBudget, turns, event = null) {
 }
 
 const games = Array.from({ length: SETTINGS.games }, (_, index) => dealGame(index));
-function expectedValue(energyBudget, turns, event = null) {
+function expectedValue(energyBudget, turns, event = null, deals = games) {
   let total = 0;
-  for (const cards of games) total += playGame(cards, energyBudget, turns, event);
-  return total / games.length;
+  for (const cards of deals) total += playGame(cards, energyBudget, turns, event);
+  return total / deals.length;
 }
+
+// Course disruption: Energy's worth on a course whose disruption cards are worth
+// w times the average (w = 0, 1, 2), relative to the average course. Measured as
+// the total worth of +1 Energy over races of 6-12 turns, turns and 0-9 Energy
+// received; the app interpolates linearly between these points.
+function totalEnergyWorth(deals) {
+  let total = 0;
+  for (let turns = 6; turns <= 12; turns += 2) {
+    for (let energy = 0; energy <= 9; energy += 3) {
+      const base = expectedValue(energy, turns, null, deals);
+      for (let turn = 1; turn <= turns; turn += 2) {
+        total += expectedValue(energy, turns, { kind: "energy", turn }, deals) - base;
+      }
+    }
+  }
+  return total;
+}
+const disruptionDeals = (w) => Array.from({ length: 2000 }, (_, index) => dealGame(index, w));
+const averageWorth = totalEnergyWorth(disruptionDeals(1));
+const disruptionMultipliers = [0, 1, 2].map((w) => Number((totalEnergyWorth(disruptionDeals(w)) / averageWorth).toFixed(3)));
+process.stderr.write(`disruption multipliers ${disruptionMultipliers.join(" ")}\n`);
 
 const round = (value) => Number(Math.max(0, value).toFixed(4));
 // baseValue[turns][energy]: upgrade value of a race with this starting Energy.
@@ -281,6 +301,8 @@ export const ENERGY_GAIN_VALUE = ${JSON.stringify(energyValue)};
 export const UPGRADE_CARD_GAIN_VALUE = ${JSON.stringify(cardValue)};
 // Value of a free random upgrade installed at once at a turn: [turns][turn].
 export const FREE_UPGRADE_INSTALL_VALUE = ${JSON.stringify(installValue)};
+// Energy's worth on a course with disruption weight 0 / 1 / 2 (1 = average course).
+export const ENERGY_VALUE_DISRUPTION_MULTIPLIERS = Object.freeze(${JSON.stringify(disruptionMultipliers)});
 export const ENERGY_VALUE_TABLE_MAXIMA = Object.freeze({
   energy: ${maxOf(energyValue)},
   card: ${maxOf(cardValue)},
