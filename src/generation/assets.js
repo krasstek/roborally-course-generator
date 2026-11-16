@@ -115,6 +115,8 @@ export const PIECE_DATA_FILES = [
   "rr-2016-5b",
   "rr-2016-6a",
   "rr-2016-6b",
+  "rr-2016-start-a",
+  "rr-2016-start-b",
   "sampler",
   "shake-n-bake",
   "sidewinder",
