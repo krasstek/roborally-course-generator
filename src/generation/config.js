@@ -302,3 +302,9 @@ export const COMPETITIVE_DECISION_BASE_UNCERTAINTY_RE = 0.5;
 export const COMPETITIVE_DECISION_TRAFFIC_UNCERTAINTY_SHARE = 0.5;
 // Simulated drafts per course (deterministic seed).
 export const COMPETITIVE_DECISION_DRAFTS = 200;
+
+// Race length for valuing Energy and upgrades: the route's nominal turns times
+// the average forecast-uncertainty share (real races run ~17% longer than the
+// planned routes; user 2026-11-16). Applied where the length is derived from
+// route actions; lengths passed down from the preflight are already scaled.
+export const ENERGY_RACE_LENGTH_UNCERTAINTY_FACTOR = 1.17;

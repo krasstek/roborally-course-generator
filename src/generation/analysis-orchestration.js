@@ -9,6 +9,7 @@ import {
 import { applyCompetitiveStrategicBlocking } from "./competitive.js";
 import {
   COURSE_PREFLIGHT_DIFFICULTY_MARGIN,
+  ENERGY_RACE_LENGTH_UNCERTAINTY_FACTOR,
   COURSE_PREFLIGHT_LATER_MAX_ACTIONS,
   COURSE_PREFLIGHT_LENGTH_MARGIN,
   COURSE_PREFLIGHT_OPENING_MAX_ACTIONS,
@@ -282,7 +283,7 @@ export function buildRouteAwareBatteryScoringOptions(coursePreflight, options = 
   const config = getRouteEnergyEconomyConfig(options);
   const horizonActions = Number(coursePreflight?.sequence?.summary?.totalActions);
   const measuredHorizonTurns = Number.isFinite(horizonActions) && horizonActions > 0
-    ? horizonActions / config.registersPerTurn
+    ? (horizonActions / config.registersPerTurn) * ENERGY_RACE_LENGTH_UNCERTAINTY_FACTOR
     : 0;
   const registerSamples = [];
   const addRoute = (route) => {
