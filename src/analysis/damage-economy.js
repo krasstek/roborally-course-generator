@@ -671,10 +671,18 @@ export function getDamageEconomyTelemetrySnapshot() {
 export const DAMAGE_ECONOMY_RELIEF_TIMING_ALLOWANCE = Object.freeze([
   0.08, 0.30, 0.65, 0.95, 1.00
 ]);
-export const DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT = 2;
-// v49fh: beginning a register on a Randomizer surrenders the same amount of
-// control as one SPAM play. It enters the SAME turn-level nonlinear clog curve;
-// it is not a standalone feature-score difficulty bonus.
+// Measured 2026-11-16 (scratch study: a random program card swapped into
+// register 1..5 of 209 real route turns on the golden courses, the rest of the
+// turn played as planned, then the planned and the disturbed end-of-turn states
+// re-searched): without reboots a random card cost 4.3 / 4.4 / 2.7 / 2.4 / 1.9 RE
+// by register, about 1.8x the earlier weights (2 down to 1 on open floor) with
+// the same early-register slope. So every SPAM-play weight below is the earlier
+// one x 1.8. Reboots it causes are a separate term (DAMAGE_ECONOMY_RANDOM_CARD_*).
+export const DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT = 3.6;
+// A Randomizer start is the same event as a SPAM play (a random card in that
+// register) and uses the same weight by register and board
+// (getDamageEconomySpamPlayClogWeight; user 2026-11-16). This constant is only
+// the open-floor register-1 value used where no register is known.
 export const DAMAGE_ECONOMY_RANDOMIZER_CLOG_WEIGHT = DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT;
 export const DAMAGE_ECONOMY_RELIEF_FORCED_ROTATION_PENALTY = 0.15;
 export const DAMAGE_ECONOMY_RELIEF_FORCED_MOVEMENT_PENALTY = 0.12;
@@ -713,8 +721,34 @@ export const DAMAGE_ECONOMY_CLOG_RE_BY_COUNT = Object.freeze([0, 1, 2.2, 3.6, 5.
 // Together they span the full SPAM play weight (register 1, open floor) down to
 // a floor (register 5 facing a wall). Randomizer registers are already random,
 // so SPAM shed there adds no control loss of its own.
-export const DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT_HARMLESS = 0.5;
-export const DAMAGE_ECONOMY_SPAM_PLAY_DISPLACEMENT_WEIGHT = 1;
+export const DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT_HARMLESS = 0.9;
+export const DAMAGE_ECONOMY_SPAM_PLAY_DISPLACEMENT_WEIGHT = 1.8;
+// Chance that a random card in a register leads to a reboot before the turn ends
+// (into a pit or off the course, directly or as the planned cards run on from
+// the wrong square): 1 - exp(-(base + perLater x registers left after it +
+// perExposure x reboot exposure of the planned squares from it to the turn's
+// end, getRebootExposureSum)). Fitted 2026-11-16 on 2,620 random-card events
+// over every turn of the golden courses' first legs (13% in register 1 far from
+// any pit, ~25% next to pits in any register).
+export const DAMAGE_ECONOMY_RANDOM_CARD_REBOOT_HAZARD = Object.freeze({
+  base: 0.015,
+  perLaterRegister: 0.03,
+  perExposure: 0.08
+});
+// A reboot surrenders the rest of the turn and deals two damage cards (~2.9 RE
+// measured for the damage alone, plus ~2-3 lost registers): about 3 clog units
+// on the clog curve's steep part.
+export const DAMAGE_ECONOMY_REBOOT_CLOG_LOAD = 3;
+
+export function getDamageEconomyRandomCardRebootChance(register, restOfTurnExposure = 0) {
+  const laterRegisters = clamp(REGISTER_COUNT - (Number(register) || REGISTER_COUNT), 0, REGISTER_COUNT - 1);
+  const hazard = DAMAGE_ECONOMY_RANDOM_CARD_REBOOT_HAZARD;
+  return 1 - Math.exp(-(
+    hazard.base +
+    hazard.perLaterRegister * laterRegisters +
+    hazard.perExposure * Math.max(0, Number(restOfTurnExposure) || 0)
+  ));
+}
 // Board safety reaches 1 at this net bonus (e.g. an adjacent wall plus a
 // conveyor ride); hazards and forced motion pull it back to 0.
 export const DAMAGE_ECONOMY_SPAM_PLAY_FULL_BOARD_SAFETY = 0.5;
@@ -730,7 +764,7 @@ export function getDamageEconomySpamPlayBoardSafety(reliefProfile) {
   return clamp(netBonus / DAMAGE_ECONOMY_SPAM_PLAY_FULL_BOARD_SAFETY, 0, 1);
 }
 
-export function getDamageEconomySpamPlayClogWeight(register, reliefProfile) {
+export function getDamageEconomySpamPlayClogWeight(register, reliefProfile, restOfTurnExposure = 0) {
   const laterRegisters = clamp(REGISTER_COUNT - (Number(register) || REGISTER_COUNT), 0, REGISTER_COUNT - 1);
   const chaos =
     (DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT - DAMAGE_ECONOMY_SPAM_PLAY_DISPLACEMENT_WEIGHT) *
@@ -738,7 +772,17 @@ export function getDamageEconomySpamPlayClogWeight(register, reliefProfile) {
   const displacement = DAMAGE_ECONOMY_SPAM_PLAY_DISPLACEMENT_WEIGHT -
     (DAMAGE_ECONOMY_SPAM_PLAY_DISPLACEMENT_WEIGHT - DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT_HARMLESS) *
     getDamageEconomySpamPlayBoardSafety(reliefProfile);
-  return chaos + displacement;
+  const reboot = DAMAGE_ECONOMY_REBOOT_CLOG_LOAD *
+    getDamageEconomyRandomCardRebootChance(register, restOfTurnExposure);
+  return chaos + displacement + reboot;
+}
+
+// A turn's Randomizer clog: each Randomizer start weighs like a SPAM play in
+// that register (its relief profile has no board safety, so displacement is full).
+export function getDamageEconomyTurnRandomizerClogLoad(turnRecords = []) {
+  return turnRecords.reduce((sum, record) => sum + (record?.randomizerAtRegisterStart
+    ? getDamageEconomySpamPlayClogWeight(record.register, record.reliefProfile, record.restOfTurnExposure)
+    : 0), 0);
 }
 
 // Plans one turn's SPAM plays at programming time. Forced plays (too few
@@ -758,7 +802,11 @@ export function planDamageEconomyTurnSpamRelief(
   const registers = (turnRecords || []).map((record, order) => ({
     absoluteAction: record.absoluteAction,
     order,
-    clogWeight: getDamageEconomySpamPlayClogWeight(record?.register, record?.reliefProfile),
+    clogWeight: getDamageEconomySpamPlayClogWeight(
+      record?.register,
+      record?.reliefProfile,
+      record?.restOfTurnExposure
+    ),
     randomizer: Boolean(record?.randomizerAtRegisterStart),
     opportunity: Math.max(
       0,
@@ -908,7 +956,10 @@ export function getDamageEconomyCombinedClogSummary(
   forcedSpamClogWeight = DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT,
   electiveSpamClogWeight = DAMAGE_ECONOMY_SPAM_PLAY_CLOG_WEIGHT,
   // Deterministic extra clog this turn (Transformers mines: 1 per entry).
-  extraClogLoad = 0
+  extraClogLoad = 0,
+  // The turn's Randomizer clog by register (getDamageEconomyTurnRandomizerClogLoad);
+  // without it every start counts at the open-floor register-1 weight.
+  randomizerClogLoad = null
 ) {
   const joint = Array.isArray(forcedSpamHaywireJointDistribution) &&
     forcedSpamHaywireJointDistribution.length
@@ -922,8 +973,9 @@ export function getDamageEconomyCombinedClogSummary(
     0,
     Math.floor(Number(randomizerStartCount) || 0)
   );
-  const safeRandomizerClogLoad =
-    safeRandomizerStartCount * DAMAGE_ECONOMY_RANDOMIZER_CLOG_WEIGHT;
+  const safeRandomizerClogLoad = Number.isFinite(randomizerClogLoad)
+    ? Math.max(0, randomizerClogLoad)
+    : safeRandomizerStartCount * DAMAGE_ECONOMY_RANDOMIZER_CLOG_WEIGHT;
   const spamPlayCountDistribution = Array(REGISTER_COUNT + 1).fill(0);
   const controlClogLoadProbability = new Map();
   let expectedSpamPlayInitiations = 0;
@@ -1927,7 +1979,8 @@ export function replayDamageEconomyShutdownEquivalentScore({
       turnRandomizerStarts,
       reliefPlan.forcedClogWeight,
       reliefPlan.electiveClogWeight,
-      turnRecords.reduce((sum, record) => sum + (record.realized?.mineDamageUnits || 0), 0)
+      turnRecords.reduce((sum, record) => sum + (record.realized?.mineDamageUnits || 0), 0),
+      getDamageEconomyTurnRandomizerClogLoad(turnRecords)
     );
     const turnDamageEconomyRegisterEquivalents =
       programming.spamSupplyRegisterEquivalents + combinedClog.clogRegisterEquivalents;

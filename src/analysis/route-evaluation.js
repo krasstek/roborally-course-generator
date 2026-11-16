@@ -30,13 +30,16 @@ import {
   getDamageEconomyRegisterReliefProfile,
   getDamageEconomyReliefOpportunityByAbsoluteAction,
   getDamageEconomySelectedProgramTurns,
+  getDamageEconomySpamPlayClogWeight,
   getDamageEconomyTelemetrySnapshot,
+  getDamageEconomyTurnRandomizerClogLoad,
   getDamageEconomyVariantProfile,
   isDamageEconomyRandomizerAtRegisterStart,
   isDamageEconomyRepairStationTile,
   planDamageEconomyTurnSpamRelief,
   replayDamageEconomyShutdownEquivalentScore
 } from "./damage-economy.js";
+import { getRebootExposureSum } from "./movement.js";
 import {
   getEnergonContactSquares,
   getInitialRouteEnergyShadowReserve,
@@ -307,6 +310,16 @@ export function summarizeDamageEconomyFoundationForRoute(
   });
   for (const records of recordsByTurn.values()) {
     records.sort((a, b) => a.absoluteAction - b.absoluteAction);
+    // Reboot exposure of the planned squares from each register to the turn's
+    // end: how likely a random card there is to end in a reboot
+    // (getDamageEconomyRandomCardRebootChance).
+    let exposureAfter = 0;
+    for (let index = records.length - 1; index >= 0; index -= 1) {
+      const transition = records[index].transition;
+      if (transition?.to) exposureAfter += getRebootExposureSum(tileMap, transition.to, options);
+      records[index].restOfTurnExposure = exposureAfter +
+        (transition?.from ? getRebootExposureSum(tileMap, transition.from, options) : 0);
+    }
   }
 
   const maxRouteTurn = Math.max(
@@ -645,7 +658,7 @@ export function summarizeDamageEconomyFoundationForRoute(
         damageUnits: Number(combinedDamageUnits.toFixed(4)),
         randomizerAtRegisterStart: Boolean(randomizerAtRegisterStart),
         randomizerClogLoad: randomizerAtRegisterStart
-          ? DAMAGE_ECONOMY_RANDOMIZER_CLOG_WEIGHT
+          ? getDamageEconomySpamPlayClogWeight(register, reliefProfile, record?.restOfTurnExposure)
           : 0,
         reliefOpportunity: Number(reliefOpportunity.toFixed(4)),
         reliefInitiation: Number(reliefInitiation.toFixed(4)),
@@ -720,7 +733,8 @@ export function summarizeDamageEconomyFoundationForRoute(
       turnRandomizerStarts,
       reliefPlan.forcedClogWeight,
       reliefPlan.electiveClogWeight,
-      turnRecords.reduce((sum, record) => sum + (record.realized?.mineDamageUnits || 0), 0)
+      turnRecords.reduce((sum, record) => sum + (record.realized?.mineDamageUnits || 0), 0),
+      getDamageEconomyTurnRandomizerClogLoad(turnRecords)
     );
     const randomizerClogLoad = combinedClog.randomizerClogLoad;
     const randomizerForcedSpamOverlap =
