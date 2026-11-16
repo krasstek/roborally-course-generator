@@ -246,6 +246,12 @@
       "y": 2,
       "features": [
         {
+          "type": "ledge",
+          "sides": [
+            "N"
+          ]
+        },
+        {
           "type": "ramp",
           "dir": "N"
         }
@@ -541,6 +547,13 @@
       "x": 3,
       "y": 4,
       "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "S",
+            "E"
+          ]
+        },
         {
           "type": "ramp",
           "dir": "S"
@@ -1113,6 +1126,12 @@
       "y": 8,
       "features": [
         {
+          "type": "ledge",
+          "sides": [
+            "E"
+          ]
+        },
+        {
           "type": "ramp",
           "dir": "E"
         }
@@ -1126,6 +1145,12 @@
           "type": "belt",
           "dir": "W",
           "speed": 1
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "W"
+          ]
         },
         {
           "type": "ramp",
@@ -1208,6 +1233,12 @@
       "x": 8,
       "y": 9,
       "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "N"
+          ]
+        },
         {
           "type": "ramp",
           "dir": "N"

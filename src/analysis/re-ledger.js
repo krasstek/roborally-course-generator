@@ -122,9 +122,11 @@ export function transitionTouchesHazardousFlagFeature(tileMap, transition, optio
 }
 
 // Square-swap rules (src/generation/square-swaps.js) mark every square they
-// change with `swappedBy`; a step that starts on, passes or ends on one makes
-// that rule relevant this turn.
-function getSquareSwapRulesTouched(tileMap, transition) {
+// change with `swappedBy`; ramp rules act on ramp squares. A step that starts
+// on, passes or ends on such a square makes that rule relevant this turn.
+const RAMP_RULE_BY_FEATURE_TYPE = Object.freeze({ ramp: "steepRamps", jumpRamp: "turboRamps" });
+
+function getRuleSquaresTouched(tileMap, transition, options = {}) {
   const touched = new Set();
   if (!tileMap || !transition) return touched;
   const points = [
@@ -136,6 +138,8 @@ function getSquareSwapRulesTouched(tileMap, transition) {
     if (!Number.isFinite(point?.x) || !Number.isFinite(point?.y)) continue;
     for (const feature of tileMap.get(tileKey(point.x, point.y))?.features || []) {
       if (feature.swappedBy) touched.add(feature.swappedBy);
+      const rampRule = RAMP_RULE_BY_FEATURE_TYPE[feature.type];
+      if (rampRule && options[rampRule]) touched.add(rampRule);
     }
   }
   return touched;
@@ -172,7 +176,9 @@ export function getVariantMentalPlanningEventsForTransition(
     } else if (rule.trigger === "walled-in-relevant") {
       applicable = Boolean(mechanicContext?.walledInRelevant);
     } else if (rule.trigger === "square-swap-relevant") {
-      applicable = Boolean(mechanicContext?.squareSwapRulesTouched?.has(rule.variantId));
+      applicable = Boolean(mechanicContext?.ruleSquaresTouched?.has(rule.variantId));
+    } else if (rule.trigger === "ramp-rule-relevant") {
+      applicable = Boolean(mechanicContext?.ruleSquaresTouched?.has(rule.variantId));
     }
     if (!applicable) continue;
 
@@ -536,7 +542,7 @@ export function getRegisterEquivalentLedgerPlanningEventsForTransition(
   const walledInRelevant = Boolean(
     options.lessDeadlyGame && transition?.walledInRelevant
   );
-  const squareSwapRulesTouched = getSquareSwapRulesTouched(tileMap, transition);
+  const ruleSquaresTouched = getRuleSquaresTouched(tileMap, transition, options);
   events.push(...getVariantMentalPlanningEventsForTransition(
     options,
     damageEvent,
@@ -547,7 +553,7 @@ export function getRegisterEquivalentLedgerPlanningEventsForTransition(
       hazardousFlagRelevant,
       movingTargetTrackingRelevant,
       walledInRelevant,
-      squareSwapRulesTouched
+      ruleSquaresTouched
     }
   ));
 

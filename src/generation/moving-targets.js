@@ -1,5 +1,6 @@
 // Robo Rally Course Randomizer - Moving Targets: checkpoint traces along conveyors, re-entry points and per-register timelines
 import { getTilePenaltyForFeature } from "../../feature-weights.js";
+import { isRampOnlyLedge } from "../analysis/board-geometry.js";
 import { CARDINAL_DIRS, OPPOSITE_DIRS } from "./config.js";
 
 export function getTileBelt(tile) {
@@ -176,7 +177,7 @@ export function getMovingCheckpointTrace(tileMap, point, cache = null, options =
     }
 
     for (const feature of tile?.features || []) {
-      if (feature.type === "checkpoint" || feature.type === "wall" || feature.type === "belt" || feature.type === "battery" || feature.type === "homingMissile") {
+      if (feature.type === "checkpoint" || feature.type === "wall" || feature.type === "belt" || feature.type === "battery" || feature.type === "homingMissile" || isRampOnlyLedge(tile, feature)) {
         continue;
       }
       hazardLoad += getTilePenaltyForFeature(feature, {

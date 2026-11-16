@@ -223,6 +223,13 @@
           "turn": "right"
         },
         {
+          "type": "ledge",
+          "sides": [
+            "N",
+            "W"
+          ]
+        },
+        {
           "type": "ramp",
           "dir": "N"
         },
@@ -343,6 +350,13 @@
           "dir": "S",
           "speed": 1,
           "turn": "right"
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "N",
+            "E"
+          ]
         },
         {
           "type": "ramp",
@@ -760,7 +774,8 @@
         {
           "type": "ledge",
           "sides": [
-            "N"
+            "N",
+            "W"
           ]
         },
         {
@@ -793,6 +808,12 @@
           "type": "wall",
           "sides": [
             "W"
+          ]
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "E"
           ]
         },
         {
@@ -920,6 +941,12 @@
           ]
         },
         {
+          "type": "ledge",
+          "sides": [
+            "W"
+          ]
+        },
+        {
           "type": "ramp",
           "dir": "W"
         }
@@ -951,7 +978,8 @@
         {
           "type": "ledge",
           "sides": [
-            "S"
+            "S",
+            "E"
           ]
         },
         {
@@ -1308,6 +1336,13 @@
           "turn": "right"
         },
         {
+          "type": "ledge",
+          "sides": [
+            "W",
+            "S"
+          ]
+        },
+        {
           "type": "ramp",
           "dir": "W"
         },
@@ -1428,6 +1463,13 @@
           "dir": "W",
           "speed": 1,
           "turn": "right"
+        },
+        {
+          "type": "ledge",
+          "sides": [
+            "E",
+            "S"
+          ]
         },
         {
           "type": "ramp",
