@@ -24,7 +24,8 @@
         {
           "type": "ledge",
           "sides": [
-            "W"
+            "W",
+            "N"
           ]
         },
         {
@@ -38,6 +39,12 @@
       "y": 0,
       "features": [
         {
+          "type": "ledge",
+          "sides": [
+            "N"
+          ]
+        },
+        {
           "type": "ramp",
           "dir": "N"
         }
@@ -50,7 +57,8 @@
         {
           "type": "ledge",
           "sides": [
-            "E"
+            "E",
+            "N"
           ]
         },
         {
@@ -199,7 +207,8 @@
         {
           "type": "ledge",
           "sides": [
-            "W"
+            "W",
+            "N"
           ]
         },
         {
@@ -223,6 +232,12 @@
       "x": 11,
       "y": 1,
       "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "E"
+          ]
+        },
         {
           "type": "ramp",
           "dir": "E"
@@ -249,7 +264,8 @@
         {
           "type": "ledge",
           "sides": [
-            "S"
+            "S",
+            "W"
           ]
         },
         {
@@ -275,6 +291,12 @@
       "x": 6,
       "y": 2,
       "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "N"
+          ]
+        },
         {
           "type": "ramp",
           "dir": "N"
@@ -320,6 +342,12 @@
       "x": 11,
       "y": 2,
       "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "E"
+          ]
+        },
         {
           "type": "ramp",
           "dir": "E"
@@ -414,7 +442,8 @@
         {
           "type": "ledge",
           "sides": [
-            "S"
+            "S",
+            "E"
           ]
         },
         {
@@ -509,6 +538,12 @@
       "y": 4,
       "features": [
         {
+          "type": "ledge",
+          "sides": [
+            "S"
+          ]
+        },
+        {
           "type": "ramp",
           "dir": "S"
         }
@@ -550,7 +585,8 @@
         {
           "type": "ledge",
           "sides": [
-            "N"
+            "N",
+            "W"
           ]
         },
         {
@@ -712,7 +748,8 @@
         {
           "type": "ledge",
           "sides": [
-            "N"
+            "N",
+            "W"
           ]
         },
         {
@@ -761,6 +798,12 @@
       "x": 7,
       "y": 7,
       "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "N"
+          ]
+        },
         {
           "type": "ramp",
           "dir": "N"
@@ -814,6 +857,12 @@
       "x": 0,
       "y": 8,
       "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "W"
+          ]
+        },
         {
           "type": "ramp",
           "dir": "W"
@@ -908,7 +957,8 @@
         {
           "type": "ledge",
           "sides": [
-            "N"
+            "N",
+            "E"
           ]
         },
         {
@@ -924,7 +974,8 @@
         {
           "type": "ledge",
           "sides": [
-            "S"
+            "S",
+            "W"
           ]
         },
         {
@@ -954,6 +1005,12 @@
       "x": 2,
       "y": 9,
       "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "S"
+          ]
+        },
         {
           "type": "ramp",
           "dir": "S"
@@ -1012,6 +1069,12 @@
       "y": 9,
       "features": [
         {
+          "type": "ledge",
+          "sides": [
+            "E"
+          ]
+        },
+        {
           "type": "ramp",
           "dir": "E"
         }
@@ -1058,7 +1121,8 @@
         {
           "type": "ledge",
           "sides": [
-            "W"
+            "W",
+            "S"
           ]
         },
         {
@@ -1072,6 +1136,12 @@
       "y": 10,
       "features": [
         {
+          "type": "ledge",
+          "sides": [
+            "S"
+          ]
+        },
+        {
           "type": "ramp",
           "dir": "S"
         }
@@ -1081,6 +1151,12 @@
       "x": 7,
       "y": 10,
       "features": [
+        {
+          "type": "ledge",
+          "sides": [
+            "S"
+          ]
+        },
         {
           "type": "ramp",
           "dir": "S"
@@ -1121,6 +1197,12 @@
       "y": 10,
       "features": [
         {
+          "type": "ledge",
+          "sides": [
+            "S"
+          ]
+        },
+        {
           "type": "ramp",
           "dir": "S"
         }
@@ -1133,7 +1215,8 @@
         {
           "type": "ledge",
           "sides": [
-            "S"
+            "S",
+            "E"
           ]
         },
         {

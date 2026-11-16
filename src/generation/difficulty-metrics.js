@@ -530,6 +530,8 @@ export function computeRETurnVariantDifficultyAccounting(rawTurnRE, preferences 
   for (const swapId of SQUARE_SWAP_RULE_IDS) {
     if (preferences[swapId]) mechanical(swapId, "square swap: boards analysed with the swapped elements; once-per-turn rule-memory event when the route touches a changed square");
   }
+  if (preferences.steepRamps) mechanical("steepRamps", "movement: a ramp climb costs two extra moves; once-per-turn rule-memory event when the route touches a ramp");
+  if (preferences.turboRamps) mechanical("turboRamps", "movement: jumps one square longer; once-per-turn rule-memory event when the route touches a jump ramp");
   if (preferences.setToKill) mechanical(
     "setToKill",
     "robot-laser damage economy: two damage-card draws per successful main-laser hit"
@@ -1052,6 +1054,8 @@ export function computeVariantDifficultyAccounting(raw, preferences = {}, sequen
   for (const swapId of SQUARE_SWAP_RULE_IDS) {
     if (preferences[swapId]) mechanical(swapId, "square swap: boards analysed with the swapped elements; once-per-turn rule-memory event when the route touches a changed square");
   }
+  if (preferences.steepRamps) mechanical("steepRamps", "movement: a ramp climb costs two extra moves; once-per-turn rule-memory event when the route touches a ramp");
+  if (preferences.turboRamps) mechanical("turboRamps", "movement: jumps one square longer; once-per-turn rule-memory event when the route touches a jump ramp");
   if (preferences.setToKill) mechanical("setToKill", "robot-laser damage economy: double damage per hit");
   if (preferences.setToStun) mechanical("setToStun", "robot-laser damage economy: SPAM suppressed, Haywire unchanged");
   if (preferences.repairStations) mechanical("repairStations", "checkpoint repair route value");

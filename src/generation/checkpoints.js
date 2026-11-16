@@ -1,5 +1,6 @@
 // Robo Rally Course Randomizer - checkpoints: candidates, spacing expectations, Hazardous Checkpoints claimability, weighting and picking, flag overrides
 import { simulateAction } from "../../analyze.js";
+import { isRampOnlyLedge } from "../analysis/board-geometry.js";
 import { canMoveBetween } from "../analysis/movement.js";
 import { buildResolvedMap, placePiece } from "../../board.js";
 import { getEffectiveLaserDamage, getTilePenaltyForFeature } from "../../feature-weights.js";
@@ -333,7 +334,7 @@ export function getFlagCandidateTilePenalty(candidate, tileMap, difficulty, pref
   let penalty = 0;
 
   for (const feature of features) {
-    if (feature.type === "checkpoint" || feature.type === "battery" || feature.type === "wall" || feature.type === "homingMissile") {
+    if (feature.type === "checkpoint" || feature.type === "battery" || feature.type === "wall" || feature.type === "homingMissile" || isRampOnlyLedge(tile, feature)) {
       continue;
     }
 
@@ -401,7 +402,7 @@ export function getFlagCandidateAreaPenalty(candidate, tileMap, difficulty, pref
       }
 
       for (const feature of tile.features || []) {
-        if (feature.type === "checkpoint" || feature.type === "battery" || feature.type === "wall" || feature.type === "homingMissile") {
+        if (feature.type === "checkpoint" || feature.type === "battery" || feature.type === "wall" || feature.type === "homingMissile" || isRampOnlyLedge(tile, feature)) {
           continue;
         }
 

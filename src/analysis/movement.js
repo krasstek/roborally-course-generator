@@ -12,6 +12,7 @@ import {
   getFeatureDutyCycle,
   getGear,
   getJumpRamp,
+  getLedgeElevationDelta,
   getLedgeSides,
   getPortal,
   getPushes,
@@ -32,6 +33,7 @@ import {
   isFirePit,
   isOil,
   isPit,
+  isRampOnlyLedge,
   isWater,
   tileKey
 } from "./board-geometry.js";
@@ -151,6 +153,12 @@ export function getTilePenalty(
     // burden is counted by post-build mental RE. Do not also price the gear as
     // a generic tile hazard merely for existing.
     if (feature.type === "gear") {
+      continue;
+    }
+    // A ramp's own ledge (its uphill side, data since 2026-11-16) is a slope:
+    // the climb is simulated, and nothing falls there. Only other ledge sides
+    // on the square count as a ledge hazard, as before that data pass.
+    if (feature.type === "ledge" && isRampOnlyLedge(tile, feature)) {
       continue;
     }
     // v49ei: Homing Missile is an offensive opportunity for the entering robot.
@@ -694,13 +702,12 @@ export function canMoveBetween(
   }
 
   // Transformers: a building square is entered and left only through its
-  // doorways (a grandstand has none), and a jump ramp is entered only in its
-  // arrow direction. Conveyors and pushers obey both.
-  const toJumpRamp = getJumpRamp(toTile);
+  // doorways (a grandstand has none); conveyors and pushers obey this too. A
+  // jump ramp can be entered from any side (errata, user ruling 2026-11-06);
+  // only a programmed move along its arrow jumps (simulateProgrammedAction).
   if (
     isBuildingSideClosed(fromTile, dir) ||
-    isBuildingSideClosed(toTile, OPPOSITE[dir]) ||
-    (toJumpRamp && toJumpRamp.dir !== dir)
+    isBuildingSideClosed(toTile, OPPOSITE[dir])
   ) {
     return { ok: false, crash: false, offBoard: false };
   }
@@ -748,10 +755,10 @@ export function canMoveBetween(
     ledgeDamage: toLedges.has(OPPOSITE[dir]) && !hasRampForDir(toTile, OPPOSITE[dir])
       ? (isWater(toTile) ? 1 : 2)
       : 0,
-    // A ramp sits on the lower square and points uphill; its square carries no
-    // ledge on that side (data convention). Leaving through the ramp side is the
-    // climb, which costs one extra move for any programmed move (forward, back,
-    // drift); coming down is an ordinary step.
+    // A ramp sits on the lower square and points uphill. Leaving through the
+    // ramp side is the climb: one extra square of open floor for any programmed
+    // move (forward, back, drift), two under Steep Ramps (getRampClimbExtraMoves);
+    // coming down is an ordinary step.
     rampAscent: hasRampForDir(fromTile, dir)
   };
 }
@@ -972,7 +979,10 @@ export function moveOneStep(
     }
     : null;
 
-  if (mode === "manual" && moveCheck.ok && moveCheck.rampAscent && moveBudget !== null && moveBudget < 2) {
+  if (
+    mode === "manual" && moveCheck.ok && moveCheck.rampAscent && moveBudget !== null &&
+    moveBudget < 1 + getRampClimbExtraMoves(options)
+  ) {
     if (finishProgrammedStepPhase) finishProgrammedStepPhase("physicalMissProgramBlockedMs");
     return {
       state: cloneState(state),
@@ -1362,11 +1372,22 @@ export function resolveTeleporterMove(tileMap, state, action, options = {}) {
   return outcome;
 }
 
+// Extra moves a ramp climb costs on top of the step itself: rules as written
+// count it as one extra square of open floor; Steep Ramps makes it two, so
+// only a Move 3 started on the ramp square climbs (user 2026-11-16).
+export function getRampClimbExtraMoves(options = {}) {
+  return options.steepRamps ? 2 : 1;
+}
+
 // Transformers jump ramp: a programmed move that enters a ramp in its arrow
-// direction continues as many squares as it took to reach the ramp, flying
-// over everything (walls and robots included), and the card ends there. A
-// landing on a building continues until the robot clears it; a landing in a
-// pit or off the course reboots. Facing is unchanged.
+// direction continues as many squares as it actually moved to reach the ramp
+// (one more under Turbo Ramps; the caller passes the total), flying over
+// everything (walls and robots included), and the card ends there. A landing
+// on a building continues until the robot clears it; a landing in a pit or off
+// the course reboots; a landing on a portal goes through it as usual. A jump
+// that ends lower than it started takes the ledge fall damage once (no damage
+// when it ends on the same level or higher; user 2026-11-16). Facing is
+// unchanged.
 export function resolveJumpRampMove(tileMap, state, dir, squares, options = {}) {
   const delta = DIRS[dir];
   let steps = squares;
@@ -1377,13 +1398,30 @@ export function resolveJumpRampMove(tileMap, state, dir, squares, options = {}) 
     destination = { x: state.x + delta.dx * steps, y: state.y + delta.dy * steps };
     destinationTile = tileMap.get(tileKey(destination.x, destination.y));
   }
-  const traversed = [{ x: destination.x, y: destination.y, jump: true }];
+  const landing = { x: destination.x, y: destination.y, jump: true };
+  const traversed = [landing];
 
   if (!destinationTile || isPit(destinationTile) || hasActiveFeature(destinationTile, "trapdoor", options)) {
     return resolveCrashOrReboot(tileMap, state, destination, traversed, options, steps);
   }
 
-  const resolvedState = { x: destination.x, y: destination.y, facing: state.facing };
+  const ledgeDamage = getJumpLedgeDamage(tileMap, state, dir, steps, destinationTile);
+  // The damage models read it from the landing point (a jump is not a
+  // sequence of adjacent steps they could check for ledges).
+  if (ledgeDamage) landing.jumpLedgeDamage = ledgeDamage;
+
+  let resolvedState = { x: destination.x, y: destination.y, facing: state.facing };
+  let landingTile = destinationTile;
+  const portalDestination = resolvePortalDestination(tileMap, destination, options.portalMap ?? new Map());
+  if (portalDestination) {
+    resolvedState = { x: portalDestination.x, y: portalDestination.y, facing: state.facing };
+    landingTile = tileMap.get(tileKey(portalDestination.x, portalDestination.y));
+    traversed.push({ x: portalDestination.x, y: portalDestination.y, jump: true });
+    if (isPit(landingTile) || hasActiveFeature(landingTile, "trapdoor", options)) {
+      return resolveCrashOrReboot(tileMap, state, resolvedState, traversed, options, steps);
+    }
+  }
+
   return {
     state: resolvedState,
     blocked: false,
@@ -1391,18 +1429,35 @@ export function resolveJumpRampMove(tileMap, state, dir, squares, options = {}) 
     rebooted: false,
     traversed,
     conveyorSteps: [],
-    hazard: getTilePenalty(destinationTile, options) +
-      getActiveFlamethrowerEntryPenalty(destinationTile, options) +
-      getMineEntryPenalty(destinationTile, options) +
-      getTimedTraversalFragilityPenalty(destinationTile, options) +
+    hazard: getTilePenalty(landingTile, options) +
+      getActiveFlamethrowerEntryPenalty(landingTile, options) +
+      getMineEntryPenalty(landingTile, options) +
+      getTimedTraversalFragilityPenalty(landingTile, options) +
       getPitPressurePenalty(tileMap, resolvedState, options) +
-      getLedgePressurePenalty(tileMap, resolvedState, options),
+      getLedgePressurePenalty(tileMap, resolvedState, options) +
+      ledgeDamage,
     rebootPenalty: 0,
     distance: steps,
     forcedDistance: 0,
     spentMove: true,
     rampAscent: false
   };
+}
+
+// Fall damage for a jump: the level change summed over every ledge the jump
+// crosses; ending lower takes one fall (1 into water, else 2), however many
+// ledges it went down.
+function getJumpLedgeDamage(tileMap, state, dir, steps, landingTile) {
+  const delta = DIRS[dir];
+  let elevation = 0;
+  let fromTile = tileMap.get(tileKey(state.x, state.y));
+  for (let index = 1; index <= steps; index += 1) {
+    const toTile = tileMap.get(tileKey(state.x + delta.dx * index, state.y + delta.dy * index));
+    elevation += getLedgeElevationDelta(fromTile, toTile, dir);
+    fromTile = toTile;
+  }
+  if (elevation >= 0) return 0;
+  return isWater(landingTile) ? 1 : 2;
 }
 
 export function resolveConveyorPhase(
@@ -2138,12 +2193,12 @@ export function simulateAction(tileMap, startState, action, options = {}) {
         // The jump ends the card.
         remainingSteps = 0;
       } else {
-        remainingSteps -= 1 + (step.rampAscent ? 1 : 0);
+        remainingSteps -= 1 + (step.rampAscent ? getRampClimbExtraMoves(options) : 0);
         cardSquaresMoved += 1;
         const landedTile = tileMap.get(tileKey(state.x, state.y));
         const jumpRamp = getJumpRamp(landedTile);
         if (jumpRamp && jumpRamp.dir === stepDir) {
-          pendingJump = { dir: stepDir, squares: cardSquaresMoved };
+          pendingJump = { dir: stepDir, squares: cardSquaresMoved + (options.turboRamps ? 1 : 0) };
           remainingSteps = 1;
         } else if (isFirePit(landedTile)) {
           // Entering a fire pit stops the move.

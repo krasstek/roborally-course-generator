@@ -1,6 +1,6 @@
 // Robo Rally Course Randomizer - checkpoint (flag) area: approach directions and area scoring
 import { FLAG_APPROACH_WEIGHTS, getFlagAreaFeatureScore } from "../../feature-weights.js";
-import { getBelt, isPit, tileKey } from "./board-geometry.js";
+import { getBelt, isPit, isRampOnlyLedge, tileKey } from "./board-geometry.js";
 import { DIRS } from "./constants.js";
 import { canMoveBetween } from "./movement.js";
 import { isBatteryActive } from "./rule-options.js";
@@ -122,6 +122,8 @@ export function scoreFlagArea(tileMap, goal, options = {}) {
         // v49ei: a Homing Missile near a checkpoint is not board danger to the
         // robot that can activate it. Strategic value is route-owned instead.
         if (feature.type === "homingMissile") continue;
+        // A ramp's own ledge is a slope (data since 2026-11-16).
+        if (isRampOnlyLedge(tile, feature)) continue;
         const featureScore = getFlagAreaFeatureScore(feature, dist, {
           batteryActive: isBatteryActive(options),
           cuttingFloor: options.cuttingFloor,

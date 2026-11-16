@@ -404,6 +404,8 @@ const NEUTRAL_VARIANT_CHANCE = Object.freeze({
   spaceBridgeNetwork: 0.1,
   napalmDeath: 0.1,
   pistonCup: 0.1,
+  steepRamps: 0.1,
+  turboRamps: 0.1,
   repulsorOverdrive: 0.03,
   setToKill: 0.14,
   setToStun: 0.11,

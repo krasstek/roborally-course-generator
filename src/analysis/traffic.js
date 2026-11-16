@@ -5,6 +5,7 @@ import {
 } from "../../feature-weights.js";
 import {
   crossesLedgeBoundary,
+  isRampSlope,
   getBuilding,
   getJumpRamp,
   getLedgeElevationDelta,
@@ -208,7 +209,8 @@ export function hasLineOfSight(tileMap, from, to) {
         return false;
       }
 
-      if (crossesLedgeBoundary(fromTile, toTile, dir)) {
+      // Ramp ledges (2026-11-16 data) are slopes: line of sight as before.
+      if (crossesLedgeBoundary(fromTile, toTile, dir) && !isRampSlope(fromTile, toTile, dir)) {
         elevation += getLedgeElevationDelta(fromTile, toTile, dir);
         maxElevation = Math.max(maxElevation, elevation);
       }
@@ -230,7 +232,7 @@ export function hasLineOfSight(tileMap, from, to) {
       return false;
     }
 
-    if (crossesLedgeBoundary(fromTile, toTile, dir)) {
+    if (crossesLedgeBoundary(fromTile, toTile, dir) && !isRampSlope(fromTile, toTile, dir)) {
       elevation += getLedgeElevationDelta(fromTile, toTile, dir);
       maxElevation = Math.max(maxElevation, elevation);
     }

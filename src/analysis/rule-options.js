@@ -91,7 +91,10 @@ export const ROUTE_RULE_BOOLEAN_KEYS = Object.freeze([
   "batteryPitStops",
   "spaceBridgeNetwork",
   "napalmDeath",
-  "pistonCup"
+  "pistonCup",
+  // Ramp rules change movement (movement.js).
+  "steepRamps",
+  "turboRamps"
 ]);
 
 // Energy and upgrade economy settings, passed as given.

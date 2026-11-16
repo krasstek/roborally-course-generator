@@ -135,6 +135,12 @@ const SQUARE_SWAP_IMPACT = Object.freeze([
   { id: "pistonCup", types: ["push"], one: "pusher", many: "pushers" }
 ]);
 
+// Ramp rules (movement.js): counted on the course as printed.
+const RAMP_RULE_IMPACT = Object.freeze([
+  { id: "steepRamps", types: ["ramp"], one: "ramp", many: "ramps" },
+  { id: "turboRamps", types: ["jumpRamp"], one: "jump ramp", many: "jump ramps" }
+]);
+
 // The course's Energy spaces, in one list shared by the Special Rules texts;
 // the same feature types the energy model reads (energy-economy.js).
 const ENERGY_SPACE_KINDS = Object.freeze([
@@ -234,7 +240,7 @@ export function getVariantImpactSummary(scenario) {
   }
   // Square swaps count the printed elements they change (scenario.pieceMap is
   // the printed one; goalTileMap already carries the swap).
-  const activeSquareSwaps = SQUARE_SWAP_IMPACT.filter((entry) => scenario[entry.id]);
+  const activeSquareSwaps = [...SQUARE_SWAP_IMPACT, ...RAMP_RULE_IMPACT].filter((entry) => scenario[entry.id]);
   if (activeSquareSwaps.length) {
     const printedTileMap = buildResolvedMap(scenario.placements, scenario.pieceMap).tileMap;
     for (const entry of activeSquareSwaps) {
@@ -897,7 +903,7 @@ export function updateRulesNote(scenario) {
     notes.push("Repulsor Overdrive: repulsors push robots twice the full distance of the triggering Move card.");
   }
 
-  for (const entry of SQUARE_SWAP_IMPACT) {
+  for (const entry of [...SQUARE_SWAP_IMPACT, ...RAMP_RULE_IMPACT]) {
     if (scenario[entry.id]) {
       const variant = getVariantDefinition(entry.id);
       notes.push(`${variant?.label ?? entry.id}: ${variant?.description ?? ""}`);

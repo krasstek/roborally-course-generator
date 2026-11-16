@@ -56,6 +56,8 @@ export function getContextualPhysicalOptionSignature(options = {}) {
     options.lighterGame ? 1 : 0,
     options.routeAwareBatteryScoring ? 1 : 0,
     options.flamingOil ? 1 : 0,
+    options.steepRamps ? 1 : 0,
+    options.turboRamps ? 1 : 0,
     options.playerCount ?? "",
     rebootTokens,
     boardRects

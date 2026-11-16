@@ -1585,7 +1585,11 @@ export function getDamageEconomyRealizedDamageForTransition(
           : dx === 0 && dy === -1
             ? "N"
             : null;
-    if (!dir) continue;
+    if (!dir) {
+      // A jump ramp landing carries its own fall damage (resolveJumpRampMove).
+      ledgeDamageUnits += Number(to.jumpLedgeDamage) || 0;
+      continue;
+    }
     const toTile = tileMap.get(tileKey(to.x, to.y));
     if (
       toTile &&

@@ -271,6 +271,18 @@ export function hasRampForDir(tile, dir) {
   return getRamps(tile).some((feature) => feature.dir === dir);
 }
 
+// A ramp's own ledge (on its uphill side) is a slope, not a drop.
+export function isRampSlope(fromTile, toTile, dir) {
+  return hasRampForDir(fromTile, dir) || hasRampForDir(toTile, OPPOSITE[dir]);
+}
+
+// A ledge feature whose every side is a ramp of the same square: the ramp's
+// own ledge, which only matters once a checkpoint switches the ramp off.
+export function isRampOnlyLedge(tile, feature) {
+  const sides = feature?.sides || [];
+  return sides.length > 0 && sides.every((side) => hasRampForDir(tile, side));
+}
+
 export function crossesLedgeBoundary(fromTile, toTile, dir) {
   const fromLedges = getLedgeSides(fromTile);
   const toLedges = getLedgeSides(toTile);

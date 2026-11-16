@@ -41,6 +41,8 @@ const VARIANT_COMPLEXITY = {
   spaceBridgeNetwork: 1,
   napalmDeath: 1,
   pistonCup: 1,
+  steepRamps: 1,
+  turboRamps: 1,
   setToKill: 1,
   setToStun: 1,
   classicSharedDeck: 1,
@@ -444,6 +446,48 @@ const VARIANT_DEFINITION_ROWS = [
       reason: `${swap.label} needs at least one selected board with ${swap.reason.replace(/^Requires | in the selected sets\.$/g, "")}.`
     },
     applyBundle: applyBooleanField(swap.id)
+  })),
+  // Ramp rules (user 2026-11-16): they change movement itself, so they reach
+  // the route search as analysis options (movement.js).
+  ...[
+    {
+      id: "steepRamps",
+      label: "Steep Ramps",
+      description: "Climbing a ramp counts as two extra squares of open floor instead of one, so only a Move 3 that starts on the ramp square gets up. Jump ramps are not affected.",
+      featureType: "ramp",
+      reason: "Requires ramps in the selected sets.",
+      requirement: "Steep Ramps needs at least one selected board with a ramp."
+    },
+    {
+      id: "turboRamps",
+      label: "Turbo Ramps",
+      description: "A robot jumping off a jump ramp flies one square further than the squares it moved to reach the ramp.",
+      featureType: "jumpRamp",
+      reason: "Requires jump ramps in the selected sets.",
+      requirement: "Turbo Ramps needs at least one selected board with a jump ramp."
+    }
+  ].map((rule) => ({
+    id: rule.id,
+    label: rule.label,
+    category: VARIANT_CATEGORIES.factoryFloor,
+    controlId: `variant-${rule.id.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}`,
+    defaultState: "off",
+    description: rule.description,
+    cost: VARIANT_COMPLEXITY[rule.id],
+    complexityRationale: "One persistent rule changes how a board element moves robots.",
+    mentalEvent: {
+      cadence: "once-per-game-turn",
+      trigger: "ramp-rule-relevant",
+      eventType: `variant-rule:${rule.id}`,
+      rationale: "Remember once in a turn that the rule changes this ramp when the route enters, passes or ends on one."
+    },
+    availability: { type: "featureTypeAvailable", featureType: rule.featureType, reason: rule.reason },
+    constructionRequirement: {
+      type: "boardFeatureAnyOf",
+      featureTypes: [rule.featureType],
+      reason: rule.requirement
+    },
+    applyBundle: applyBooleanField(rule.id)
   })),
   {
     id: "setToKill",

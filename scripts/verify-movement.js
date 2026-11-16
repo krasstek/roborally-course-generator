@@ -106,7 +106,8 @@ function runCase(testCase) {
     y: result.to.y,
     facing: result.to.facing,
     turnedSteps: (result.conveyorSteps || []).filter((step) => step.turned).length,
-    rebooted: Boolean(result.rebooted)
+    rebooted: Boolean(result.rebooted),
+    jumpLedgeDamage: (result.traversed || []).reduce((sum, point) => sum + (point.jumpLedgeDamage || 0), 0)
   };
 
   const expected = testCase.expected;
@@ -114,7 +115,8 @@ function runCase(testCase) {
     actual.y === expected.y &&
     actual.facing === expected.facing &&
     actual.turnedSteps === expected.turnedSteps &&
-    actual.rebooted === (expected.rebooted ?? false);
+    actual.rebooted === (expected.rebooted ?? false) &&
+    actual.jumpLedgeDamage === (expected.jumpLedgeDamage ?? 0);
 
   return { pass, actual, expected, result };
 }
@@ -157,9 +159,10 @@ const FORWARD_3 = { id: "FORWARD_3", type: "move", relative: "forward", steps: 3
 const DRIFT_LEFT = { id: "DRIFT_LEFT", type: "move", relative: "left" };
 const DRIFT_RIGHT = { id: "DRIFT_RIGHT", type: "move", relative: "right" };
 
-// A ramp sits on the lower square and points uphill (no ledge encoded there).
+// A ramp sits on the lower square and points uphill.
+// It carries the ledge on its uphill side (data convention since 2026-11-16).
 function ramp(x, y, dir) {
-  return tile(x, y, [{ type: "ramp", dir }]);
+  return tile(x, y, [{ type: "ledge", sides: [dir] }, { type: "ramp", dir }]);
 }
 
 const FORWARD_2 = { id: "FORWARD_2", type: "move", relative: "forward", steps: 2 };
@@ -324,11 +327,90 @@ const transformersCases = [
     expected: { x: 2, y: 0, facing: "W", turnedSteps: 0 }
   },
   {
-    name: "jump ramp: entered only in its arrow direction",
+    name: "jump ramp: entered from the side is an ordinary step (errata)",
     tiles: [tile(1, 1), jumpRamp(1, 0, "E"), tile(2, 0)],
     start: { x: 1, y: 1, facing: "N" },
     action: FORWARD,
-    expected: { x: 1, y: 1, facing: "N", turnedSteps: 0 }
+    expected: { x: 1, y: 0, facing: "N", turnedSteps: 0 }
+  },
+  {
+    name: "jump ramp: a move across it from the side carries on without a jump",
+    tiles: [tile(1, 1), jumpRamp(1, 0, "E"), tile(1, -1), tile(1, -2), tile(2, 0), tile(3, 0)],
+    start: { x: 1, y: 1, facing: "N" },
+    action: FORWARD_3,
+    expected: { x: 1, y: -2, facing: "N", turnedSteps: 0 }
+  },
+  {
+    name: "jump ramp: entered against the arrow is an ordinary step",
+    tiles: [jumpRamp(1, 0, "E"), tile(2, 0), tile(0, 0), tile(-1, 0)],
+    start: { x: 2, y: 0, facing: "W" },
+    action: FORWARD,
+    expected: { x: 1, y: 0, facing: "W", turnedSteps: 0 }
+  },
+  {
+    name: "jump ramp: a conveyor can carry a robot onto it from the side",
+    tiles: [belt(1, 1, "N"), jumpRamp(1, 0, "E"), tile(2, 0)],
+    start: { x: 1, y: 1, facing: "E" },
+    action: WAIT,
+    expected: { x: 1, y: 0, facing: "E", turnedSteps: 0 }
+  },
+  {
+    name: "jump ramp: a water start shortens the run-up and so the jump",
+    tiles: [tile(-1, 0, [{ type: "water" }]), tile(0, 0), jumpRamp(1, 0, "E"), ...row(2, 6)],
+    start: { x: -1, y: 0, facing: "E" },
+    action: FORWARD_3,
+    expected: { x: 3, y: 0, facing: "E", turnedSteps: 0 }
+  },
+  {
+    name: "jump ramp: Turbo Ramps jumps one square further",
+    tiles: [tile(0, 0), jumpRamp(1, 0, "E"), ...row(2, 5)],
+    start: { x: 0, y: 0, facing: "E" },
+    action: FORWARD,
+    options: { turboRamps: true },
+    expected: { x: 3, y: 0, facing: "E", turnedSteps: 0 }
+  },
+  {
+    name: "jump ramp: a landing on a portal goes through it",
+    tiles: [tile(0, 0), jumpRamp(1, 0, "E"), portal(2, 0, "A"), tile(3, 0), portal(5, 5, "A")],
+    start: { x: 0, y: 0, facing: "E" },
+    action: FORWARD,
+    expected: { x: 5, y: 5, facing: "E", turnedSteps: 0 }
+  },
+  {
+    name: "jump ramp: a jump down a ledge takes the fall damage",
+    tiles: [tile(0, 0), jumpRamp(1, 0, "E"), tile(2, 0, [{ type: "ledge", sides: ["W"] }]), tile(3, 0)],
+    start: { x: 0, y: 0, facing: "E" },
+    action: FORWARD,
+    expected: { x: 2, y: 0, facing: "E", turnedSteps: 0, jumpLedgeDamage: 2 }
+  },
+  {
+    name: "jump ramp: a fall into water takes 1",
+    tiles: [tile(0, 0), jumpRamp(1, 0, "E"), tile(2, 0, [{ type: "ledge", sides: ["W"] }, { type: "water" }]), tile(3, 0)],
+    start: { x: 0, y: 0, facing: "E" },
+    action: FORWARD,
+    expected: { x: 2, y: 0, facing: "E", turnedSteps: 0, jumpLedgeDamage: 1 }
+  },
+  {
+    name: "jump ramp: down two ledges is one fall",
+    tiles: [...row(-1, 0), jumpRamp(1, 0, "E"), tile(2, 0, [{ type: "ledge", sides: ["W"] }]), tile(3, 0, [{ type: "ledge", sides: ["W"] }]), tile(4, 0)],
+    start: { x: -1, y: 0, facing: "E" },
+    action: FORWARD_2,
+    expected: { x: 3, y: 0, facing: "E", turnedSteps: 0, jumpLedgeDamage: 2 }
+  },
+  {
+    name: "jump ramp: down and back up to the same level is no damage",
+    tiles: [...row(-1, 0), jumpRamp(1, 0, "E"), tile(2, 0, [{ type: "ledge", sides: ["W", "E"] }]), tile(3, 0), tile(4, 0)],
+    start: { x: -1, y: 0, facing: "E" },
+    action: FORWARD_2,
+    expected: { x: 3, y: 0, facing: "E", turnedSteps: 0, jumpLedgeDamage: 0 }
+  },
+  {
+    name: "jump ramp: a jump up a ledge is no damage",
+    // The ramp square is the lower one: the jump goes up its ledge.
+    tiles: [tile(0, 0), tile(1, 0, [{ type: "jumpRamp", dir: "E" }, { type: "ledge", sides: ["E"] }]), tile(2, 0)],
+    start: { x: 0, y: 0, facing: "E" },
+    action: FORWARD,
+    expected: { x: 2, y: 0, facing: "E", turnedSteps: 0, jumpLedgeDamage: 0 }
   },
   {
     name: "jump ramp: a landing on a building continues until clear of it",
@@ -403,6 +485,38 @@ const cases = [
     action: DRIFT_RIGHT,
     options: { driftDeck: true },
     expected: { x: 0, y: 0, facing: "N", turnedSteps: 0 }
+  },
+  {
+    name: "Steep Ramps: climbing with Move 2 spends the move without moving",
+    tiles: [ramp(0, 0, "E"), tile(1, 0), tile(2, 0)],
+    start: { x: 0, y: 0, facing: "E" },
+    action: FORWARD_2,
+    options: { steepRamps: true },
+    expected: { x: 0, y: 0, facing: "E", turnedSteps: 0 }
+  },
+  {
+    name: "Steep Ramps: Move 3 from the ramp square climbs",
+    tiles: [ramp(0, 0, "E"), tile(1, 0), tile(2, 0)],
+    start: { x: 0, y: 0, facing: "E" },
+    action: FORWARD_3,
+    options: { steepRamps: true },
+    expected: { x: 1, y: 0, facing: "E", turnedSteps: 0 }
+  },
+  {
+    name: "Steep Ramps: Move 3 from below the ramp square stops on it",
+    tiles: [tile(-1, 0), ramp(0, 0, "E"), tile(1, 0), tile(2, 0)],
+    start: { x: -1, y: 0, facing: "E" },
+    action: FORWARD_3,
+    options: { steepRamps: true },
+    expected: { x: 0, y: 0, facing: "E", turnedSteps: 0 }
+  },
+  {
+    name: "Steep Ramps: coming down is still an ordinary step",
+    tiles: [tile(1, 0), ramp(0, 0, "E")],
+    start: { x: 1, y: 0, facing: "W" },
+    action: FORWARD,
+    options: { steepRamps: true },
+    expected: { x: 0, y: 0, facing: "W", turnedSteps: 0 }
   },
   {
     name: "coming down a ramp is an ordinary step",
