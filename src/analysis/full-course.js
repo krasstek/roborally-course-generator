@@ -69,6 +69,7 @@ import {
   getTurnEndAfterActionIndexes
 } from "./reboot-recovery.js";
 import { getExpectedTrafficBreakdown } from "./route-evaluation.js";
+import { summarizeEnergyCourseWeight } from "./energy-course-weight.js";
 import {
   getFixedRoutePricingBaseRELedger,
   rescoreFixedRouteUpgradeEconomy
@@ -5342,6 +5343,12 @@ export function evaluateFullCourseFocusPaymentCurveUnderOccupancy(
     trafficRouteMixture:
       pricingRouteMixtureByIndex.get(analysis.index) ?? analysis.trafficRouteMixture ?? null
   }));
+  // Energy's worth on this course (energy-course-weight.js), as in start fairness.
+  const energyCourseMultiplier = summarizeEnergyCourseWeight(
+    tileMap,
+    pricingTrafficAnalyses,
+    options
+  ).multiplier;
   const candidates = focus.fullCourseRoutes.map((candidate, routeIndex) => {
     const trafficLegacy = getExpectedTrafficBreakdown(
       tileMap,
@@ -5411,10 +5418,13 @@ export function evaluateFullCourseFocusPaymentCurveUnderOccupancy(
       Number(traffic?.competition) || 0
     ) / REGISTER_TEMPO_COST;
     const trafficMentalRE = Math.max(0, Number(trafficMental?.incrementRE) || 0);
+    const energyCourseAdjustmentRE =
+      (energyCourseMultiplier - 1) * (Number(candidateLedger?.energyRE) || 0);
     const baseEffectiveRE = Number.isFinite(intrinsicRE)
       ? (
         intrinsicRE -
         homingMissileStrategicCreditRE +
+        energyCourseAdjustmentRE +
         robotLaserDamageRE +
         nearbyControlRE +
         residualRangedThreatRE +
@@ -5456,7 +5466,8 @@ export function evaluateFullCourseFocusPaymentCurveUnderOccupancy(
         {
           ...options,
           startingEnergy: adjustedStartingEnergy,
-          routeEconomyReferenceStartingEnergy: baseStartingEnergy
+          routeEconomyReferenceStartingEnergy: baseStartingEnergy,
+          energyCourseMultiplier
         }
       );
       const score = Number.isFinite(rescored?.score)

@@ -12,6 +12,7 @@ import {
   summarizePowerUpOpportunityBenchmark
 } from "../../analyze.js";
 import {
+  ENERGY_RACE_LENGTH_UNCERTAINTY_FACTOR,
   NORMAL_CONTEXTUAL_FULL_FORECAST_SHARE,
   NORMAL_EFFECTIVE_RE_FAIRNESS_STDDEV_LIMIT,
   NORMAL_EFFECTIVE_RE_OUTLIER_Z,
@@ -238,7 +239,9 @@ export function getPayToWinPricingBenchmark(tileMap, firstLeg, activeStarts, opt
   return {
     benchmark,
     registerScore: Number(registerScore.toFixed(2)),
-    horizonTurns: Number((measuredTurns > 0 ? measuredTurns : fallbackTurns).toFixed(2))
+    horizonTurns: Number((
+      (measuredTurns > 0 ? measuredTurns : fallbackTurns) * ENERGY_RACE_LENGTH_UNCERTAINTY_FACTOR
+    ).toFixed(2))
   };
 }
 
@@ -249,7 +252,8 @@ export function getPayToWinRouteEconomyPricingOptions(firstLeg, options = {}) {
     .map((item) => item?.fullCourseRoute)
     .filter((route) => route && Number(route.actions) > 0 && Number.isFinite(Number(route.score)));
   const fallbackHorizonTurns = retainedRoutes.length
-    ? medianValue(retainedRoutes.map((route) => Number(route.actions) / config.registersPerTurn))
+    ? medianValue(retainedRoutes.map((route) => Number(route.actions) / config.registersPerTurn)) *
+      ENERGY_RACE_LENGTH_UNCERTAINTY_FACTOR
     : 0;
   const fallbackRegisterScore = retainedRoutes.length
     ? medianValue(retainedRoutes.map((route) => Number(route.score) / Number(route.actions)))

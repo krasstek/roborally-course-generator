@@ -272,8 +272,8 @@ export function getRouteEconomyNextBoundaryAction(absoluteActionCount, config) {
 // more Energy, one more blind upgrade card, or a free random install is worth,
 // by the race turn whose Upgrade Phase can first use it, the race length, and the
 // Energy the robot has received so far (starting Energy plus route gains; the
-// table already accounts for spending it on upgrades). The table is in Energy
-// units; config.powerRegistersPerEnergy turns it into registers.
+// table already accounts for spending it on upgrades). The table is in
+// register-equivalents (RE), valued from the real upgrade deck.
 function getEnergyValueTableRaceTurns(options) {
   const turns = Number(options?.routeEnergyHorizonTurns);
   if (!(turns > 0)) return 0;
@@ -299,8 +299,7 @@ export function getFlattenedRouteEnergyMarginalValueR(
   if (!raceTurns || reserve >= config.maxEnergy) return 0;
   const turn = getEnergyValueTableUpgradeTurn(absoluteActionCount, config);
   if (turn > raceTurns) return 0;
-  return ENERGY_GAIN_VALUE[raceTurns][turn][getEnergyValueTableEnergyIndex(reserve)] *
-    config.powerRegistersPerEnergy;
+  return ENERGY_GAIN_VALUE[raceTurns][turn][getEnergyValueTableEnergyIndex(reserve)];
 }
 
 export function getFlattenedUnknownUpgradeCardValueR(
@@ -313,8 +312,7 @@ export function getFlattenedUnknownUpgradeCardValueR(
   if (!raceTurns) return 0;
   const turn = getEnergyValueTableUpgradeTurn(absoluteActionCount, config);
   if (turn > raceTurns) return 0;
-  return UPGRADE_CARD_GAIN_VALUE[raceTurns][turn][getEnergyValueTableEnergyIndex(energy)] *
-    config.powerRegistersPerEnergy;
+  return UPGRADE_CARD_GAIN_VALUE[raceTurns][turn][getEnergyValueTableEnergyIndex(energy)];
 }
 
 export function getFlattenedFreeRandomUpgradeInstallValueR(
@@ -327,7 +325,7 @@ export function getFlattenedFreeRandomUpgradeInstallValueR(
   // Radioactive Waste installs at once, during the current turn.
   const turn = Math.floor(Math.max(0, Number(absoluteActionCount) || 0) / config.registersPerTurn) + 1;
   if (turn > raceTurns) return 0;
-  return FREE_UPGRADE_INSTALL_VALUE[raceTurns][turn] * config.powerRegistersPerEnergy;
+  return FREE_UPGRADE_INSTALL_VALUE[raceTurns][turn];
 }
 
 // The route's energy shadow counts Energy received so far, starting with the
@@ -399,8 +397,7 @@ export function getRouteEnergyDominanceBoundConfig(options = {}) {
   if (!Number.isFinite(registerScore)) {
     return { active: true, unbounded: true, energyCubeScore: Infinity, unknownCardScore: Infinity, upgradeWorld: Boolean(options.upgradeWorld) };
   }
-  const nonnegativeRegisterScore = Math.max(0, registerScore) *
-    getRouteEnergyEconomyConfig(options).powerRegistersPerEnergy;
+  const nonnegativeRegisterScore = Math.max(0, registerScore);
   // The largest values in the energy value table bound every single gain.
   const energyCubeScore = ENERGY_VALUE_TABLE_MAXIMA.energy * nonnegativeRegisterScore;
   const unknownCardScore = ENERGY_VALUE_TABLE_MAXIMA.card * nonnegativeRegisterScore;

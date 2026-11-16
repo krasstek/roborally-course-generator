@@ -9,6 +9,7 @@ import {
   summarizeRegisterEquivalentLedger
 } from "./route-evaluation.js";
 import { sliceFullCourseRoute } from "./route-search.js";
+import { summarizeEnergyCourseWeight } from "./energy-course-weight.js";
 import {
   FULL_COURSE_LATER_LEG_TRAFFIC_WEIGHT,
   FULL_COURSE_OPENING_LEG_TRAFFIC_WEIGHT,
@@ -1165,6 +1166,9 @@ export function applyNormalFullCourseEffectiveREFairnessScores(
   startAnalyses,
   options = {}
 ) {
+  // Energy's worth on this course (disruption cards; energy-course-weight.js):
+  // scales the Energy line here only, never in route search.
+  const energyCourse = summarizeEnergyCourseWeight(tileMap, startAnalyses, options);
   for (const analysis of startAnalyses || []) {
     const route = analysis?.fullCourseRoute ?? null;
     if (!route || !tileMap) {
@@ -1233,6 +1237,11 @@ export function applyNormalFullCourseEffectiveREFairnessScores(
       Number(analysis.fullCourseTrafficNearby) || 0
     ) / REGISTER_TEMPO_COST;
     const residualRangedThreatRE = 0; // v49ej diagnostic-only legacy ranged score
+    // The Energy line that went into intrinsicRE (cached with it on the route).
+    const intrinsicEnergyRE = Number(
+      route.normalFairnessIntrinsicREComponents?.energyRE ?? intrinsicLedger?.energyRE
+    ) || 0;
+    const energyCourseAdjustmentRE = (energyCourse.multiplier - 1) * intrinsicEnergyRE;
     const competitionRE = Math.max(
       0,
       Number(analysis.fullCourseTrafficCompetition) || 0
@@ -1248,6 +1257,7 @@ export function applyNormalFullCourseEffectiveREFairnessScores(
       ? (
         intrinsicRE -
         homingMissileStrategicCreditRE +
+        energyCourseAdjustmentRE +
         robotLaserDamageRE +
         nearbyControlRE +
         residualRangedThreatRE +
@@ -1274,6 +1284,9 @@ export function applyNormalFullCourseEffectiveREFairnessScores(
       homingMissileStrategicCreditRE: Number(
         homingMissileStrategicCreditRE.toFixed(4)
       ),
+      energyCourseWeight: energyCourse.weight,
+      energyCourseMultiplier: energyCourse.multiplier,
+      energyCourseAdjustmentRE: Number(energyCourseAdjustmentRE.toFixed(4)),
       robotLaserDamageRE: Number(robotLaserDamageRE.toFixed(4)),
       nearbyControlRE: Number(nearbyControlRE.toFixed(4)),
       residualRangedThreatRE: Number(residualRangedThreatRE.toFixed(4)),

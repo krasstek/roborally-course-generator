@@ -6,7 +6,7 @@ import {
   summarizeFixedRouteUpgradeEconomyActivity,
   summarizeIntrinsicRouteForecastConfidence
 } from "../../analyze.js";
-import { NORMAL_EFFECTIVE_RE_SCORE_PER_RE } from "./config.js";
+import { ENERGY_RACE_LENGTH_UNCERTAINTY_FACTOR, NORMAL_EFFECTIVE_RE_SCORE_PER_RE } from "./config.js";
 import { getDevAcceptableCandidatePool } from "./dev-replay.js";
 import {
   computeBoardHarshness,
@@ -44,7 +44,8 @@ export function getLengthEconomyActivityOptions(sequence, preferences = {}) {
   const config = getRouteEnergyEconomyConfig(preferences);
   const fallbackHorizonTurns = Math.max(
     0,
-    (Number(sequence?.summary?.totalActions) || 0) / config.registersPerTurn
+    ((Number(sequence?.summary?.totalActions) || 0) / config.registersPerTurn) *
+      ENERGY_RACE_LENGTH_UNCERTAINTY_FACTOR
   );
   const horizonTurns = Number(production?.horizonTurns) > 0
     ? Number(production.horizonTurns)

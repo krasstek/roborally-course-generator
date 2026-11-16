@@ -296,7 +296,7 @@ export function evaluateRouteStartingEconomyPotentialR(tileMap, route, options =
   const startingEnergy = clamp(Math.floor(config.startingEnergy), 0, config.maxEnergy);
   let potential = UPGRADE_VALUE_BY_STARTING_ENERGY[raceTurns][
     Math.min(startingEnergy, ENERGY_VALUE_TABLE_MAX_ENERGY)
-  ] * config.powerRegistersPerEnergy;
+  ];
   let reserve = startingEnergy;
   let elapsed = Math.max(0, Number(route.absoluteStartAction) || 0);
   for (const transition of route.transitions) {
@@ -494,7 +494,7 @@ export function rescoreFixedRouteUpgradeEconomy(tileMap, route, options = {}) {
     ? clamp(Math.floor(Number(options.routeEconomyReferenceStartingEnergy)), 0, config.maxEnergy)
     : currentStartingEnergy;
   const registerScore = Math.max(0, Number(options.routeEnergyRegisterScore) || 0);
-  const currentEconomyPotentialR = evaluateRouteStartingEconomyPotentialR(
+  let currentEconomyPotentialR = evaluateRouteStartingEconomyPotentialR(
     tileMap,
     route,
     options
@@ -502,13 +502,19 @@ export function rescoreFixedRouteUpgradeEconomy(tileMap, route, options = {}) {
   const referenceOptions = referenceStartingEnergy === currentStartingEnergy
     ? options
     : { ...options, startingEnergy: referenceStartingEnergy };
-  const referenceEconomyPotentialR = referenceStartingEnergy === currentStartingEnergy
+  let referenceEconomyPotentialR = referenceStartingEnergy === currentStartingEnergy
     ? currentEconomyPotentialR
     : evaluateRouteStartingEconomyPotentialR(
       tileMap,
       route,
       referenceOptions
     );
+  // Course weight for Energy's worth (energy-course-weight.js); 1 outside pricing.
+  const energyCourseMultiplier = Number(options.energyCourseMultiplier) > 0
+    ? Number(options.energyCourseMultiplier)
+    : 1;
+  currentEconomyPotentialR *= energyCourseMultiplier;
+  referenceEconomyPotentialR *= energyCourseMultiplier;
   const startingEconomyAdjustmentScore = (
     referenceEconomyPotentialR - currentEconomyPotentialR
   ) * registerScore;
