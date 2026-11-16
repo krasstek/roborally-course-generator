@@ -490,6 +490,13 @@ export function getProductionRETurnDifficulty(sequence, preferences = {}, contex
   return result;
 }
 
+// Temporary (2026-11-16, user): the measured clog weights (damage-economy.js,
+// d9a8562) raised RE-turn difficulty by a mean log ratio of +0.100 (36 golden
+// courses re-evaluated unchanged, sd 0.072). The difficulty bands and the
+// construction guidance were fitted on the earlier scale, so the final value is
+// scaled back by this until the calibration rerun refits them; then set to 0.
+export const CLOG_REFIT_DIFFICULTY_LOG_OFFSET = -0.1;
+
 export function computeRETurnVariantDifficultyAccounting(rawTurnRE, preferences = {}, sequence = null) {
   const programmingPressure = computeProgrammingPressureProfile(sequence);
   let adjusted = Number(rawTurnRE) || 0;
@@ -669,10 +676,13 @@ export function computeRETurnVariantDifficultyAccounting(rawTurnRE, preferences 
     );
   }
 
+  const scaled = adjusted * Math.exp(CLOG_REFIT_DIFFICULTY_LOG_OFFSET);
   return {
     base: Number((Number(rawTurnRE) || 0).toFixed(4)),
-    final: Number(adjusted.toFixed(4)),
-    delta: Number((adjusted - (Number(rawTurnRE) || 0)).toFixed(4)),
+    final: Number(scaled.toFixed(4)),
+    delta: Number((scaled - (Number(rawTurnRE) || 0)).toFixed(4)),
+    beforeScaleOffset: Number(adjusted.toFixed(4)),
+    scaleLogOffset: CLOG_REFIT_DIFFICULTY_LOG_OFFSET,
     contributions,
     mechanicalRules,
     deferredRules,
