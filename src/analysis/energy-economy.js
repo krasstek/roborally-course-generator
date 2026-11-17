@@ -4,6 +4,7 @@ import { REGISTER_COUNT } from "./constants.js";
 import { clamp } from "../shared/math.js";
 import {
   ENERGY_GAIN_VALUE,
+  ENERGY_VALUE_STARTING_POINTS,
   ENERGY_VALUE_TABLE_MAXIMA,
   ENERGY_VALUE_TABLE_MAX_ENERGY,
   ENERGY_VALUE_TABLE_MAX_TURNS,
@@ -271,9 +272,10 @@ export function getRouteEconomyNextBoundaryAction(absoluteActionCount, config) {
 // energy-value-table.js (built by scripts/build-energy-value-table.mjs): what one
 // more Energy, one more blind upgrade card, or a free random install is worth,
 // by the race turn whose Upgrade Phase can first use it, the race length, and the
-// Energy the robot has received so far (starting Energy plus route gains; the
-// table already accounts for spending it on upgrades). The table is in
-// register-equivalents (RE), valued from the real upgrade deck.
+// Energy the robot has received so far (starting Energy plus route gains, no
+// storage cap: the table already accounts for spending it on upgrades); Energy
+// values also by starting Energy. Deck averages in register-equivalents (RE);
+// the app never sees a card.
 function getEnergyValueTableRaceTurns(options) {
   const turns = Number(options?.routeEnergyHorizonTurns);
   if (!(turns > 0)) return 0;
@@ -288,6 +290,19 @@ function getEnergyValueTableEnergyIndex(energy) {
   return clamp(Math.floor(Number(energy) || 0), 0, ENERGY_VALUE_TABLE_MAX_ENERGY);
 }
 
+// Energy values were built at a few starting Energies; interpolate between them.
+function getEnergyGainTableValue(raceTurns, startingEnergy, turn, received) {
+  const points = ENERGY_VALUE_STARTING_POINTS;
+  const rows = ENERGY_GAIN_VALUE[raceTurns];
+  const index = getEnergyValueTableEnergyIndex(received);
+  const start = clamp(Number(startingEnergy) || 0, points[0], points[points.length - 1]);
+  let upper = 1;
+  while (upper < points.length - 1 && start > points[upper]) upper += 1;
+  const lower = upper - 1;
+  const t = (start - points[lower]) / (points[upper] - points[lower]);
+  return (1 - t) * rows[lower][turn][index] + t * rows[upper][turn][index];
+}
+
 export function getFlattenedRouteEnergyMarginalValueR(
   energy,
   absoluteActionCount,
@@ -295,11 +310,10 @@ export function getFlattenedRouteEnergyMarginalValueR(
 ) {
   const config = getRouteEnergyEconomyConfig(options);
   const raceTurns = getEnergyValueTableRaceTurns(options);
-  const reserve = clamp(Math.floor(Number(energy) || 0), 0, config.maxEnergy);
-  if (!raceTurns || reserve >= config.maxEnergy) return 0;
+  if (!raceTurns) return 0;
   const turn = getEnergyValueTableUpgradeTurn(absoluteActionCount, config);
   if (turn > raceTurns) return 0;
-  return ENERGY_GAIN_VALUE[raceTurns][turn][getEnergyValueTableEnergyIndex(reserve)];
+  return getEnergyGainTableValue(raceTurns, config.startingEnergy, turn, energy);
 }
 
 export function getFlattenedUnknownUpgradeCardValueR(
@@ -362,12 +376,12 @@ export function applyFlattenedRouteEnergyGain(
   absoluteActionCount,
   options = {}
 ) {
-  const config = getRouteEnergyEconomyConfig(options);
-  const reserveBefore = clamp(Math.floor(Number(energy) || 0), 0, config.maxEnergy);
+  // Energy received so far: no storage cap (the table spends it on upgrades).
+  const reserveBefore = clamp(Math.floor(Number(energy) || 0), 0, ENERGY_VALUE_TABLE_MAX_ENERGY);
   const reserveAfter = clamp(
     reserveBefore + Math.max(0, Math.floor(Number(gain) || 0)),
     0,
-    config.maxEnergy
+    ENERGY_VALUE_TABLE_MAX_ENERGY
   );
   let rewardR = 0;
   for (let level = reserveBefore; level < reserveAfter; level += 1) {
@@ -482,7 +496,7 @@ export function getRouteEnergyShadowStep(
       ? Number(currentReserve)
       : initialState.energy),
     0,
-    config.maxEnergy
+    ENERGY_VALUE_TABLE_MAX_ENERGY
   );
   // A register-5 card cancelled by a fire pit (Transformers) does nothing.
   const powerUp = actionId === "WAIT" && !transition?.cancelledByFirePit;
