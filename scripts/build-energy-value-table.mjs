@@ -554,4 +554,43 @@ if (process.argv.includes("--check")) {
   const steps = starts.map((start) => (totals[start].table / INCOME_ROUTES.length).toFixed(2));
   const directSteps = starts.map((start) => (totals[start].direct / INCOME_ROUTES.length).toFixed(2));
   console.log(`  mean value by starting Energy 0..6: table ${steps.join(" ")} | direct ${directSteps.join(" ")}`);
+
+  // One blind card (Chop Shop, Upgrade World) arriving before turn t's upgrade
+  // phase: table vs the same games with and without it.
+  const playWithCard = (cards, start, turns, income, cardTurn) => {
+    const state = newState(cards, start);
+    for (let turn = 1; turn <= turns; turn += 1) {
+      if (turn > 1) state.energy = Math.min(SETTINGS.maxEnergy, state.energy + income[turn]);
+      if (turn === cardTurn && state.deck.length) state.hand.push(state.deck.pop());
+      playTurn(state, turn, turns);
+    }
+    return state.value;
+  };
+  const cardDeals = deals.slice(0, 300);
+  for (const start of [0, 3, 6]) {
+    const cardErrors = { early: [], mid: [], late: [] };
+    let directSum = 0;
+    let tableSum = 0;
+    for (const [routeTurns, gainTurns] of INCOME_ROUTES) {
+      const turns = Math.min(MAX_TURNS, routeTurns);
+      if (turns < 3) continue;
+      const income = exactIncome(gainTurns, turns);
+      const moments = { early: 2, mid: Math.max(2, Math.round(turns / 2)), late: turns };
+      for (const [moment, cardTurn] of Object.entries(moments)) {
+        let direct = 0;
+        for (const cards of cardDeals) {
+          direct += playWithCard(cards, start, turns, income, cardTurn) - playWithCard(cards, start, turns, income, 0);
+        }
+        direct /= cardDeals.length;
+        let received = start;
+        for (let turn = 2; turn <= cardTurn; turn += 1) received += income[turn];
+        const table = cardValue[turns][cardTurn][Math.min(received, MAX_RECEIVED)];
+        cardErrors[moment].push(table - direct);
+        directSum += direct;
+        tableSum += table;
+      }
+    }
+    console.log(`  card, start ${start}: direct mean ${(directSum / (3 * cardErrors.early.length)).toFixed(3)}, table mean ${(tableSum / (3 * cardErrors.early.length)).toFixed(3)}; ` +
+      Object.entries(cardErrors).map(([moment, list]) => `${moment} ${stats(list)}`).join(" | "));
+  }
 }

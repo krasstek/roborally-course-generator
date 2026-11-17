@@ -1,6 +1,12 @@
 // v49ej ownership note: this module is primarily cheap-search/construction and
 // diagnostic guidance. Do not promote these score-space weights into final course
 // evaluation when a damage/control/card/mental/economy RE owner exists.
+import {
+  ENERGY_GAIN_VALUE,
+  ENERGY_VALUE_STARTING_POINTS,
+  ENERGY_VALUE_TABLE_MAX_TURNS,
+  UPGRADE_CARD_GAIN_VALUE
+} from "./src/analysis/energy-value-table.js";
 
 export const BOARD_PROFILE_DENSITY_WEIGHT = 1.1;
 export const BOARD_PROFILE_DENSITY_COMPONENT_WEIGHTS = {
@@ -15,6 +21,39 @@ export const BOARD_PROFILE_DENSITY_COMPONENT_WEIGHTS = {
 // as discovery guidance only; shared-turn clog and SPAM relief are owned by the
 // completed-route damage/control economy and will be fitted later from corpus data.
 export const RANDOMIZER_CONTROL_PENALTY = 14.08;
+
+// Cheap-pathfinder bridge for Energy squares (2026-11-17): the race-average worth
+// of +1 Energy and of one blind upgrade card from the Energy value table, at the
+// usual start (3 Energy), a 9-turn race (median golden route 8 turns x 1.17) and
+// the median route income (0.5 Energy per turn), at 6.4 score per RE. The full
+// route search values Energy squares from the table itself, by turn.
+const CHEAP_ENERGY_SCORE_PER_RE = 6.4;
+const CHEAP_ENERGY_VALUE = (() => {
+  const raceTurns = Math.min(9, ENERGY_VALUE_TABLE_MAX_TURNS);
+  const startPoint = Math.max(0, ENERGY_VALUE_STARTING_POINTS.indexOf(3));
+  let energy = 0;
+  let card = 0;
+  let turns = 0;
+  for (let turn = 2; turn <= raceTurns; turn += 1) {
+    const received = 3 + Math.floor(0.5 * (turn - 2));
+    energy += ENERGY_GAIN_VALUE[raceTurns][startPoint][turn][received];
+    card += UPGRADE_CARD_GAIN_VALUE[raceTurns][turn][received];
+    turns += 1;
+  }
+  return { energy: energy / turns, card: card / turns };
+})();
+export const CHEAP_BATTERY_SCORE = Number((-CHEAP_ENERGY_VALUE.energy * CHEAP_ENERGY_SCORE_PER_RE).toFixed(2));
+export const CHEAP_BATTERY_UPGRADE_WORLD_SCORE = Number((
+  -(CHEAP_ENERGY_VALUE.energy + CHEAP_ENERGY_VALUE.card) * CHEAP_ENERGY_SCORE_PER_RE
+).toFixed(2));
+// Chop Shop: the better of +1 Energy and one card (Upgrade World: Energy and a
+// card, or two cards).
+export const CHEAP_CHOP_SHOP_SCORE = Number((
+  -Math.max(CHEAP_ENERGY_VALUE.energy, CHEAP_ENERGY_VALUE.card) * CHEAP_ENERGY_SCORE_PER_RE
+).toFixed(2));
+export const CHEAP_CHOP_SHOP_UPGRADE_WORLD_SCORE = Number((
+  -Math.max(CHEAP_ENERGY_VALUE.energy + CHEAP_ENERGY_VALUE.card, 2 * CHEAP_ENERGY_VALUE.card) * CHEAP_ENERGY_SCORE_PER_RE
+).toFixed(2));
 
 // v38 programming-pressure accounting. These weights are deliberately not
 // ordinary route hazard: they describe how much factory-controlled facing /
@@ -381,10 +420,10 @@ export function getTilePenaltyForFeature(feature, options = {}) {
     return Number((2.8 * oilMultiplier).toFixed(2));
   }
   if (feature.type === "battery" && options.batteryActive) {
-    return options.upgradeWorld ? -3 : -2;
+    return options.upgradeWorld ? CHEAP_BATTERY_UPGRADE_WORLD_SCORE : CHEAP_BATTERY_SCORE;
   }
   if (feature.type === "chopShop" && options.batteryActive) {
-    return options.upgradeWorld ? -4.7 : -3.5;
+    return options.upgradeWorld ? CHEAP_CHOP_SHOP_UPGRADE_WORLD_SCORE : CHEAP_CHOP_SHOP_SCORE;
   }
   if (feature.type === "repulsor") {
     return Number((3.2 * repulsorMultiplier).toFixed(2));
