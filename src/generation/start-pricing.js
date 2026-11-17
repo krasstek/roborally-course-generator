@@ -2130,6 +2130,87 @@ export function findPricedStartPrePricingOutlier(entries = [], playerCount = 1) 
   };
 }
 
+// Before pricing (user 2026-11-17): prices are set against the most extreme start
+// in the direction Energy can move a start (Pay to Win: the weakest, payments make
+// a start weaker; Subsidized Starts: the strongest). When that start is an outlier,
+// most others cannot reach it even at the full legal Energy and sit at the cap.
+// For each possible anchor, count the starts that can be priced against it: the
+// anchor itself plus the starts on the other side that the full legal Energy brings
+// within the fair range (starts beyond the anchor would have to go). If a less
+// extreme anchor keeps more starts (or as many, with fewer of them left short of
+// the anchor at the cap), prune the current extreme start; the pricing
+// loop then reprices and checks again, one start at a time, never below the
+// player count. Early-selector curves only.
+export function findPricedStartAnchorReachRemoval(entries = [], options = {}, playerCount = 1) {
+  const minimumStarts = Math.max(1, playerCount || 1);
+  const subsidizedStarts = isSubsidizedStartsPricing(options);
+  const field = (entries || [])
+    .filter((entry) => Number.isFinite(Number(entry?.fullScore)) && Array.isArray(entry?.paymentScores))
+    .sort((left, right) => (
+      subsidizedStarts
+        ? left.fullScore - right.fullScore || left.index - right.index
+        : right.fullScore - left.fullScore || left.index - right.index
+    ));
+  if (field.length <= minimumStarts) return null;
+  const fairRange = getPricedStartFairnessRangeRE(field, options);
+  if (!(fairRange > 0)) return null;
+
+  // The furthest each start can be moved toward the anchor side by legal Energy.
+  const reach = field.map((entry) => {
+    const values = entry.paymentScores.map(Number).filter(Number.isFinite);
+    if (!values.length) return Number(entry.fullScore);
+    return subsidizedStarts ? Math.min(...values) : Math.max(...values);
+  });
+  // Kept starts, and how many of them even the full legal Energy leaves short of
+  // the anchor (they would show the cap without being balanced).
+  const keptWithAnchor = (anchorPosition) => {
+    const anchorRE = Number(field[anchorPosition].fullScore);
+    let kept = 1;
+    let short = 0;
+    for (let position = anchorPosition + 1; position < field.length; position += 1) {
+      const gap = subsidizedStarts ? reach[position] - anchorRE : anchorRE - reach[position];
+      if (gap <= fairRange + 1e-9) {
+        kept += 1;
+        if (gap > 1e-9) short += 1;
+      }
+    }
+    return { kept, short };
+  };
+
+  const current = keptWithAnchor(0);
+  const currentKept = current.kept;
+  let bestPosition = 0;
+  let best = current;
+  for (let position = 1; position < field.length; position += 1) {
+    const candidate = keptWithAnchor(position);
+    if (
+      candidate.kept > best.kept ||
+      (candidate.kept === best.kept && candidate.short < best.short)
+    ) {
+      best = candidate;
+      bestPosition = position;
+    }
+  }
+  const bestKept = best.kept;
+  if (bestPosition === 0 || bestKept < minimumStarts) return null;
+
+  const entry = field[0];
+  return {
+    index: entry.index,
+    score: Number(entry.fullScore),
+    fullScore: Number(entry.fullScore),
+    energyCost: 0,
+    lateEnergyCost: 0,
+    anchorReachPruned: true,
+    effectiveREPruned: true,
+    balanceDispersionPruned: false,
+    reason:
+      `pricing anchor too far out: Energy can bring ${currentKept - 1} other start(s) within the ` +
+      `fair range of this start, but ${bestKept - 1} within range of a start ` +
+      `${Number(Math.abs(Number(entry.fullScore) - Number(field[bestPosition].fullScore)).toFixed(3))} RE further in`
+  };
+}
+
 export function chooseEconomyCompensatedStartRemoval(
   earlyEntries = [],
   lateEntries = [],
@@ -3045,6 +3126,8 @@ export function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, option
     if (costState.entries.length <= playerCount) return null;
     const prePricingOutlier = findPricedStartPrePricingOutlier(costState.entries, playerCount);
     if (prePricingOutlier) return prePricingOutlier;
+    const anchorReachRemoval = findPricedStartAnchorReachRemoval(costState.entries, pricingOptions, playerCount);
+    if (anchorReachRemoval) return anchorReachRemoval;
 
     let currentEconomy = evaluatePayToWinSelectorAwarePricingState(
       currentFirstLeg,
