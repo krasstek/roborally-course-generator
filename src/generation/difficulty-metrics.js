@@ -541,6 +541,7 @@ export function computeRETurnVariantDifficultyAccounting(rawTurnRE, preferences 
   if (preferences.turboRamps) mechanical("turboRamps", "movement: jumps one square longer; once-per-turn rule-memory event when the route touches a jump ramp");
   if (preferences.perilsOfTheWarp) mechanical("perilsOfTheWarp", "damage economy: 1 damage per portal, teleporter or space bridge use; once-per-turn rule-memory event when the route takes that damage");
   if (preferences.batteryOvercharge) mechanical("batteryOvercharge", "Energy economy: 2 Energy per battery activation; damage economy: 1 damage with it; once-per-turn rule-memory event");
+  if (preferences.missileBanks) mechanical("missileBanks", "homing missile credit: one damage to each other robot, no target choice");
   if (preferences.setToKill) mechanical(
     "setToKill",
     "robot-laser damage economy: two damage-card draws per successful main-laser hit"
@@ -1070,6 +1071,7 @@ export function computeVariantDifficultyAccounting(raw, preferences = {}, sequen
   if (preferences.turboRamps) mechanical("turboRamps", "movement: jumps one square longer; once-per-turn rule-memory event when the route touches a jump ramp");
   if (preferences.perilsOfTheWarp) mechanical("perilsOfTheWarp", "damage economy: 1 damage per portal, teleporter or space bridge use; once-per-turn rule-memory event when the route takes that damage");
   if (preferences.batteryOvercharge) mechanical("batteryOvercharge", "Energy economy: 2 Energy per battery activation; damage economy: 1 damage with it; once-per-turn rule-memory event");
+  if (preferences.missileBanks) mechanical("missileBanks", "homing missile credit: one damage to each other robot, no target choice");
   if (preferences.setToKill) mechanical("setToKill", "robot-laser damage economy: double damage per hit");
   if (preferences.setToStun) mechanical("setToStun", "robot-laser damage economy: SPAM suppressed, Haywire unchanged");
   if (preferences.repairStations) mechanical("repairStations", "checkpoint repair route value");

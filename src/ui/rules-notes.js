@@ -150,7 +150,8 @@ const RAMP_RULE_IMPACT = Object.freeze([
   { id: "turboRamps", types: ["jumpRamp"], one: "jump ramp", many: "jump ramps" },
   // Not a ramp rule, but counted and worded the same way.
   { id: "perilsOfTheWarp", types: ["portal", "teleporter", "spaceBridge"], one: "warp square", many: "warp squares" },
-  { id: "batteryOvercharge", types: ["battery"], one: "battery", many: "batteries" }
+  { id: "batteryOvercharge", types: ["battery"], one: "battery", many: "batteries" },
+  { id: "missileBanks", types: ["homingMissile"], one: "homing missile", many: "homing missiles" }
 ]);
 
 // The course's Energy spaces, in one list shared by the Special Rules texts;

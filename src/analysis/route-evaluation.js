@@ -80,8 +80,9 @@ import {
   FULL_COURSE_LATER_LEG_TRAFFIC_WEIGHT,
   FULL_COURSE_OPENING_LEG_TRAFFIC_WEIGHT,
   HOMING_MISSILE_ONE_DAMAGE_REFERENCE_RE,
-  HOMING_MISSILE_STRATEGIC_CREDIT_RE,
-  HOMING_MISSILE_STRATEGIC_DAMAGE_EQUIVALENTS,
+  getHomingMissileCreditRE,
+  isHomingMissileActivationEvent,
+  getHomingMissileDamageEquivalents,
   RE_NATIVE_DAMAGE_EFFORT_CEILING,
   TRAFFIC_FORECAST_CONFIDENCE_FLOOR,
   buildConditionalOccupancyMap,
@@ -1370,12 +1371,12 @@ export function summarizeRegisterEquivalentLedger(
   const mentalRegisterEquivalents = sum("mentalRegisterEquivalents");
   const homingMissileActivationCount = orderedTurns.reduce(
     (total, turn) => total + (turn.planningEvents || []).filter(
-      (event) => event?.type === "homing-missile-target-choice"
+      isHomingMissileActivationEvent
     ).length,
     0
   );
   const homingMissileStrategicCreditRE = Number((
-    homingMissileActivationCount * HOMING_MISSILE_STRATEGIC_CREDIT_RE
+    homingMissileActivationCount * getHomingMissileCreditRE(options)
   ).toFixed(4));
   const knownMechanismSubtotalRE = Number((
     programmedRegisterRE +
@@ -1409,7 +1410,7 @@ export function summarizeRegisterEquivalentLedger(
       HOMING_MISSILE_ONE_DAMAGE_REFERENCE_RE.toFixed(4)
     ),
     homingMissileStrategicDamageEquivalents:
-      HOMING_MISSILE_STRATEGIC_DAMAGE_EQUIVALENTS,
+      getHomingMissileDamageEquivalents(options),
     homingMissileCheapSearchGuidanceScore: Number(
       getHomingMissileSearchGuidanceScore(options).toFixed(2)
     ),

@@ -46,6 +46,7 @@ const VARIANT_COMPLEXITY = {
   shallowPits: 1,
   perilsOfTheWarp: 1,
   batteryOvercharge: 1,
+  missileBanks: 1,
   steepRamps: 1,
   turboRamps: 1,
   setToKill: 1,
@@ -573,6 +574,27 @@ const VARIANT_DEFINITION_ROWS = [
       reason: "Battery Overcharge needs at least one selected board with a battery."
     },
     applyBundle: applyBooleanField("batteryOvercharge")
+  },
+  {
+    id: "missileBanks",
+    label: "Missile Banks",
+    category: VARIANT_CATEGORIES.factoryFloor,
+    controlId: "variant-missile-banks",
+    defaultState: "off",
+    description: "A homing missile hits every other robot for 1 damage instead of one chosen target.",
+    cost: VARIANT_COMPLEXITY.missileBanks,
+    complexityRationale: "One persistent rule changes an existing board element; it removes the target choice rather than adding a decision.",
+    availability: {
+      type: "featureTypeAvailable",
+      featureType: "homingMissile",
+      reason: "Requires homing missiles in the selected sets."
+    },
+    constructionRequirement: {
+      type: "boardFeatureAnyOf",
+      featureTypes: ["homingMissile"],
+      reason: "Missile Banks needs at least one selected board with a homing missile."
+    },
+    applyBundle: applyBooleanField("missileBanks")
   },
   {
     id: "setToKill",

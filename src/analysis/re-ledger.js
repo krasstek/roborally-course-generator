@@ -14,9 +14,11 @@ import {
 } from "./reboot-recovery.js";
 import {
   HOMING_MISSILE_ONE_DAMAGE_REFERENCE_RE,
-  HOMING_MISSILE_STRATEGIC_CREDIT_RE,
-  HOMING_MISSILE_STRATEGIC_DAMAGE_EQUIVALENTS,
-  HOMING_MISSILE_TARGET_CHOICE_EVENT_WEIGHT
+  getHomingMissileDamageEquivalents,
+  HOMING_MISSILE_TARGET_CHOICE_EVENT_WEIGHT,
+  MISSILE_BANK_FIRE_EVENT_TYPE,
+  getHomingMissileCreditRE,
+  isHomingMissileActivationEvent
 } from "./traffic.js";
 
 // v49ap observational unified-RE ledger ------------------------------------
@@ -473,6 +475,11 @@ export function getRegisterEquivalentLedgerPlanningEventsForTransition(
     mechanicContext?.homingMissileActivatedSpacesThisTurn
   );
   for (const activation of homingActivations) {
+    if (options.missileBanks) {
+      // No target choice: recorded for the credit, no planning load.
+      events.push({ type: MISSILE_BANK_FIRE_EVENT_TYPE, weight: 0, detail: { at: { x: activation.x, y: activation.y } } });
+      continue;
+    }
     add(
       "homing-missile-target-choice",
       HOMING_MISSILE_TARGET_CHOICE_EVENT_WEIGHT,
@@ -682,9 +689,7 @@ export function replaySearchIntrinsicMentalForContext(
     totalRE += step.deltaRE;
     totalScore += step.score;
     totalEvents += step.eventWeight;
-    homingMissileActivationCount += (step.events || []).filter(
-      (event) => event?.type === "homing-missile-target-choice"
-    ).length;
+    homingMissileActivationCount += (step.events || []).filter(isHomingMissileActivationEvent).length;
     if (step.closesTurn) {
       homingMissileActivatedSpacesThisTurn.clear();
     }
@@ -694,7 +699,7 @@ export function replaySearchIntrinsicMentalForContext(
   });
 
   const homingMissileStrategicCreditRE =
-    homingMissileActivationCount * HOMING_MISSILE_STRATEGIC_CREDIT_RE;
+    homingMissileActivationCount * getHomingMissileCreditRE(options);
   const homingMissileStrategicCreditScore =
     homingMissileStrategicCreditRE * REGISTER_TEMPO_COST;
 
@@ -718,7 +723,7 @@ export function replaySearchIntrinsicMentalForContext(
       HOMING_MISSILE_ONE_DAMAGE_REFERENCE_RE.toFixed(4)
     ),
     homingMissileStrategicDamageEquivalents:
-      HOMING_MISSILE_STRATEGIC_DAMAGE_EQUIVALENTS,
+      getHomingMissileDamageEquivalents(options),
     searchIntrinsicMentalModel: 'rounded-turn-events-quadratic-after-7-v49bc-postbuild'
   };
 }

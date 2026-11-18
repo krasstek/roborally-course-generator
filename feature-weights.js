@@ -483,7 +483,13 @@ export function getHomingMissileSearchGuidanceScore(options = {}) {
       { ...options, cuttingFloor: false }
     )
   );
-  return 2 * oneDamageCheapGuidance;
+  // Missile Banks: one damage to each other robot instead of a chosen target
+  // worth ~2 (traffic.js getHomingMissileDamageEquivalents).
+  const playerCount = Number(options.playerCount);
+  const damageEquivalents = options.missileBanks
+    ? Math.max(1, (Number.isFinite(playerCount) ? playerCount : 4) - 1)
+    : 2;
+  return damageEquivalents * oneDamageCheapGuidance;
 }
 
 export function getFlagAreaFeatureScore(feature, dist, options = {}) {

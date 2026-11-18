@@ -414,6 +414,7 @@ const NEUTRAL_VARIANT_CHANCE = Object.freeze({
   shallowPits: 0.1,
   perilsOfTheWarp: 0.1,
   batteryOvercharge: 0.1,
+  missileBanks: 0.1,
   steepRamps: 0.1,
   turboRamps: 0.1,
   repulsorOverdrive: 0.03,

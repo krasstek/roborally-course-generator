@@ -702,6 +702,29 @@ export const HOMING_MISSILE_STRATEGIC_CREDIT_RE =
   HOMING_MISSILE_ONE_DAMAGE_REFERENCE_RE;
 export const HOMING_MISSILE_TARGET_CHOICE_EVENT_WEIGHT = 1;
 
+// Missile Banks (variant batch 2, user 2026-11-18): a homing missile hits
+// every other robot for 1 damage; no target to choose, so no strategic x2 and
+// no target-choice planning event. Its activation is recorded by a weightless
+// "missile-bank-fire" event instead (counted, never planning load). Being hit
+// by other robots' missiles is not modelled, as without the rule.
+export const MISSILE_BANK_FIRE_EVENT_TYPE = "missile-bank-fire";
+
+export function isHomingMissileActivationEvent(event) {
+  return event?.type === "homing-missile-target-choice" || event?.type === MISSILE_BANK_FIRE_EVENT_TYPE;
+}
+
+export function getHomingMissileDamageEquivalents(options = {}) {
+  if (!options?.missileBanks) return HOMING_MISSILE_STRATEGIC_DAMAGE_EQUIVALENTS;
+  const playerCount = Number(options.playerCount);
+  return Math.max(1, (Number.isFinite(playerCount) ? playerCount : 4) - 1);
+}
+
+export function getHomingMissileCreditRE(options = {}) {
+  return options?.missileBanks
+    ? getHomingMissileDamageEquivalents(options) * HOMING_MISSILE_ONE_DAMAGE_REFERENCE_RE
+    : HOMING_MISSILE_STRATEGIC_CREDIT_RE;
+}
+
 
 export function getRegisterTimeline(route) {
   if (!route?.transitions?.length) {
