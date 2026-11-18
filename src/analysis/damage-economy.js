@@ -1587,6 +1587,9 @@ export function getDamageEconomyRealizedDamageForTransition(
   let mineDamageUnits = 0;
   // Perils of the Warp: 1 per portal, teleporter or space bridge use.
   let warpDamageUnits = 0;
+  // Battery Overcharge: 1 when the battery gives its Energy (ending a
+  // register on it, as getRouteEnergyShadowStep credits it).
+  let batteryDamageUnits = 0;
   const rebootDamageUnits = transition?.rebooted
     ? (options.moreDeadlyGame ? 3 : 2)
     : 0;
@@ -1694,6 +1697,9 @@ export function getDamageEconomyRealizedDamageForTransition(
     if (hasFeatureType(finalTile, "radioactiveWaste")) {
       radioactiveWasteDamageUnits += 1;
     }
+    if (options.batteryOvercharge && hasFeatureType(finalTile, "battery")) {
+      batteryDamageUnits += 1;
+    }
   }
 
   const totalDamageUnits = (
@@ -1706,6 +1712,7 @@ export function getDamageEconomyRealizedDamageForTransition(
     firePitDamageUnits +
     mineDamageUnits +
     warpDamageUnits +
+    batteryDamageUnits +
     rebootDamageUnits
   );
   const sourceTypes = [];
@@ -1718,6 +1725,7 @@ export function getDamageEconomyRealizedDamageForTransition(
   if (firePitDamageUnits > 0) sourceTypes.push("fire-pit-damage");
   if (mineDamageUnits > 0) sourceTypes.push("mine-hit");
   if (warpDamageUnits > 0) sourceTypes.push("warp-damage");
+  if (batteryDamageUnits > 0) sourceTypes.push("battery-overcharge-damage");
   if (rebootDamageUnits > 0) sourceTypes.push("reboot-damage");
 
   return {
@@ -1730,6 +1738,7 @@ export function getDamageEconomyRealizedDamageForTransition(
     firePitDamageUnits,
     mineDamageUnits,
     ...(warpDamageUnits > 0 ? { warpDamageUnits } : {}),
+    ...(batteryDamageUnits > 0 ? { batteryDamageUnits } : {}),
     rebootDamageUnits,
     totalDamageUnits,
     sourceTypes

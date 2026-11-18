@@ -181,6 +181,8 @@ export function getVariantMentalPlanningEventsForTransition(
       applicable = Boolean(mechanicContext?.ruleSquaresTouched?.has(rule.variantId));
     } else if (rule.trigger === "warp-damage-relevant") {
       applicable = sourceTypes.has("warp-damage");
+    } else if (rule.trigger === "battery-overcharge-relevant") {
+      applicable = sourceTypes.has("battery-overcharge-damage");
     }
     if (!applicable) continue;
 

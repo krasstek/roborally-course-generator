@@ -49,12 +49,22 @@ const laser = { type: "laser", dir: "E", damage: 1 };
 const FORWARD = { id: "FORWARD", type: "move", relative: "forward", steps: 1 };
 
 // Energy step for a robot ending the register on square x of the row.
-function energyStep(map, x, transition = {}) {
-  const options = { routeAwareBatteryScoring: true, routeEnergyHorizonTurns: 6, routeEnergyRegisterScore: 6.4 };
+function energyStep(map, x, transition = {}, extraOptions = {}) {
+  const options = { routeAwareBatteryScoring: true, routeEnergyHorizonTurns: 6, routeEnergyRegisterScore: 6.4, ...extraOptions };
   return getRouteEnergyShadowStep(map, { x, y: 0 }, "FORWARD", 3, 3, 0, options, transition);
 }
 
 const pitStop = [{ type: "pitStop" }];
+const battery = [{ type: "battery" }];
+function overchargeDamage(map, from, to, traversed) {
+  return getDamageEconomyRealizedDamageForTransition(map, {
+    from: { x: from, y: 0, facing: "E" },
+    to: { x: to, y: 0, facing: "E" },
+    traversed: traversed.map((x) => ({ x, y: 0 })),
+    rebooted: false,
+    crashed: false
+  }, { batteryOvercharge: true }, 2).batteryDamageUnits ?? 0;
+}
 
 // Perils of the Warp: warp damage for Move 1 east from x = 0 on a row.
 const portalA = [{ type: "portal", id: "A" }];
@@ -206,6 +216,16 @@ const cases = [
   {
     name: "Perils of the Warp: a jump ramp is not a warp",
     check: () => warpDamage({ perilsOfTheWarp: true }, { 1: ramp("E") }) === 0
+  },
+  {
+    name: "Battery Overcharge: ending on a battery gives 2 Energy",
+    check: () => energyStep(row(3, { 1: battery }), 1, {}, { batteryOvercharge: true }).batteryEnergyGain === 2 &&
+      energyStep(row(3, { 1: battery }), 1).batteryEnergyGain === 1
+  },
+  {
+    name: "Battery Overcharge: ending on a battery deals 1, passing it nothing",
+    check: () => overchargeDamage(row(3, { 1: battery }), 0, 1, [1]) === 1 &&
+      overchargeDamage(row(3, { 1: battery }), 0, 2, [1, 2]) === 0
   },
   {
     name: "mine: every entry deals 1 damage",

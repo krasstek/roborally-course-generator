@@ -102,6 +102,9 @@ export function getLegacyRealizedDirectDamageScoreForRoute(tileMap, route, optio
         const finalTile = tileMap.get(tileKey(transition.to.x, transition.to.y));
         const inFirePit = isFirePit(finalTile);
         if (hasFirePitEndDamage(finalTile)) score += getFlamethrowerDamagePenalty(registerOptions);
+        if (options.batteryOvercharge && (finalTile?.features || []).some((feature) => feature.type === "battery")) {
+          score += getFlamethrowerDamagePenalty(registerOptions);
+        }
         for (const feature of finalTile?.features || []) {
           if (feature.type === "laser" && !inFirePit) {
             score += Math.max(0, getTilePenaltyForFeature(feature, {

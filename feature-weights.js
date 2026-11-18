@@ -49,6 +49,12 @@ export const CHEAP_BATTERY_SCORE = Number((-CHEAP_ENERGY_VALUE.energy * CHEAP_EN
 export const CHEAP_BATTERY_UPGRADE_WORLD_SCORE = Number((
   -(CHEAP_ENERGY_VALUE.energy + CHEAP_ENERGY_VALUE.card) * CHEAP_ENERGY_SCORE_PER_RE
 ).toFixed(2));
+// Battery Overcharge (variant batch 2): two Energy per activation; its damage
+// is priced by the damage model, not here.
+export const CHEAP_BATTERY_OVERCHARGE_SCORE = Number((-2 * CHEAP_ENERGY_VALUE.energy * CHEAP_ENERGY_SCORE_PER_RE).toFixed(2));
+export const CHEAP_BATTERY_OVERCHARGE_UPGRADE_WORLD_SCORE = Number((
+  -(2 * CHEAP_ENERGY_VALUE.energy + CHEAP_ENERGY_VALUE.card) * CHEAP_ENERGY_SCORE_PER_RE
+).toFixed(2));
 // Chop Shop: the better of +1 Energy and one card (Upgrade World: Energy and a
 // card, or two cards).
 export const CHEAP_CHOP_SHOP_SCORE = Number((
@@ -431,6 +437,9 @@ export function getTilePenaltyForFeature(feature, options = {}) {
     return Number((2.8 * oilMultiplier).toFixed(2));
   }
   if (feature.type === "battery" && options.batteryActive) {
+    if (options.batteryOvercharge) {
+      return options.upgradeWorld ? CHEAP_BATTERY_OVERCHARGE_UPGRADE_WORLD_SCORE : CHEAP_BATTERY_OVERCHARGE_SCORE;
+    }
     return options.upgradeWorld ? CHEAP_BATTERY_UPGRADE_WORLD_SCORE : CHEAP_BATTERY_SCORE;
   }
   if (feature.type === "chopShop" && options.batteryActive) {

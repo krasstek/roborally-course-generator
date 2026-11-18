@@ -45,6 +45,7 @@ const VARIANT_COMPLEXITY = {
   tarSpills: 1,
   shallowPits: 1,
   perilsOfTheWarp: 1,
+  batteryOvercharge: 1,
   steepRamps: 1,
   turboRamps: 1,
   setToKill: 1,
@@ -407,6 +408,7 @@ const VARIANT_DEFINITION_ROWS = [
       label: "Batteries Are Pit Stops",
       description: "Batteries work as pit stops. With Dynamic Archiving they still archive.",
       featureTypes: ["battery"],
+      incompatibleWith: ["batteryOvercharge"],
       reason: "Requires batteries in the selected sets."
     },
     {
@@ -544,6 +546,33 @@ const VARIANT_DEFINITION_ROWS = [
       reason: "Perils of the Warp needs at least one selected board with a portal, teleporter or space bridge."
     },
     applyBundle: applyBooleanField("perilsOfTheWarp")
+  },
+  {
+    id: "batteryOvercharge",
+    label: "Battery Overcharge",
+    category: VARIANT_CATEGORIES.factoryFloor,
+    controlId: "variant-battery-overcharge",
+    defaultState: "off",
+    description: "A battery gives 2 Energy instead of 1, and every time it gives Energy the robot also takes 1 damage.",
+    cost: VARIANT_COMPLEXITY.batteryOvercharge,
+    complexityRationale: "One persistent rule changes what an existing board element gives.",
+    mentalEvent: {
+      cadence: "once-per-game-turn",
+      trigger: "battery-overcharge-relevant",
+      eventType: "variant-rule:battery-overcharge",
+      rationale: "Remember once in a turn that the battery gives 2 Energy and 1 damage when the route takes it."
+    },
+    availability: {
+      type: "featureTypeAvailable",
+      featureType: "battery",
+      reason: "Requires batteries in the selected sets."
+    },
+    constructionRequirement: {
+      type: "boardFeatureAnyOf",
+      featureTypes: ["battery"],
+      reason: "Battery Overcharge needs at least one selected board with a battery."
+    },
+    applyBundle: applyBooleanField("batteryOvercharge")
   },
   {
     id: "setToKill",

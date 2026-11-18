@@ -239,13 +239,19 @@ export function applyFlattenedRouteEnergyGain(
 // search may use this deliberately conservative one-step reward ceiling.  Exposure,
 // reserve caps and late-race timing can only reduce the realized reward, so subtracting
 // this ceiling gives a safe lower bound on successor cost.
+// Battery Overcharge (variant batch 2): a battery gives 2 Energy (and 1
+// damage, damage-economy.js) whenever it gives Energy.
+export function getBatteryEnergyGain(options = {}) {
+  return options.batteryOvercharge ? 2 : 1;
+}
+
 export function getRouteEnergyDominanceBoundConfig(options = {}) {
   if (!isRouteAwareBatteryScoringActive(options)) {
     return { active: false, energyCubeScore: 0, unknownCardScore: 0, upgradeWorld: false };
   }
   const registerScore = Number(options.routeEnergyRegisterScore);
   if (!Number.isFinite(registerScore)) {
-    return { active: true, unbounded: true, energyCubeScore: Infinity, unknownCardScore: Infinity, upgradeWorld: Boolean(options.upgradeWorld) };
+    return { active: true, unbounded: true, energyCubeScore: Infinity, unknownCardScore: Infinity, upgradeWorld: Boolean(options.upgradeWorld), batteryEnergy: getBatteryEnergyGain(options) };
   }
   const nonnegativeRegisterScore = Math.max(0, registerScore);
   // The largest values in the energy value table bound every single gain.
@@ -255,6 +261,7 @@ export function getRouteEnergyDominanceBoundConfig(options = {}) {
   return {
     active: true,
     unbounded: false,
+    batteryEnergy: getBatteryEnergyGain(options),
     energyCubeScore,
     unknownCardScore,
     freeInstallScore,
@@ -290,7 +297,7 @@ export function getRouteEnergyDominanceRewardUpperBound(
 
   let rewardUpperBound = powerUp ? cubeScore : 0;
   if (onBattery) {
-    rewardUpperBound += cubeScore + upgradeCardScore;
+    rewardUpperBound += cubeScore * (boundConfig.batteryEnergy ?? 1) + upgradeCardScore;
   }
   if (onChopShop) {
     const energyOption = cubeScore + upgradeCardScore;
@@ -397,7 +404,7 @@ export function getRouteEnergyShadowStep(
   if (onBattery) {
     const energyPackage = applyFlattenedRouteEnergyGain(
       energy,
-      1,
+      getBatteryEnergyGain(options),
       nextAbsoluteActionCount,
       options
     );

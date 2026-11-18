@@ -1937,6 +1937,11 @@ export function getEndOfRegisterFeaturePenalty(tileMap, state, options = {}) {
     penalty += getFlamethrowerDamagePenalty(options);
   }
 
+  // Battery Overcharge: the battery's Energy comes with 1 damage.
+  if (options.batteryOvercharge && hasFeatureType(tile, "battery")) {
+    penalty += getFlamethrowerDamagePenalty(options);
+  }
+
   // Repair Stations are an optional rule on ordinary checkpoints, not a
   // standalone board feature. Flag 0 is excluded from the playable checkpoint map.
   if (options.repairStations) {

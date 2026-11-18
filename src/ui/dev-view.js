@@ -133,6 +133,7 @@ const TRACE_DAMAGE_SOURCE_LABELS = {
   "fire-pit-damage": "fire pit",
   "mine-hit": "mine",
   "warp-damage": "warp",
+  "battery-overcharge-damage": "battery overcharge",
   "reboot-damage": "reboot",
   "robot-laser-expected": "robot lasers, expected"
 };
