@@ -81,7 +81,11 @@ export function getLengthEconomyStartingEnergyOptions(baseOptions, startAnalysis
   const adjustment = meanFinite(adjustments);
   const baseEnergy = getCourseStartingEnergy(baseOptions);
   const maxEnergy = getCourseMaxEnergy(baseOptions);
-  const signed = preferences.subsidizedStarts ? adjustment : -adjustment;
+  // Signed start pricing gives each start its own direction (energyDirection).
+  const receives = startAnalysis?.energyDirection
+    ? startAnalysis.energyDirection === "subsidy"
+    : Boolean(preferences.subsidizedStarts);
+  const signed = receives ? adjustment : -adjustment;
   return {
     ...baseOptions,
     startingEnergy: clamp(Math.round(baseEnergy + signed), 0, maxEnergy)

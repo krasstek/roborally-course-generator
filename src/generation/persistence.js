@@ -273,7 +273,8 @@ export function serializeScenario(scenario) {
         lateEnergyCost: entry.lateEnergyCost ?? null,
         lateUnavailable: Boolean(entry.lateUnavailable),
         payToWinUnavailable: Boolean(entry.payToWinUnavailable),
-        lateAdjustedScore: entry.lateAdjustedScore ?? null
+        lateAdjustedScore: entry.lateAdjustedScore ?? null,
+        ...(entry.energyDirection ? { energyDirection: entry.energyDirection } : {})
       }))
       : null,
     payToWinPricing: (scenario.payToWin || scenario.subsidizedStarts) ? (scenario.sequence?.firstLeg?.summary?.payToWin ?? null) : null,

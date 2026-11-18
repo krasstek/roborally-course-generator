@@ -59,6 +59,20 @@ import {
 import { isVariantForced } from "./variant-availability.js";
 import { getNearestTargetBand } from "./target-selection.js";
 
+
+// Visible Energy changes a forced start-price rule made. Under signed start
+// pricing (both rules drawn) each forced rule needs its own direction: Pay to
+// Win paid starts, Subsidized Starts subsidized ones.
+function getForcedEconomyMeaningfulCount(pricedSummary, preferences) {
+  if (!pricedSummary?.signedStartPricing) {
+    return Number(pricedSummary?.meaningfulEnergyAdjustmentCount) || 0;
+  }
+  const counts = [];
+  if (isVariantForced(preferences, "payToWin")) counts.push(Number(pricedSummary.meaningfulPaymentCount) || 0);
+  if (isVariantForced(preferences, "subsidizedStarts")) counts.push(Number(pricedSummary.meaningfulSubsidyCount) || 0);
+  return counts.length ? Math.min(...counts) : Number(pricedSummary.meaningfulEnergyAdjustmentCount) || 0;
+}
+
 export function classifyCandidate(sequence, preferences, context = {}) {
   const reachableStarts = computeCourseReachableStarts(sequence.firstLeg);
   const usableStarts = computeUsableStarts(sequence.firstLeg, preferences);
@@ -217,7 +231,7 @@ export function classifyCandidate(sequence, preferences, context = {}) {
       preferences.payToWin && isVariantForced(preferences, "payToWin")
     ) &&
     sequence.firstLeg.summary.payToWin?.active &&
-    !(Number(sequence.firstLeg.summary.payToWin?.meaningfulEnergyAdjustmentCount) > 0)
+    !(getForcedEconomyMeaningfulCount(sequence.firstLeg.summary.payToWin, preferences) > 0)
   ) {
     softFailures.push("forced-economy-no-effect");
   }
@@ -535,7 +549,7 @@ export function classifyCandidate(sequence, preferences, context = {}) {
   const forcedEconomyNoEffect = Boolean(
     forcedEconomyVariantId &&
     pricedSummary?.active &&
-    !(Number(pricedSummary.meaningfulEnergyAdjustmentCount) > 0)
+    !(getForcedEconomyMeaningfulCount(pricedSummary, preferences) > 0)
   );
   const forcedEconomyEffectFitPenalty = forcedEconomyNoEffect
     ? FORCED_ECONOMY_NO_EFFECT_FIT_PENALTY

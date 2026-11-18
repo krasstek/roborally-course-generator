@@ -673,10 +673,12 @@ export function computeRETurnVariantDifficultyAccounting(rawTurnRE, preferences 
     }
   }
   if (preferences.payToWin || preferences.subsidizedStarts) {
-    mechanical(
-      preferences.subsidizedStarts ? "subsidizedStarts" : "payToWin",
-      "selector-aware starting-Energy balance/pricing; setup evaluation adds no generic RE-turn difficulty"
-    );
+    // Signed start pricing (both drawn) records both rules.
+    for (const ruleId of preferences.signedStartPricing
+      ? ["payToWin", "subsidizedStarts"]
+      : [preferences.subsidizedStarts ? "subsidizedStarts" : "payToWin"]) {
+      mechanical(ruleId, "selector-aware starting-Energy balance/pricing; setup evaluation adds no generic RE-turn difficulty");
+    }
   }
 
   const scaled = adjusted * Math.exp(CLOG_REFIT_DIFFICULTY_LOG_OFFSET);
@@ -1125,10 +1127,12 @@ export function computeVariantDifficultyAccounting(raw, preferences = {}, sequen
     mechanical("competitiveMode", "setup strategy owned by Competitive completed-RE blocking/selection; no legacy raw difficulty residue");
   }
   if (preferences.payToWin || preferences.subsidizedStarts) {
-    mechanical(
-      preferences.subsidizedStarts ? "subsidizedStarts" : "payToWin",
-      "starting-Energy selector/pricing ownership; no legacy raw difficulty residue"
-    );
+    // Signed start pricing (both drawn) records both rules.
+    for (const ruleId of preferences.signedStartPricing
+      ? ["payToWin", "subsidizedStarts"]
+      : [preferences.subsidizedStarts ? "subsidizedStarts" : "payToWin"]) {
+      mechanical(ruleId, "starting-Energy selector/pricing ownership; no legacy raw difficulty residue");
+    }
   }
 
   return {
