@@ -98,7 +98,10 @@ function applyBooleanField(field) {
 export const VARIANT_EXCLUSIVE_GROUPS = Object.freeze({
   startingSpaceSetup: Object.freeze({
     label: "starting-space setup",
-    description: "Virtual Bots, Competitive Mode, Pay to Win, and Subsidized Starts are mutually exclusive starting-space setups; only one can be active on a generated course."
+    description: "Virtual Bots, Competitive Mode and the start-price rules are mutually exclusive starting-space setups. Pay to Win and Subsidized Starts may come together: then stronger starts pay Energy and weaker starts receive it.",
+    // Pairs inside the group that may coexist (user 2026-11-18): together they
+    // give signed start pricing (start-pricing.js).
+    compatiblePairs: Object.freeze([Object.freeze(["payToWin", "subsidizedStarts"])])
   }),
   dockLayout: Object.freeze({
     label: "dock layout",
@@ -979,6 +982,14 @@ export function getVariantExclusiveGroupConflict(leftVariantId, rightVariantId) 
   if (!sharedGroupId) {
     return null;
   }
+  const compatible = (getVariantExclusiveGroupDefinition(sharedGroupId)?.compatiblePairs ?? [])
+    .some(([first, second]) => (
+      (first === leftVariantId && second === rightVariantId) ||
+      (first === rightVariantId && second === leftVariantId)
+    ));
+  if (compatible) {
+    return null;
+  }
   return {
     id: sharedGroupId,
     ...(getVariantExclusiveGroupDefinition(sharedGroupId) ?? {})
@@ -1022,6 +1033,21 @@ export function getVariantGuidanceRules(variantId) {
   ];
 }
 
+// Pay to Win and Subsidized Starts drawn together price starts both ways
+// around the median start (start-pricing.js). Set from the raw rule flags only:
+// the generation and analysis options fold Subsidized Starts into payToWin, so
+// "payToWin && subsidizedStarts" there is true for Subsidized Starts alone.
+// The key is present only when true, so single-rule courses are unchanged.
+export function withSignedStartPricing(bundle) {
+  if (!bundle) return bundle;
+  if (bundle.payToWin && bundle.subsidizedStarts) {
+    bundle.signedStartPricing = true;
+  } else {
+    delete bundle.signedStartPricing;
+  }
+  return bundle;
+}
+
 export function buildVariantBundle(activeVariants = {}, options = {}) {
   const bundle = {
     alignedLayout: true,
@@ -1038,7 +1064,7 @@ export function buildVariantBundle(activeVariants = {}, options = {}) {
     }
   });
 
-  return bundle;
+  return withSignedStartPricing(bundle);
 }
 
 export function applyVariantGenerationOptions(baseOptions = {}, variantBundle = {}) {

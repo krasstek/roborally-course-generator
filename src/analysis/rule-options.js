@@ -131,6 +131,7 @@ export const ROUTE_RULE_EXCLUDED_KEYS = Object.freeze([
   "competitiveMode",
   "payToWin",
   "subsidizedStarts",
+  "signedStartPricing",
   "hazardousFlags",
   "movingTargets",
   "dynamicArchiving",

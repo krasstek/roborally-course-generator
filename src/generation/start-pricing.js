@@ -4,6 +4,9 @@ import {
   buildStartOccupancyMap,
   evaluateFullCourseFocusPaymentCurveUnderOccupancy,
   getCourseMaxEnergy,
+  getFullCourseFocusZeroEnergyEffectiveRE,
+  prepareFullCourseFocusPaymentContext,
+  scoreFullCourseFocusPaymentContext,
   getCourseStartingEnergy,
   getCourseStartingUpgradeCards,
   getRouteEnergyEconomyConfig,
@@ -45,6 +48,36 @@ export function isSubsidizedStartsPricing(options = {}) {
   return Boolean(options.subsidizedStarts);
 }
 
+// Signed start pricing (Pay to Win and Subsidized Starts drawn together, user
+// 2026-11-18): the median start is free, stronger starts pay Energy, weaker
+// starts receive it. Each start is priced in its own direction, set from the
+// current field's median 0-Energy effective RE (buildPayToWinPaymentCurveBundle)
+// and carried as `energyDirection` on entries and starts. The flag comes from
+// the raw rule flags (variants.js withSignedStartPricing); prices stay
+// magnitudes.
+export function isSignedStartPricing(options = {}) {
+  return Boolean(options.signedStartPricing);
+}
+
+export function getStartEnergyDirection(options = {}, entry = null) {
+  if (!isSignedStartPricing(options)) {
+    return isSubsidizedStartsPricing(options) ? "subsidy" : "payment";
+  }
+  const direction = entry?.energyDirection ??
+    (entry && options.startEnergyDirectionByIndex instanceof Map
+      ? options.startEnergyDirectionByIndex.get(entry.index)
+      : null) ??
+    options.startEnergyDirection;
+  return direction === "subsidy" ? "subsidy" : "payment";
+}
+
+export function getStartEnergyAdjustmentLimitForDirection(options = {}, direction = "payment") {
+  const startingEnergy = getCourseStartingEnergy(options);
+  return direction === "subsidy"
+    ? Math.max(0, getSubsidizedStartsMaximumEnergy(options) - startingEnergy)
+    : startingEnergy;
+}
+
 export function getSubsidizedStartsMaximumEnergy(options = {}) {
   const startingEnergy = getCourseStartingEnergy(options);
   const storageCap = getCourseMaxEnergy(options);
@@ -56,6 +89,14 @@ export function getSubsidizedStartsMaximumEnergy(options = {}) {
 
 export function getStartEnergyAdjustmentLimit(options = {}) {
   const startingEnergy = getCourseStartingEnergy(options);
+  if (isSignedStartPricing(options)) {
+    return options.startEnergyDirection
+      ? getStartEnergyAdjustmentLimitForDirection(options, options.startEnergyDirection)
+      : Math.max(
+        getStartEnergyAdjustmentLimitForDirection(options, "payment"),
+        getStartEnergyAdjustmentLimitForDirection(options, "subsidy")
+      );
+  }
   if (isSubsidizedStartsPricing(options)) {
     return Math.max(0, getSubsidizedStartsMaximumEnergy(options) - startingEnergy);
   }
@@ -342,21 +383,64 @@ export function buildPayToWinPaymentCurveBundle(
     ];
   }));
 
+  // Signed start pricing: prepare every start first (traffic and ledgers do
+  // not depend on the Energy adjustment), place the median of their 0-Energy
+  // effective RE, then score each start only in its own direction.
+  const signed = isSignedStartPricing(pricingOptions);
+  const contextByIndex = new Map();
+  let energyDirectionByIndex = null;
+  if (signed) {
+    const zeroREByIndex = new Map();
+    activeStarts.forEach((item) => {
+      const occupancyByIndex = buildPayToWinQualityOccupancy(
+        activeStarts,
+        item.index,
+        playerCount,
+        qualityScoreByIndex
+      );
+      const context = prepareFullCourseFocusPaymentContext(
+        tileMap,
+        firstLeg,
+        firstLeg.flags || [],
+        item.index,
+        occupancyByIndex,
+        pricingOptions
+      );
+      contextByIndex.set(item.index, context);
+      zeroREByIndex.set(item.index, getFullCourseFocusZeroEnergyEffectiveRE(context));
+    });
+    const finiteZero = [...zeroREByIndex.values()].filter(Number.isFinite);
+    const medianZeroRE = finiteZero.length ? medianValue(finiteZero) : 0;
+    // Lower effective RE is the stronger start: at or below the median it pays.
+    energyDirectionByIndex = new Map(activeStarts.map((item) => {
+      const zeroRE = zeroREByIndex.get(item.index);
+      return [item.index, Number.isFinite(zeroRE) && zeroRE > medianZeroRE ? "subsidy" : "payment"];
+    }));
+  }
+
   activeStarts.forEach((item) => {
-    const occupancyByIndex = buildPayToWinQualityOccupancy(
-      activeStarts,
-      item.index,
-      playerCount,
-      qualityScoreByIndex
-    );
-    const evaluation = evaluateFullCourseFocusPaymentCurveUnderOccupancy(
-      tileMap,
-      firstLeg,
-      firstLeg.flags || [],
-      item.index,
-      occupancyByIndex,
-      pricingOptions
-    );
+    let evaluation;
+    if (signed) {
+      evaluation = scoreFullCourseFocusPaymentContext(
+        contextByIndex.get(item.index),
+        { ...pricingOptions, startEnergyDirection: energyDirectionByIndex.get(item.index) }
+      );
+    } else {
+      const occupancyByIndex = buildPayToWinQualityOccupancy(
+        activeStarts,
+        item.index,
+        playerCount,
+        qualityScoreByIndex
+      );
+      evaluation = evaluateFullCourseFocusPaymentCurveUnderOccupancy(
+        tileMap,
+        firstLeg,
+        firstLeg.flags || [],
+        item.index,
+        occupancyByIndex,
+        pricingOptions
+      );
+    }
     const ordered = (evaluation?.entries ?? [])
       .slice()
       .sort((left, right) => left.payment - right.payment);
@@ -374,7 +458,9 @@ export function buildPayToWinPaymentCurveBundle(
     );
   });
 
-  return { scoreCurves, effectiveRECurves };
+  return energyDirectionByIndex
+    ? { scoreCurves, effectiveRECurves, energyDirectionByIndex }
+    : { scoreCurves, effectiveRECurves };
 }
 
 export function buildPayToWinPaymentScoreCurves(
@@ -438,6 +524,24 @@ export function buildPayToWinRegisterPricingState(
       minScore: 0,
       maxScore: 0,
       pricingModel: null
+    };
+  }
+
+  // Signed start pricing: the score-space comparator has no single direction;
+  // keep only the curves (late pricing reads each start's fullScore from them).
+  if (isSignedStartPricing(options)) {
+    const legacyRegisterScore = Math.max(0.01, Number(pricingBenchmark?.registerScore) || 6.4);
+    return {
+      entries: scoredStarts.map((entry) => ({ ...entry, energyCost: 0 })),
+      costUnit: legacyRegisterScore,
+      minScore: Math.min(...scoredStarts.map((entry) => entry.fullScore)),
+      maxScore: Math.max(...scoredStarts.map((entry) => entry.fullScore)),
+      pricingModel: {
+        method: "legacy-skipped-signed",
+        mode: "signed",
+        registerScore: legacyRegisterScore,
+        horizonTurns: pricingBenchmark?.horizonTurns ?? null
+      }
     };
   }
 
@@ -652,11 +756,14 @@ export function chooseEconomyStartAdjustmentClosestToTarget(
   options = {},
   deadBandRE = 0
 ) {
-  const subsidizedStarts = isSubsidizedStartsPricing(options);
+  const direction = getStartEnergyDirection(options, entry);
+  const subsidizedStarts = direction === "subsidy";
   const epsilon = 1e-9;
   const rawRE = Number(entry?.fullScore);
   const maxAdjustment = Math.min(
-    getStartEnergyAdjustmentLimit(options),
+    isSignedStartPricing(options)
+      ? getStartEnergyAdjustmentLimitForDirection(options, direction)
+      : getStartEnergyAdjustmentLimit(options),
     Math.max(0, (entry?.paymentScores?.length ?? 1) - 1)
   );
   const rawDelta = rawRE - targetEffectiveRE;
@@ -743,13 +850,17 @@ export function chooseEconomyStartAdjustmentClosestToTarget(
 
 export function optimizeEconomyStartingEnergyAdjustments(entries = [], options = {}) {
   const subsidizedStarts = isSubsidizedStartsPricing(options);
+  const signed = isSignedStartPricing(options);
   const finiteRaw = entries
     .map((entry) => Number(entry.fullScore))
     .filter(Number.isFinite);
-  const targetEffectiveRE = finiteRaw.length
-    ? (subsidizedStarts ? Math.min(...finiteRaw) : Math.max(...finiteRaw))
-    : 0;
   const fieldMedianEffectiveRE = finiteRaw.length ? medianValue(finiteRaw) : 0;
+  // Signed start pricing anchors on the median start (it pays nothing).
+  const targetEffectiveRE = !finiteRaw.length
+    ? 0
+    : signed
+      ? fieldMedianEffectiveRE
+      : (subsidizedStarts ? Math.min(...finiteRaw) : Math.max(...finiteRaw));
   const fairnessRangeRE = getPricedStartFairnessRangeRE(entries, options);
   const deadBandRE = fairnessRangeRE * PRICED_START_DEAD_BAND_RANGE_FRACTION;
   const adjustmentByIndex = new Map();
@@ -800,9 +911,11 @@ export function optimizeEconomyStartingEnergyAdjustments(entries = [], options =
     maxAdjustment: getStartEnergyAdjustmentLimit(options),
     targetEffectiveRE,
     fieldMedianEffectiveRE,
-    targetPolicy: subsidizedStarts
-      ? "strongest-start-directional-anchor"
-      : "weakest-start-directional-anchor",
+    targetPolicy: signed
+      ? "field-median-signed-anchor"
+      : subsidizedStarts
+        ? "strongest-start-directional-anchor"
+        : "weakest-start-directional-anchor",
     capLimitedIndices
   };
 }
@@ -814,6 +927,7 @@ export function buildPayToWinEffectiveREPricingState(
   paymentEffectiveREByIndex = null
 ) {
   const subsidizedStarts = isSubsidizedStartsPricing(options);
+  const signed = isSignedStartPricing(options);
   const maxAdjustment = getStartEnergyAdjustmentLimit(options);
   const rawEntries = activeStarts.map((item) => {
     const rawCurve = paymentEffectiveREByIndex?.get(item.index);
@@ -824,8 +938,12 @@ export function buildPayToWinEffectiveREPricingState(
       : Number.isFinite(curveZero)
         ? curveZero
         : Number(item.normalFairnessEffectiveRE);
+    const energyDirection = signed ? getStartEnergyDirection(options, item) : null;
+    const entryMaxAdjustment = signed
+      ? getStartEnergyAdjustmentLimitForDirection(options, energyDirection)
+      : maxAdjustment;
     const paymentScores = Array.from(
-      { length: maxAdjustment + 1 },
+      { length: entryMaxAdjustment + 1 },
       (_, adjustment) => {
         const value = Array.isArray(rawCurve) ? Number(rawCurve[adjustment]) : null;
         return Number.isFinite(value)
@@ -839,7 +957,8 @@ export function buildPayToWinEffectiveREPricingState(
       index: item.index,
       adjustedScore: item.adjustedScore,
       fullScore: fullRE,
-      paymentScores
+      paymentScores,
+      ...(energyDirection ? { energyDirection } : {})
     };
   }).filter((entry) => Number.isFinite(entry.fullScore));
 
@@ -857,19 +976,22 @@ export function buildPayToWinEffectiveREPricingState(
   const targetRE = Number(optimized.targetEffectiveRE);
   const centerRE = Number(optimized.fieldMedianEffectiveRE);
   const targetEntry = [...rawEntries].sort((left, right) => (
-    subsidizedStarts
-      ? left.fullScore - right.fullScore || left.index - right.index
-      : right.fullScore - left.fullScore || left.index - right.index
+    signed
+      ? Math.abs(left.fullScore - targetRE) - Math.abs(right.fullScore - targetRE) || left.index - right.index
+      : subsidizedStarts
+        ? left.fullScore - right.fullScore || left.index - right.index
+        : right.fullScore - left.fullScore || left.index - right.index
   ))[0] ?? null;
   const entries = rawEntries.map((entry) => {
     const energyCost = optimized.adjustmentByIndex.get(entry.index) ?? 0;
     const choice = optimized.choiceByIndex.get(entry.index) ?? null;
     const postRE = Number(entry.paymentScores?.[energyCost]);
-    const directionalAdvantage = subsidizedStarts
+    const entrySubsidy = signed ? entry.energyDirection === "subsidy" : subsidizedStarts;
+    const directionalAdvantage = entrySubsidy
       ? Math.max(0, entry.fullScore - targetRE)
       : Math.max(0, targetRE - entry.fullScore);
     const remainingDirectionalAdvantage = Number.isFinite(postRE)
-      ? subsidizedStarts
+      ? entrySubsidy
         ? Math.max(0, postRE - targetRE)
         : Math.max(0, targetRE - postRE)
       : directionalAdvantage;
@@ -913,10 +1035,12 @@ export function buildPayToWinEffectiveREPricingState(
     ? Math.max(...entries.map((entry) => entry.energyCost))
     : 0;
   const pricingModel = {
-    method: subsidizedStarts
-      ? "selector-aware-start-specific-effective-re-balance-subsidy-v49dz"
-      : "selector-aware-start-specific-effective-re-balance-payment-v49dz",
-    mode: subsidizedStarts ? "subsidy" : "payment",
+    method: signed
+      ? "selector-aware-start-specific-effective-re-balance-signed-median"
+      : subsidizedStarts
+        ? "selector-aware-start-specific-effective-re-balance-subsidy-v49dz"
+        : "selector-aware-start-specific-effective-re-balance-payment-v49dz",
+    mode: signed ? "signed" : subsidizedStarts ? "subsidy" : "payment",
     ownership: "completed-effective-re",
     occupancyQualityOwner: "completed-effective-re",
     energyStepPolicy: "per-start-discrete-closest-to-directional-anchor-before-pruning-v49dz",
@@ -932,7 +1056,17 @@ export function buildPayToWinEffectiveREPricingState(
     startingEnergy: getCourseStartingEnergy(options),
     maxEnergy: getCourseMaxEnergy(options),
     maxAdjustment,
-    maxSubsidy: subsidizedStarts ? maxAdjustment : 0,
+    maxSubsidy: signed
+      ? getStartEnergyAdjustmentLimitForDirection(options, "subsidy")
+      : subsidizedStarts ? maxAdjustment : 0,
+    ...(signed
+      ? {
+        signedStartPricing: true,
+        maxPayment: getStartEnergyAdjustmentLimitForDirection(options, "payment"),
+        paymentCount: entries.filter((entry) => entry.energyDirection === "payment" && entry.energyCost > 0).length,
+        subsidyCount: entries.filter((entry) => entry.energyDirection === "subsidy" && entry.energyCost > 0).length
+      }
+      : {}),
     subsidyStartingEnergyCeiling: subsidizedStarts
       ? getSubsidizedStartsMaximumEnergy(options)
       : null,
@@ -995,11 +1129,15 @@ export function getPayToWinCostEntries(firstLeg, tileMap, excludedIndices = new 
     activeStarts,
     options
   );
+  const energyDirectionByIndex = paymentCurves.energyDirectionByIndex ?? null;
+  const directionOptions = energyDirectionByIndex
+    ? { ...options, startEnergyDirectionByIndex: energyDirectionByIndex }
+    : options;
   const legacyState = buildPayToWinRegisterPricingState(
     activeStarts,
     null,
     pricingBenchmark,
-    options,
+    directionOptions,
     paymentCurves.scoreCurves
   );
   const effectiveREByIndex = new Map(activeStarts.map((item) => [
@@ -1009,11 +1147,12 @@ export function getPayToWinCostEntries(firstLeg, tileMap, excludedIndices = new 
   const effectiveREPricingState = buildPayToWinEffectiveREPricingState(
     activeStarts,
     effectiveREByIndex,
-    options,
+    directionOptions,
     paymentCurves.effectiveRECurves
   );
   return {
     ...effectiveREPricingState,
+    ...(energyDirectionByIndex ? { energyDirectionByIndex } : {}),
     legacyPricingState: legacyState,
     legacyScoreCurves: paymentCurves.scoreCurves,
     effectiveRECurves: paymentCurves.effectiveRECurves,
@@ -1495,6 +1634,7 @@ export function getPayToWinLateCostEntries(
     );
   let fallbackPaymentCurves;
   let fallbackEffectiveRECurves;
+  let energyDirectionByIndex = baseCostState?.energyDirectionByIndex ?? null;
   if (baseCostState) {
     fallbackPaymentCurves = baseCostState.legacyScoreCurves ?? new Map(
       (baseCostState.legacyPricingState?.entries ?? []).map((entry) => [entry.index, entry.paymentScores])
@@ -1517,6 +1657,12 @@ export function getPayToWinLateCostEntries(
     );
     fallbackPaymentCurves = fallbackBundle.scoreCurves;
     fallbackEffectiveRECurves = fallbackBundle.effectiveRECurves;
+    energyDirectionByIndex = fallbackBundle.energyDirectionByIndex ?? null;
+  }
+  // Signed start pricing: each start keeps the direction of the base field in
+  // every selector scenario (its curves run one way); only the median moves.
+  if (energyDirectionByIndex) {
+    options = { ...options, startEnergyDirectionByIndex: energyDirectionByIndex };
   }
   const fallbackFullScores = new Map(activeStarts.map((item) => [
     item.index,
@@ -1672,7 +1818,10 @@ export function getPayToWinLateCostEntries(
           {
             ...pricingOptions,
             playerCount: config.playerCount,
-            fullCourseTrafficPasses: 1
+            fullCourseTrafficPasses: 1,
+            ...(energyDirectionByIndex
+              ? { startEnergyDirection: energyDirectionByIndex.get(item.index) }
+              : {})
           }
         );
         const paymentEntries = scenario?.entries ?? [];
@@ -1933,9 +2082,15 @@ export function formatPayToWinEnergyCost(startAnalysis, options = {}) {
   }
 
   const subsidizedStarts = Boolean(options.subsidizedStarts);
+  // Signed start pricing (energyDirection set): "−n" pays, "+n" receives.
+  const direction = startAnalysis.energyDirection ?? null;
   const formatValue = (value) => {
     const numeric = Number(value);
     if (!Number.isFinite(numeric)) return null;
+    if (direction) {
+      if (numeric === 0) return "0";
+      return direction === "subsidy" ? `+${numeric}` : `\u2212${numeric}`;
+    }
     return subsidizedStarts ? `+${numeric}` : String(numeric);
   };
   const normalCost = Number(startAnalysis.energyCost);
@@ -2136,6 +2291,10 @@ export function findPricedStartPrePricingOutlier(entries = [], playerCount = 1) 
 // loop then reprices and checks again, one start at a time, never below the
 // player count. Early-selector curves only.
 export function findPricedStartAnchorReachRemoval(entries = [], options = {}, playerCount = 1) {
+  // Signed start pricing anchors on the median, which one far-out start cannot
+  // drag; starts Energy cannot bring within range are pruned by the residual
+  // gap (chooseEconomyCompensatedStartRemoval) as in the one-way rules.
+  if (isSignedStartPricing(options)) return null;
   const minimumStarts = Math.max(1, playerCount || 1);
   const subsidizedStarts = isSubsidizedStartsPricing(options);
   const field = (entries || [])
@@ -2253,6 +2412,7 @@ export function chooseEconomyCompensatedStartRemoval(
       fullScore: Number(entry.fullScore),
       energyCost: entry.energyCost,
       lateEnergyCost: lateEntry?.lateEnergyCost ?? entry.energyCost,
+      ...(entry.energyDirection ? { energyDirection: entry.energyDirection } : {}),
       registerEquivalent: entry.registerEquivalent,
       lateRegisterEquivalent: lateEntry?.lateRegisterEquivalent ?? entry.registerEquivalent,
       beyondEnergyRangePruned: true,
@@ -2338,6 +2498,7 @@ export function chooseEconomyCompensatedStartRemoval(
     fullScore: Number(selected.entry.fullScore),
     energyCost: selected.entry.energyCost,
     lateEnergyCost: selected.lateEntry?.lateEnergyCost ?? selected.entry.energyCost,
+    ...(selected.entry.energyDirection ? { energyDirection: selected.entry.energyDirection } : {}),
     registerEquivalent: selected.entry.registerEquivalent,
     lateRegisterEquivalent: selected.lateEntry?.lateRegisterEquivalent ?? selected.entry.registerEquivalent,
     effectiveREPruned: selected.isOutlier,
@@ -2483,7 +2644,7 @@ export function evaluatePayToWinSelectorAwarePricingState(
       energyStepPolicy: "per-start-discrete-closest-to-directional-anchor-before-pruning-v49dz",
       compensationFirst: true,
       selectorAware: true,
-      mode: isSubsidizedStartsPricing(pricingOptions) ? "subsidy" : "payment",
+      mode: isSignedStartPricing(pricingOptions) ? "signed" : isSubsidizedStartsPricing(pricingOptions) ? "subsidy" : "payment",
       early: {
         rawStdDev: Number.isFinite(rawEarlyStdDev)
           ? Number(rawEarlyStdDev.toFixed(3))
@@ -2656,7 +2817,10 @@ export function mergeEconomyTargetedRescueRoutesIntoField(
 }
 
 export function getEconomyTargetedRescueDirectionProfile(removal, pricingOptions = {}) {
-  const subsidyMode = isSubsidizedStartsPricing(pricingOptions);
+  // Signed start pricing: the removed start's own direction.
+  const subsidyMode = isSignedStartPricing(pricingOptions)
+    ? removal?.energyDirection === "subsidy"
+    : isSubsidizedStartsPricing(pricingOptions);
   const earlyDelta = Number(removal?.registerEquivalent);
   const lateDelta = Number(removal?.lateRegisterEquivalent);
   const directional = [earlyDelta, lateDelta].filter(Number.isFinite);
@@ -2692,7 +2856,12 @@ export function attemptEconomyTargetedEnergyRescue({
   if (!targetAnalysis?.start || !Array.isArray(currentFirstLeg?.flags) || !currentFirstLeg.flags.length) {
     return { attempted: false, reason: "missing-target-route-context" };
   }
-  const adjustmentLimit = getStartEnergyAdjustmentLimit(pricingOptions);
+  const signedDirection = isSignedStartPricing(pricingOptions)
+    ? (removal?.energyDirection === "subsidy" ? "subsidy" : "payment")
+    : null;
+  const adjustmentLimit = signedDirection
+    ? getStartEnergyAdjustmentLimitForDirection(pricingOptions, signedDirection)
+    : getStartEnergyAdjustmentLimit(pricingOptions);
   if (!(adjustmentLimit > 0)) {
     return { attempted: false, reason: "no-legal-energy-adjustment" };
   }
@@ -2712,7 +2881,9 @@ export function attemptEconomyTargetedEnergyRescue({
 
   const baseStartingEnergy = getCourseStartingEnergy(pricingOptions);
   const maxEnergy = getCourseMaxEnergy(pricingOptions);
-  const subsidyMode = isSubsidizedStartsPricing(pricingOptions);
+  const subsidyMode = signedDirection
+    ? signedDirection === "subsidy"
+    : isSubsidizedStartsPricing(pricingOptions);
   const rescueStartingEnergy = subsidyMode
     ? Math.min(maxEnergy, baseStartingEnergy + adjustmentLimit)
     : Math.max(0, baseStartingEnergy - adjustmentLimit);
@@ -3436,6 +3607,13 @@ export function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, option
 
   const activeScores = earlyCostState.entries.map((entry) => entry.postPaymentFullScore);
   const meanScore = activeScores.length ? average(activeScores) : 0;
+  // Signed start pricing: each start's own direction (absent otherwise).
+  const signedPricing = isSignedStartPricing(options);
+  const energyDirectionByIndex = signedPricing
+    ? new Map(earlyCostState.entries
+      .filter((entry) => entry.energyDirection)
+      .map((entry) => [entry.index, entry.energyDirection]))
+    : null;
   const prunedOutliers = pruned.map((item) => ({
     index: item.index,
     score: item.score,
@@ -3443,7 +3621,9 @@ export function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, option
     actionDelta: 0,
     reasons: {
       payToWinPruned: true,
-      subsidizedStarts: isSubsidizedStartsPricing(options),
+      subsidizedStarts: signedPricing
+        ? item.energyDirection === "subsidy"
+        : isSubsidizedStartsPricing(options),
       energyCost: item.energyCost,
       outlierPass: item.pass,
       removalReason: item.reason,
@@ -3458,7 +3638,9 @@ export function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, option
     actionDelta: 0,
     reasons: {
       payToWinUnavailable: true,
-      subsidizedStarts: isSubsidizedStartsPricing(options),
+      subsidizedStarts: signedPricing
+        ? energyDirectionByIndex.get(item.index) === "subsidy"
+        : isSubsidizedStartsPricing(options),
       energyCost: item.energyCost,
       lateEnergyCost: lateCostByIndex.get(item.index),
       startingEnergy,
@@ -3475,6 +3657,7 @@ export function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, option
       advantage: entry.advantage,
       registerEquivalent: entry.registerEquivalent,
       energyCost: entry.energyCost,
+      ...(entry.energyDirection ? { energyDirection: entry.energyDirection } : {}),
       unavailable: entry.energyCost >= denialCost,
       postPaymentFullScore: entry.postPaymentFullScore,
       postAdjustmentDeltaScore: entry.postAdjustmentDeltaScore,
@@ -3515,7 +3698,10 @@ export function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, option
       payToWinUnavailable: fullyUnavailableIndices.has(startAnalysis.index),
       lateAdjustedScore: lateAdjustedScoreByIndex.has(startAnalysis.index)
         ? lateAdjustedScoreByIndex.get(startAnalysis.index)
-        : null
+        : null,
+      ...(energyDirectionByIndex?.has(startAnalysis.index)
+        ? { energyDirection: energyDirectionByIndex.get(startAnalysis.index) }
+        : {})
     })),
     summary: {
       ...currentFirstLeg.summary,
@@ -3533,8 +3719,20 @@ export function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, option
       outliers,
       payToWin: {
         active: true,
-        mode: isSubsidizedStartsPricing(options) ? "subsidy" : "payment",
+        mode: signedPricing ? "signed" : isSubsidizedStartsPricing(options) ? "subsidy" : "payment",
         subsidizedStarts: isSubsidizedStartsPricing(options),
+        ...(signedPricing
+          ? {
+            signedStartPricing: true,
+            maxPayment: getStartEnergyAdjustmentLimitForDirection(options, "payment"),
+            meaningfulPaymentCount: pricingEntries.filter((entry) => (
+              entry.energyDirection === "payment" && Math.max(Number(entry.energyCost) || 0, Number(entry.lateEnergyCost) || 0) > 0
+            )).length,
+            meaningfulSubsidyCount: pricingEntries.filter((entry) => (
+              entry.energyDirection === "subsidy" && Math.max(Number(entry.energyCost) || 0, Number(entry.lateEnergyCost) || 0) > 0
+            )).length
+          }
+          : {}),
         pricingEconomyMethod: "simulated-upgrade-economy-table-v50",
         pruningPolicy: "pre-control-energy-economy-v49dz + one-shot-final-start-balance-v49fn",
         compensationFirst: true,
@@ -3547,7 +3745,9 @@ export function applyPayToWinStartPricing(firstLeg, tileMap, playerCount, option
         startingEnergy,
         maxEnergy,
         startingUpgradeCards,
-        maxSubsidy: isSubsidizedStartsPricing(options) ? getStartEnergyAdjustmentLimit(options) : 0,
+        maxSubsidy: signedPricing
+          ? getStartEnergyAdjustmentLimitForDirection(options, "subsidy")
+          : isSubsidizedStartsPricing(options) ? getStartEnergyAdjustmentLimit(options) : 0,
         subsidyStartingEnergyCeiling: isSubsidizedStartsPricing(options)
           ? getSubsidizedStartsMaximumEnergy(options)
           : null,

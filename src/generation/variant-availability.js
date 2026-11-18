@@ -8,7 +8,8 @@ import {
   getVariantDefinition,
   getVariantExclusiveGroupConflict,
   getVariantRequirementIds,
-  isLayoutPreferenceVariant
+  isLayoutPreferenceVariant,
+  withSignedStartPricing
 } from "../../variants.js";
 import { cachedAssets } from "./assets.js";
 import { countFeatureTypeInTileMap } from "./board-profile.js";
@@ -763,7 +764,7 @@ export function applyCourseVariantAvailability(variantBundle, tileMap, preferenc
   }
 
   return {
-    variantBundle: nextBundle,
+    variantBundle: withSignedStartPricing(nextBundle),
     blockedRequired,
     deactivatedZeroCost
   };

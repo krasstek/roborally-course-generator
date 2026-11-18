@@ -106,7 +106,10 @@ export {
   analyzeFullCourse,
   analyzeFullCourseCooperative,
   evaluateFullCourseFocusPaymentCurveUnderOccupancy,
-  recomputeFirstLegPressure
+  getFullCourseFocusZeroEnergyEffectiveRE,
+  prepareFullCourseFocusPaymentContext,
+  recomputeFirstLegPressure,
+  scoreFullCourseFocusPaymentContext
 } from "./src/analysis/full-course.js";
 export {
   clearAnalysisCaches,

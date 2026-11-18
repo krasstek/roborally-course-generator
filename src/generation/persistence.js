@@ -6,7 +6,7 @@ import {
 } from "../../analyze.js";
 import { buildResolvedMap } from "../../board.js";
 import { buildCourseNotesHtml } from "../../course-notes.js";
-import { VARIANT_DEFINITIONS, applyVariantAnalysisOptions } from "../../variants.js";
+import { VARIANT_DEFINITIONS, applyVariantAnalysisOptions, withSignedStartPricing } from "../../variants.js";
 import {
   analyzeFlagSequence,
   buildRouteAwareBatteryScoringOptions
@@ -808,7 +808,7 @@ export async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}
   // applyVariantScenarioState recorded them. A hand-kept list here used to drop
   // route-relevant rules (Moving Targets, More Deadly Game, Repair Stations, ...),
   // so a reload analysed a different course from the one that was accepted.
-  const hydrationVariantBundle = {
+  const hydrationVariantBundle = withSignedStartPricing({
     ...Object.fromEntries(VARIANT_DEFINITIONS.map((variant) => [variant.id, Boolean(snapshot[variant.id])])),
     // Saves made before every registry id was persisted still carry Dynamic
     // Archiving through the recovery rule.
@@ -816,7 +816,7 @@ export async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}
     actFastMode,
     recoveryRule,
     homeReboot
-  };
+  });
   const placements = snapshot.placements;
   const checkpoints = snapshot.checkpoints;
   const boardPlacements = placements.filter((placement) => {
