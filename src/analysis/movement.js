@@ -1,5 +1,6 @@
 // Robo Rally Course Randomizer - movement simulation: tile penalties, programmed moves, conveyors, pushers, crushers, recovery pressure and simulateAction
 import {
+  CHEAP_RADIOACTIVE_WASTE_REWARD_SCORE,
   getDamageDeckPressureMultipliers,
   getTilePenaltyForFeature
 } from "../../feature-weights.js";
@@ -143,9 +144,20 @@ export function getTilePenalty(
     // The route-aware reward is applied once, at the post-register landing
     // boundary, so traversing a Battery does not collect energy.
     if (
-      (feature.type === "battery" || feature.type === "chopShop") &&
+      (feature.type === "battery" || feature.type === "chopShop" || feature.type === "pitStop") &&
       isRouteAwareBatteryScoringActive(options)
     ) {
+      continue;
+    }
+    // Radioactive Waste: its damage is priced by the damage model (skipped
+    // below); without route-aware Energy, credit its reward here (placeholder,
+    // 2026-11-18).
+    if (
+      feature.type === "radioactiveWaste" &&
+      isBatteryActive(options) &&
+      !isRouteAwareBatteryScoringActive(options)
+    ) {
+      penalty += CHEAP_RADIOACTIVE_WASTE_REWARD_SCORE;
       continue;
     }
     // v49be ownership cleanup: gears are exact physical state transitions.

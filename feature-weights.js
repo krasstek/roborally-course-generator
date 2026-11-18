@@ -5,6 +5,7 @@ import {
   ENERGY_GAIN_VALUE,
   ENERGY_VALUE_STARTING_POINTS,
   ENERGY_VALUE_TABLE_MAX_TURNS,
+  FREE_UPGRADE_INSTALL_VALUE,
   UPGRADE_CARD_GAIN_VALUE
 } from "./src/analysis/energy-value-table.js";
 
@@ -33,14 +34,16 @@ const CHEAP_ENERGY_VALUE = (() => {
   const startPoint = Math.max(0, ENERGY_VALUE_STARTING_POINTS.indexOf(3));
   let energy = 0;
   let card = 0;
+  let install = 0;
   let turns = 0;
   for (let turn = 2; turn <= raceTurns; turn += 1) {
     const received = 3 + Math.floor(0.5 * (turn - 2));
     energy += ENERGY_GAIN_VALUE[raceTurns][startPoint][turn][received];
     card += UPGRADE_CARD_GAIN_VALUE[raceTurns][turn][received];
+    install += FREE_UPGRADE_INSTALL_VALUE[raceTurns][turn];
     turns += 1;
   }
-  return { energy: energy / turns, card: card / turns };
+  return { energy: energy / turns, card: card / turns, install: install / turns };
 })();
 export const CHEAP_BATTERY_SCORE = Number((-CHEAP_ENERGY_VALUE.energy * CHEAP_ENERGY_SCORE_PER_RE).toFixed(2));
 export const CHEAP_BATTERY_UPGRADE_WORLD_SCORE = Number((
@@ -53,6 +56,14 @@ export const CHEAP_CHOP_SHOP_SCORE = Number((
 ).toFixed(2));
 export const CHEAP_CHOP_SHOP_UPGRADE_WORLD_SCORE = Number((
   -Math.max(CHEAP_ENERGY_VALUE.energy + CHEAP_ENERGY_VALUE.card, 2 * CHEAP_ENERGY_VALUE.card) * CHEAP_ENERGY_SCORE_PER_RE
+).toFixed(2));
+// Placeholders until the cheap-vs-full pathfinding calibration (2026-11-18):
+// a Pit Stop credits both picks as Energy, as the full route search does; a
+// Radioactive Waste square the better of +1 Energy and a free install (its
+// damage is priced by the damage model, not here).
+export const CHEAP_PIT_STOP_SCORE = Number((-2 * CHEAP_ENERGY_VALUE.energy * CHEAP_ENERGY_SCORE_PER_RE).toFixed(2));
+export const CHEAP_RADIOACTIVE_WASTE_REWARD_SCORE = Number((
+  -Math.max(CHEAP_ENERGY_VALUE.energy, CHEAP_ENERGY_VALUE.install) * CHEAP_ENERGY_SCORE_PER_RE
 ).toFixed(2));
 
 // v38 programming-pressure accounting. These weights are deliberately not
@@ -424,6 +435,9 @@ export function getTilePenaltyForFeature(feature, options = {}) {
   }
   if (feature.type === "chopShop" && options.batteryActive) {
     return options.upgradeWorld ? CHEAP_CHOP_SHOP_UPGRADE_WORLD_SCORE : CHEAP_CHOP_SHOP_SCORE;
+  }
+  if (feature.type === "pitStop" && options.batteryActive) {
+    return CHEAP_PIT_STOP_SCORE;
   }
   if (feature.type === "repulsor") {
     return Number((3.2 * repulsorMultiplier).toFixed(2));
