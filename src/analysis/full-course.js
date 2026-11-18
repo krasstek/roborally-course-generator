@@ -5286,6 +5286,33 @@ export function evaluateFullCourseFocusPaymentCurveUnderOccupancy(
   occupancyByIndex,
   options = {}
 ) {
+  return scoreFullCourseFocusPaymentContext(
+    prepareFullCourseFocusPaymentContext(tileMap, firstLeg, flags, focusIndex, occupancyByIndex, options),
+    options
+  );
+}
+
+// The 0-Energy effective RE of a prepared focus start: at no adjustment the
+// economy delta is zero, so it is the best candidate's base effective RE
+// (what scoreFullCourseFocusPaymentContext reports for payment 0). Signed start
+// pricing reads it to place the median before choosing each start's direction.
+export function getFullCourseFocusZeroEnergyEffectiveRE(context) {
+  const values = (context?.candidates || [])
+    .map((candidate) => Number(candidate.baseEffectiveRE))
+    .filter(Number.isFinite);
+  return values.length ? Math.min(...values) : null;
+}
+
+// Everything in a focus start's payment curve that does not depend on the
+// Energy adjustment: traffic, ledgers and base effective RE of each candidate.
+export function prepareFullCourseFocusPaymentContext(
+  tileMap,
+  firstLeg,
+  flags,
+  focusIndex,
+  occupancyByIndex,
+  options = {}
+) {
   const analyses = (firstLeg?.starts || []).filter((analysis) => (
     analysis.reachable &&
     analysis.fullCourseRoutes?.length
@@ -5293,25 +5320,6 @@ export function evaluateFullCourseFocusPaymentCurveUnderOccupancy(
   const focus = analyses.find((analysis) => analysis.index === focusIndex);
   if (!focus) return null;
 
-  const baseStartingEnergy = getCourseStartingEnergy(options);
-  const maxEnergy = getCourseMaxEnergy(options);
-  const subsidizedStarts = Boolean(options.subsidizedStarts);
-  const defaultMaxAdjustment = subsidizedStarts
-    ? Math.max(0, maxEnergy - baseStartingEnergy)
-    : baseStartingEnergy;
-  const requestedMaxAdjustment = subsidizedStarts
-    ? Number(options.subsidizedStartsMaxSubsidy)
-    : Number(options.payToWinMaxPayment);
-  const maxPayment = Math.max(
-    0,
-    Math.min(
-      defaultMaxAdjustment,
-      Number.isFinite(requestedMaxAdjustment)
-        ? Math.floor(requestedMaxAdjustment)
-        : defaultMaxAdjustment
-    )
-  );
-  const payments = Array.from({ length: maxPayment + 1 }, (_, payment) => payment);
   const pricingRouteMixtureByIndex = new Map(
     analyses.map((analysis) => [
       analysis.index,
@@ -5349,7 +5357,7 @@ export function evaluateFullCourseFocusPaymentCurveUnderOccupancy(
     pricingTrafficAnalyses,
     options
   ).multiplier;
-  const candidates = focus.fullCourseRoutes.map((candidate, routeIndex) => {
+  const prepared = focus.fullCourseRoutes.map((candidate, routeIndex) => {
     const trafficLegacy = getExpectedTrafficBreakdown(
       tileMap,
       candidate,
@@ -5433,6 +5441,57 @@ export function evaluateFullCourseFocusPaymentCurveUnderOccupancy(
       )
       : Infinity;
 
+    return {
+      routeIndex,
+      route: candidate,
+      traffic,
+      firstLegRoute,
+      firstTraffic,
+      baseEffectiveRE: Number.isFinite(baseEffectiveRE)
+        ? Number(baseEffectiveRE.toFixed(6))
+        : Infinity,
+      rawBaseEffectiveRE: baseEffectiveRE
+    };
+  });
+
+  return {
+    tileMap,
+    focusIndex,
+    candidates: prepared,
+    energyCourseMultiplier
+  };
+}
+
+// The payment curve of a prepared focus start. The direction is the start's
+// own under signed start pricing (options.startEnergyDirection), otherwise the
+// course's rule (Subsidized Starts grants Energy, Pay to Win charges it).
+export function scoreFullCourseFocusPaymentContext(context, options = {}) {
+  if (!context) return null;
+  const { tileMap, focusIndex, energyCourseMultiplier } = context;
+  const baseStartingEnergy = getCourseStartingEnergy(options);
+  const maxEnergy = getCourseMaxEnergy(options);
+  const subsidizedStarts = options.startEnergyDirection
+    ? options.startEnergyDirection === "subsidy"
+    : Boolean(options.subsidizedStarts);
+  const defaultMaxAdjustment = subsidizedStarts
+    ? Math.max(0, maxEnergy - baseStartingEnergy)
+    : baseStartingEnergy;
+  const requestedMaxAdjustment = subsidizedStarts
+    ? Number(options.subsidizedStartsMaxSubsidy)
+    : Number(options.payToWinMaxPayment);
+  const maxPayment = Math.max(
+    0,
+    Math.min(
+      defaultMaxAdjustment,
+      Number.isFinite(requestedMaxAdjustment)
+        ? Math.floor(requestedMaxAdjustment)
+        : defaultMaxAdjustment
+    )
+  );
+  const payments = Array.from({ length: maxPayment + 1 }, (_, payment) => payment);
+  const candidates = context.candidates.map((prepared) => {
+    const { routeIndex, route: candidate, traffic, firstLegRoute, firstTraffic } = prepared;
+    const baseEffectiveRE = prepared.rawBaseEffectiveRE;
     const scores = [];
     const effectiveREs = [];
     const economyAdjustmentREs = [];

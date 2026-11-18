@@ -8,7 +8,8 @@ import {
   getVariantDefinition,
   getVariantExclusiveGroupConflict,
   getVariantRequirementIds,
-  isLayoutPreferenceVariant
+  isLayoutPreferenceVariant,
+  withSignedStartPricing
 } from "../../variants.js";
 import { cachedAssets } from "./assets.js";
 import { countFeatureTypeInTileMap } from "./board-profile.js";
@@ -39,6 +40,11 @@ export const DEFAULT_CHECKPOINT_ACTIVE_FEATURE_TYPES = new Set([
 
 export function isCheckpointActiveFeature(feature, options = {}) {
   if (DEFAULT_CHECKPOINT_ACTIVE_FEATURE_TYPES.has(feature?.type)) {
+    return true;
+  }
+  // Scramblers: a printed laser stays on under a checkpoint, so its beam
+  // marker and the randomizer it became stay on too.
+  if (feature?.printedType === "laser") {
     return true;
   }
 
@@ -404,6 +410,12 @@ const NEUTRAL_VARIANT_CHANCE = Object.freeze({
   spaceBridgeNetwork: 0.1,
   napalmDeath: 0.1,
   pistonCup: 0.1,
+  scramblers: 0.1,
+  tarSpills: 0.1,
+  shallowPits: 0.1,
+  perilsOfTheWarp: 0.1,
+  batteryOvercharge: 0.1,
+  missileBanks: 0.1,
   steepRamps: 0.1,
   turboRamps: 0.1,
   repulsorOverdrive: 0.03,
@@ -752,7 +764,7 @@ export function applyCourseVariantAvailability(variantBundle, tileMap, preferenc
   }
 
   return {
-    variantBundle: nextBundle,
+    variantBundle: withSignedStartPricing(nextBundle),
     blockedRequired,
     deactivatedZeroCost
   };
@@ -886,12 +898,6 @@ export function getRouteAnalysisVariantOptions(options = {}) {
     startingUpgradeCards: options.startingUpgradeCards ?? variantOptions.startingUpgradeCards,
     startingUpgradeCardDelta: options.startingUpgradeCardDelta ?? variantOptions.startingUpgradeCardDelta,
     maxEnergy: options.maxEnergy ?? variantOptions.maxEnergy,
-    upgradeDrawsPerTurn: options.upgradeDrawsPerTurn ?? variantOptions.upgradeDrawsPerTurn,
-    upgradeInstallsPerTurn: options.upgradeInstallsPerTurn ?? variantOptions.upgradeInstallsPerTurn,
-    upgradeDrawEnergyCost: options.upgradeDrawEnergyCost ?? variantOptions.upgradeDrawEnergyCost,
-    upgradeUsefulCardRate: options.upgradeUsefulCardRate ?? variantOptions.upgradeUsefulCardRate,
-    upgradeUsefulEnergyPerInstall: options.upgradeUsefulEnergyPerInstall ?? variantOptions.upgradeUsefulEnergyPerInstall,
-    upgradePowerRegistersPerEnergy: options.upgradePowerRegistersPerEnergy ?? variantOptions.upgradePowerRegistersPerEnergy,
     routeRegistersPerTurn: options.routeRegistersPerTurn ?? variantOptions.routeRegistersPerTurn
   };
 }

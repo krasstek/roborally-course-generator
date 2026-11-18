@@ -92,6 +92,12 @@ export const ROUTE_RULE_BOOLEAN_KEYS = Object.freeze([
   "spaceBridgeNetwork",
   "napalmDeath",
   "pistonCup",
+  "scramblers",
+  "tarSpills",
+  "shallowPits",
+  "perilsOfTheWarp",
+  "batteryOvercharge",
+  "missileBanks",
   // Ramp rules change movement (movement.js).
   "steepRamps",
   "turboRamps"
@@ -107,12 +113,6 @@ export const ROUTE_ECONOMY_RAW_KEYS = Object.freeze([
   "startingUpgradeCards",
   "startingUpgradeCardDelta",
   "maxEnergy",
-  "upgradeDrawsPerTurn",
-  "upgradeInstallsPerTurn",
-  "upgradeDrawEnergyCost",
-  "upgradeUsefulCardRate",
-  "upgradeUsefulEnergyPerInstall",
-  "upgradePowerRegistersPerEnergy",
   "routeRegistersPerTurn"
 ]);
 
@@ -131,6 +131,7 @@ export const ROUTE_RULE_EXCLUDED_KEYS = Object.freeze([
   "competitiveMode",
   "payToWin",
   "subsidizedStarts",
+  "signedStartPricing",
   "hazardousFlags",
   "movingTargets",
   "dynamicArchiving",

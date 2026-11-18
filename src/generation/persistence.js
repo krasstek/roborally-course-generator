@@ -6,7 +6,7 @@ import {
 } from "../../analyze.js";
 import { buildResolvedMap } from "../../board.js";
 import { buildCourseNotesHtml } from "../../course-notes.js";
-import { VARIANT_DEFINITIONS, applyVariantAnalysisOptions } from "../../variants.js";
+import { VARIANT_DEFINITIONS, applyVariantAnalysisOptions, withSignedStartPricing } from "../../variants.js";
 import {
   analyzeFlagSequence,
   buildRouteAwareBatteryScoringOptions
@@ -273,7 +273,8 @@ export function serializeScenario(scenario) {
         lateEnergyCost: entry.lateEnergyCost ?? null,
         lateUnavailable: Boolean(entry.lateUnavailable),
         payToWinUnavailable: Boolean(entry.payToWinUnavailable),
-        lateAdjustedScore: entry.lateAdjustedScore ?? null
+        lateAdjustedScore: entry.lateAdjustedScore ?? null,
+        ...(entry.energyDirection ? { energyDirection: entry.energyDirection } : {})
       }))
       : null,
     payToWinPricing: (scenario.payToWin || scenario.subsidizedStarts) ? (scenario.sequence?.firstLeg?.summary?.payToWin ?? null) : null,
@@ -808,7 +809,7 @@ export async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}
   // applyVariantScenarioState recorded them. A hand-kept list here used to drop
   // route-relevant rules (Moving Targets, More Deadly Game, Repair Stations, ...),
   // so a reload analysed a different course from the one that was accepted.
-  const hydrationVariantBundle = {
+  const hydrationVariantBundle = withSignedStartPricing({
     ...Object.fromEntries(VARIANT_DEFINITIONS.map((variant) => [variant.id, Boolean(snapshot[variant.id])])),
     // Saves made before every registry id was persisted still carry Dynamic
     // Archiving through the recovery rule.
@@ -816,7 +817,7 @@ export async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}
     actFastMode,
     recoveryRule,
     homeReboot
-  };
+  });
   const placements = snapshot.placements;
   const checkpoints = snapshot.checkpoints;
   const boardPlacements = placements.filter((placement) => {
@@ -948,9 +949,6 @@ export async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}
         routeEnergyReferenceReserve: savedRouteAwareEnergy.referenceReserve ??
           savedRouteAwareEnergy.startingReserve ?? null,
         startingEnergy: savedRouteAwareEnergy.startingReserve ?? null,
-        upgradeUsefulCardRate: savedRouteAwareEnergy.usefulUpgradeCardRate ?? null,
-        upgradeDrawEnergyCost: savedRouteAwareEnergy.drawEnergyCost ?? null,
-        upgradeUsefulEnergyPerInstall: savedRouteAwareEnergy.usefulEnergyPerInstall ?? null
       }
       : {})
   };
@@ -1075,9 +1073,6 @@ export async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}
       registerScore: hydrationEnergyOptions.routeEnergyRegisterScore ?? null,
       startingReserve: hydrationEnergyOptions.startingEnergy ?? null,
       referenceReserve: hydrationEnergyOptions.routeEnergyReferenceReserve ?? null,
-      usefulUpgradeCardRate: hydrationEnergyOptions.upgradeUsefulCardRate ?? null,
-      drawEnergyCost: hydrationEnergyOptions.upgradeDrawEnergyCost ?? null,
-      usefulEnergyPerInstall: hydrationEnergyOptions.upgradeUsefulEnergyPerInstall ?? null
     };
     sequence.firstLeg.summary.coursePreflight = savedCoursePreflight
       ? { ...savedCoursePreflight, routeAwareBatteryScoring: restoredEnergyMetadata }

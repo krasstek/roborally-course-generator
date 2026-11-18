@@ -6,6 +6,7 @@ import {
   hasRampForDir,
   isBoundaryBlockedByWalls,
   isFeatureActiveThisRegister,
+  hasFirePitEndDamage,
   isFirePit,
   isOil,
   isWater,
@@ -1584,6 +1585,11 @@ export function getDamageEconomyRealizedDamageForTransition(
   let ledgeDamageUnits = 0;
   let firePitDamageUnits = 0;
   let mineDamageUnits = 0;
+  // Perils of the Warp: 1 per portal, teleporter or space bridge use.
+  let warpDamageUnits = 0;
+  // Battery Overcharge: 1 when the battery gives its Energy (ending a
+  // register on it, as getRouteEnergyShadowStep credits it).
+  let batteryDamageUnits = 0;
   const rebootDamageUnits = transition?.rebooted
     ? (options.moreDeadlyGame ? 3 : 2)
     : 0;
@@ -1605,6 +1611,7 @@ export function getDamageEconomyRealizedDamageForTransition(
     // A mine (Transformers token, modelled as never removed) deals 1 damage on
     // every entry; its +1 clog is added to the turn's clog summary.
     if (hasFeatureType(tile, "mine")) mineDamageUnits += 1;
+    if (point.warp) warpDamageUnits += 1;
   }
 
   // Flaming Oil is never register-specific. It mirrors the flamer's entry/end
@@ -1657,10 +1664,10 @@ export function getDamageEconomyRealizedDamageForTransition(
   // survives, inspect only the final post-conveyor/pusher/gear/machinery square.
   if (!transition?.rebooted && !transition?.crashed && transition?.to) {
     const finalTile = tileMap.get(tileKey(transition.to.x, transition.to.y));
-    // A robot in a fire pit takes 1 just before board lasers and is not hit by
-    // them.
+    // A robot in a fire pit takes 1 just before board lasers (not in a shallow
+    // pit) and is not hit by them.
     const inFirePit = isFirePit(finalTile);
-    if (inFirePit) firePitDamageUnits += 1;
+    if (hasFirePitEndDamage(finalTile)) firePitDamageUnits += 1;
     for (const feature of finalTile?.features || []) {
       if (feature.type === "laser" && !inFirePit) {
         boardLaserDamageUnits += getEffectiveLaserDamage(feature, options);
@@ -1690,6 +1697,9 @@ export function getDamageEconomyRealizedDamageForTransition(
     if (hasFeatureType(finalTile, "radioactiveWaste")) {
       radioactiveWasteDamageUnits += 1;
     }
+    if (options.batteryOvercharge && hasFeatureType(finalTile, "battery")) {
+      batteryDamageUnits += 1;
+    }
   }
 
   const totalDamageUnits = (
@@ -1701,6 +1711,8 @@ export function getDamageEconomyRealizedDamageForTransition(
     ledgeDamageUnits +
     firePitDamageUnits +
     mineDamageUnits +
+    warpDamageUnits +
+    batteryDamageUnits +
     rebootDamageUnits
   );
   const sourceTypes = [];
@@ -1712,6 +1724,8 @@ export function getDamageEconomyRealizedDamageForTransition(
   if (ledgeDamageUnits > 0) sourceTypes.push("ledge-damage");
   if (firePitDamageUnits > 0) sourceTypes.push("fire-pit-damage");
   if (mineDamageUnits > 0) sourceTypes.push("mine-hit");
+  if (warpDamageUnits > 0) sourceTypes.push("warp-damage");
+  if (batteryDamageUnits > 0) sourceTypes.push("battery-overcharge-damage");
   if (rebootDamageUnits > 0) sourceTypes.push("reboot-damage");
 
   return {
@@ -1723,6 +1737,8 @@ export function getDamageEconomyRealizedDamageForTransition(
     ledgeDamageUnits,
     firePitDamageUnits,
     mineDamageUnits,
+    ...(warpDamageUnits > 0 ? { warpDamageUnits } : {}),
+    ...(batteryDamageUnits > 0 ? { batteryDamageUnits } : {}),
     rebootDamageUnits,
     totalDamageUnits,
     sourceTypes

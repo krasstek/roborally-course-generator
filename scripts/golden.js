@@ -96,6 +96,8 @@ const CASES = [
   { name: "forced-virtual-bots", variants: { virtualBots: "forced" } },
   { name: "forced-pay-to-win", variants: { payToWin: "forced" } },
   { name: "forced-subsidized-starts", variants: { subsidizedStarts: "forced" } },
+  // Both drawn together: signed start pricing around the median start (2026-11-18).
+  { name: "forced-signed-start-pricing", variants: { payToWin: "forced", subsidizedStarts: "forced" } },
   { name: "forced-competitive", variants: { competitiveMode: "forced" } },
   { name: "forced-moving-targets", variants: { movingTargets: "forced" } },
   { name: "forced-drift-deck", expansions: ["roborally", "transformers"], variants: { driftDeck: "forced" } },

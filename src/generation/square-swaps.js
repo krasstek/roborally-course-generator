@@ -20,6 +20,11 @@ export const TELEPORTER_NETWORK_BRIDGE_ID = "teleporter-network";
 // effect on robots, only a record of the printed conveyor.
 export const STOPPED_CONVEYOR_TYPE = "stoppedConveyor";
 
+// What a printed board laser leaves under Scramblers: no effect on robots, only
+// a record of the printed beam (direction and strength) for the layout checks
+// that anchor beams to walls; the square's randomizer does the work.
+export const SCRAMBLER_BEAM_TYPE = "scramblerBeam";
+
 const hasType = (features, type) => features.some((feature) => feature.type === type);
 
 // Applied in this order. Cold Storage and Radioactive Gunk never come together
@@ -68,6 +73,13 @@ export const SQUARE_SWAP_RULES = Object.freeze([
     swap: (features) => replaceType(features, "firePit", () => ({ type: "pit", printedType: "firePit", swappedBy: "lavaPits" }))
   },
   {
+    id: "shallowPits",
+    // Pits are fire pits without the end-of-register damage: 1 damage on
+    // entry, the move stops, register 5 is cancelled, lasers are blocked, no
+    // reboot. Never with Lava Pits (variants.js).
+    swap: (features) => replaceType(features, "pit", () => ({ type: "firePit", noEndDamage: true, printedType: "pit", swappedBy: "shallowPits" }))
+  },
+  {
     id: "batteryPitStops",
     swap: (features) => replaceType(features, "battery", () => ({ type: "pitStop", printedType: "battery", swappedBy: "batteryPitStops" }))
   },
@@ -87,6 +99,27 @@ export const SQUARE_SWAP_RULES = Object.freeze([
   {
     id: "pistonCup",
     swap: (features) => replaceType(features, "push", (feature) => ({ ...feature, timing: [...ALL_REGISTERS], swappedBy: "pistonCup" }))
+  },
+  {
+    id: "tarSpills",
+    // Oil slicks are tar (movement.js isTar). Never with Cold Storage or
+    // Flaming Oil (variants.js).
+    swap: (features) => replaceType(features, "oil", () => ({ type: "tar", printedType: "oil", swappedBy: "tarSpills" }))
+  },
+  {
+    id: "scramblers",
+    // Every board laser square is a randomizer; robots do not block the beam
+    // (user 2026-11-13), so each printed beam square simply carries one. Two
+    // beams crossing a square still give one randomizer.
+    swap(features) {
+      if (!hasType(features, "laser")) return features;
+      const beams = features.filter((feature) => feature.type === "laser");
+      return [
+        ...features.filter((feature) => feature.type !== "laser"),
+        ...beams.map((laser) => ({ ...laser, type: SCRAMBLER_BEAM_TYPE, printedType: "laser", swappedBy: "scramblers" })),
+        ...(hasType(features, "randomizer") ? [] : [{ type: "randomizer", printedType: "laser", swappedBy: "scramblers" }])
+      ];
+    }
   }
 ]);
 

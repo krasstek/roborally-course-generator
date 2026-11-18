@@ -92,7 +92,8 @@ export function summarizeWholeCourseBoardAblationState(sequence, metrics) {
       entry.lateEnergyCost ?? null,
       Boolean(entry.payToWinUnavailable),
       Boolean(entry.earlyUnavailable),
-      Boolean(entry.lateUnavailable)
+      Boolean(entry.lateUnavailable),
+      ...(entry.energyDirection ? [entry.energyDirection] : [])
     ].join(":"))
     .join("|");
   const filteredHardFailures = [...(metrics?.hardFailures ?? [])]

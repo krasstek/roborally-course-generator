@@ -315,8 +315,14 @@ export function tileHasLaserSupportBlock(features = [], side, options = {}) {
   return Boolean(options.includeLowerLedge && tileHasLedgeOnSide(features, side));
 }
 
+// A printed board laser for the layout checks: a laser, or the beam marker a
+// laser leaves under Scramblers (square-swaps.js), which players still see.
+export function isLayoutLaser(feature) {
+  return feature?.type === "laser" || feature?.type === "scramblerBeam";
+}
+
 export function tileHasLaserInDirection(features = [], dir) {
-  return features.some((feature) => feature.type === "laser" && feature.dir === dir);
+  return features.some((feature) => isLayoutLaser(feature) && feature.dir === dir);
 }
 
 // A neighbouring laser continues a beam when it lies on the same line (pointing
@@ -325,7 +331,7 @@ export function tileContinuesLaserBeam(features = [], laser) {
   const opposite = getOppositeSide(laser.dir);
   const damage = Number(laser.damage) || 1;
   return features.some((feature) => (
-    feature.type === "laser" &&
+    isLayoutLaser(feature) &&
     (feature.dir === laser.dir || feature.dir === opposite) &&
     (Number(feature.damage) || 1) === damage
   ));
@@ -342,7 +348,7 @@ export function findUnanchoredLaserEnds(tileMap) {
   for (const tile of tileMap.values()) {
     const features = tile.features || [];
     for (const laser of features) {
-      if (laser.type !== "laser" || !CARDINAL_DIRS[laser.dir]) continue;
+      if (!isLayoutLaser(laser) || !CARDINAL_DIRS[laser.dir]) continue;
       for (const side of [laser.dir, getOppositeSide(laser.dir)]) {
         if (tileHasLaserSupportBlock(features, side, { includeLowerLedge: true })) continue;
         const delta = CARDINAL_DIRS[side];

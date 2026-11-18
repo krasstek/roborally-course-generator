@@ -129,7 +129,6 @@ function buildProgramCardModelProfile(options) {
   const evaluationAdaptabilityFactor =
     (resetEachTurn ? 1 : PROGRAM_CARD_SCARCITY_EVALUATION_FACTOR) + sharedDeckAlphaIncrement;
   const deck = getProgramDeck(options);
-  const powerUpRate = getPowerUpRegistersPerEnergy(deck, handSize, resetEachTurn, adaptabilityFactor);
   return {
     deck,
     handSize,
@@ -146,38 +145,8 @@ function buildProgramCardModelProfile(options) {
     evaluationCardScale: adaptabilityFactor > 0
       ? Number((evaluationAdaptabilityFactor / adaptabilityFactor).toFixed(6))
       : 1,
-    powerUpRegistersPerEnergy: powerUpRate.registersPerEnergy,
-    powerUpRateFallback: powerUpRate.fallback,
     sharedDeckEnlargedDeckModeled: false,
     sharedDeckCrossRobotHandsModeled: false
-  };
-}
-
-// What one Energy is worth in registers: the price of making it with Power Up.
-// Power Up spends a register, and planning on it also needs the card in hand,
-// which costs the same card-scarcity RE as any other card requirement: under
-// the rolling model (previous program known, Power Up not in it) the hand is
-// drawn from the deck minus five cards; Less Foreshadowing draws from the full
-// deck. The standard deck (1 Power Up in 20, 9-card hand, search alpha 0.70)
-// gives ~1.39; the 22-card Drift Deck a little more. The rate uses the search
-// alpha, since it also bounds dominance pruning.
-// Every Energy and upgrade value in energy-value-table.js is in Energy units
-// and is multiplied by this rate. A deck without Power Up has no such price;
-// the rate then falls back to what a single Power Up copy would cost (a stated
-// assumption, see MODEL-REVIEW.md).
-function getPowerUpRegistersPerEnergy(deck, handSize, resetEachTurn, adaptabilityFactor) {
-  const powerUpCopies = deck.counts.get("WAIT") || 0;
-  const copies = powerUpCopies > 0 ? powerUpCopies : 1;
-  const population = deck.size - (resetEachTurn ? 0 : REGISTER_COUNT);
-  const hand = Math.min(handSize, population);
-  const probability = 1 - chooseSmall(population - copies, hand) / chooseSmall(population, hand);
-  const scarcityRE = probability > 0
-    ? Math.max(0, deck.baselineProbability / probability - 1) *
-      Math.max(0, adaptabilityFactor)
-    : 0;
-  return {
-    registersPerEnergy: Number((1 + scarcityRE).toFixed(4)),
-    fallback: powerUpCopies === 0
   };
 }
 

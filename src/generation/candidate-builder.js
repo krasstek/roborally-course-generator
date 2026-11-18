@@ -1571,7 +1571,7 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
 
         if (startEnergyPricing && !virtualBots) {
           await reportStage(
-            `${subsidizedStarts ? "Subsidizing" : "Pricing Pay to Win"} starts — routing all ${analysisStarts.length} physical choices`,
+            `${payToWin && subsidizedStarts ? "Pricing and subsidizing" : subsidizedStarts ? "Subsidizing" : "Pricing Pay to Win"} starts — routing all ${analysisStarts.length} physical choices`,
             evaluationsUsed
           );
           sequence = await analyzeFlagSequence(
@@ -1780,9 +1780,6 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
               registerScore: productionAnalysisOptions.routeEnergyRegisterScore ?? null,
               startingReserve: productionAnalysisOptions.startingEnergy ?? null,
               referenceReserve: productionAnalysisOptions.routeEnergyReferenceReserve ?? null,
-              usefulUpgradeCardRate: productionAnalysisOptions.upgradeUsefulCardRate ?? null,
-              drawEnergyCost: productionAnalysisOptions.upgradeDrawEnergyCost ?? null,
-              usefulEnergyPerInstall: productionAnalysisOptions.upgradeUsefulEnergyPerInstall ?? null
             },
             routePool: null
           };

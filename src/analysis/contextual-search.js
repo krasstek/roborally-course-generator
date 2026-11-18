@@ -100,7 +100,8 @@ import {
   FORECAST_SOLID_CONFIDENCE,
   FORECAST_SPECULATIVE_CONFIDENCE,
   HOMING_MISSILE_ONE_DAMAGE_REFERENCE_RE,
-  HOMING_MISSILE_STRATEGIC_CREDIT_RE,
+  getHomingMissileCreditRE,
+  isHomingMissileActivationEvent,
   HOMING_MISSILE_STRATEGIC_DAMAGE_EQUIVALENTS,
   compareScoredRouteLike,
   dedupeRoutes,
@@ -3154,6 +3155,7 @@ export function buildEstimatedPhysicalRouteFromTransitions(
   let searchIntrinsicMentalScore = 0;
   let searchIntrinsicMentalEventWeight = 0;
   let homingMissileActivationCount = 0;
+  const homingMissileCreditRE = getHomingMissileCreditRE(options);
   const homingMissileActivatedSpacesThisTurn = new Set(
     Array.isArray(options.searchHomingMissileActivatedSpacesCurrentTurn)
       ? options.searchHomingMissileActivatedSpacesCurrentTurn
@@ -3206,9 +3208,7 @@ export function buildEstimatedPhysicalRouteFromTransitions(
         variantMentalEventIdsThisTurn
       }
     );
-    const stepHomingActivations = (mentalStep.events || []).filter(
-      (event) => event?.type === "homing-missile-target-choice"
-    ).length;
+    const stepHomingActivations = (mentalStep.events || []).filter(isHomingMissileActivationEvent).length;
     homingMissileActivationCount += stepHomingActivations;
     mentalEventCount = mentalStep.nextEventCount;
     searchIntrinsicMentalRE += mentalStep.deltaRE;
@@ -3224,7 +3224,7 @@ export function buildEstimatedPhysicalRouteFromTransitions(
       transitionRebootPenalty +
       actionPenalty +
       mentalStep.score -
-      stepHomingActivations * HOMING_MISSILE_STRATEGIC_CREDIT_RE * REGISTER_TEMPO_COST;
+      stepHomingActivations * homingMissileCreditRE * REGISTER_TEMPO_COST;
     if (mentalStep.closesTurn) {
       homingMissileActivatedSpacesThisTurn.clear();
       variantMentalEventIdsThisTurn.clear();
@@ -3292,10 +3292,10 @@ export function buildEstimatedPhysicalRouteFromTransitions(
       [...homingMissileActivatedSpacesThisTurn],
     homingMissileActivationCount,
     homingMissileStrategicCreditRE: Number(
-      (homingMissileActivationCount * HOMING_MISSILE_STRATEGIC_CREDIT_RE).toFixed(4)
+      (homingMissileActivationCount * homingMissileCreditRE).toFixed(4)
     ),
     homingMissileStrategicCreditScore: Number(
-      (homingMissileActivationCount * HOMING_MISSILE_STRATEGIC_CREDIT_RE *
+      (homingMissileActivationCount * homingMissileCreditRE *
         REGISTER_TEMPO_COST).toFixed(2)
     ),
     homingMissileStrategicCreditModel:

@@ -539,6 +539,9 @@ export function computeRETurnVariantDifficultyAccounting(rawTurnRE, preferences 
   }
   if (preferences.steepRamps) mechanical("steepRamps", "movement: a ramp climb costs two extra moves; once-per-turn rule-memory event when the route touches a ramp");
   if (preferences.turboRamps) mechanical("turboRamps", "movement: jumps one square longer; once-per-turn rule-memory event when the route touches a jump ramp");
+  if (preferences.perilsOfTheWarp) mechanical("perilsOfTheWarp", "damage economy: 1 damage per portal, teleporter or space bridge use; once-per-turn rule-memory event when the route takes that damage");
+  if (preferences.batteryOvercharge) mechanical("batteryOvercharge", "Energy economy: 2 Energy per battery activation; damage economy: 1 damage with it; once-per-turn rule-memory event");
+  if (preferences.missileBanks) mechanical("missileBanks", "homing missile credit: one damage to each other robot, no target choice");
   if (preferences.setToKill) mechanical(
     "setToKill",
     "robot-laser damage economy: two damage-card draws per successful main-laser hit"
@@ -670,10 +673,12 @@ export function computeRETurnVariantDifficultyAccounting(rawTurnRE, preferences 
     }
   }
   if (preferences.payToWin || preferences.subsidizedStarts) {
-    mechanical(
-      preferences.subsidizedStarts ? "subsidizedStarts" : "payToWin",
-      "selector-aware starting-Energy balance/pricing; setup evaluation adds no generic RE-turn difficulty"
-    );
+    // Signed start pricing (both drawn) records both rules.
+    for (const ruleId of preferences.signedStartPricing
+      ? ["payToWin", "subsidizedStarts"]
+      : [preferences.subsidizedStarts ? "subsidizedStarts" : "payToWin"]) {
+      mechanical(ruleId, "selector-aware starting-Energy balance/pricing; setup evaluation adds no generic RE-turn difficulty");
+    }
   }
 
   const scaled = adjusted * Math.exp(CLOG_REFIT_DIFFICULTY_LOG_OFFSET);
@@ -1066,6 +1071,9 @@ export function computeVariantDifficultyAccounting(raw, preferences = {}, sequen
   }
   if (preferences.steepRamps) mechanical("steepRamps", "movement: a ramp climb costs two extra moves; once-per-turn rule-memory event when the route touches a ramp");
   if (preferences.turboRamps) mechanical("turboRamps", "movement: jumps one square longer; once-per-turn rule-memory event when the route touches a jump ramp");
+  if (preferences.perilsOfTheWarp) mechanical("perilsOfTheWarp", "damage economy: 1 damage per portal, teleporter or space bridge use; once-per-turn rule-memory event when the route takes that damage");
+  if (preferences.batteryOvercharge) mechanical("batteryOvercharge", "Energy economy: 2 Energy per battery activation; damage economy: 1 damage with it; once-per-turn rule-memory event");
+  if (preferences.missileBanks) mechanical("missileBanks", "homing missile credit: one damage to each other robot, no target choice");
   if (preferences.setToKill) mechanical("setToKill", "robot-laser damage economy: double damage per hit");
   if (preferences.setToStun) mechanical("setToStun", "robot-laser damage economy: SPAM suppressed, Haywire unchanged");
   if (preferences.repairStations) mechanical("repairStations", "checkpoint repair route value");
@@ -1119,10 +1127,12 @@ export function computeVariantDifficultyAccounting(raw, preferences = {}, sequen
     mechanical("competitiveMode", "setup strategy owned by Competitive completed-RE blocking/selection; no legacy raw difficulty residue");
   }
   if (preferences.payToWin || preferences.subsidizedStarts) {
-    mechanical(
-      preferences.subsidizedStarts ? "subsidizedStarts" : "payToWin",
-      "starting-Energy selector/pricing ownership; no legacy raw difficulty residue"
-    );
+    // Signed start pricing (both drawn) records both rules.
+    for (const ruleId of preferences.signedStartPricing
+      ? ["payToWin", "subsidizedStarts"]
+      : [preferences.subsidizedStarts ? "subsidizedStarts" : "payToWin"]) {
+      mechanical(ruleId, "starting-Energy selector/pricing ownership; no legacy raw difficulty residue");
+    }
   }
 
   return {

@@ -132,6 +132,8 @@ const TRACE_DAMAGE_SOURCE_LABELS = {
   "ledge-damage": "ledge",
   "fire-pit-damage": "fire pit",
   "mine-hit": "mine",
+  "warp-damage": "warp",
+  "battery-overcharge-damage": "battery overcharge",
   "reboot-damage": "reboot",
   "robot-laser-expected": "robot lasers, expected"
 };
@@ -630,7 +632,10 @@ export function formatRouteDetail(scenario, entry) {
       );
     }
     if (entry.startAnalysis.energyCost !== null && entry.startAnalysis.energyCost !== undefined) {
-      const subsidyMode = Boolean(scenario.subsidizedStarts);
+      // Signed start pricing: this start's own direction.
+      const subsidyMode = entry.startAnalysis.energyDirection
+        ? entry.startAnalysis.energyDirection === "subsidy"
+        : Boolean(scenario.subsidizedStarts);
       const pricingLabel = subsidyMode ? "Subsidized Starts" : "Pay to Win";
       const formattedCost = formatPayToWinEnergyCost(entry.startAnalysis, {
         subsidizedStarts: subsidyMode

@@ -41,6 +41,12 @@ const VARIANT_COMPLEXITY = {
   spaceBridgeNetwork: 1,
   napalmDeath: 1,
   pistonCup: 1,
+  scramblers: 1,
+  tarSpills: 1,
+  shallowPits: 1,
+  perilsOfTheWarp: 1,
+  batteryOvercharge: 1,
+  missileBanks: 1,
   steepRamps: 1,
   turboRamps: 1,
   setToKill: 1,
@@ -92,7 +98,10 @@ function applyBooleanField(field) {
 export const VARIANT_EXCLUSIVE_GROUPS = Object.freeze({
   startingSpaceSetup: Object.freeze({
     label: "starting-space setup",
-    description: "Virtual Bots, Competitive Mode, Pay to Win, and Subsidized Starts are mutually exclusive starting-space setups; only one can be active on a generated course."
+    description: "Virtual Bots, Competitive Mode and the start-price rules are mutually exclusive starting-space setups. Pay to Win and Subsidized Starts may come together: then stronger starts pay Energy and weaker starts receive it.",
+    // Pairs inside the group that may coexist (user 2026-11-18): together they
+    // give signed start pricing (start-pricing.js).
+    compatiblePairs: Object.freeze([Object.freeze(["payToWin", "subsidizedStarts"])])
   }),
   dockLayout: Object.freeze({
     label: "dock layout",
@@ -365,7 +374,7 @@ const VARIANT_DEFINITION_ROWS = [
       label: "Cold Storage",
       description: "All water is frozen into ice, which works like an oil slick (not for Flaming Oil). Currents in water stop; pits in water stay.",
       featureTypes: ["water"],
-      incompatibleWith: ["flamingOil", "radioactiveGunk"],
+      incompatibleWith: ["flamingOil", "radioactiveGunk", "tarSpills"],
       reason: "Requires water in the selected sets."
     },
     {
@@ -388,13 +397,22 @@ const VARIANT_DEFINITION_ROWS = [
       label: "Lava Pits",
       description: "Fire pits are ordinary pits.",
       featureTypes: ["firePit"],
+      incompatibleWith: ["shallowPits"],
       reason: "Requires fire pits in the selected sets."
+    },
+    {
+      id: "shallowPits",
+      label: "Shallow Pits",
+      description: "Pits do not destroy robots. A robot entering a pit stops there and takes 1 damage; after entering one in registers 1-4 the robot does not move in register 5 (the card is still played), and board lasers do not hit a robot in a pit. Falling off the board still reboots.",
+      featureTypes: ["pit"],
+      reason: "Requires pits in the selected sets."
     },
     {
       id: "batteryPitStops",
       label: "Batteries Are Pit Stops",
       description: "Batteries work as pit stops. With Dynamic Archiving they still archive.",
       featureTypes: ["battery"],
+      incompatibleWith: ["batteryOvercharge"],
       reason: "Requires batteries in the selected sets."
     },
     {
@@ -417,6 +435,22 @@ const VARIANT_DEFINITION_ROWS = [
       description: "Pushers push in every register.",
       featureTypes: ["push"],
       reason: "Requires pushers in the selected sets."
+    },
+    {
+      id: "tarSpills",
+      label: "Tar Spills",
+      description: "Oil slicks are tar. A robot entering tar stops there, whatever moved it. A Move or Back Up started on tar moves 1 square less (Move 1 and Back Up do nothing), as from water.",
+      featureTypes: ["oil"],
+      incompatibleWith: ["flamingOil"],
+      reason: "Requires oil slicks in the selected sets."
+    },
+    {
+      id: "scramblers",
+      label: "Scramblers",
+      description: "Board lasers are scramblers: every square of a laser beam acts as a randomizer, and board lasers deal no damage. Robots do not block scrambler beams.",
+      featureTypes: ["laser"],
+      incompatibleWith: ["cuttingFloor"],
+      reason: "Requires board lasers in the selected sets."
     }
   ].map((swap) => ({
     id: swap.id,
@@ -489,6 +523,82 @@ const VARIANT_DEFINITION_ROWS = [
     },
     applyBundle: applyBooleanField(rule.id)
   })),
+  // Variant batch 2 (2026-11-18): a damage price on every warp.
+  {
+    id: "perilsOfTheWarp",
+    label: "Perils of the Warp",
+    category: VARIANT_CATEGORIES.factoryFloor,
+    controlId: "variant-perils-of-the-warp",
+    defaultState: "off",
+    description: "Every time a robot goes through a portal, is moved by a teleporter or crosses a space bridge, it takes 1 damage.",
+    cost: VARIANT_COMPLEXITY.perilsOfTheWarp,
+    complexityRationale: "One persistent rule adds damage to existing board elements.",
+    mentalEvent: {
+      cadence: "once-per-game-turn",
+      trigger: "warp-damage-relevant",
+      eventType: "variant-rule:perils-of-the-warp",
+      rationale: "Remember once in a turn that a warp deals damage when the route uses one."
+    },
+    availability: {
+      type: "featureTypesAnyAvailable",
+      featureTypes: ["portal", "teleporter", "spaceBridge"],
+      reason: "Requires portals, teleporters or space bridges in the selected sets."
+    },
+    constructionRequirement: {
+      type: "boardFeatureAnyOf",
+      featureTypes: ["portal", "teleporter", "spaceBridge"],
+      reason: "Perils of the Warp needs at least one selected board with a portal, teleporter or space bridge."
+    },
+    applyBundle: applyBooleanField("perilsOfTheWarp")
+  },
+  {
+    id: "batteryOvercharge",
+    label: "Battery Overcharge",
+    category: VARIANT_CATEGORIES.factoryFloor,
+    controlId: "variant-battery-overcharge",
+    defaultState: "off",
+    description: "A battery gives 2 Energy instead of 1, and every time it gives Energy the robot also takes 1 damage.",
+    cost: VARIANT_COMPLEXITY.batteryOvercharge,
+    complexityRationale: "One persistent rule changes what an existing board element gives.",
+    mentalEvent: {
+      cadence: "once-per-game-turn",
+      trigger: "battery-overcharge-relevant",
+      eventType: "variant-rule:battery-overcharge",
+      rationale: "Remember once in a turn that the battery gives 2 Energy and 1 damage when the route takes it."
+    },
+    availability: {
+      type: "featureTypeAvailable",
+      featureType: "battery",
+      reason: "Requires batteries in the selected sets."
+    },
+    constructionRequirement: {
+      type: "boardFeatureAnyOf",
+      featureTypes: ["battery"],
+      reason: "Battery Overcharge needs at least one selected board with a battery."
+    },
+    applyBundle: applyBooleanField("batteryOvercharge")
+  },
+  {
+    id: "missileBanks",
+    label: "Missile Banks",
+    category: VARIANT_CATEGORIES.factoryFloor,
+    controlId: "variant-missile-banks",
+    defaultState: "off",
+    description: "A homing missile hits every other robot for 1 damage instead of one chosen target.",
+    cost: VARIANT_COMPLEXITY.missileBanks,
+    complexityRationale: "One persistent rule changes an existing board element; it removes the target choice rather than adding a decision.",
+    availability: {
+      type: "featureTypeAvailable",
+      featureType: "homingMissile",
+      reason: "Requires homing missiles in the selected sets."
+    },
+    constructionRequirement: {
+      type: "boardFeatureAnyOf",
+      featureTypes: ["homingMissile"],
+      reason: "Missile Banks needs at least one selected board with a homing missile."
+    },
+    applyBundle: applyBooleanField("missileBanks")
+  },
   {
     id: "setToKill",
     label: "Set to Kill",
@@ -872,6 +982,14 @@ export function getVariantExclusiveGroupConflict(leftVariantId, rightVariantId) 
   if (!sharedGroupId) {
     return null;
   }
+  const compatible = (getVariantExclusiveGroupDefinition(sharedGroupId)?.compatiblePairs ?? [])
+    .some(([first, second]) => (
+      (first === leftVariantId && second === rightVariantId) ||
+      (first === rightVariantId && second === leftVariantId)
+    ));
+  if (compatible) {
+    return null;
+  }
   return {
     id: sharedGroupId,
     ...(getVariantExclusiveGroupDefinition(sharedGroupId) ?? {})
@@ -915,6 +1033,21 @@ export function getVariantGuidanceRules(variantId) {
   ];
 }
 
+// Pay to Win and Subsidized Starts drawn together price starts both ways
+// around the median start (start-pricing.js). Set from the raw rule flags only:
+// the generation and analysis options fold Subsidized Starts into payToWin, so
+// "payToWin && subsidizedStarts" there is true for Subsidized Starts alone.
+// The key is present only when true, so single-rule courses are unchanged.
+export function withSignedStartPricing(bundle) {
+  if (!bundle) return bundle;
+  if (bundle.payToWin && bundle.subsidizedStarts) {
+    bundle.signedStartPricing = true;
+  } else {
+    delete bundle.signedStartPricing;
+  }
+  return bundle;
+}
+
 export function buildVariantBundle(activeVariants = {}, options = {}) {
   const bundle = {
     alignedLayout: true,
@@ -931,7 +1064,7 @@ export function buildVariantBundle(activeVariants = {}, options = {}) {
     }
   });
 
-  return bundle;
+  return withSignedStartPricing(bundle);
 }
 
 export function applyVariantGenerationOptions(baseOptions = {}, variantBundle = {}) {
@@ -989,12 +1122,6 @@ export function applyVariantAnalysisOptions(baseOptions = {}, variantBundle = {}
     startingUpgradeCards: numeric("startingUpgradeCards"),
     startingUpgradeCardDelta: numeric("startingUpgradeCardDelta"),
     maxEnergy: numeric("maxEnergy"),
-    upgradeDrawsPerTurn: numeric("upgradeDrawsPerTurn"),
-    upgradeInstallsPerTurn: numeric("upgradeInstallsPerTurn"),
-    upgradeDrawEnergyCost: numeric("upgradeDrawEnergyCost"),
-    upgradeUsefulCardRate: numeric("upgradeUsefulCardRate"),
-    upgradeUsefulEnergyPerInstall: numeric("upgradeUsefulEnergyPerInstall"),
-    upgradePowerRegistersPerEnergy: numeric("upgradePowerRegistersPerEnergy"),
     routeRegistersPerTurn: numeric("routeRegistersPerTurn"),
 
     lessDeadlyGame: Boolean(variantBundle.lessDeadlyGame),

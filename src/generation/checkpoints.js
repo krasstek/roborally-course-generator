@@ -271,7 +271,8 @@ export function canUseCheckpointTile(candidate, tileMap, starts, preferences = {
   }
 
   const tile = tileMap.get(`${candidate.x},${candidate.y}`);
-  if ((tile?.features || []).some((feature) => feature.type === "pit")) return false;
+  // Shallow Pits: a printed pit stays off limits (printedType).
+  if ((tile?.features || []).some((feature) => feature.type === "pit" || feature.printedType === "pit")) return false;
   // With Moving Targets the checkpoint rides the same conveyors as the robot, so
   // the static claim test below does not apply.
   return preferences.movingTargets || isHazardousCheckpointClaimable(tileMap, candidate);

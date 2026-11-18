@@ -448,8 +448,66 @@ const transformersCases = [
   }
 ];
 
+// Tar Spills (variant): oil slicks are tar (square-swaps.js turns "oil" into "tar").
+const TAR = [{ type: "tar" }];
+const tarCases = [
+  {
+    name: "tar: entering it stops the move",
+    tiles: [tile(0, 0), tile(1, 0, TAR), tile(2, 0), tile(3, 0)],
+    start: { x: 0, y: 0, facing: "E" },
+    action: FORWARD_3,
+    expected: { x: 1, y: 0, facing: "E", turnedSteps: 0 }
+  },
+  {
+    name: "tar: Move 2 started on it moves one square",
+    tiles: [tile(0, 0, TAR), tile(1, 0), tile(2, 0), tile(3, 0)],
+    start: { x: 0, y: 0, facing: "E" },
+    action: FORWARD_2,
+    expected: { x: 1, y: 0, facing: "E", turnedSteps: 0 }
+  },
+  {
+    name: "tar: Move 1 started on it does nothing",
+    tiles: [tile(0, 0, TAR), tile(1, 0)],
+    start: { x: 0, y: 0, facing: "E" },
+    action: FORWARD,
+    expected: { x: 0, y: 0, facing: "E", turnedSteps: 0 }
+  },
+  {
+    name: "tar: Back Up started on it does nothing",
+    tiles: [tile(0, 0, TAR), tile(-1, 0)],
+    start: { x: 0, y: 0, facing: "E" },
+    action: BACK,
+    expected: { x: 0, y: 0, facing: "E", turnedSteps: 0 }
+  },
+  {
+    name: "tar: a conveyor carries a robot onto it without a slide",
+    tiles: [belt(0, 0, "E"), tile(1, 0, TAR), tile(2, 0)],
+    start: { x: 0, y: 0, facing: "N" },
+    action: WAIT,
+    expected: { x: 1, y: 0, facing: "N", turnedSteps: 0 }
+  },
+  {
+    name: "tar: a fast conveyor's second step stops on tar",
+    tiles: [belt(0, 0, "E", 2), tile(1, 0, [{ type: "belt", dir: "E", speed: 2 }, ...TAR]), tile(2, 0), tile(3, 0)],
+    start: { x: 0, y: 0, facing: "N" },
+    action: WAIT,
+    expected: { x: 1, y: 0, facing: "N", turnedSteps: 0 }
+  },
+  {
+    name: "tar: a repulsor bounce stops on tar",
+    tiles: [
+      tile(-3, 0), tile(-2, 0), tile(-1, 0, TAR), tile(0, 0),
+      { x: 1, y: 0, features: [{ type: "repulsor", sides: ["W"] }] }
+    ],
+    start: { x: 0, y: 0, facing: "E" },
+    action: FORWARD_3,
+    expected: { x: -1, y: 0, facing: "E", turnedSteps: 0 }
+  }
+];
+
 const cases = [
   ...transformersCases,
+  ...tarCases,
   {
     name: "climbing a ramp with one move left spends the move without moving",
     tiles: [ramp(0, 0, "E"), tile(1, 0)],

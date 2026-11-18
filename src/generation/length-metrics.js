@@ -65,18 +65,6 @@ export function getLengthEconomyActivityOptions(sequence, preferences = {}) {
       : config.startingEnergy,
     startingUpgradeCards: config.startingUpgradeCards,
     maxEnergy: config.maxEnergy,
-    upgradeDrawsPerTurn: config.drawsPerTurn,
-    upgradeInstallsPerTurn: config.installsPerTurn,
-    upgradeDrawEnergyCost: Number.isFinite(Number(production?.drawEnergyCost))
-      ? Number(production.drawEnergyCost)
-      : config.drawEnergyCost,
-    upgradeUsefulCardRate: Number.isFinite(Number(production?.usefulUpgradeCardRate))
-      ? Number(production.usefulUpgradeCardRate)
-      : config.usefulUpgradeCardRate,
-    upgradeUsefulEnergyPerInstall: Number.isFinite(Number(production?.usefulEnergyPerInstall))
-      ? Number(production.usefulEnergyPerInstall)
-      : config.usefulEnergyPerInstall,
-    upgradePowerRegistersPerEnergy: config.powerRegistersPerEnergy,
     routeRegistersPerTurn: config.registersPerTurn
   };
 }
@@ -93,7 +81,11 @@ export function getLengthEconomyStartingEnergyOptions(baseOptions, startAnalysis
   const adjustment = meanFinite(adjustments);
   const baseEnergy = getCourseStartingEnergy(baseOptions);
   const maxEnergy = getCourseMaxEnergy(baseOptions);
-  const signed = preferences.subsidizedStarts ? adjustment : -adjustment;
+  // Signed start pricing gives each start its own direction (energyDirection).
+  const receives = startAnalysis?.energyDirection
+    ? startAnalysis.energyDirection === "subsidy"
+    : Boolean(preferences.subsidizedStarts);
+  const signed = receives ? adjustment : -adjustment;
   return {
     ...baseOptions,
     startingEnergy: clamp(Math.round(baseEnergy + signed), 0, maxEnergy)

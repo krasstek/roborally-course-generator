@@ -129,16 +129,29 @@ const SQUARE_SWAP_IMPACT = Object.freeze([
     many: "conveyor squares"
   },
   { id: "lavaPits", types: ["firePit"], one: "fire pit", many: "fire pits" },
+  { id: "shallowPits", types: ["pit"], one: "pit", many: "pits" },
   { id: "batteryPitStops", types: ["battery"], one: "battery", many: "batteries" },
   { id: "spaceBridgeNetwork", types: ["teleporter"], one: "teleporter", many: "teleporters" },
   { id: "napalmDeath", types: ["flamethrower"], one: "flamethrower", many: "flamethrowers" },
-  { id: "pistonCup", types: ["push"], one: "pusher", many: "pushers" }
+  { id: "pistonCup", types: ["push"], one: "pusher", many: "pushers" },
+  { id: "tarSpills", types: ["oil"], one: "oil slick", many: "oil slicks" },
+  {
+    id: "scramblers",
+    // Beam squares, not beams: two beams crossing count once.
+    count: (tileMap) => [...tileMap.values()].filter((tile) => (tile.features || []).some((feature) => feature.type === "laser")).length,
+    one: "laser square",
+    many: "laser squares"
+  }
 ]);
 
 // Ramp rules (movement.js): counted on the course as printed.
 const RAMP_RULE_IMPACT = Object.freeze([
   { id: "steepRamps", types: ["ramp"], one: "ramp", many: "ramps" },
-  { id: "turboRamps", types: ["jumpRamp"], one: "jump ramp", many: "jump ramps" }
+  { id: "turboRamps", types: ["jumpRamp"], one: "jump ramp", many: "jump ramps" },
+  // Not a ramp rule, but counted and worded the same way.
+  { id: "perilsOfTheWarp", types: ["portal", "teleporter", "spaceBridge"], one: "warp square", many: "warp squares" },
+  { id: "batteryOvercharge", types: ["battery"], one: "battery", many: "batteries" },
+  { id: "missileBanks", types: ["homingMissile"], one: "homing missile", many: "homing missiles" }
 ]);
 
 // The course's Energy spaces, in one list shared by the Special Rules texts;
@@ -309,7 +322,18 @@ export function getVariantImpactSummary(scenario) {
   if (scenario.competitiveMode) {
     addImpact("competitiveMode");
   }
-  if (scenario.subsidizedStarts) {
+  if (scenario.payToWin && scenario.subsidizedStarts) {
+    // Signed start pricing: count each direction under its own rule.
+    const pricedStarts = (scenario.sequence.firstLeg.starts || []).filter((start) => (
+      Number.isFinite(start.energyCost) && !start.payToWinUnavailable
+    ));
+    const paying = pricedStarts.filter((start) => start.energyDirection === "payment" &&
+      Math.max(Number(start.energyCost) || 0, Number(start.lateEnergyCost) || 0) > 0).length;
+    const receiving = pricedStarts.filter((start) => start.energyDirection === "subsidy" &&
+      Math.max(Number(start.energyCost) || 0, Number(start.lateEnergyCost) || 0) > 0).length;
+    addImpact("payToWin", `${paying} paying start${paying === 1 ? "" : "s"}`);
+    addImpact("subsidizedStarts", `${receiving} subsidized start${receiving === 1 ? "" : "s"}`);
+  } else if (scenario.subsidizedStarts) {
     const offeredStarts = (scenario.sequence.firstLeg.starts || []).filter((start) => (
       Number.isFinite(start.energyCost) && !start.payToWinUnavailable
     ));
@@ -733,7 +757,9 @@ export function updateRulesNote(scenario) {
 
   if (scenario.noDocks) {
     let noDockText;
-    if (scenario.subsidizedStarts) {
+    if (scenario.payToWin && scenario.subsidizedStarts) {
+      noDockText = "No Docks: do not use a docking bay. The priced and subsidized starting spaces along the indicated outer board edge replace docking-bay starting spaces.";
+    } else if (scenario.subsidizedStarts) {
       noDockText = "No Docks: do not use a docking bay. The subsidized starting spaces along the indicated outer board edge replace docking-bay starting spaces.";
     } else if (scenario.payToWin) {
       noDockText = "No Docks: do not use a docking bay. The priced starting spaces along the indicated outer board edge replace docking-bay starting spaces.";
@@ -791,7 +817,27 @@ export function updateRulesNote(scenario) {
     }
   }
 
-  if (scenario.subsidizedStarts) {
+  // Pay to Win and Subsidized Starts together: one note for both directions.
+  const signedStartPricing = Boolean(scenario.payToWin && scenario.subsidizedStarts);
+  if (signedStartPricing) {
+    const pricing = scenario.sequence.firstLeg.summary.payToWin;
+    const baseStartingEnergy = pricing?.startingEnergy ?? DEFAULT_STARTING_ENERGY;
+    let lateText = "";
+    if (pricing?.hasLatePriceDifference) {
+      const firstLatePlayer = pricing.lateSelectorStart ?? scenario.playerCount;
+      const lastLatePlayer = pricing.lateSelectorEnd ?? scenario.playerCount;
+      const singleLatePlayer = firstLatePlayer === lastLatePlayer;
+      const latePlayerText = singleLatePlayer
+        ? `Player ${firstLatePlayer}`
+        : `Players ${firstLatePlayer}–${lastLatePlayer}`;
+      lateText = ` ${latePlayerText} ${singleLatePlayer ? "uses" : "use"} the second value after the slash; earlier players use the first.`;
+    }
+    notes.push(
+      `Pay to Win and Subsidized Starts: green starting spaces show a cost (−n): pay it from your ${baseStartingEnergy} starting Energy. Light-blue starting spaces show a subsidy (+n): add it to your ${baseStartingEnergy} starting Energy. A 0 space neither pays nor receives.${lateText} Prohibited starting spaces are not available for selection. Resolve starting-space selection and Energy before dealing or revealing any starting upgrade cards.`
+    );
+  }
+
+  if (scenario.subsidizedStarts && !signedStartPricing) {
     const subsidyPricing = scenario.sequence.firstLeg.summary.payToWin;
     const baseStartingEnergy = subsidyPricing?.startingEnergy ?? DEFAULT_STARTING_ENERGY;
     if (subsidyPricing?.hasLatePriceDifference) {
@@ -816,7 +862,7 @@ export function updateRulesNote(scenario) {
     }
   }
 
-  if (scenario.payToWin) {
+  if (scenario.payToWin && !signedStartPricing) {
     const payToWinPricing = scenario.sequence.firstLeg.summary.payToWin;
     const baseStartingEnergy = payToWinPricing?.startingEnergy ?? DEFAULT_STARTING_ENERGY;
     if (payToWinPricing?.hasLatePriceDifference) {
@@ -1085,9 +1131,11 @@ export function updateLegend(scenario) {
   }
   rebootTokenEl?.classList.toggle("hidden", !["reboot_tokens", "home_reboot"].includes(scenario?.recoveryRule));
   if (payToWinStartEl) {
-    payToWinStartEl.textContent = scenario?.subsidizedStarts
-      ? "Light-blue square: extra starting Energy subsidy"
-      : "Green square: Pay to Win starting Energy cost";
+    payToWinStartEl.textContent = scenario?.payToWin && scenario?.subsidizedStarts
+      ? "Green square (−n): starting Energy cost; light-blue square (+n): starting Energy subsidy"
+      : scenario?.subsidizedStarts
+        ? "Light-blue square: extra starting Energy subsidy"
+        : "Green square: Pay to Win starting Energy cost";
   }
   payToWinStartEl?.classList.toggle("hidden", !(scenario?.payToWin || scenario?.subsidizedStarts));
 }

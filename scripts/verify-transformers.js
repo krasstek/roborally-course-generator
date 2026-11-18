@@ -27,6 +27,7 @@ function row(length, featuresByX = {}) {
 const building = (doorways) => [{ type: "building", sides: doorways }];
 const ramp = (dir) => [{ type: "jumpRamp", dir }];
 const firePit = [{ type: "firePit" }];
+const shallowPit = [{ type: "firePit", noEndDamage: true, printedType: "pit", swappedBy: "shallowPits" }];
 
 // Robot points as the traffic model passes them: positions after the register.
 function point(x, facing) {
@@ -48,12 +49,36 @@ const laser = { type: "laser", dir: "E", damage: 1 };
 const FORWARD = { id: "FORWARD", type: "move", relative: "forward", steps: 1 };
 
 // Energy step for a robot ending the register on square x of the row.
-function energyStep(map, x, transition = {}) {
-  const options = { routeAwareBatteryScoring: true, routeEnergyHorizonTurns: 6, routeEnergyRegisterScore: 6.4 };
+function energyStep(map, x, transition = {}, extraOptions = {}) {
+  const options = { routeAwareBatteryScoring: true, routeEnergyHorizonTurns: 6, routeEnergyRegisterScore: 6.4, ...extraOptions };
   return getRouteEnergyShadowStep(map, { x, y: 0 }, "FORWARD", 3, 3, 0, options, transition);
 }
 
 const pitStop = [{ type: "pitStop" }];
+const battery = [{ type: "battery" }];
+function overchargeDamage(map, from, to, traversed) {
+  return getDamageEconomyRealizedDamageForTransition(map, {
+    from: { x: from, y: 0, facing: "E" },
+    to: { x: to, y: 0, facing: "E" },
+    traversed: traversed.map((x) => ({ x, y: 0 })),
+    rebooted: false,
+    crashed: false
+  }, { batteryOvercharge: true }, 2).batteryDamageUnits ?? 0;
+}
+
+// Perils of the Warp: warp damage for Move 1 east from x = 0 on a row.
+const portalA = [{ type: "portal", id: "A" }];
+function warpDamage(options, featuresByX) {
+  const map = row(8, featuresByX);
+  const portalMap = new Map();
+  for (const tile of map.values()) {
+    for (const feature of tile.features) {
+      if (feature.type === "portal") portalMap.set(feature.id, [...(portalMap.get(feature.id) ?? []), { x: tile.x, y: tile.y }]);
+    }
+  }
+  const transition = simulateAction(map, { x: 0, y: 0, facing: "E" }, FORWARD, { ...options, portalMap });
+  return getDamageEconomyRealizedDamageForTransition(map, transition, options, 2).warpDamageUnits ?? 0;
+}
 
 // Plays Move 1 east for `count` registers from x = 0, register by register
 // (register index runs 0-4 and wraps into the next turn); returns each x.
@@ -160,6 +185,47 @@ const cases = [
       const result = playForward(row(10, { 5: firePit }), 6);
       return result.xs === "1,2,3,4,5,6" && result.cancelled === "";
     }
+  },
+  {
+    name: "shallow pit: entering and ending the register in it deals 1 (no end damage)",
+    check: () => damage(row(3, { 1: shallowPit }), 0, 1, [1]).firePitDamageUnits === 1
+  },
+  {
+    name: "shallow pit: staying in it for a register deals nothing",
+    check: () => damage(row(3, { 1: shallowPit }), 1, 1, []).firePitDamageUnits === 0
+  },
+  {
+    name: "shallow pit: a board laser does not hit a robot in it",
+    check: () => damage(row(3, { 1: [...shallowPit, laser] }), 1, 1, []).totalDamageUnits === 0
+  },
+  {
+    name: "shallow pit: entered in register 2, the register-5 card is cancelled",
+    check: () => {
+      const result = playForward(row(10, { 2: shallowPit }), 6);
+      return result.xs === "1,2,3,4,4,5" && result.cancelled === "5";
+    }
+  },
+  {
+    name: "Perils of the Warp: going through a portal deals 1",
+    check: () => warpDamage({ perilsOfTheWarp: true }, { 1: portalA, 4: portalA }) === 1
+  },
+  {
+    name: "Perils of the Warp: a portal deals nothing without the rule",
+    check: () => warpDamage({}, { 1: portalA, 4: portalA }) === 0
+  },
+  {
+    name: "Perils of the Warp: a jump ramp is not a warp",
+    check: () => warpDamage({ perilsOfTheWarp: true }, { 1: ramp("E") }) === 0
+  },
+  {
+    name: "Battery Overcharge: ending on a battery gives 2 Energy",
+    check: () => energyStep(row(3, { 1: battery }), 1, {}, { batteryOvercharge: true }).batteryEnergyGain === 2 &&
+      energyStep(row(3, { 1: battery }), 1).batteryEnergyGain === 1
+  },
+  {
+    name: "Battery Overcharge: ending on a battery deals 1, passing it nothing",
+    check: () => overchargeDamage(row(3, { 1: battery }), 0, 1, [1]) === 1 &&
+      overchargeDamage(row(3, { 1: battery }), 0, 2, [1, 2]) === 0
   },
   {
     name: "mine: every entry deals 1 damage",
