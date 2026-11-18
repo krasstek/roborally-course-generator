@@ -19,6 +19,7 @@ import {
   getPlacementOccupiedOffsets,
   getPlacementOccupiedTiles,
   isBlankCustomBoardPiece,
+  isLayoutLaser,
   isMiniOverlayPiece,
   tileContinuesLaserBeam,
   tileHasLaserSupportBlock
@@ -213,7 +214,7 @@ function canonicalFeatures(features = []) {
 // (user 2026-11-10). A token on the same feature still counts when anything
 // else differs (walls, other features it replaces, extra features on it).
 function pieceHasLaser(piece) {
-  return (piece?.tiles || []).some((tile) => (tile.features || []).some((feature) => feature.type === "laser"));
+  return (piece?.tiles || []).some((tile) => (tile.features || []).some(isLayoutLaser));
 }
 
 export function placementChangesNothing(placement, piece, currentTileMap) {
@@ -257,7 +258,7 @@ export function placementHasValidLaserSupport(placement, piece, currentTileMap, 
   const effectiveFeatureMap = candidateFeatureMap ?? getPlacedTileFeatureMap(piece, placement);
 
   return placed.tiles.every((tile) => {
-    const lasers = (tile.features || []).filter((feature) => feature.type === "laser");
+    const lasers = (tile.features || []).filter(isLayoutLaser);
     if (!lasers.length) {
       return true;
     }

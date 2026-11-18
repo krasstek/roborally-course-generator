@@ -1,6 +1,6 @@
 // Robo Rally Course Randomizer - damage pressure in routing: intrinsic damage scores, alternate-route pressure and traffic routing breakdowns
 import { getTilePenaltyForFeature } from "../../feature-weights.js";
-import { getLedgeSides, hasRampForDir, isFirePit, isWater, tileKey } from "./board-geometry.js";
+import { getLedgeSides, hasFirePitEndDamage, hasRampForDir, isFirePit, isWater, tileKey } from "./board-geometry.js";
 import { OPPOSITE, REGISTER_COUNT, REGISTER_TEMPO_COST } from "./constants.js";
 import {
   DAMAGE_ECONOMY_SHUTDOWN_REFERENCE_RE,
@@ -100,7 +100,7 @@ export function getLegacyRealizedDirectDamageScoreForRoute(tileMap, route, optio
       } else if (!transition?.crashed && transition?.to) {
         const finalTile = tileMap.get(tileKey(transition.to.x, transition.to.y));
         const inFirePit = isFirePit(finalTile);
-        if (inFirePit) score += getFlamethrowerDamagePenalty(registerOptions);
+        if (hasFirePitEndDamage(finalTile)) score += getFlamethrowerDamagePenalty(registerOptions);
         for (const feature of finalTile?.features || []) {
           if (feature.type === "laser" && !inFirePit) {
             score += Math.max(0, getTilePenaltyForFeature(feature, {

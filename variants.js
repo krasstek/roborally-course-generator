@@ -41,6 +41,9 @@ const VARIANT_COMPLEXITY = {
   spaceBridgeNetwork: 1,
   napalmDeath: 1,
   pistonCup: 1,
+  scramblers: 1,
+  tarSpills: 1,
+  shallowPits: 1,
   steepRamps: 1,
   turboRamps: 1,
   setToKill: 1,
@@ -365,7 +368,7 @@ const VARIANT_DEFINITION_ROWS = [
       label: "Cold Storage",
       description: "All water is frozen into ice, which works like an oil slick (not for Flaming Oil). Currents in water stop; pits in water stay.",
       featureTypes: ["water"],
-      incompatibleWith: ["flamingOil", "radioactiveGunk"],
+      incompatibleWith: ["flamingOil", "radioactiveGunk", "tarSpills"],
       reason: "Requires water in the selected sets."
     },
     {
@@ -388,7 +391,15 @@ const VARIANT_DEFINITION_ROWS = [
       label: "Lava Pits",
       description: "Fire pits are ordinary pits.",
       featureTypes: ["firePit"],
+      incompatibleWith: ["shallowPits"],
       reason: "Requires fire pits in the selected sets."
+    },
+    {
+      id: "shallowPits",
+      label: "Shallow Pits",
+      description: "Pits do not destroy robots. A robot entering a pit stops there and takes 1 damage; after entering one in registers 1-4 the robot does not move in register 5 (the card is still played), and board lasers do not hit a robot in a pit. Falling off the board still reboots.",
+      featureTypes: ["pit"],
+      reason: "Requires pits in the selected sets."
     },
     {
       id: "batteryPitStops",
@@ -417,6 +428,22 @@ const VARIANT_DEFINITION_ROWS = [
       description: "Pushers push in every register.",
       featureTypes: ["push"],
       reason: "Requires pushers in the selected sets."
+    },
+    {
+      id: "tarSpills",
+      label: "Tar Spills",
+      description: "Oil slicks are tar. A robot entering tar stops there, whatever moved it. A Move or Back Up started on tar moves 1 square less (Move 1 and Back Up do nothing), as from water.",
+      featureTypes: ["oil"],
+      incompatibleWith: ["flamingOil"],
+      reason: "Requires oil slicks in the selected sets."
+    },
+    {
+      id: "scramblers",
+      label: "Scramblers",
+      description: "Board lasers are scramblers: every square of a laser beam acts as a randomizer, and board lasers deal no damage. Robots do not block scrambler beams.",
+      featureTypes: ["laser"],
+      incompatibleWith: ["cuttingFloor"],
+      reason: "Requires board lasers in the selected sets."
     }
   ].map((swap) => ({
     id: swap.id,

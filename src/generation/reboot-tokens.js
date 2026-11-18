@@ -14,6 +14,7 @@ import {
 export function isUnsafeRebootQueueTile(tile) {
   return (tile?.features || []).some((feature) => (
     feature.type === "pit" ||
+    feature.printedType === "pit" ||
     feature.type === "trapdoor" ||
     feature.type === "crusher"
   ));
@@ -278,7 +279,7 @@ export function placeHomeRebootTokens(dockPlacements, pieceMap, starts = [], til
       .filter((point) => !checkpointKeys.has(`${point.x},${point.y}`))
       .filter((point) => {
         const tile = tileMap?.get(`${point.x},${point.y}`) ?? { features: [] };
-        return !(tile.features || []).some((feature) => feature.type === "pit");
+        return !(tile.features || []).some((feature) => feature.type === "pit" || feature.printedType === "pit");
       });
 
     // The token is the square nearest the dock centre from which a route

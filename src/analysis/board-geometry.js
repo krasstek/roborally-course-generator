@@ -194,6 +194,12 @@ export function isOil(tile) {
   return (tile?.features || []).some((feature) => feature.type === "oil");
 }
 
+// Tar (Tar Spills, square-swaps.js): entering it ends the move; starting on it
+// shortens a Move like water.
+export function isTar(tile) {
+  return (tile?.features || []).some((feature) => feature.type === "tar");
+}
+
 export function isWater(tile) {
   return (tile?.features || []).some((feature) => feature.type === "water");
 }
@@ -229,6 +235,12 @@ export function getRoad(tile) {
 
 export function isFirePit(tile) {
   return (tile?.features || []).some((feature) => feature.type === "firePit");
+}
+
+// A fire pit's damage for ending a register in it; a shallow pit (Shallow
+// Pits, square-swaps.js) is a fire pit without it.
+export function hasFirePitEndDamage(tile) {
+  return (tile?.features || []).some((feature) => feature.type === "firePit" && !feature.noEndDamage);
 }
 
 export function getSpaceBridge(tile) {

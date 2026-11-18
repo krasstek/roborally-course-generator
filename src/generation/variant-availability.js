@@ -41,6 +41,11 @@ export function isCheckpointActiveFeature(feature, options = {}) {
   if (DEFAULT_CHECKPOINT_ACTIVE_FEATURE_TYPES.has(feature?.type)) {
     return true;
   }
+  // Scramblers: a printed laser stays on under a checkpoint, so its beam
+  // marker and the randomizer it became stay on too.
+  if (feature?.printedType === "laser") {
+    return true;
+  }
 
   return Boolean(options.movingTargets && feature?.type === "belt");
 }
@@ -404,6 +409,9 @@ const NEUTRAL_VARIANT_CHANCE = Object.freeze({
   spaceBridgeNetwork: 0.1,
   napalmDeath: 0.1,
   pistonCup: 0.1,
+  scramblers: 0.1,
+  tarSpills: 0.1,
+  shallowPits: 0.1,
   steepRamps: 0.1,
   turboRamps: 0.1,
   repulsorOverdrive: 0.03,

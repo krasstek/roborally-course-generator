@@ -31,8 +31,10 @@ import {
   isBuildingSideClosed,
   isCurrent,
   isFeatureActiveThisRegister,
+  hasFirePitEndDamage,
   isFirePit,
   isOil,
+  isTar,
   isPit,
   isRampOnlyLedge,
   isWater,
@@ -1062,6 +1064,8 @@ export function moveOneStep(
         workingState.x = bounce.state.x;
         workingState.y = bounce.state.y;
         workingState.facing = bounce.state.facing;
+        // Entering tar ends the bounce.
+        if (bounce.distance > 0 && isTar(tileMap.get(tileKey(workingState.x, workingState.y)))) break;
       }
 
       const repulsorOutcome = {
@@ -1548,6 +1552,8 @@ export function resolveConveyorPhase(
     workingState.x = step.state.x;
     workingState.y = step.state.y;
     workingState.facing = step.state.facing;
+    // Entering tar ends the conveyor move (a blue belt's second step too).
+    if (step.distance > 0 && isTar(tileMap.get(tileKey(workingState.x, workingState.y)))) break;
   }
 
   const conveyorOutcome = {
@@ -1912,8 +1918,8 @@ export function getEndOfRegisterFeaturePenalty(tileMap, state, options = {}) {
     penalty += 4.5 / REGISTER_COUNT;
   }
 
-  // A fire pit deals 1 more damage just before board lasers.
-  if (isFirePit(tile)) {
+  // A fire pit deals 1 more damage just before board lasers (a shallow pit not).
+  if (hasFirePitEndDamage(tile)) {
     penalty += getFlamethrowerDamagePenalty(options);
   }
 
@@ -2118,6 +2124,7 @@ export function simulateAction(tileMap, startState, action, options = {}) {
     const startTile = tileMap.get(tileKey(state.x, state.y));
     const onOil = isOil(startTile);
     const onWater = isWater(startTile);
+    const onTar = isTar(startTile);
     const cardMoveDistance = Math.max(1, action.steps ?? 1);
     // A Move card (forward or Move Back, not a drift) started on a road while
     // facing its arrow moves one square further (mandatory).
@@ -2128,7 +2135,8 @@ export function simulateAction(tileMap, startState, action, options = {}) {
       : 0;
     let remainingSteps = Math.max(0, cardMoveDistance + roadBonus - (
       (onOil ? 1 : 0) +
-      (onWater ? 1 : 0)
+      (onWater ? 1 : 0) +
+      (onTar ? 1 : 0)
     ));
     let cardSquaresMoved = 0;
     let pendingJump = null;
@@ -2212,8 +2220,8 @@ export function simulateAction(tileMap, startState, action, options = {}) {
         if (jumpRamp && jumpRamp.dir === stepDir) {
           pendingJump = { dir: stepDir, squares: cardSquaresMoved + (options.turboRamps ? 1 : 0) };
           remainingSteps = 1;
-        } else if (isFirePit(landedTile)) {
-          // Entering a fire pit stops the move.
+        } else if (isFirePit(landedTile) || isTar(landedTile)) {
+          // Entering a fire pit or tar stops the move.
           remainingSteps = 0;
         }
       }

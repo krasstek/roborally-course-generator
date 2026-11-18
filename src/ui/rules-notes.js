@@ -129,10 +129,19 @@ const SQUARE_SWAP_IMPACT = Object.freeze([
     many: "conveyor squares"
   },
   { id: "lavaPits", types: ["firePit"], one: "fire pit", many: "fire pits" },
+  { id: "shallowPits", types: ["pit"], one: "pit", many: "pits" },
   { id: "batteryPitStops", types: ["battery"], one: "battery", many: "batteries" },
   { id: "spaceBridgeNetwork", types: ["teleporter"], one: "teleporter", many: "teleporters" },
   { id: "napalmDeath", types: ["flamethrower"], one: "flamethrower", many: "flamethrowers" },
-  { id: "pistonCup", types: ["push"], one: "pusher", many: "pushers" }
+  { id: "pistonCup", types: ["push"], one: "pusher", many: "pushers" },
+  { id: "tarSpills", types: ["oil"], one: "oil slick", many: "oil slicks" },
+  {
+    id: "scramblers",
+    // Beam squares, not beams: two beams crossing count once.
+    count: (tileMap) => [...tileMap.values()].filter((tile) => (tile.features || []).some((feature) => feature.type === "laser")).length,
+    one: "laser square",
+    many: "laser squares"
+  }
 ]);
 
 // Ramp rules (movement.js): counted on the course as printed.

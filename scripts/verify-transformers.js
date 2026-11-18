@@ -27,6 +27,7 @@ function row(length, featuresByX = {}) {
 const building = (doorways) => [{ type: "building", sides: doorways }];
 const ramp = (dir) => [{ type: "jumpRamp", dir }];
 const firePit = [{ type: "firePit" }];
+const shallowPit = [{ type: "firePit", noEndDamage: true, printedType: "pit", swappedBy: "shallowPits" }];
 
 // Robot points as the traffic model passes them: positions after the register.
 function point(x, facing) {
@@ -159,6 +160,25 @@ const cases = [
     check: () => {
       const result = playForward(row(10, { 5: firePit }), 6);
       return result.xs === "1,2,3,4,5,6" && result.cancelled === "";
+    }
+  },
+  {
+    name: "shallow pit: entering and ending the register in it deals 1 (no end damage)",
+    check: () => damage(row(3, { 1: shallowPit }), 0, 1, [1]).firePitDamageUnits === 1
+  },
+  {
+    name: "shallow pit: staying in it for a register deals nothing",
+    check: () => damage(row(3, { 1: shallowPit }), 1, 1, []).firePitDamageUnits === 0
+  },
+  {
+    name: "shallow pit: a board laser does not hit a robot in it",
+    check: () => damage(row(3, { 1: [...shallowPit, laser] }), 1, 1, []).totalDamageUnits === 0
+  },
+  {
+    name: "shallow pit: entered in register 2, the register-5 card is cancelled",
+    check: () => {
+      const result = playForward(row(10, { 2: shallowPit }), 6);
+      return result.xs === "1,2,3,4,4,5" && result.cancelled === "5";
     }
   },
   {

@@ -6,6 +6,7 @@ import {
   hasRampForDir,
   isBoundaryBlockedByWalls,
   isFeatureActiveThisRegister,
+  hasFirePitEndDamage,
   isFirePit,
   isOil,
   isWater,
@@ -1657,10 +1658,10 @@ export function getDamageEconomyRealizedDamageForTransition(
   // survives, inspect only the final post-conveyor/pusher/gear/machinery square.
   if (!transition?.rebooted && !transition?.crashed && transition?.to) {
     const finalTile = tileMap.get(tileKey(transition.to.x, transition.to.y));
-    // A robot in a fire pit takes 1 just before board lasers and is not hit by
-    // them.
+    // A robot in a fire pit takes 1 just before board lasers (not in a shallow
+    // pit) and is not hit by them.
     const inFirePit = isFirePit(finalTile);
-    if (inFirePit) firePitDamageUnits += 1;
+    if (hasFirePitEndDamage(finalTile)) firePitDamageUnits += 1;
     for (const feature of finalTile?.features || []) {
       if (feature.type === "laser" && !inFirePit) {
         boardLaserDamageUnits += getEffectiveLaserDamage(feature, options);
