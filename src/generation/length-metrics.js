@@ -111,7 +111,7 @@ export function summarizeLengthEconomyWallClockActivity(
     return {
       active: true,
       removedByEnergyCrisis: true,
-      method: "card-aware-fixed-route-upgrade-activity-v49du",
+      method: "energy-value-table-activity-2026-11-18",
       drawEventsPerPlayer: 0,
       installEventsPerPlayer: 0,
       transactionEventsPerPlayer: 0,
@@ -142,7 +142,6 @@ export function summarizeLengthEconomyWallClockActivity(
   let openingInstallEventsPerPlayer = 0;
   let laterInstallEventsPerPlayer = 0;
   let drawEnergySpentPerPlayer = 0;
-  let abstractInstallInvestmentPerPlayer = 0;
   let summarizedStartWeight = 0;
 
   for (const reStart of reStarts) {
@@ -171,7 +170,6 @@ export function summarizeLengthEconomyWallClockActivity(
     let startOpeningInstalls = 0;
     let startLaterInstalls = 0;
     let startDrawEnergy = 0;
-    let startAbstractInvestment = 0;
     let usableRouteWeight = 0;
 
     for (const routeEntry of routeEntries) {
@@ -191,7 +189,6 @@ export function summarizeLengthEconomyWallClockActivity(
       startOpeningInstalls += Math.max(0, Number(activity.openingInstallEvents) || 0) * routeWeight;
       startLaterInstalls += Math.max(0, Number(activity.laterInstallEvents) || 0) * routeWeight;
       startDrawEnergy += Math.max(0, Number(activity.drawEnergySpent) || 0) * routeWeight;
-      startAbstractInvestment += Math.max(0, Number(activity.abstractInstallInvestment) || 0) * routeWeight;
     }
     if (!(usableRouteWeight > 0)) continue;
     const normalization = 1 / usableRouteWeight;
@@ -200,7 +197,6 @@ export function summarizeLengthEconomyWallClockActivity(
     openingInstallEventsPerPlayer += startOpeningInstalls * normalization * startWeight;
     laterInstallEventsPerPlayer += startLaterInstalls * normalization * startWeight;
     drawEnergySpentPerPlayer += startDrawEnergy * normalization * startWeight;
-    abstractInstallInvestmentPerPlayer += startAbstractInvestment * normalization * startWeight;
     summarizedStartWeight += startWeight;
   }
 
@@ -213,7 +209,6 @@ export function summarizeLengthEconomyWallClockActivity(
   openingInstallEventsPerPlayer *= normalize;
   laterInstallEventsPerPlayer *= normalize;
   drawEnergySpentPerPlayer *= normalize;
-  abstractInstallInvestmentPerPlayer *= normalize;
 
   const transactionEventsPerPlayer = drawEventsPerPlayer + installEventsPerPlayer;
   const nominalActivityRegisterEquivalents =
@@ -225,20 +220,19 @@ export function summarizeLengthEconomyWallClockActivity(
   return {
     active: true,
     removedByEnergyCrisis: false,
-    method: "card-aware-fixed-route-upgrade-activity-v49du",
+    method: "energy-value-table-activity-2026-11-18",
     drawEventsPerPlayer: Number(drawEventsPerPlayer.toFixed(3)),
     installEventsPerPlayer: Number(installEventsPerPlayer.toFixed(3)),
     openingInstallEventsPerPlayer: Number(openingInstallEventsPerPlayer.toFixed(3)),
     laterInstallEventsPerPlayer: Number(laterInstallEventsPerPlayer.toFixed(3)),
     transactionEventsPerPlayer: Number(transactionEventsPerPlayer.toFixed(3)),
     drawEnergySpentPerPlayer: Number(drawEnergySpentPerPlayer.toFixed(3)),
-    abstractInstallInvestmentPerPlayer: Number(abstractInstallInvestmentPerPlayer.toFixed(3)),
     drawEventWallClockRegisters: ENERGY_ECONOMY_DRAW_EVENT_WALL_CLOCK_REGISTERS,
     installEventWallClockRegisters: ENERGY_ECONOMY_INSTALL_EVENT_WALL_CLOCK_REGISTERS,
     nominalActivityRegisterEquivalents: Number(nominalActivityRegisterEquivalents.toFixed(3)),
     expectedActivityRegisterEquivalents: Number(expectedActivityRegisterEquivalents.toFixed(3)),
     playTimeScaling: Number(Math.max(1, Number(playTimeMultiplier) || 1).toFixed(4)),
-    note: "Paid upgrade-card draws and upgrade install/play events are the wall-clock primitives. Energy/card gains affect the DP and therefore event opportunity, but get no independent time tax; abstract install-investment Energy is diagnostic only."
+    note: "Paid upgrade-card draws and upgrade installs are the wall-clock primitives, expected per player from the Energy value table's deck simulation along each route (by turn and Energy received). Energy gains change how many there are but get no time tax of their own."
   };
 }
 
