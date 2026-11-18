@@ -95,6 +95,7 @@ export const ROUTE_RULE_BOOLEAN_KEYS = Object.freeze([
   "scramblers",
   "tarSpills",
   "shallowPits",
+  "perilsOfTheWarp",
   // Ramp rules change movement (movement.js).
   "steepRamps",
   "turboRamps"

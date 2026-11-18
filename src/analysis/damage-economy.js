@@ -1585,6 +1585,8 @@ export function getDamageEconomyRealizedDamageForTransition(
   let ledgeDamageUnits = 0;
   let firePitDamageUnits = 0;
   let mineDamageUnits = 0;
+  // Perils of the Warp: 1 per portal, teleporter or space bridge use.
+  let warpDamageUnits = 0;
   const rebootDamageUnits = transition?.rebooted
     ? (options.moreDeadlyGame ? 3 : 2)
     : 0;
@@ -1606,6 +1608,7 @@ export function getDamageEconomyRealizedDamageForTransition(
     // A mine (Transformers token, modelled as never removed) deals 1 damage on
     // every entry; its +1 clog is added to the turn's clog summary.
     if (hasFeatureType(tile, "mine")) mineDamageUnits += 1;
+    if (point.warp) warpDamageUnits += 1;
   }
 
   // Flaming Oil is never register-specific. It mirrors the flamer's entry/end
@@ -1702,6 +1705,7 @@ export function getDamageEconomyRealizedDamageForTransition(
     ledgeDamageUnits +
     firePitDamageUnits +
     mineDamageUnits +
+    warpDamageUnits +
     rebootDamageUnits
   );
   const sourceTypes = [];
@@ -1713,6 +1717,7 @@ export function getDamageEconomyRealizedDamageForTransition(
   if (ledgeDamageUnits > 0) sourceTypes.push("ledge-damage");
   if (firePitDamageUnits > 0) sourceTypes.push("fire-pit-damage");
   if (mineDamageUnits > 0) sourceTypes.push("mine-hit");
+  if (warpDamageUnits > 0) sourceTypes.push("warp-damage");
   if (rebootDamageUnits > 0) sourceTypes.push("reboot-damage");
 
   return {
@@ -1724,6 +1729,7 @@ export function getDamageEconomyRealizedDamageForTransition(
     ledgeDamageUnits,
     firePitDamageUnits,
     mineDamageUnits,
+    ...(warpDamageUnits > 0 ? { warpDamageUnits } : {}),
     rebootDamageUnits,
     totalDamageUnits,
     sourceTypes

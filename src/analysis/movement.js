@@ -1183,7 +1183,7 @@ export function moveOneStep(
 
   const traversed = [{ x: next.x, y: next.y }];
   if (portalDestination) {
-    traversed.push({ x: portalDestination.x, y: portalDestination.y, jump: true });
+    traversed.push(getWarpPoint(portalDestination.x, portalDestination.y, options));
     const portalDestinationTile = tileMap.get(tileKey(portalDestination.x, portalDestination.y));
     if (isPit(portalDestinationTile) || hasActiveFeature(portalDestinationTile, "trapdoor", options)) {
       const portalCrashOutcome = resolveCrashOrReboot(
@@ -1215,7 +1215,8 @@ export function moveOneStep(
       ? getTilePenalty(portalDestinationTile, options) +
         getActiveFlamethrowerEntryPenalty(portalDestinationTile, options) +
         getMineEntryPenalty(portalDestinationTile, options) +
-        getTimedTraversalFragilityPenalty(portalDestinationTile, options)
+        getTimedTraversalFragilityPenalty(portalDestinationTile, options) +
+        getWarpEntryPenalty(options)
       : 0);
   if (finishProgrammedStepPhase) finishProgrammedStepPhase("physicalMissProgramHazardMs");
 
@@ -1349,7 +1350,7 @@ export function resolveTeleporterMove(tileMap, state, action, options = {}) {
     x: state.x + DIRS[dir].dx * steps,
     y: state.y + DIRS[dir].dy * steps
   };
-  const traversed = [{ x: destination.x, y: destination.y, jump: true }];
+  const traversed = [getWarpPoint(destination.x, destination.y, options)];
   const destinationTile = tileMap.get(tileKey(destination.x, destination.y));
 
   if (!destinationTile || isPit(destinationTile) || hasActiveFeature(destinationTile, "trapdoor", options)) {
@@ -1373,7 +1374,8 @@ export function resolveTeleporterMove(tileMap, state, action, options = {}) {
       getMineEntryPenalty(destinationTile, options) +
       getTimedTraversalFragilityPenalty(destinationTile, options) +
       getPitPressurePenalty(tileMap, resolvedState, options) +
-      getLedgePressurePenalty(tileMap, resolvedState, options),
+      getLedgePressurePenalty(tileMap, resolvedState, options) +
+      getWarpEntryPenalty(options),
     rebootPenalty: 0,
     distance: steps,
     forcedDistance: 0,
@@ -1432,7 +1434,7 @@ export function resolveJumpRampMove(tileMap, state, dir, squares, options = {}) 
   if (portalDestination) {
     resolvedState = { x: portalDestination.x, y: portalDestination.y, facing: state.facing };
     landingTile = tileMap.get(tileKey(portalDestination.x, portalDestination.y));
-    traversed.push({ x: portalDestination.x, y: portalDestination.y, jump: true });
+    traversed.push(getWarpPoint(portalDestination.x, portalDestination.y, options));
     if (isPit(landingTile) || hasActiveFeature(landingTile, "trapdoor", options)) {
       return resolveCrashOrReboot(tileMap, state, resolvedState, traversed, options, steps);
     }
@@ -1451,7 +1453,8 @@ export function resolveJumpRampMove(tileMap, state, dir, squares, options = {}) 
       getTimedTraversalFragilityPenalty(landingTile, options) +
       getPitPressurePenalty(tileMap, resolvedState, options) +
       getLedgePressurePenalty(tileMap, resolvedState, options) +
-      ledgeDamage,
+      ledgeDamage +
+      (portalDestination ? getWarpEntryPenalty(options) : 0),
     rebootPenalty: 0,
     distance: steps,
     forcedDistance: 0,
@@ -1719,6 +1722,17 @@ export function getMineEntryPenalty(tile, options = {}) {
   return hasFeatureType(tile, "mine")
     ? getFlamethrowerDamagePenalty(options) + REGISTER_TEMPO_COST
     : 0;
+}
+
+// Perils of the Warp: every portal, teleporter or space bridge use deals 1
+// damage. The warp's landing point carries `warp` (only under the rule, so
+// saved routes stay unchanged otherwise); the damage models count it.
+export function getWarpPoint(x, y, options = {}) {
+  return options.perilsOfTheWarp ? { x, y, jump: true, warp: true } : { x, y, jump: true };
+}
+
+export function getWarpEntryPenalty(options = {}) {
+  return options.perilsOfTheWarp ? getFlamethrowerDamagePenalty(options) : 0;
 }
 
 export function getActiveFlamethrowerEntryPenalty(tile, options = {}) {
@@ -2405,7 +2419,8 @@ export function simulateAction(tileMap, startState, action, options = {}) {
     const hop = options.spaceBridgeHop;
     if (hop) {
       if (otherBridges.some((square) => square.x === hop.x && square.y === hop.y)) {
-        traversed.push({ x: hop.x, y: hop.y, jump: true });
+        traversed.push(getWarpPoint(hop.x, hop.y, options));
+        hazard += getWarpEntryPenalty(options);
         boardEvents.push({ type: "space-bridge", from: cloneState(state), to: { x: hop.x, y: hop.y, facing: state.facing } });
         state.x = hop.x;
         state.y = hop.y;

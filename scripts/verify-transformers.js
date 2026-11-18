@@ -56,6 +56,20 @@ function energyStep(map, x, transition = {}) {
 
 const pitStop = [{ type: "pitStop" }];
 
+// Perils of the Warp: warp damage for Move 1 east from x = 0 on a row.
+const portalA = [{ type: "portal", id: "A" }];
+function warpDamage(options, featuresByX) {
+  const map = row(8, featuresByX);
+  const portalMap = new Map();
+  for (const tile of map.values()) {
+    for (const feature of tile.features) {
+      if (feature.type === "portal") portalMap.set(feature.id, [...(portalMap.get(feature.id) ?? []), { x: tile.x, y: tile.y }]);
+    }
+  }
+  const transition = simulateAction(map, { x: 0, y: 0, facing: "E" }, FORWARD, { ...options, portalMap });
+  return getDamageEconomyRealizedDamageForTransition(map, transition, options, 2).warpDamageUnits ?? 0;
+}
+
 // Plays Move 1 east for `count` registers from x = 0, register by register
 // (register index runs 0-4 and wraps into the next turn); returns each x.
 function playForward(map, count) {
@@ -180,6 +194,18 @@ const cases = [
       const result = playForward(row(10, { 2: shallowPit }), 6);
       return result.xs === "1,2,3,4,4,5" && result.cancelled === "5";
     }
+  },
+  {
+    name: "Perils of the Warp: going through a portal deals 1",
+    check: () => warpDamage({ perilsOfTheWarp: true }, { 1: portalA, 4: portalA }) === 1
+  },
+  {
+    name: "Perils of the Warp: a portal deals nothing without the rule",
+    check: () => warpDamage({}, { 1: portalA, 4: portalA }) === 0
+  },
+  {
+    name: "Perils of the Warp: a jump ramp is not a warp",
+    check: () => warpDamage({ perilsOfTheWarp: true }, { 1: ramp("E") }) === 0
   },
   {
     name: "mine: every entry deals 1 damage",

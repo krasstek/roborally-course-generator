@@ -44,6 +44,7 @@ const VARIANT_COMPLEXITY = {
   scramblers: 1,
   tarSpills: 1,
   shallowPits: 1,
+  perilsOfTheWarp: 1,
   steepRamps: 1,
   turboRamps: 1,
   setToKill: 1,
@@ -516,6 +517,34 @@ const VARIANT_DEFINITION_ROWS = [
     },
     applyBundle: applyBooleanField(rule.id)
   })),
+  // Variant batch 2 (2026-11-18): a damage price on every warp.
+  {
+    id: "perilsOfTheWarp",
+    label: "Perils of the Warp",
+    category: VARIANT_CATEGORIES.factoryFloor,
+    controlId: "variant-perils-of-the-warp",
+    defaultState: "off",
+    description: "Every time a robot goes through a portal, is moved by a teleporter or crosses a space bridge, it takes 1 damage.",
+    cost: VARIANT_COMPLEXITY.perilsOfTheWarp,
+    complexityRationale: "One persistent rule adds damage to existing board elements.",
+    mentalEvent: {
+      cadence: "once-per-game-turn",
+      trigger: "warp-damage-relevant",
+      eventType: "variant-rule:perils-of-the-warp",
+      rationale: "Remember once in a turn that a warp deals damage when the route uses one."
+    },
+    availability: {
+      type: "featureTypesAnyAvailable",
+      featureTypes: ["portal", "teleporter", "spaceBridge"],
+      reason: "Requires portals, teleporters or space bridges in the selected sets."
+    },
+    constructionRequirement: {
+      type: "boardFeatureAnyOf",
+      featureTypes: ["portal", "teleporter", "spaceBridge"],
+      reason: "Perils of the Warp needs at least one selected board with a portal, teleporter or space bridge."
+    },
+    applyBundle: applyBooleanField("perilsOfTheWarp")
+  },
   {
     id: "setToKill",
     label: "Set to Kill",

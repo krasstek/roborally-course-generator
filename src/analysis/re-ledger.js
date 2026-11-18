@@ -179,6 +179,8 @@ export function getVariantMentalPlanningEventsForTransition(
       applicable = Boolean(mechanicContext?.ruleSquaresTouched?.has(rule.variantId));
     } else if (rule.trigger === "ramp-rule-relevant") {
       applicable = Boolean(mechanicContext?.ruleSquaresTouched?.has(rule.variantId));
+    } else if (rule.trigger === "warp-damage-relevant") {
+      applicable = sourceTypes.has("warp-damage");
     }
     if (!applicable) continue;
 

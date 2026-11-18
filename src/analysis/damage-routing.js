@@ -61,6 +61,7 @@ export function getLegacyRealizedDirectDamageScoreForRoute(tileMap, route, optio
           getFlamethrowerDamagePenalty(registerOptions);
         if (isFirePit(tile)) score += getFlamethrowerDamagePenalty(registerOptions);
         score += getMineEntryPenalty(tile, registerOptions);
+        if (point.warp) score += getFlamethrowerDamagePenalty(registerOptions);
       }
 
       // Ledge direct damage historically entered route.hazard in raw damage units.

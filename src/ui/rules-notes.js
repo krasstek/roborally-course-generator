@@ -147,7 +147,9 @@ const SQUARE_SWAP_IMPACT = Object.freeze([
 // Ramp rules (movement.js): counted on the course as printed.
 const RAMP_RULE_IMPACT = Object.freeze([
   { id: "steepRamps", types: ["ramp"], one: "ramp", many: "ramps" },
-  { id: "turboRamps", types: ["jumpRamp"], one: "jump ramp", many: "jump ramps" }
+  { id: "turboRamps", types: ["jumpRamp"], one: "jump ramp", many: "jump ramps" },
+  // Not a ramp rule, but counted and worded the same way.
+  { id: "perilsOfTheWarp", types: ["portal", "teleporter", "spaceBridge"], one: "warp square", many: "warp squares" }
 ]);
 
 // The course's Energy spaces, in one list shared by the Special Rules texts;

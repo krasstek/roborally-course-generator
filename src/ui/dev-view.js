@@ -132,6 +132,7 @@ const TRACE_DAMAGE_SOURCE_LABELS = {
   "ledge-damage": "ledge",
   "fire-pit-damage": "fire pit",
   "mine-hit": "mine",
+  "warp-damage": "warp",
   "reboot-damage": "reboot",
   "robot-laser-expected": "robot lasers, expected"
 };

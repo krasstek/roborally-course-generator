@@ -58,6 +58,7 @@ export function getContextualPhysicalOptionSignature(options = {}) {
     options.flamingOil ? 1 : 0,
     options.steepRamps ? 1 : 0,
     options.turboRamps ? 1 : 0,
+    options.perilsOfTheWarp ? 1 : 0,
     options.playerCount ?? "",
     rebootTokens,
     boardRects
