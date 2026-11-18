@@ -273,8 +273,10 @@ function freeInstall(state, turn, turns) {
 function playTurn(state, turn, turns) {
   state.temporaryFreeAt = state.temporaryFreeAt.filter((freeAt) => freeAt > turn);
   const { gainOf, install } = turnContext(state, turn, turns);
+  const events = { draws: 0, installs: 0 };
   let affordable = state.hand.filter((card) => card.cost <= state.energy && gainOf(card) > 0);
   if (!affordable.length && state.energy >= SETTINGS.drawCost + 1 && state.deck.length) {
+    events.draws = 1;
     state.energy -= SETTINGS.drawCost;
     state.hand.push(state.deck.pop());
     affordable = state.hand.filter((card) => card.cost <= state.energy && gainOf(card) > 0);
@@ -292,6 +294,7 @@ function playTurn(state, turn, turns) {
     state.energy -= best.cost;
     state.hand.splice(state.hand.indexOf(best), 1);
     install(best, bestGain);
+    events.installs = 1;
   } else {
     // Energy sinks only when nothing was bought this turn (spend as you go).
     for (const card of state.installed) {
@@ -301,6 +304,7 @@ function playTurn(state, turn, turns) {
       }
     }
   }
+  return events;
 }
 
 // Play from `fromTurn` (its income already arrived) to the end of the race.
@@ -320,7 +324,9 @@ function simulateRace(turns, games, rng, w = SETTINGS.disruptionWeight, bucket =
     forkEnergy: new Float64Array(size),
     card: new Float64Array(size),
     energyN: new Float64Array(size),
-    energy: new Float64Array(size)
+    energy: new Float64Array(size),
+    draws: new Float64Array(size),
+    installs: new Float64Array(size)
   };
   const install = { n: new Float64Array(turns + 1), value: new Float64Array(turns + 1) };
   for (let game = 0; game < games; game += 1) {
@@ -374,14 +380,16 @@ function simulateRace(turns, games, rng, w = SETTINGS.disruptionWeight, bucket =
       cells.card[cell] += withCard - base;
       install.n[turn] += 1;
       install.value[turn] += withInstall - base;
-      playTurn(state, turn, turns);
+      const events = playTurn(state, turn, turns);
+      cells.draws[cell] += events.draws;
+      cells.installs[cell] += events.installs;
     }
   }
   return { cells, install };
 }
 
 // Cell means; thin cells take the nearest received count with enough games.
-function cellTable(cells, field, turns, countField = "n", fallbackField = null) {
+function cellTable(cells, field, turns, countField = "n", fallbackField = null, smooth = true) {
   const table = [null];
   for (let turn = 1; turn <= turns; turn += 1) {
     const row = [];
@@ -411,7 +419,7 @@ function cellTable(cells, field, turns, countField = "n", fallbackField = null) 
   // Smooth over turns only: the same gain is never worth more later in the race.
   // Not for path values (Energy as it arrives): for a poor robot a lone Energy can
   // be worth more later, once earlier Energy has made a purchase possible.
-  if (countField === "energyN") return table;
+  if (countField === "energyN" || !smooth) return table;
   for (let turn = 2; turn <= turns; turn += 1) {
     for (let received = 0; received <= MAX_RECEIVED; received += 1) {
       table[turn][received] = Math.min(table[turn][received], table[turn - 1][received]);
@@ -441,6 +449,8 @@ const baseValue = [null];
 const energyValue = [null];
 const cardValue = [null];
 const installValue = [null];
+const drawRate = [null];
+const installRate = [null];
 for (let turns = 1; turns <= MAX_TURNS; turns += 1) {
   const { cells, install } = simulateRace(turns, SETTINGS.gamesPerRaceLength, rng);
   energyValue.push(STARTING_ENERGY_POINTS.map((start) => {
@@ -448,6 +458,8 @@ for (let turns = 1; turns <= MAX_TURNS; turns += 1) {
     return cellTable(bucketCells, "energy", turns, "energyN", "forkEnergy").map((row) => row && row.map(round));
   }));
   cardValue.push(cellTable(cells, "card", turns).map((row) => row && row.map(round)));
+  drawRate.push(cellTable(cells, "draws", turns, "n", null, false).map((row) => row && row.map(round)));
+  installRate.push(cellTable(cells, "installs", turns, "n", null, false).map((row) => row && row.map(round)));
   const installRow = [null];
   for (let turn = 1; turn <= turns; turn += 1) {
     const value = install.n[turn] ? install.value[turn] / install.n[turn] : 0;
@@ -492,6 +504,10 @@ export const ENERGY_GAIN_VALUE = ${JSON.stringify(energyValue)};
 export const UPGRADE_CARD_GAIN_VALUE = ${JSON.stringify(cardValue)};
 // Value of a free random upgrade installed at once at a turn: [turns][turn].
 export const FREE_UPGRADE_INSTALL_VALUE = ${JSON.stringify(installValue)};
+// Expected upgrade-phase events in a turn (for wall-clock length): paid blind draws
+// and installs per player, [turns][turn][received] (mixed starting Energy).
+export const UPGRADE_DRAW_EVENT_RATE = ${JSON.stringify(drawRate)};
+export const UPGRADE_INSTALL_EVENT_RATE = ${JSON.stringify(installRate)};
 // Energy's worth on a course with disruption weight 0 / 1 / 2 (1 = average course).
 export const ENERGY_VALUE_DISRUPTION_MULTIPLIERS = Object.freeze(${JSON.stringify(disruptionMultipliers)});
 export const ENERGY_VALUE_TABLE_MAXIMA = Object.freeze({
