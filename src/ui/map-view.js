@@ -351,6 +351,9 @@ export function getScenarioRenderState(scenario) {
   const lateEnergyCostByKey = new Map(scenario.sequence.firstLeg.starts.map((startAnalysis) => [
     `${startAnalysis.start.x},${startAnalysis.start.y}`, startAnalysis.lateEnergyCost
   ]));
+  const energyDirectionByKey = new Map(scenario.sequence.firstLeg.starts.map((startAnalysis) => [
+    `${startAnalysis.start.x},${startAnalysis.start.y}`, startAnalysis.energyDirection ?? null
+  ]));
   const earlyUnavailableByKey = new Map(scenario.sequence.firstLeg.starts.map((startAnalysis) => [
     `${startAnalysis.start.x},${startAnalysis.start.y}`, startAnalysis.earlyUnavailable ?? false
   ]));
@@ -386,6 +389,10 @@ export function getScenarioRenderState(scenario) {
   const startLateEnergyCosts = startEnergyPricing
     ? scenario.activeStarts.map((start) => lateEnergyCostByKey.get(`${start.x},${start.y}`))
     : [];
+  // Signed start pricing: each start's own direction (empty otherwise).
+  const startEnergyDirections = startEnergyPricing && scenario.payToWin && scenario.subsidizedStarts
+    ? scenario.activeStarts.map((start) => energyDirectionByKey.get(`${start.x},${start.y}`) ?? null)
+    : [];
   const startEarlyUnavailable = startEnergyPricing
     ? scenario.activeStarts.map((start) => earlyUnavailableByKey.get(`${start.x},${start.y}`) ?? false)
     : [];
@@ -399,7 +406,7 @@ export function getScenarioRenderState(scenario) {
     devViewEnabled, goal, iconBoardView, renderAnalysis, selectedLegIndices,
     startLabels, selectedStartIndices, startEnergyCosts, startLateEnergyCosts,
     startEarlyUnavailable, startLateUnavailable,
-    startEnergyIsSubsidy: Boolean(scenario.subsidizedStarts), unusableStartIndices,
+    startEnergyIsSubsidy: Boolean(scenario.subsidizedStarts), startEnergyDirections, unusableStartIndices,
     highlightMapFeatures: Boolean(mapFeatureHighlightEnabled && highlightTargets.hasTargets)
   };
 }
@@ -421,6 +428,7 @@ export function drawScenarioCanvas(scenario, options = {}) {
     startEarlyUnavailable,
     startLateUnavailable,
     startEnergyIsSubsidy,
+    startEnergyDirections,
     unusableStartIndices,
     highlightMapFeatures
   } = getScenarioRenderState(scenario);
@@ -449,6 +457,7 @@ export function drawScenarioCanvas(scenario, options = {}) {
     startEarlyUnavailable,
     startLateUnavailable,
     startEnergyIsSubsidy,
+    startEnergyDirections,
     rebootTokens: scenario.rebootTokens,
     tileMap: scenario.goalTileMap,
     unusableStartIndices,

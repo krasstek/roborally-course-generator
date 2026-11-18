@@ -520,9 +520,12 @@ export function buildScenarioCopySummary(scenario) {
       `Competitive balance v49fj: Start Balance ${formatStartBalanceLabel(scenario.preferences?.startBalance)} applies to post-block best-P only; sequential best-one completed-RE blocks ${competitive.blockedStartCount ?? 0}/${scenario.playerCount ?? scenario.preferences?.playerCount ?? "?"} [${(competitive.blockedIndices ?? []).map((index) => `#${index + 1}`).join(", ") || "none"}], traffic recomputed after every block (${competitive.trafficRecomputations ?? 0} total); remaining choices ${competitive.remainingStartCount ?? 0}, post-block best-${scenario.playerCount ?? scenario.preferences?.playerCount ?? "P"} [${(competitive.selectedIndices ?? []).map((index) => `#${index + 1}`).join(", ") || "none"}], RE range ${competitive.selectedRangeRE ?? competitive.scoreRange ?? "n/a"}/${competitive.balanceRangeLimit ?? "n/a"} soft/${competitive.hardBalanceRangeLimit ?? "n/a"} hard (excess ${competitive.balanceRangeExcess ?? "n/a"}; observed ${competitive.observedBalanceRangeExcess ?? competitive.balanceRangeExcess ?? "n/a"}; median ${competitive.selectedMedianTurns ?? "n/a"} turns), SD ${competitive.selectedStdDev ?? "n/a"} diagnostic-only, decision difficulty +${competitive.strategicDifficulty ?? "n/a"} RE/turn (misjudging cost ${competitive.strategicDifficultyEvidence?.decisionCostRE ?? "n/a"} RE over ${competitive.strategicDifficultyEvidence?.programmingTurns ?? "n/a"} turns, ${competitive.strategicDifficultyEvidence?.draws ?? "n/a"} simulated drafts), RE-native legibility fit +${competitive.blockReadability?.fitPenalty ?? 0} (${competitive.blockReadability?.requestedDifficulty ?? "any"}; legacy shadow OFF), block traffic ${competitive.blockTrafficScope ?? "n/a"}, softBalanced ${competitive.softBalanced ? "yes" : "no"}, hardAcceptable ${competitive.hardAcceptable ? "yes" : "no"}, method ${competitive.method ?? "n/a"}`
     );
   } else if ((scenario.payToWin || scenario.subsidizedStarts) && payToWin?.active) {
-    const subsidyMode = Boolean(scenario.subsidizedStarts);
-    const pricingLabel = subsidyMode ? "Subsidized Starts" : "Pay to Win";
-    const pricingShortLabel = subsidyMode ? "Subsidy" : "P2W";
+    const signedMode = payToWin?.mode === "signed";
+    const subsidyMode = Boolean(scenario.subsidizedStarts) && !signedMode;
+    const pricingLabel = signedMode
+      ? "Pay to Win + Subsidized Starts (signed, median anchor)"
+      : subsidyMode ? "Subsidized Starts" : "Pay to Win";
+    const pricingShortLabel = signedMode ? "Signed" : subsidyMode ? "Subsidy" : "P2W";
     const pricingModel = payToWin.pricingModel ?? {};
     const selectorSplit = payToWin.selectorSplit ?? null;
     const finalStartBalance = payToWin.startBalanceFinalCheck ?? null;
@@ -612,16 +615,16 @@ export function buildScenarioCopySummary(scenario) {
       }
     }
     if ((payToWin.pricingEntries ?? []).length) {
-      const formatAdjustment = (value) => Number.isFinite(Number(value))
-        ? `${subsidyMode ? "+" : ""}${Number(value)}E`
+      const formatAdjustment = (value, direction = null) => Number.isFinite(Number(value))
+        ? `${direction ? (direction === "subsidy" ? "+" : "-") : subsidyMode ? "+" : ""}${Number(value)}E`
         : "—";
       lines.push(
         `${pricingShortLabel} post-adjustment starts: ${(payToWin.pricingEntries ?? []).map((entry) => {
           const early = entry.unavailable
             ? "unavailable"
-            : `${formatAdjustment(entry.energyCost)} -> ${entry.postPaymentFullScore ?? "n/a"} (${entry.postAdjustmentDeltaRegisters ?? "n/a"}R vs baseline)`;
+            : `${formatAdjustment(entry.energyCost, entry.energyDirection)} -> ${entry.postPaymentFullScore ?? "n/a"} (${entry.postAdjustmentDeltaRegisters ?? "n/a"}R vs baseline)`;
           const late = payToWin.latePricingActive
-            ? `; late ${entry.lateUnavailable ? "unavailable" : `${formatAdjustment(entry.lateEnergyCost)} -> ${entry.latePostPaymentFullScore ?? "n/a"} (${entry.latePostAdjustmentDeltaRegisters ?? "n/a"}R)`}`
+            ? `; late ${entry.lateUnavailable ? "unavailable" : `${formatAdjustment(entry.lateEnergyCost, entry.energyDirection)} -> ${entry.latePostPaymentFullScore ?? "n/a"} (${entry.latePostAdjustmentDeltaRegisters ?? "n/a"}R)`}`
             : "";
           return `#${entry.index + 1} raw ${entry.fullScore ?? "n/a"}, ${early}${late}`;
         }).join(" | ")}`
@@ -1473,7 +1476,7 @@ export function buildScenarioReport(scenario, selectedLegIndices = null) {
       })()
       : "Competitive completed-RE ownership v49ec: n/a",
     summary.payToWin?.active
-      ? `${summary.payToWin.subsidizedStarts ? "Subsidized Starts" : "Pay to Win"}: model ${summary.payToWin.pricingModel?.method ?? "n/a"}, economy ${summary.payToWin.pricingEconomyMethod ?? "n/a"}, target ${summary.payToWin.pricingModel?.target ?? "n/a"}, ${summary.payToWin.subsidizedStarts ? `start ${summary.payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY}E / subsidy-total ceiling ${summary.payToWin.subsidyStartingEnergyCeiling ?? summary.payToWin.pricingModel?.subsidyStartingEnergyCeiling ?? "n/a"}E / storage ${summary.payToWin.maxEnergy ?? ROUTE_ENERGY_ECONOMY_DEFAULTS.maxEnergy}E` : `start ${summary.payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY}E / storage ${summary.payToWin.maxEnergy ?? ROUTE_ENERGY_ECONOMY_DEFAULTS.maxEnergy}E`}, startingCards ${summary.payToWin.startingUpgradeCards ?? DEFAULT_STARTING_UPGRADE_CARDS}, offered ${summary.payToWin.pricedStartCount ?? "n/a"}, pruned ${(summary.payToWin.pruned ?? []).length}, residualRange ${summary.payToWin.residualBalance?.worstRange ?? "n/a"}/${summary.payToWin.residualBalance?.worstRangeLimit ?? "n/a"}RE (overflow ${summary.payToWin.residualBalance?.worstRangeExcess ?? 0}; soft +${summary.payToWin.residualBalance?.worstSoftOverflowAllowance ?? "n/a"}), residualPenalty ${summary.payToWin.residualBalance?.worstResidualPenalty ?? 0}, meaningfulEnergy ${summary.payToWin.meaningfulEnergyAdjustmentCount ?? 0}, capLimited ${summary.payToWin.capLimitedEnergyAdjustmentCount ?? 0}, SD ${summary.payToWin.residualBalance?.worstStdDev ?? "n/a"} diagnostic-only, availability ${summary.payToWin.availabilityValid === false ? "FAIL" : "pass"}, balance ${summary.payToWin.balanceValid === false ? "residual" : "pass"}, latePricing ${summary.payToWin.latePricingActive ? "active" : "inactive"}, selectorSplit ${summary.payToWin.selectorSplit?.selected ? `after-p${summary.payToWin.selectorSplit.cutoffAfter}` : "none"}`
+      ? `${summary.payToWin.mode === "signed" ? "Pay to Win + Subsidized Starts (signed)" : summary.payToWin.subsidizedStarts ? "Subsidized Starts" : "Pay to Win"}: model ${summary.payToWin.pricingModel?.method ?? "n/a"}, economy ${summary.payToWin.pricingEconomyMethod ?? "n/a"}, target ${summary.payToWin.pricingModel?.target ?? "n/a"}, ${summary.payToWin.subsidizedStarts ? `start ${summary.payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY}E / subsidy-total ceiling ${summary.payToWin.subsidyStartingEnergyCeiling ?? summary.payToWin.pricingModel?.subsidyStartingEnergyCeiling ?? "n/a"}E / storage ${summary.payToWin.maxEnergy ?? ROUTE_ENERGY_ECONOMY_DEFAULTS.maxEnergy}E` : `start ${summary.payToWin.startingEnergy ?? DEFAULT_STARTING_ENERGY}E / storage ${summary.payToWin.maxEnergy ?? ROUTE_ENERGY_ECONOMY_DEFAULTS.maxEnergy}E`}, startingCards ${summary.payToWin.startingUpgradeCards ?? DEFAULT_STARTING_UPGRADE_CARDS}, offered ${summary.payToWin.pricedStartCount ?? "n/a"}, pruned ${(summary.payToWin.pruned ?? []).length}, residualRange ${summary.payToWin.residualBalance?.worstRange ?? "n/a"}/${summary.payToWin.residualBalance?.worstRangeLimit ?? "n/a"}RE (overflow ${summary.payToWin.residualBalance?.worstRangeExcess ?? 0}; soft +${summary.payToWin.residualBalance?.worstSoftOverflowAllowance ?? "n/a"}), residualPenalty ${summary.payToWin.residualBalance?.worstResidualPenalty ?? 0}, meaningfulEnergy ${summary.payToWin.meaningfulEnergyAdjustmentCount ?? 0}, capLimited ${summary.payToWin.capLimitedEnergyAdjustmentCount ?? 0}, SD ${summary.payToWin.residualBalance?.worstStdDev ?? "n/a"} diagnostic-only, availability ${summary.payToWin.availabilityValid === false ? "FAIL" : "pass"}, balance ${summary.payToWin.balanceValid === false ? "residual" : "pass"}, latePricing ${summary.payToWin.latePricingActive ? "active" : "inactive"}, selectorSplit ${summary.payToWin.selectorSplit?.selected ? `after-p${summary.payToWin.selectorSplit.cutoffAfter}` : "none"}`
       : "Priced starts: n/a",
     summary.payToWin?.startBalanceFinalCheck
       ? (() => {
@@ -1513,7 +1516,9 @@ export function buildScenarioReport(scenario, selectedLegIndices = null) {
       : "Economy targeted Energy rescue v49ct: n/a",
     summary.payToWin?.pricingEntries?.length
       ? `Priced start residuals: ${summary.payToWin.pricingEntries.map((entry) => {
-        const prefix = summary.payToWin.subsidizedStarts ? "+" : "";
+        const prefix = entry.energyDirection
+          ? (entry.energyDirection === "subsidy" ? "+" : "-")
+          : summary.payToWin.subsidizedStarts ? "+" : "";
         const early = entry.unavailable
           ? "unavailable"
           : `${prefix}${entry.energyCost}E -> ${entry.postPaymentFullScore ?? "n/a"}RE (Δ${entry.postAdjustmentDeltaRegisters ?? "n/a"}RE vs median)`;
