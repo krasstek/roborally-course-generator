@@ -1780,9 +1780,6 @@ export async function createRandomCandidate(assets, preferences, attempt = 1, re
               registerScore: productionAnalysisOptions.routeEnergyRegisterScore ?? null,
               startingReserve: productionAnalysisOptions.startingEnergy ?? null,
               referenceReserve: productionAnalysisOptions.routeEnergyReferenceReserve ?? null,
-              usefulUpgradeCardRate: productionAnalysisOptions.upgradeUsefulCardRate ?? null,
-              drawEnergyCost: productionAnalysisOptions.upgradeDrawEnergyCost ?? null,
-              usefulEnergyPerInstall: productionAnalysisOptions.upgradeUsefulEnergyPerInstall ?? null
             },
             routePool: null
           };

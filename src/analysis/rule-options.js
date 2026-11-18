@@ -107,12 +107,6 @@ export const ROUTE_ECONOMY_RAW_KEYS = Object.freeze([
   "startingUpgradeCards",
   "startingUpgradeCardDelta",
   "maxEnergy",
-  "upgradeDrawsPerTurn",
-  "upgradeInstallsPerTurn",
-  "upgradeDrawEnergyCost",
-  "upgradeUsefulCardRate",
-  "upgradeUsefulEnergyPerInstall",
-  "upgradePowerRegistersPerEnergy",
   "routeRegistersPerTurn"
 ]);
 

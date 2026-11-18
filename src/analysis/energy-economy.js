@@ -11,7 +11,6 @@ import {
   FREE_UPGRADE_INSTALL_VALUE,
   UPGRADE_CARD_GAIN_VALUE
 } from "./energy-value-table.js";
-import { getProgramCardModelProfile } from "./program-availability.js";
 import { isRouteAwareBatteryScoringActive } from "./rule-options.js";
 
 // Pit stop (Transformers): the player picks twice (same allowed).
@@ -38,27 +37,13 @@ export function getEnergonContactSquares(tileMap, transition, destination = tran
   return squares;
 }
 
-// Shared upgrade-economy defaults.  The legacy DP diagnostics and the v18
-// flattened production scorer intentionally share these assumptions, while
-// production no longer carries fractional upgrade-card state through routes.
-
+// Course economy settings: starting resources, the Energy storage cap and the
+// registers in a turn. What Energy and upgrade cards are worth comes from the
+// simulated upgrade economy (energy-value-table.js), not from settings here.
 export const ROUTE_ENERGY_ECONOMY_DEFAULTS = Object.freeze({
   startingEnergy: 3,
   maxEnergy: 10,
   startingUpgradeCards: 3,
-  drawsPerTurn: 1,
-  installsPerTurn: 1,
-  drawEnergyCost: 1,
-  // Unknown-card usefulness remains an expectation (default 2/3). v18 applies
-  // it immediately to feature-card opportunities instead of storing card units
-  // in every route-search state.
-  usefulUpgradeCardRate: 2 / 3,
-  // This is useful investment throughput per install opportunity, not a claim
-  // that real upgrade cards cost 2E or have identical effects.
-  usefulEnergyPerInstall: 2,
-  // Registers per Energy is not a fixed default: it is the price of making one
-  // Energy with Power Up, derived from the programming deck and card model
-  // (getProgramCardModelProfile().powerUpRegistersPerEnergy, ~1.39 today).
   registersPerTurn: REGISTER_COUNT
 });
 
@@ -105,40 +90,6 @@ export function getRouteEnergyEconomyConfig(options = {}) {
     startingEnergy: getCourseStartingEnergy(options),
     maxEnergy: getCourseMaxEnergy(options),
     startingUpgradeCards: getCourseStartingUpgradeCards(options),
-    drawsPerTurn: getUpgradeEconomyRate(
-      options,
-      "upgradeDrawsPerTurn",
-      ROUTE_ENERGY_ECONOMY_DEFAULTS.drawsPerTurn
-    ),
-    installsPerTurn: getUpgradeEconomyRate(
-      options,
-      "upgradeInstallsPerTurn",
-      ROUTE_ENERGY_ECONOMY_DEFAULTS.installsPerTurn
-    ),
-    drawEnergyCost: getUpgradeEconomyRate(
-      options,
-      "upgradeDrawEnergyCost",
-      ROUTE_ENERGY_ECONOMY_DEFAULTS.drawEnergyCost
-    ),
-    usefulUpgradeCardRate: clamp(
-      getUpgradeEconomyRate(
-        options,
-        "upgradeUsefulCardRate",
-        ROUTE_ENERGY_ECONOMY_DEFAULTS.usefulUpgradeCardRate
-      ),
-      0,
-      1
-    ),
-    usefulEnergyPerInstall: Math.max(1, Math.floor(getUpgradeEconomyRate(
-      options,
-      "upgradeUsefulEnergyPerInstall",
-      ROUTE_ENERGY_ECONOMY_DEFAULTS.usefulEnergyPerInstall
-    ))),
-    powerRegistersPerEnergy: getUpgradeEconomyRate(
-      options,
-      "upgradePowerRegistersPerEnergy",
-      getProgramCardModelProfile(options).powerUpRegistersPerEnergy
-    ),
     registersPerTurn: Math.max(1, getUpgradeEconomyRate(
       options,
       "routeRegistersPerTurn",

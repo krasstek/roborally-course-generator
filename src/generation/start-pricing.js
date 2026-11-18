@@ -274,12 +274,6 @@ export function getPayToWinRouteEconomyPricingOptions(firstLeg, options = {}) {
     startingEnergy: config.startingEnergy,
     startingUpgradeCards: config.startingUpgradeCards,
     maxEnergy: config.maxEnergy,
-    upgradeDrawsPerTurn: config.drawsPerTurn,
-    upgradeInstallsPerTurn: config.installsPerTurn,
-    upgradeDrawEnergyCost: config.drawEnergyCost,
-    upgradeUsefulCardRate: config.usefulUpgradeCardRate,
-    upgradeUsefulEnergyPerInstall: config.usefulEnergyPerInstall,
-    upgradePowerRegistersPerEnergy: config.powerRegistersPerEnergy,
     routeRegistersPerTurn: config.registersPerTurn,
     payToWinMaxPayment: config.startingEnergy,
     subsidizedStartsMaxSubsidy: Math.max(0, Math.min(config.maxEnergy, config.startingEnergy + SUBSIDIZED_STARTS_MAX_EXTRA_ENERGY) - config.startingEnergy)

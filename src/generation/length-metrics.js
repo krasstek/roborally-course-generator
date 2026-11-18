@@ -65,18 +65,6 @@ export function getLengthEconomyActivityOptions(sequence, preferences = {}) {
       : config.startingEnergy,
     startingUpgradeCards: config.startingUpgradeCards,
     maxEnergy: config.maxEnergy,
-    upgradeDrawsPerTurn: config.drawsPerTurn,
-    upgradeInstallsPerTurn: config.installsPerTurn,
-    upgradeDrawEnergyCost: Number.isFinite(Number(production?.drawEnergyCost))
-      ? Number(production.drawEnergyCost)
-      : config.drawEnergyCost,
-    upgradeUsefulCardRate: Number.isFinite(Number(production?.usefulUpgradeCardRate))
-      ? Number(production.usefulUpgradeCardRate)
-      : config.usefulUpgradeCardRate,
-    upgradeUsefulEnergyPerInstall: Number.isFinite(Number(production?.usefulEnergyPerInstall))
-      ? Number(production.usefulEnergyPerInstall)
-      : config.usefulEnergyPerInstall,
-    upgradePowerRegistersPerEnergy: config.powerRegistersPerEnergy,
     routeRegistersPerTurn: config.registersPerTurn
   };
 }

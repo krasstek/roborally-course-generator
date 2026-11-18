@@ -989,12 +989,6 @@ export function applyVariantAnalysisOptions(baseOptions = {}, variantBundle = {}
     startingUpgradeCards: numeric("startingUpgradeCards"),
     startingUpgradeCardDelta: numeric("startingUpgradeCardDelta"),
     maxEnergy: numeric("maxEnergy"),
-    upgradeDrawsPerTurn: numeric("upgradeDrawsPerTurn"),
-    upgradeInstallsPerTurn: numeric("upgradeInstallsPerTurn"),
-    upgradeDrawEnergyCost: numeric("upgradeDrawEnergyCost"),
-    upgradeUsefulCardRate: numeric("upgradeUsefulCardRate"),
-    upgradeUsefulEnergyPerInstall: numeric("upgradeUsefulEnergyPerInstall"),
-    upgradePowerRegistersPerEnergy: numeric("upgradePowerRegistersPerEnergy"),
     routeRegistersPerTurn: numeric("routeRegistersPerTurn"),
 
     lessDeadlyGame: Boolean(variantBundle.lessDeadlyGame),

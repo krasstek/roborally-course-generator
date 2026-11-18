@@ -948,9 +948,6 @@ export async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}
         routeEnergyReferenceReserve: savedRouteAwareEnergy.referenceReserve ??
           savedRouteAwareEnergy.startingReserve ?? null,
         startingEnergy: savedRouteAwareEnergy.startingReserve ?? null,
-        upgradeUsefulCardRate: savedRouteAwareEnergy.usefulUpgradeCardRate ?? null,
-        upgradeDrawEnergyCost: savedRouteAwareEnergy.drawEnergyCost ?? null,
-        upgradeUsefulEnergyPerInstall: savedRouteAwareEnergy.usefulEnergyPerInstall ?? null
       }
       : {})
   };
@@ -1075,9 +1072,6 @@ export async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}
       registerScore: hydrationEnergyOptions.routeEnergyRegisterScore ?? null,
       startingReserve: hydrationEnergyOptions.startingEnergy ?? null,
       referenceReserve: hydrationEnergyOptions.routeEnergyReferenceReserve ?? null,
-      usefulUpgradeCardRate: hydrationEnergyOptions.upgradeUsefulCardRate ?? null,
-      drawEnergyCost: hydrationEnergyOptions.upgradeDrawEnergyCost ?? null,
-      usefulEnergyPerInstall: hydrationEnergyOptions.upgradeUsefulEnergyPerInstall ?? null
     };
     sequence.firstLeg.summary.coursePreflight = savedCoursePreflight
       ? { ...savedCoursePreflight, routeAwareBatteryScoring: restoredEnergyMetadata }

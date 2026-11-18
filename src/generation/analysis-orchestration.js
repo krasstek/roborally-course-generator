@@ -324,12 +324,6 @@ export function buildRouteAwareBatteryScoringOptions(coursePreflight, options = 
     startingEnergy: config.startingEnergy,
     startingUpgradeCards: config.startingUpgradeCards,
     maxEnergy: config.maxEnergy,
-    upgradeDrawsPerTurn: config.drawsPerTurn,
-    upgradeInstallsPerTurn: config.installsPerTurn,
-    upgradeDrawEnergyCost: config.drawEnergyCost,
-    upgradeUsefulCardRate: config.usefulUpgradeCardRate,
-    upgradeUsefulEnergyPerInstall: config.usefulEnergyPerInstall,
-    upgradePowerRegistersPerEnergy: config.powerRegistersPerEnergy,
     routeRegistersPerTurn: config.registersPerTurn,
     // v18 keeps only reserve + race progress in production search. Unknown
     // upgrade cards are valued immediately as expectations; no persistent card

@@ -61,12 +61,6 @@ export function getFixedRoutePricingEconomySignature(options = {}) {
     config.startingEnergy,
     config.maxEnergy,
     config.startingUpgradeCards,
-    config.drawsPerTurn,
-    config.installsPerTurn,
-    config.drawEnergyCost,
-    config.usefulUpgradeCardRate,
-    config.usefulEnergyPerInstall,
-    config.powerRegistersPerEnergy,
     config.registersPerTurn,
     Number(options.routeEnergyHorizonTurns) || 0,
     options.upgradeWorld ? 1 : 0,
@@ -292,10 +286,6 @@ export function rescoreFixedRouteUpgradeEconomy(tileMap, route, options = {}) {
     referenceStartingEconomyPotentialR: Number(referenceEconomyPotentialR.toFixed(3)),
     pricingEconomyMethod: "simulated-upgrade-economy-table-v50",
     pricingStartingUpgradeCards: config.startingUpgradeCards,
-    pricingUsefulUpgradeCardRate: config.usefulUpgradeCardRate,
-    pricingDrawsPerTurn: config.drawsPerTurn,
-    pricingInstallsPerTurn: config.installsPerTurn,
-    pricingDrawEnergyCost: config.drawEnergyCost,
     pricingMaxEnergy: config.maxEnergy
   };
 }
