@@ -1287,8 +1287,10 @@ function drawStarts(
     const energyDirection = startEnergyDirections[index] ?? null;
     const startReceivesEnergy = energyDirection ? energyDirection === "subsidy" : startEnergyIsSubsidy;
     const formatEnergyValue = (value) => {
-      if (!energyDirection) return startEnergyIsSubsidy ? `+${value}` : String(value);
+      if (!energyDirection && startEnergyIsSubsidy) return `+${value}`;
       if (Number(value) === 0) return "0";
+      // Pay to Win alone has no per-start direction: every price is a payment.
+      if (!energyDirection) return `−${value}`;
       return energyDirection === "subsidy" ? `+${value}` : `\u2212${value}`;
     };
     const energyCostLabel = hasEnergyCost

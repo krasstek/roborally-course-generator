@@ -881,10 +881,10 @@ export function updateRulesNote(scenario) {
         ? " A dash in either position means that starting space is unavailable to that selector group; a fully unavailable space uses the prohibited-start marker instead of a price."
         : "";
       notes.push(
-        `Pay to Win: green starting spaces show starting Energy costs. Pay the shown cost from your ${baseStartingEnergy} starting Energy when choosing a starting space. ${latePlayerText} ${singleLatePlayer ? "uses" : "use"} the second value after the slash; earlier players use the first cost.${dashText} Resolve Pay to Win starting-space selection before dealing or revealing any starting upgrade cards.`
+        `Pay to Win: green starting spaces show starting Energy costs (−n). Pay the shown cost from your ${baseStartingEnergy} starting Energy when choosing a starting space. ${latePlayerText} ${singleLatePlayer ? "uses" : "use"} the second value after the slash; earlier players use the first cost.${dashText} Resolve Pay to Win starting-space selection before dealing or revealing any starting upgrade cards.`
       );
     } else {
-      notes.push(`Pay to Win: green starting spaces show the starting Energy cost for choosing that space. Pay that cost from your ${baseStartingEnergy} starting Energy when choosing a starting space; a start whose cost exceeds your available starting Energy is unavailable. Resolve Pay to Win starting-space selection before dealing or revealing any starting upgrade cards.`);
+      notes.push(`Pay to Win: green starting spaces show the starting Energy cost (−n) for choosing that space. Pay that cost from your ${baseStartingEnergy} starting Energy when choosing a starting space; a start whose cost exceeds your available starting Energy is unavailable. Resolve Pay to Win starting-space selection before dealing or revealing any starting upgrade cards.`);
     }
   }
 
@@ -1135,7 +1135,7 @@ export function updateLegend(scenario) {
       ? "Green square (−n): starting Energy cost; light-blue square (+n): starting Energy subsidy"
       : scenario?.subsidizedStarts
         ? "Light-blue square: extra starting Energy subsidy"
-        : "Green square: Pay to Win starting Energy cost";
+        : "Green square (−n): Pay to Win starting Energy cost";
   }
   payToWinStartEl?.classList.toggle("hidden", !(scenario?.payToWin || scenario?.subsidizedStarts));
 }
