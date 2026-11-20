@@ -1,6 +1,7 @@
 // Robo Rally Course Randomizer - contextual leg search: physical timing templates, card-aware leg routes, estimate-then-realize stitching and card-pressure summaries
 import { buildPortalMap, cloneState, stateKey } from "./board-geometry.js";
 import { MinHeap } from "./collections.js";
+import { getWalkingDistanceToTarget } from "./goal-distance.js";
 import {
   ACTIONS,
   REGISTER_COUNT,
@@ -418,8 +419,16 @@ export function createContextualQueueEntry(
   return {
     ...route,
     homingMissileSearchGuidanceBonus: Number(missileGuidanceBonus.toFixed(3)),
-    estimate: route.baseCost + heuristic(route.finalState, target) * 5 - missileGuidanceBonus
+    estimate: route.baseCost + getLegSearchAimDistance(route.finalState, target, tileMap, options) * 5 - missileGuidanceBonus
   };
+}
+
+// The queue's aim: walking squares to the target around walls, buildings and
+// pits (goal-distance.js), or the straight-line distance where the target is
+// not walkable from here or no tile map is at hand.
+function getLegSearchAimDistance(state, target, tileMap, options) {
+  if (!tileMap || !target) return heuristic(state, target);
+  return getWalkingDistanceToTarget(tileMap, state, target, options) ?? heuristic(state, target);
 }
 
 export function getContextualUsageParetoDescriptor(rawKey, rawCost = 0) {
