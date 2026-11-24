@@ -1,6 +1,6 @@
 // Robo Rally Course Randomizer - register-equivalent ledger building blocks: mental and planning events, Moving Targets / Hazardous Checkpoints events, search-intrinsic mental replay
 import { getActiveVariantMentalEventRules } from "../../variants.js";
-import { getPortal, getTeleporter, hasHomingMissile, isWater, tileKey } from "./board-geometry.js";
+import { getPortal, getTeleporter, hasExplicitTiming, hasHomingMissile, isWater, tileKey } from "./board-geometry.js";
 import { ACTIONS, AGAIN_CARD_COUNT, REGISTER_COUNT, REGISTER_TEMPO_COST } from "./constants.js";
 import { getProgramCardModelProfile, getProgramDeck } from "./program-availability.js";
 import {
@@ -540,6 +540,27 @@ export function getRegisterEquivalentLedgerPlanningEventsForTransition(
   if (sourceTypes.has("radiation-hit")) add("accepted-hazard:radiation");
   if (sourceTypes.has("radioactive-waste-hit")) add("accepted-hazard:radioactive-waste");
   if (sourceTypes.has("ledge-damage")) add("accepted-hazard:ledge");
+
+  // Timed elements (E19): a pusher, flamethrower or crusher that acts only in
+  // some registers is one item per game turn when the robot ends a register in
+  // its reach, active or not: the plan relies on its timing. One that acts in
+  // every register (Napalm Death, Piston Cup) is a fixed fact, no extra item.
+  {
+    const timedTurnIds = mechanicContext?.variantMentalEventIdsThisTurn instanceof Set
+      ? mechanicContext.variantMentalEventIdsThisTurn
+      : null;
+    const endTile = !transition?.rebooted && transition?.to
+      ? tileMap.get(tileKey(transition.to.x, transition.to.y))
+      : null;
+    for (const feature of endTile?.features || []) {
+      if (!["pusher", "flamethrower", "crusher"].includes(feature.type)) continue;
+      if (!hasExplicitTiming(feature) || new Set(feature.timing).size >= REGISTER_COUNT) continue;
+      const id = `__timed:${feature.type}|${transition.to.x},${transition.to.y}|${feature.dir ?? ""}`;
+      if (timedTurnIds?.has(id)) continue;
+      timedTurnIds?.add(id);
+      add(`timed-element:${feature.type}`);
+    }
+  }
 
   // Flamethrower planning is a true/false remember-the-mechanic event at the
   // game-turn level. Entry and end-of-register damage remain mechanically
