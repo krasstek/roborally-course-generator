@@ -22,7 +22,8 @@ import {
   NORMAL_EFFECTIVE_RE_OUTLIER_Z,
   NORMAL_FULL_COURSE_TRAFFIC_PASSES,
   NORMAL_TRAFFIC_ALTERNATE_DEMAND_THRESHOLD,
-  NORMAL_TRAFFIC_ALTERNATE_MIN_GAIN
+  NORMAL_TRAFFIC_ALTERNATE_MIN_GAIN,
+  QUALITY_ROUTE_AIM_WEIGHT
 } from "./config.js";
 import { getGenerationModeProfile, getScenarioGenerationMode } from "./generation-modes.js";
 import {
@@ -964,6 +965,9 @@ export async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}
     // used the current Balanced budgets, so getScenarioGenerationMode() maps
     // those legacy snapshots to Balanced rather than silently using Standard.
     generationMode: hydrationGenerationMode,
+    // Re-routing a finished course (quality pass, trim, unused-board check,
+    // reload of a save without stored routes) uses the quality search tier.
+    contextualAimWeight: control.contextualAimWeight ?? QUALITY_ROUTE_AIM_WEIGHT,
     fullCourseAnalyzer: analyzeFullCourseCooperative,
     cooperativeYield: async (progress) => {
       if (onCooperativeProgress) {
@@ -1510,6 +1514,33 @@ export async function evaluateFinishedCourse(assets, candidate, preferences, con
     candidate,
     preferences,
     candidate.sequence?.firstLeg ?? null,
+    control
+  );
+}
+
+// Route search 2 (two tiers): the course that passed screening is routed once
+// more with the quality search (hydration's default tier, see config.js), its
+// start balance and prices rebuilt over the new routes, then evaluated the way
+// a reload does. Kept whatever its bands (user 2026-11-24); the caller records
+// how often the bands change.
+export async function evaluateQualityRoutedCourse(assets, evaluated, preferences, control = {}) {
+  const snapshot = buildFinalEvaluationSnapshot(evaluated, preferences);
+  snapshot.startDisposition = null;
+  snapshot.normalStartBalance = null;
+  snapshot.startPricing = null;
+  snapshot.payToWinPricing = null;
+  snapshot.presentationMetrics = null;
+  snapshot.courseNotesHtml = null;
+  const routed = await evaluateFinalSnapshot(assets, snapshot, evaluated, preferences, null, control);
+  if (!routed) return routed;
+  const withDisposition = withRecomputedNormalStartDisposition(routed);
+  if (withDisposition === routed) return routed;
+  return evaluateFinalSnapshot(
+    assets,
+    buildFinalEvaluationSnapshot(withDisposition, preferences),
+    evaluated,
+    preferences,
+    withDisposition.sequence?.firstLeg ?? null,
     control
   );
 }

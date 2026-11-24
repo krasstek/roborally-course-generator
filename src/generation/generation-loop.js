@@ -46,7 +46,7 @@ import {
   isCalibrationHarnessGeneration,
   normalizeGenerationMode
 } from "./generation-modes.js";
-import { evaluateFinishedCourse, evaluateTrimmedFinishedCourse } from "./persistence.js";
+import { evaluateFinishedCourse, evaluateQualityRoutedCourse, evaluateTrimmedFinishedCourse } from "./persistence.js";
 import { resolveAnyPreferencesForGeneration } from "./preferences.js";
 import { getNearestTargetBand } from "./target-selection.js";
 import { getDifficultyThresholds, getProductionLengthThresholds } from "./targets.js";
@@ -260,6 +260,35 @@ export async function generateScenarioForPreferences(assets, preferences, option
       elapsedMs: Number((generationNow() - startedAt).toFixed(2))
     });
     return evaluated;
+  }
+
+  // Route search 2 (two tiers, 2026-11-24): the course to be returned is routed
+  // once more with the quality search and kept whatever its bands (user
+  // 2026-11-24); the diagnostics record how often that changes the outcome. A
+  // stop request or a failed evaluation keeps the screening version.
+  async function applyQualityPass(scenario) {
+    if (!scenario || shouldStopRequested()) return scenario;
+    const startedAt = generationNow();
+    let routed = null;
+    try {
+      routed = await evaluateQualityRoutedCourse(assets, scenario, preferences, finalEvaluationControl);
+    } catch (error) {
+      if (error?.code === "ANALYSIS_STOP_REQUESTED" && shouldStopRequested()) return scenario;
+      throw error;
+    }
+    generationDiagnostics.qualityPass = {
+      complete: Boolean(routed),
+      elapsedMs: Number((generationNow() - startedAt).toFixed(2)),
+      acceptableBefore: Boolean(scenario.metrics?.acceptable),
+      acceptableAfter: Boolean(routed?.metrics?.acceptable),
+      difficultyBefore: scenario.metrics?.difficultyTurnRE ?? null,
+      difficultyAfter: routed?.metrics?.difficultyTurnRE ?? null,
+      lengthBefore: scenario.metrics?.lengthWallClockTurnIndex ?? null,
+      lengthAfter: routed?.metrics?.lengthWallClockTurnIndex ?? null
+    };
+    if (!routed) return scenario;
+    routed.attempts = scenario.attempts;
+    return routed;
   }
 
   // A finished course that missed only by being too long often fits with its
@@ -720,7 +749,7 @@ export async function generateScenarioForPreferences(assets, preferences, option
       terminationReason = "accepted";
       generationDiagnostics.cleanMatchStop = cleanMatchStop;
       const nearBestChoice = selection.choice;
-      const selectedScenario = selection.scenario;
+      const selectedScenario = await applyQualityPass(selection.scenario);
       generationDiagnostics.nearBestCandidateScores = nearBestChoice.pool.map((entry) => (
         Number(entry.score.toFixed(2))
       ));
@@ -795,6 +824,7 @@ export async function generateScenarioForPreferences(assets, preferences, option
   // v49er: forced Extra Docks is a hard gate. One-dock near misses remain
   // diagnostic candidates only and are never promoted to a returned course.
 
+  if (bestScenario) bestScenario = await applyQualityPass(bestScenario);
   if (bestScenario) {
     bestScenario.generationBestMatch = !Boolean(bestScenario.metrics?.acceptable);
     bestScenario.generationTerminationReason = terminationReason;

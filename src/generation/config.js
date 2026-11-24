@@ -50,6 +50,14 @@ export const GENERATION_MODE_LABELS = Object.freeze({
 export const NORMAL_TRAFFIC_ALTERNATE_DEMAND_THRESHOLD = 3.2;
 export const NORMAL_TRAFFIC_ALTERNATE_MIN_GAIN = 1.5;
 export const NORMAL_FULL_COURSE_TRAFFIC_PASSES = 1;
+// Route search 2 (two tiers, 2026-11-24): attempts are screened with the fast
+// leg search (aim = walking distance x 5); the course that passes, and every
+// later re-route of it (reload of an old save, trim, unused-board check), uses
+// the quality search: the aim weighted down so the search is less greedy. Board-
+// aim study 2026-11-23: x0.8 cut legs missing a cheaper route by >0.5 RE from
+// 22% to 11% of legs (>1 RE 14% -> 6%) at x1.7 routing time.
+export const SCREENING_ROUTE_AIM_WEIGHT = 1;
+export const QUALITY_ROUTE_AIM_WEIGHT = 0.8;
 export const NORMAL_PRUNE_BATCH_SIZE = 2;
 export const NORMAL_CONTEXTUAL_FULL_FORECAST_SHARE = 0.65;
 

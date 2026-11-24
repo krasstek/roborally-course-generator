@@ -733,6 +733,7 @@ export function* analyzeFullCourseContextualSteps(
   const baseRouteOptions = {
     ...pickRouteRuleOptions(options),
     ...pickRouteEconomyOptions(options),
+    contextualAimWeight: options.contextualAimWeight ?? 1,
     contextualEstimatedCardTransitionMemoContext:
       options.contextualEstimatedCardTransitionMemoContext ?? null,
     contextualEstimatedCardTransitionMemoRuleSignature:
