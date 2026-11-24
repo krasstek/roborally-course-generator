@@ -1,4 +1,4 @@
-const APP_VERSION = "20261120114213";
+const APP_VERSION = "20261124124840";
 const STATIC_CACHE = `roborally-static-${APP_VERSION}`;
 const RUNTIME_CACHE = `roborally-runtime-${APP_VERSION}`;
 
@@ -26,6 +26,7 @@ const VERSIONED_ASSETS = [
   "./src/analysis/analysis-state.js",
   "./src/analysis/board-ablation.js",
   "./src/analysis/board-geometry.js",
+  "./src/analysis/card-table.js",
   "./src/analysis/collections.js",
   "./src/analysis/constants.js",
   "./src/analysis/contextual-search.js",
@@ -35,7 +36,6 @@ const VERSIONED_ASSETS = [
   "./src/analysis/energy-course-weight.js",
   "./src/analysis/energy-economy.js",
   "./src/analysis/energy-value-table.js",
-  "./src/analysis/card-table.js",
   "./src/analysis/flag-area.js",
   "./src/analysis/full-course.js",
   "./src/analysis/goal-distance.js",
