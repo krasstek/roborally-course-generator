@@ -146,19 +146,33 @@ export const PROGRAM_CARD_MAX_COUNTS = new Map(PROGRAM_CARD_IDS.map((id) => [
 // with card-category surcharges, and never add an independent Repeat/Again RE
 // surcharge: repeat availability is already the exact union of legal
 // natural/Again realizations.
-export const PROGRAM_CARD_SCARCITY_ADAPTABILITY_FACTOR = 0.70;
-export const PROGRAM_CARD_SCARCITY_EVALUATION_FACTOR = 0.50;
+// RETIRED 2026-11-24 (card-planning): the two alphas above are replaced by one
+// measured card model, the same in the search and in course RE. Kept at 1 so
+// the profile plumbing (and its cache keys) stay as they were.
+export const PROGRAM_CARD_SCARCITY_ADAPTABILITY_FACTOR = 1;
+export const PROGRAM_CARD_SCARCITY_EVALUATION_FACTOR = 1;
+
+// Card RE as execution risk (user design 2026-11-24): a turn's program costs
+// nothing when an ordinary hand plays it, and at most the cost of failing the
+// plan when the hand is unlikely to. Per turn:
+//   card RE = CARD_PLAN_FAILURE_RE x max(0, 1 - p / CARD_PLAN_REFERENCE_PROBABILITY)
+// p = chance a hand covers the turn's program (rolling deck, exact hypergeometry).
+// Fitted 2026-11-24 on 612 golden route turns (calibration-output/studies/
+// 2026-11-24-card-risk/: 60 hands each, best 5-card program per hand with real
+// movement vs the plan): measured loss 0.41 RE per turn (old model 1.04),
+// F 0.79 / p_ref 0.72 (RMSE 0.48 vs 0.99 for the old formula). Refit at the
+// calibration rerun.
+export const CARD_PLAN_FAILURE_RE = 0.8;
+export const CARD_PLAN_REFERENCE_PROBABILITY = 0.72;
 
 // v49ek programming-variant ownership. Probability mechanics and the mapping
 // from probability -> practical card RE are deliberately separate.
 //
-// Normal play retains the provisional alpha abstraction discount (search 0.70,
-// course RE 0.50; see above).
-// Less Foreshadowing resets the programming deck at every turn boundary, so the
-// previous-turn depletion state is not carried and the ordinary omitted-state
-// discount is removed (base alpha=1.0). Shared Deck deliberately does NOT model
-// a fictitious enlarged per-player deck or cross-robot hands; instead its omitted
-// shared-state uncertainty raises alpha with player count. This increment is
-// intentionally uncapped so Less Foreshadowing + Shared Deck can exceed 1.0.
+// Since 2026-11-24 the card cost is the measured execution risk (above) and
+// "alpha" is only a variant multiplier: 1 in normal play and with Less
+// Foreshadowing (its reset deck is already in p). Shared Deck's omitted
+// shared-state uncertainty still raises it with player count: multiplier
+// 1 + increment / 0.5 (the old increment relative to the old course alpha;
+// provisional, refit at the calibration rerun).
 // Factory Rejects changes only the actual hand size used by hypergeometry.
 export const SHARED_DECK_ALPHA_INCREMENT_PER_ADDITIONAL_PLAYER = 0.05;

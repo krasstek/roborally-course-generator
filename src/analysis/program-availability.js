@@ -6,6 +6,8 @@ import {
   PROGRAM_CARD_MAX_COUNTS,
   PROGRAM_CARD_SCARCITY_ADAPTABILITY_FACTOR,
   PROGRAM_CARD_SCARCITY_EVALUATION_FACTOR,
+  CARD_PLAN_FAILURE_RE,
+  CARD_PLAN_REFERENCE_PROBABILITY,
   PROGRAM_DECKS,
   REGISTER_COUNT,
   REGISTER_TEMPO_COST,
@@ -13,6 +15,7 @@ import {
 } from "./constants.js";
 import { getRebootEndedAbsoluteActions } from "./reboot-recovery.js";
 import { analysisTelemetryNow } from "./telemetry.js";
+import { CARD_TABLE } from "./card-table.js";
 import { getTurnEndAfterActionIndexes } from "./reboot-recovery.js";
 
 // The card model depends on four values only and is asked for on every search
@@ -122,12 +125,12 @@ function buildProgramCardModelProfile(options) {
   const sharedDeckAlphaIncrement = sharedDeck
     ? Math.max(0, playerCount - 1) * SHARED_DECK_ALPHA_INCREMENT_PER_ADDITIONAL_PLAYER
     : 0;
-  const baseAlpha = resetEachTurn ? 1 : PROGRAM_CARD_SCARCITY_ADAPTABILITY_FACTOR;
+  const baseAlpha = PROGRAM_CARD_SCARCITY_ADAPTABILITY_FACTOR;
   const handSize = options.factoryRejects ? 7 : PROGRAM_EXACT_HAND_SIZE;
-  const adaptabilityFactor = baseAlpha + sharedDeckAlphaIncrement;
+  const adaptabilityFactor = baseAlpha * (1 + sharedDeckAlphaIncrement / 0.5);
   // Course RE uses its own alpha (constants.js); the search keeps the one above.
   const evaluationAdaptabilityFactor =
-    (resetEachTurn ? 1 : PROGRAM_CARD_SCARCITY_EVALUATION_FACTOR) + sharedDeckAlphaIncrement;
+    PROGRAM_CARD_SCARCITY_EVALUATION_FACTOR * (1 + sharedDeckAlphaIncrement / 0.5);
   const deck = getProgramDeck(options);
   return {
     deck,
@@ -453,24 +456,82 @@ export function getCheapProgramLiteralAvailabilityProbability(
   return storeCheapAvailability(probability);
 }
 
+// Card RE from the card table (scripts/build-card-table.mjs; user design
+// 2026-11-24). A turn's program costs its setup's base loss per turn (spread
+// over its cards, so every register pays the same share) plus an extra when it
+// reuses scarce cards from the previous turn (the real deck cycle discards all
+// drawn cards, so only such repeats depend on the route's history). Within a
+// turn a program may not use more copies than the deck has. The cost no longer
+// depends on how likely the exact hand is: measured, that explains almost
+// nothing of the real loss.
+const CARD_TABLE_BASE_CACHE = new Map();
+function interpolateHandValue(byHand, handSize) {
+  const hands = Object.keys(byHand || {}).map(Number).sort((a, b) => a - b);
+  if (!hands.length) return null;
+  if (byHand[handSize] !== undefined) return Number(byHand[handSize]);
+  const lower = hands.filter((h) => h < handSize).pop() ?? hands[0];
+  const upper = hands.find((h) => h > handSize) ?? hands[hands.length - 1];
+  if (lower === upper) return Number(byHand[lower]);
+  const t = (handSize - lower) / (upper - lower);
+  return Math.max(0, Number(byHand[lower]) + t * (Number(byHand[upper]) - Number(byHand[lower])));
+}
+export function getCardTableBaseRE(options = {}) {
+  const profile = getProgramCardModelProfile(options);
+  const deckId = profile.deck.id;
+  const cycle = profile.resetEachTurn ? "reset" : "personal";
+  const key = `${deckId}|${cycle}|${profile.handSize}`;
+  let value = CARD_TABLE_BASE_CACHE.get(key);
+  if (value === undefined) {
+    const decks = CARD_TABLE.decks;
+    const deck = decks[deckId] ?? decks.standard;
+    const personal = interpolateHandValue(deck.personal, profile.handSize) ??
+      interpolateHandValue(decks.standard.personal, profile.handSize);
+    if (cycle === "reset") {
+      // A setup without its own reset entry scales by the standard deck's ratio.
+      value = interpolateHandValue(deck.reset, profile.handSize) ??
+        personal * (decks.standard.reset[9] / decks.standard.personal[9]);
+    } else {
+      value = personal;
+    }
+    CARD_TABLE_BASE_CACHE.set(key, value);
+  }
+  return value;
+}
+const CARD_TABLE_SCARCE_INDEXES = PROGRAM_CHEAP_RESOURCE_IDS
+  .map((id, index) => (CARD_TABLE.scarceCards.includes(id) ? index : -1))
+  .filter((index) => index >= 0);
+export function getTableProgramTurnPenalty(previousCounts = [], requirementVectors = [], options = {}) {
+  const profile = getProgramCardModelProfile(options);
+  const resourceCounts = profile.deck.resourceCounts;
+  const previous = getProgramCardEffectivePreviousCounts(previousCounts, options);
+  const base = getCardTableBaseRE(options);
+  let best = Infinity;
+  for (const vector of requirementVectors || []) {
+    let cards = 0;
+    let legal = true;
+    for (let index = 0; index < PROGRAM_CHEAP_RESOURCE_IDS.length; index += 1) {
+      const count = Math.max(0, Math.floor(Number(vector?.[index]) || 0));
+      if (count > resourceCounts[index]) { legal = false; break; }
+      cards += count;
+    }
+    if (!legal) continue;
+    let repeats = 0;
+    for (const index of CARD_TABLE_SCARCE_INDEXES) {
+      if ((Number(vector?.[index]) || 0) > 0 && (Number(previous?.[index]) || 0) > 0) repeats += 1;
+    }
+    const repeatRE = repeats === 0 ? 0 : repeats === 1 ? CARD_TABLE.repeatOneScarce : CARD_TABLE.repeatTwoOrMoreScarce;
+    best = Math.min(best, base * Math.min(cards, REGISTER_COUNT) / REGISTER_COUNT + repeatRE);
+  }
+  if (!Number.isFinite(best)) return Infinity;
+  return Number((REGISTER_TEMPO_COST * best * profile.adaptabilityFactor).toFixed(3));
+}
+
 export function getCheapProgramLiteralAvailabilityPenalty(
   previousCounts = [],
   currentCounts = [],
   options = {}
 ) {
-  const probability = getCheapProgramLiteralAvailabilityProbability(
-    previousCounts,
-    currentCounts,
-    options
-  );
-  if (probability <= 0) return Infinity;
-  return Number(
-    getProgramAvailabilityPenaltyFromProbability(
-      probability,
-      getProgramCardModelProfile(options).adaptabilityFactor,
-      getProgramDeck(options).baselineProbability
-    ).toFixed(3)
-  );
+  return getTableProgramTurnPenalty(previousCounts, [currentCounts], options);
 }
 
 export function getCheapProgramRequirementUnionAvailabilityProbability(
@@ -578,19 +639,7 @@ export function getCheapProgramRequirementUnionAvailabilityPenalty(
   requirementVectors = [],
   options = {}
 ) {
-  const probability = getCheapProgramRequirementUnionAvailabilityProbability(
-    previousCounts,
-    requirementVectors,
-    options
-  );
-  if (probability <= 0) return Infinity;
-  return Number(
-    getProgramAvailabilityPenaltyFromProbability(
-      probability,
-      getProgramCardModelProfile(options).adaptabilityFactor,
-      getProgramDeck(options).baselineProbability
-    ).toFixed(3)
-  );
+  return getTableProgramTurnPenalty(previousCounts, requirementVectors, options);
 }
 
 export function getCheapProgramActionUnionAvailabilityPenalty(
@@ -1510,17 +1559,16 @@ export function getProgramAvailabilityPenaltyFromProbability(
   adaptabilityFactor = PROGRAM_CARD_SCARCITY_ADAPTABILITY_FACTOR,
   baselineProbability = PROGRAM_EXACT_FOUR_COPY_BASELINE_PROBABILITY
 ) {
+  // Execution risk (constants.js CARD_PLAN_*): zero when an ordinary hand covers
+  // the program (p >= p_ref), up to the cost of failing the plan as p falls.
+  // A program no hand can hold (p = 0: more copies than the deck has) stays
+  // impossible. `adaptabilityFactor` is only the variant multiplier now and
+  // `baselineProbability` is unused (kept for callers).
   const p = Math.max(0, Number(probability) || 0);
   if (p <= 0) return Infinity;
-  const availabilityRatio = baselineProbability / p;
-
-  // Baseline invariant:
-  // P(program) == P(one ordinary four-copy card) -> exactly 0 extra card RE.
-  // The factor compresses only scarcity ABOVE that baseline to represent player
-  // adaptation / richer real deck-state information omitted by this abstraction.
-  const rawScarcityRE = Math.max(0, availabilityRatio - 1);
+  const risk = Math.max(0, 1 - p / CARD_PLAN_REFERENCE_PROBABILITY);
   const factor = Math.max(0, Number(adaptabilityFactor) || 0);
-  return REGISTER_TEMPO_COST * rawScarcityRE * factor;
+  return REGISTER_TEMPO_COST * CARD_PLAN_FAILURE_RE * risk * factor;
 }
 
 export function getExactProgramDeckCounts(previousCode = 0, options = {}) {
@@ -1629,18 +1677,12 @@ export function getExactProgramHandAvailabilityProbability(
 }
 
 export function getExactProgramAvailabilityPenalty(previousCode, actionIds = [], options = {}) {
-  const probability = getExactProgramHandAvailabilityProbability(
-    previousCode,
-    actionIds,
+  const actions = Array.isArray(actionIds) ? actionIds : [];
+  if (!actions.length) return 0;
+  return getTableProgramTurnPenalty(
+    getCompactProgramResourceCounts(getProgramCardEffectivePreviousCode(previousCode, options)),
+    getExactProgramRequirementVectors(actions),
     options
-  );
-  if (probability <= 0) return Infinity;
-  return Number(
-    getProgramAvailabilityPenaltyFromProbability(
-      probability,
-      getProgramCardModelProfile(options).adaptabilityFactor,
-      getProgramDeck(options).baselineProbability
-    ).toFixed(3)
   );
 }
 

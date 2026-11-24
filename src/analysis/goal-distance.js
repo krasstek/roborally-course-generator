@@ -58,3 +58,67 @@ export function getWalkingDistanceToTarget(tileMap, point, target, options = {})
   }
   return distances.get(tileKey(point.x, point.y)) ?? null;
 }
+
+// Registers to go from (square, facing) to a target square (board-aim study
+// 2026-11-23): every card action of the active deck from every square and
+// facing, simulated once per register timing with the real movement code
+// (board elements included, timing taken as the most favourable), reboots
+// dropped; then a backward breadth-first search from the target (any facing),
+// one register per step. A lower bound on the registers a route needs. Built
+// once per tile map (~0.4 s on the desktop for a large course), each target
+// once. Used by scripts/build-card-table.mjs; planned for checkpoint building
+// with routing (ROADMAP Route search 2, step 4).
+import { simulateAction } from "./movement.js";
+import { getProgramDeckActions } from "./program-availability.js";
+const REGISTER_EDGES = new WeakMap();
+const REGISTER_DISTANCE_MAPS = new WeakMap();
+function buildRegisterEdges(tileMap, options) {
+  const reverse = new Map();
+  const actions = getProgramDeckActions(options);
+  for (const tile of tileMap.values()) {
+    for (const facing of ROTATION_ORDER) {
+      const from = `${tile.x},${tile.y},${facing}`;
+      const seen = new Set();
+      for (let registerIndex = 0; registerIndex < 5; registerIndex += 1) {
+        for (const action of actions) {
+          let transition = null;
+          try {
+            transition = simulateAction(tileMap, { x: tile.x, y: tile.y, facing }, action, { ...options, registerIndex });
+          } catch {
+            continue;
+          }
+          if (!transition || transition.rebooted || !transition.to || !Number.isFinite(transition.to.x)) continue;
+          const key = `${transition.to.x},${transition.to.y},${transition.to.facing}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          if (!reverse.has(key)) reverse.set(key, []);
+          reverse.get(key).push(from);
+        }
+      }
+    }
+  }
+  return reverse;
+}
+export function getRegisterDistanceToTarget(tileMap, point, target, options = {}) {
+  if (!tileMap || !point || !target) return null;
+  let reverse = REGISTER_EDGES.get(tileMap);
+  if (!reverse) { reverse = buildRegisterEdges(tileMap, options); REGISTER_EDGES.set(tileMap, reverse); }
+  let byTarget = REGISTER_DISTANCE_MAPS.get(tileMap);
+  if (!byTarget) { byTarget = new Map(); REGISTER_DISTANCE_MAPS.set(tileMap, byTarget); }
+  const targetKey = `${target.x},${target.y}`;
+  let dist = byTarget.get(targetKey);
+  if (!dist) {
+    dist = new Map();
+    let frontier = ROTATION_ORDER.map((facing) => `${target.x},${target.y},${facing}`);
+    for (const key of frontier) dist.set(key, 0);
+    let level = 0;
+    while (frontier.length) {
+      level += 1;
+      const next = [];
+      for (const v of frontier) for (const u of reverse.get(v) ?? []) if (!dist.has(u)) { dist.set(u, level); next.push(u); }
+      frontier = next;
+    }
+    byTarget.set(targetKey, dist);
+  }
+  return dist.get(`${point.x},${point.y},${point.facing}`) ?? null;
+}

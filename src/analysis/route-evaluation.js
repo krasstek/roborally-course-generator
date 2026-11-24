@@ -69,7 +69,8 @@ import {
   RE_LEDGER_MODEL_ID,
   getObservationalMentalRegisterEquivalents,
   getRegisterEquivalentLedgerAbsoluteAction,
-  getRegisterEquivalentLedgerPlanningEventsForTransition
+  getRegisterEquivalentLedgerPlanningEventsForTransition,
+  getDeclinedHazardPlanningEvents
 } from "./re-ledger.js";
 import {
   getRebootEndedAbsoluteActions,
@@ -1145,6 +1146,19 @@ export function summarizeRegisterEquivalentLedger(
     : getInitialRouteEnergyShadowReserve(options);
   const homingMissileActivatedSpacesThisTurn = new Set();
   const variantMentalEventIdsThisTurn = new Set();
+  // Declined hazards (E19): the turn's path squares, flushed into the turn's
+  // planning events when the turn ends (re-ledger.js getDeclinedHazardPlanningEvents).
+  let declinedPathTurn = null;
+  let declinedPathPoints = [];
+  const flushDeclinedHazards = () => {
+    if (declinedPathTurn !== null && declinedPathPoints.length) {
+      for (const event of getDeclinedHazardPlanningEvents(tileMap, declinedPathPoints, options, variantMentalEventIdsThisTurn)) {
+        ensureTurn(declinedPathTurn).planningEvents.push(event);
+      }
+    }
+    declinedPathTurn = null;
+    declinedPathPoints = [];
+  };
   // Energon cubes are taken once per route; each claim is valued by the chance
   // of getting there first.
   const energonWinProbabilities = hasEnergon(tileMap)
@@ -1171,6 +1185,7 @@ export function summarizeRegisterEquivalentLedger(
     const turnNumber = Math.floor((Math.max(1, absoluteAction) - 1) / REGISTER_COUNT) + 1;
     const register = getRegisterPosition(absoluteAction);
     if (turnNumber !== activeHomingMissileTurn) {
+      flushDeclinedHazards();
       homingMissileActivatedSpacesThisTurn.clear();
       variantMentalEventIdsThisTurn.clear();
       activeHomingMissileTurn = turnNumber;
@@ -1264,11 +1279,16 @@ export function summarizeRegisterEquivalentLedger(
       absoluteAction,
       register
     }));
+    declinedPathTurn = turnNumber;
+    for (const point of [transition?.from, ...(transition?.traversed || []), transition?.rebooted ? null : transition?.to]) {
+      if (Number.isFinite(point?.x) && Number.isFinite(point?.y)) declinedPathPoints.push(point);
+    }
 
     if (transition?.rebooted) {
       turn.lostRegisterTempoRE += Math.max(0, REGISTER_COUNT - register);
     }
     if (transition?.rebooted || register === REGISTER_COUNT) {
+      flushDeclinedHazards();
       homingMissileActivatedSpacesThisTurn.clear();
       variantMentalEventIdsThisTurn.clear();
     }
@@ -1277,6 +1297,7 @@ export function summarizeRegisterEquivalentLedger(
       ? getRebootEndedAbsoluteActions(absoluteAction)
       : absoluteAction;
   });
+  flushDeclinedHazards();
 
   // v49cc: when an authoritative traffic context supplies collapsed nearby
   // turn episodes, add exactly one fractional non-laser awareness event per turn.

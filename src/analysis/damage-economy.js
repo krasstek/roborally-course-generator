@@ -1,4 +1,5 @@
 // Robo Rally Course Randomizer - damage economy mechanics: SPAM/haywire state, clog curves, relief opportunities, realized damage per transition
+import { CARD_TABLE } from "./card-table.js";
 import { getEffectiveLaserDamage } from "../../feature-weights.js";
 import {
   getLedgeSides,
@@ -597,19 +598,19 @@ export function getDamageEconomyProgrammingSummary(
     });
   });
 
-  const cleanPenaltyScore = getDamageEconomyAvailabilityPenaltyFromProbability(
-    cleanProgramProbability,
-    options
-  );
-  const damagedPenaltyScore = getDamageEconomyAvailabilityPenaltyFromProbability(
-    damagedProgramProbability,
-    options
-  );
-  const spamSupplyScore = (
-    Number.isFinite(cleanPenaltyScore) && Number.isFinite(damagedPenaltyScore)
-  )
-    ? Math.max(0, damagedPenaltyScore - cleanPenaltyScore)
+  // Damage-card supply from the card table (2026-11-24): each damage card
+  // expected in hand (SPAM held or drawn, Haywire where Critical Haywire counts
+  // it against the hand) costs CARD_TABLE.perDamageCardInHand RE of execution
+  // risk (measured with SPAM in the real deck cycle). Forced SPAM plays stay
+  // with clog. The probabilities above remain diagnostics.
+  const expectedHaywireAgainstHand = profile.criticalHaywireCountsAgainstHand
+    ? haywireDistribution.reduce((sum, probability, count) => sum + probability * Math.min(REGISTER_COUNT, count), 0)
     : 0;
+  const expectedDamageCardsInHand = Math.max(0, effectiveSpam.heldSpam + expectedSpamDrawn + expectedHaywireAgainstHand);
+  const cleanPenaltyScore = 0;
+  const damagedPenaltyScore = REGISTER_TEMPO_COST * CARD_TABLE.perDamageCardInHand * expectedDamageCardsInHand *
+    getProgramCardModelProfile(options).evaluationAdaptabilityFactor;
+  const spamSupplyScore = Math.max(0, damagedPenaltyScore - cleanPenaltyScore);
   const rawSpamSupplyRegisterEquivalents = spamSupplyScore / REGISTER_TEMPO_COST;
   const permanentShutdownSpamBurden = Math.max(
     0,
