@@ -1,7 +1,8 @@
 // Robo Rally Course Randomizer - register-equivalent ledger building blocks: mental and planning events, Moving Targets / Hazardous Checkpoints events, search-intrinsic mental replay
 import { getActiveVariantMentalEventRules } from "../../variants.js";
 import { getPortal, getTeleporter, hasHomingMissile, isWater, tileKey } from "./board-geometry.js";
-import { ACTIONS, REGISTER_COUNT, REGISTER_TEMPO_COST } from "./constants.js";
+import { ACTIONS, AGAIN_CARD_COUNT, REGISTER_COUNT, REGISTER_TEMPO_COST } from "./constants.js";
+import { getProgramCardModelProfile, getProgramDeck } from "./program-availability.js";
 import {
   getDamageEconomyRealizedDamageForTransition,
   isDamageEconomyRepairStationTile
@@ -381,6 +382,30 @@ export function getHomingMissileEntryActivationsForTransition(
   return activations;
 }
 
+// Planning weight of the card options in hand: 0.5 x the expected number of
+// distinct card types in a hand of the active deck (Again included), e.g. the
+// standard deck with 9 cards ~5.9 types -> 2.95; Factory Rejects (7) ~2.6.
+// Expected damage cards in hand are not subtracted yet (the search replay has
+// no damage state; one measure for search and evaluation).
+const CARD_OPTION_WEIGHT_CACHE = new Map();
+export const CARD_OPTION_TABLE_SHARE = 0.5;
+export function getCardOptionPlanningWeight(options = {}) {
+  const deck = getProgramDeck(options);
+  const handSize = getProgramCardModelProfile(options).handSize;
+  const key = `${deck.id}|${handSize}`;
+  let weight = CARD_OPTION_WEIGHT_CACHE.get(key);
+  if (weight === undefined) {
+    const counts = [...deck.counts.values(), AGAIN_CARD_COUNT].filter((n) => n > 0);
+    const size = counts.reduce((a, b) => a + b, 0);
+    const choose = (n, k) => { if (k < 0 || k > n) return 0; let v = 1; for (let i = 1; i <= k; i += 1) v = v * (n - k + i) / i; return v; };
+    const all = choose(size, handSize);
+    const types = counts.reduce((sum, n) => sum + (1 - choose(size - n, handSize) / all), 0);
+    weight = Number((CARD_OPTION_TABLE_SHARE * types).toFixed(4));
+    CARD_OPTION_WEIGHT_CACHE.set(key, weight);
+  }
+  return weight;
+}
+
 export function getRegisterEquivalentLedgerPlanningEventsForTransition(
   tileMap,
   transition,
@@ -397,8 +422,12 @@ export function getRegisterEquivalentLedgerPlanningEventsForTransition(
   };
   const action = ACTIONS.find((candidate) => candidate.id === transition?.action) ?? null;
 
-  // The card itself is always the baseline planning item.
-  add("card");
+  // Cards (E19, user design 2026-11-13, built 2026-11-24): the player weighs the
+  // options in hand, not each card placed (the table holds what is decided).
+  // One turn-level item set on the turn's first register: half the expected
+  // number of distinct card types in hand (getCardOptionPlanningWeight).
+  const cardRegisterPosition = Math.floor(Number(mechanicContext?.registerPosition) || 0);
+  if (cardRegisterPosition === 1) add("card-options", getCardOptionPlanningWeight(options));
   if (action?.type === "turn") add("card-rotation");
 
   const startTile = transition?.from
@@ -412,6 +441,9 @@ export function getRegisterEquivalentLedgerPlanningEventsForTransition(
   const conveyorPhases = new Set(
     conveyorSteps.map((step) => step?.phase || "conveyor").filter(Boolean)
   );
+  // A blue belt moves in the blue and in the green phase: one ride, one item
+  // (planning census 2026-11-24 counted it twice per register).
+  if (conveyorPhases.has("blue")) conveyorPhases.delete("green");
   for (const phase of conveyorPhases) {
     add(`board-phase:${phase}`);
   }
