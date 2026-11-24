@@ -56,7 +56,7 @@ const OUTCOMES = Object.freeze({
 //   back in the measured value itself (difficulty-metrics.js
 //   CARD_PLANNING_DIFFICULTY_LOG_OFFSET), so no correction here.
 const CARD_ALPHA_DIFFICULTY_LOG_OFFSET = -0.102;
-const CARD_PLANNING_LENGTH_LOG_OFFSET = -0.050;
+const CARD_PLANNING_LENGTH_LOG_OFFSET = -0.035; // -0.050 before the card table
 
 export function getConstructionGuidanceInventoryPreset(calibration, preferences = {}, pieceMap = {}) {
   const supported = new Set(calibration?.domain?.inventoryPresets ?? []);

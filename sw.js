@@ -35,6 +35,7 @@ const VERSIONED_ASSETS = [
   "./src/analysis/energy-course-weight.js",
   "./src/analysis/energy-economy.js",
   "./src/analysis/energy-value-table.js",
+  "./src/analysis/card-table.js",
   "./src/analysis/flag-area.js",
   "./src/analysis/full-course.js",
   "./src/analysis/goal-distance.js",
