@@ -54,7 +54,7 @@ const OUTCOMES = Object.freeze({
 // - card + planning redesign (2026-11-24, card-planning): length -0.050 (36
 //   golden courses reloaded vs main); its difficulty change (-0.378) is scaled
 //   back in the measured value itself (difficulty-metrics.js
-//   CARD_PLANNING_DIFFICULTY_LOG_OFFSET), so no correction here.
+//   CARD_PLANNING_DIFFICULTY_INTERIM_MAP), so no correction here.
 const CARD_ALPHA_DIFFICULTY_LOG_OFFSET = -0.102;
 const CARD_PLANNING_LENGTH_LOG_OFFSET = -0.035; // -0.050 before the card table
 

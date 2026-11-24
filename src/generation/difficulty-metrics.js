@@ -497,12 +497,14 @@ export function getProductionRETurnDifficulty(sequence, preferences = {}, contex
 // scaled back by this until the calibration rerun refits them; then set to 0.
 export const CLOG_REFIT_DIFFICULTY_LOG_OFFSET = -0.1;
 // Temporary (2026-11-24, user: interim until the calibration rerun): the card +
-// planning redesign (card RE as execution risk, E19 planning items) lowered
-// RE-turn difficulty by a mean log ratio of -0.378 (36 golden courses reloaded
-// vs main, x0.686). The value is scaled back up so the bands, the construction
-// guidance and the preflight gate keep their meaning (courses keep about their
-// old real difficulty); the calibration rerun refits them; then set to 0.
-export const CARD_PLANNING_DIFFICULTY_LOG_OFFSET = 0.378;
+// planning redesign (card table, E19 planning items) lowered RE-turn difficulty
+// by roughly a constant, not a ratio: on 36 golden courses reloaded vs main,
+// old = 1.219 + 0.990 x new (r 0.80; a pure scale overshot harder courses:
+// bench requests landed above their band). The value is mapped back so the
+// bands, the construction guidance and the preflight gate keep their meaning
+// (courses keep about their old real difficulty); the calibration rerun refits
+// them; then remove the mapping (intercept 0, slope 1).
+export const CARD_PLANNING_DIFFICULTY_INTERIM_MAP = Object.freeze({ intercept: 1.219, slope: 0.99 });
 
 export function computeRETurnVariantDifficultyAccounting(rawTurnRE, preferences = {}, sequence = null) {
   const programmingPressure = computeProgrammingPressureProfile(sequence);
@@ -688,13 +690,15 @@ export function computeRETurnVariantDifficultyAccounting(rawTurnRE, preferences 
     }
   }
 
-  const scaled = adjusted * Math.exp(CLOG_REFIT_DIFFICULTY_LOG_OFFSET + CARD_PLANNING_DIFFICULTY_LOG_OFFSET);
+  const scaled = CARD_PLANNING_DIFFICULTY_INTERIM_MAP.intercept +
+    CARD_PLANNING_DIFFICULTY_INTERIM_MAP.slope * adjusted * Math.exp(CLOG_REFIT_DIFFICULTY_LOG_OFFSET);
   return {
     base: Number((Number(rawTurnRE) || 0).toFixed(4)),
     final: Number(scaled.toFixed(4)),
     delta: Number((scaled - (Number(rawTurnRE) || 0)).toFixed(4)),
     beforeScaleOffset: Number(adjusted.toFixed(4)),
-    scaleLogOffset: CLOG_REFIT_DIFFICULTY_LOG_OFFSET + CARD_PLANNING_DIFFICULTY_LOG_OFFSET,
+    scaleLogOffset: CLOG_REFIT_DIFFICULTY_LOG_OFFSET,
+    interimMap: CARD_PLANNING_DIFFICULTY_INTERIM_MAP,
     contributions,
     mechanicalRules,
     deferredRules,
