@@ -496,6 +496,13 @@ export function getProductionRETurnDifficulty(sequence, preferences = {}, contex
 // construction guidance were fitted on the earlier scale, so the final value is
 // scaled back by this until the calibration rerun refits them; then set to 0.
 export const CLOG_REFIT_DIFFICULTY_LOG_OFFSET = -0.1;
+// Temporary (2026-11-24, user: interim until the calibration rerun): the card +
+// planning redesign (card RE as execution risk, E19 planning items) lowered
+// RE-turn difficulty by a mean log ratio of -0.378 (36 golden courses reloaded
+// vs main, x0.686). The value is scaled back up so the bands, the construction
+// guidance and the preflight gate keep their meaning (courses keep about their
+// old real difficulty); the calibration rerun refits them; then set to 0.
+export const CARD_PLANNING_DIFFICULTY_LOG_OFFSET = 0.378;
 
 export function computeRETurnVariantDifficultyAccounting(rawTurnRE, preferences = {}, sequence = null) {
   const programmingPressure = computeProgrammingPressureProfile(sequence);
@@ -681,13 +688,13 @@ export function computeRETurnVariantDifficultyAccounting(rawTurnRE, preferences 
     }
   }
 
-  const scaled = adjusted * Math.exp(CLOG_REFIT_DIFFICULTY_LOG_OFFSET);
+  const scaled = adjusted * Math.exp(CLOG_REFIT_DIFFICULTY_LOG_OFFSET + CARD_PLANNING_DIFFICULTY_LOG_OFFSET);
   return {
     base: Number((Number(rawTurnRE) || 0).toFixed(4)),
     final: Number(scaled.toFixed(4)),
     delta: Number((scaled - (Number(rawTurnRE) || 0)).toFixed(4)),
     beforeScaleOffset: Number(adjusted.toFixed(4)),
-    scaleLogOffset: CLOG_REFIT_DIFFICULTY_LOG_OFFSET,
+    scaleLogOffset: CLOG_REFIT_DIFFICULTY_LOG_OFFSET + CARD_PLANNING_DIFFICULTY_LOG_OFFSET,
     contributions,
     mechanicalRules,
     deferredRules,

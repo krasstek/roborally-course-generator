@@ -48,11 +48,15 @@ const OUTCOMES = Object.freeze({
 // ---- Inputs ----------------------------------------------------------------------
 
 // The guidance models were fitted when course RE used card-scarcity alpha 0.70.
-// Course RE now uses 0.50 (constants.js), which lowered difficulty by a mean
-// log ratio of -0.102 (34 golden courses, routes unchanged; length -0.006, not
-// corrected). Applied to difficulty predictions until the calibration rerun,
-// then remove (set to 0).
+// Model-scale changes since then, applied to predictions until the calibration
+// rerun, then remove (set to 0):
+// - course RE alpha 0.50: difficulty mean log ratio -0.102 (34 golden courses);
+// - card + planning redesign (2026-11-24, card-planning): length -0.050 (36
+//   golden courses reloaded vs main); its difficulty change (-0.378) is scaled
+//   back in the measured value itself (difficulty-metrics.js
+//   CARD_PLANNING_DIFFICULTY_LOG_OFFSET), so no correction here.
 const CARD_ALPHA_DIFFICULTY_LOG_OFFSET = -0.102;
+const CARD_PLANNING_LENGTH_LOG_OFFSET = -0.050;
 
 export function getConstructionGuidanceInventoryPreset(calibration, preferences = {}, pieceMap = {}) {
   const supported = new Set(calibration?.domain?.inventoryPresets ?? []);
@@ -312,7 +316,7 @@ export function predictConstructionGuidanceStage(
     const linear = evaluateConstructionGuidanceModel(models[outcome], features);
     if (!Number.isFinite(linear)) return null;
     const shift = outcome === "difficulty" ? feedback.difficultyLogShift : feedback.lengthLogShift;
-    const modelScaleOffset = outcome === "difficulty" ? CARD_ALPHA_DIFFICULTY_LOG_OFFSET : 0;
+    const modelScaleOffset = outcome === "difficulty" ? CARD_ALPHA_DIFFICULTY_LOG_OFFSET : CARD_PLANNING_LENGTH_LOG_OFFSET;
     return makeOutcomePrediction(
       models[outcome],
       linear + getRuleVariantLogOffset(calibration, activeIds, outcome) + shift + modelScaleOffset
