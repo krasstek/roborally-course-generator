@@ -1,6 +1,6 @@
 // Robo Rally Course Randomizer - register-equivalent ledger building blocks: mental and planning events, Moving Targets / Hazardous Checkpoints events, search-intrinsic mental replay
 import { getActiveVariantMentalEventRules } from "../../variants.js";
-import { getPortal, getTeleporter, hasExplicitTiming, hasHomingMissile, isWater, tileKey } from "./board-geometry.js";
+import { getPortal, getTeleporter, hasExplicitTiming, hasHomingMissile, isPit, isWater, tileKey } from "./board-geometry.js";
 import { ACTIONS, AGAIN_CARD_COUNT, REGISTER_COUNT, REGISTER_TEMPO_COST } from "./constants.js";
 import { getProgramCardModelProfile, getProgramDeck } from "./program-availability.js";
 import {
@@ -404,6 +404,73 @@ export function getCardOptionPlanningWeight(options = {}) {
     CARD_OPTION_WEIGHT_CACHE.set(key, weight);
   }
   return weight;
+}
+
+// Declined hazards (E19, fallback form; built 2026-11-24). A hazard next to
+// the turn's path that the path never enters is something the player planned
+// around: one item per hazard chunk per game turn. Chunks: a connected group
+// of pits, a laser beam (direction and line), a board edge side, a single
+// flamethrower, crusher or trapdoor square. A declined hazard that a rule
+// changed (square swaps) also brings that rule's remember-the-rule item.
+// Final evaluation only (route-evaluation.js); the route search never sees it.
+// The full design (replan the turn with hazards ignored) was estimated at
+// 1-2.5 s per course on the desktop, too slow for phones.
+const PIT_GROUP_CACHE = new WeakMap();
+function getPitGroupId(tileMap, x, y) {
+  let groups = PIT_GROUP_CACHE.get(tileMap);
+  if (!groups) { groups = new Map(); PIT_GROUP_CACHE.set(tileMap, groups); }
+  const key = tileKey(x, y);
+  if (groups.has(key)) return groups.get(key);
+  const id = `pit:${key}`;
+  const stack = [{ x, y }];
+  groups.set(key, id);
+  while (stack.length) {
+    const p = stack.pop();
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const k = tileKey(p.x + dx, p.y + dy);
+      if (groups.has(k) || !isPit(tileMap.get(k))) continue;
+      groups.set(k, id);
+      stack.push({ x: p.x + dx, y: p.y + dy });
+    }
+  }
+  return id;
+}
+export function getDeclinedHazardPlanningEvents(tileMap, pathPoints, options = {}, seenRuleIds = new Set()) {
+  if (!tileMap || !pathPoints?.length) return [];
+  const onPath = new Set(pathPoints.map((p) => tileKey(p.x, p.y)));
+  const accepted = new Set();
+  for (const p of pathPoints) {
+    for (const feature of tileMap.get(tileKey(p.x, p.y))?.features || []) {
+      if (feature.type === "laser") accepted.add(`laser:${feature.dir}|${feature.dir === "N" || feature.dir === "S" ? p.x : p.y}`);
+    }
+  }
+  const chunks = new Map();
+  const ruleIds = new Set();
+  for (const p of pathPoints) {
+    for (const [dx, dy, side] of [[1, 0, "E"], [-1, 0, "W"], [0, 1, "S"], [0, -1, "N"]]) {
+      const x = p.x + dx, y = p.y + dy;
+      const key = tileKey(x, y);
+      if (onPath.has(key)) continue;
+      const tile = tileMap.get(key);
+      if (!tile) { chunks.set(`edge:${side}`, "edge"); continue; }
+      if (isPit(tile)) chunks.set(getPitGroupId(tileMap, x, y), "pit");
+      for (const feature of tile.features || []) {
+        let id = null;
+        if (feature.type === "laser") id = `laser:${feature.dir}|${feature.dir === "N" || feature.dir === "S" ? x : y}`;
+        else if (["flamethrower", "crusher", "trapdoor"].includes(feature.type)) id = `${feature.type}:${key}`;
+        if (!id || accepted.has(id)) continue;
+        chunks.set(id, feature.type);
+        if (feature.swappedBy) ruleIds.add(feature.swappedBy);
+      }
+    }
+  }
+  const events = [...chunks.values()].map((kind) => ({ type: `declined-hazard:${kind}`, weight: 1, turnLevel: true }));
+  for (const rule of getActiveVariantMentalEventRules(options)) {
+    if (rule?.trigger !== "square-swap-relevant" || !ruleIds.has(rule.variantId) || seenRuleIds.has(rule.variantId)) continue;
+    seenRuleIds.add(rule.variantId);
+    events.push({ type: rule.eventType || `variant-rule:${rule.variantId}`, weight: 1, turnLevel: true, detail: { variantId: rule.variantId, trigger: "declined-hazard" } });
+  }
+  return events;
 }
 
 export function getRegisterEquivalentLedgerPlanningEventsForTransition(
