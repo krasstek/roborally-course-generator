@@ -6,6 +6,8 @@ import {
   PROGRAM_CARD_MAX_COUNTS,
   PROGRAM_CARD_SCARCITY_ADAPTABILITY_FACTOR,
   PROGRAM_CARD_SCARCITY_EVALUATION_FACTOR,
+  CARD_PLAN_FAILURE_RE,
+  CARD_PLAN_REFERENCE_PROBABILITY,
   PROGRAM_DECKS,
   REGISTER_COUNT,
   REGISTER_TEMPO_COST,
@@ -122,12 +124,12 @@ function buildProgramCardModelProfile(options) {
   const sharedDeckAlphaIncrement = sharedDeck
     ? Math.max(0, playerCount - 1) * SHARED_DECK_ALPHA_INCREMENT_PER_ADDITIONAL_PLAYER
     : 0;
-  const baseAlpha = resetEachTurn ? 1 : PROGRAM_CARD_SCARCITY_ADAPTABILITY_FACTOR;
+  const baseAlpha = PROGRAM_CARD_SCARCITY_ADAPTABILITY_FACTOR;
   const handSize = options.factoryRejects ? 7 : PROGRAM_EXACT_HAND_SIZE;
-  const adaptabilityFactor = baseAlpha + sharedDeckAlphaIncrement;
+  const adaptabilityFactor = baseAlpha * (1 + sharedDeckAlphaIncrement / 0.5);
   // Course RE uses its own alpha (constants.js); the search keeps the one above.
   const evaluationAdaptabilityFactor =
-    (resetEachTurn ? 1 : PROGRAM_CARD_SCARCITY_EVALUATION_FACTOR) + sharedDeckAlphaIncrement;
+    PROGRAM_CARD_SCARCITY_EVALUATION_FACTOR * (1 + sharedDeckAlphaIncrement / 0.5);
   const deck = getProgramDeck(options);
   return {
     deck,
@@ -1510,17 +1512,16 @@ export function getProgramAvailabilityPenaltyFromProbability(
   adaptabilityFactor = PROGRAM_CARD_SCARCITY_ADAPTABILITY_FACTOR,
   baselineProbability = PROGRAM_EXACT_FOUR_COPY_BASELINE_PROBABILITY
 ) {
+  // Execution risk (constants.js CARD_PLAN_*): zero when an ordinary hand covers
+  // the program (p >= p_ref), up to the cost of failing the plan as p falls.
+  // A program no hand can hold (p = 0: more copies than the deck has) stays
+  // impossible. `adaptabilityFactor` is only the variant multiplier now and
+  // `baselineProbability` is unused (kept for callers).
   const p = Math.max(0, Number(probability) || 0);
   if (p <= 0) return Infinity;
-  const availabilityRatio = baselineProbability / p;
-
-  // Baseline invariant:
-  // P(program) == P(one ordinary four-copy card) -> exactly 0 extra card RE.
-  // The factor compresses only scarcity ABOVE that baseline to represent player
-  // adaptation / richer real deck-state information omitted by this abstraction.
-  const rawScarcityRE = Math.max(0, availabilityRatio - 1);
+  const risk = Math.max(0, 1 - p / CARD_PLAN_REFERENCE_PROBABILITY);
   const factor = Math.max(0, Number(adaptabilityFactor) || 0);
-  return REGISTER_TEMPO_COST * rawScarcityRE * factor;
+  return REGISTER_TEMPO_COST * CARD_PLAN_FAILURE_RE * risk * factor;
 }
 
 export function getExactProgramDeckCounts(previousCode = 0, options = {}) {
