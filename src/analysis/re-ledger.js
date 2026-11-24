@@ -522,7 +522,21 @@ export function getRegisterEquivalentLedgerPlanningEventsForTransition(
   if (checkpointHit) add("checkpoint");
 
   const sourceTypes = new Set(damageEvent?.sourceTypes || []);
-  if (sourceTypes.has("board-laser-hit")) add("accepted-hazard:board-laser");
+  // Board lasers (E19): one item per beam per game turn; standing in the same
+  // beam in several registers is one thing to keep in mind. A beam is keyed by
+  // its direction and line (the column for N/S beams, the row for E/W ones).
+  if (sourceTypes.has("board-laser-hit")) {
+    const laserTurnIds = mechanicContext?.variantMentalEventIdsThisTurn instanceof Set
+      ? mechanicContext.variantMentalEventIdsThisTurn
+      : null;
+    const endTile = transition?.to ? tileMap.get(tileKey(transition.to.x, transition.to.y)) : null;
+    const beamIds = (endTile?.features || [])
+      .filter((feature) => feature.type === "laser")
+      .map((feature) => `__laser:${feature.dir}|${feature.dir === "N" || feature.dir === "S" ? transition.to.x : transition.to.y}`);
+    const newBeams = laserTurnIds ? beamIds.filter((id) => !laserTurnIds.has(id)) : beamIds;
+    if (!beamIds.length || newBeams.length) add("accepted-hazard:board-laser");
+    if (laserTurnIds) for (const id of newBeams) laserTurnIds.add(id);
+  }
   if (sourceTypes.has("radiation-hit")) add("accepted-hazard:radiation");
   if (sourceTypes.has("radioactive-waste-hit")) add("accepted-hazard:radioactive-waste");
   if (sourceTypes.has("ledge-damage")) add("accepted-hazard:ledge");
