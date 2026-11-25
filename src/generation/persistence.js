@@ -43,6 +43,7 @@ import { collectMovingTargetReentryMarkers } from "./moving-targets.js";
 import { normalizeOverlayMode } from "./preferences.js";
 import { placeHomeRebootTokens } from "./reboot-tokens.js";
 import { getAcceptedStartEnergyRescues } from "./route-field.js";
+import { decodeSavedRoutes, encodeSavedRoutes } from "./saved-routes.js";
 import {
   GENERATION_COOPERATIVE_SEARCH_CHECK_POPS,
   GENERATION_COOPERATIVE_SEARCH_SLICE_MS,
@@ -199,6 +200,15 @@ export function getSavedGenerationDisposition(snapshot = {}) {
     acceptedAtSave: savedAcceptable === null ? null : Boolean(savedAcceptable),
     terminationReason
   };
+}
+
+// The save with the course's routes (saved-routes.js), so a reload evaluates
+// them without searching again. Without compression in this browser the save
+// has no routes and a reload searches, as before.
+export async function serializeScenarioWithRoutes(scenario) {
+  const saved = serializeScenario(scenario);
+  const routedField = await encodeSavedRoutes(scenario?.sequence?.firstLeg ?? null);
+  return routedField ? { ...saved, routedField } : saved;
 }
 
 // Saved Pay to Win pricing without the route copies in its residual-balance
@@ -777,6 +787,12 @@ export async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}
   if (!snapshot?.placements?.length || !snapshot?.checkpoints?.length || !snapshot?.preferences) {
     return null;
   }
+  // A reload evaluates the routes saved with the course (saved-routes.js) when
+  // it has usable ones; generation's own evaluations pass their field (or null
+  // for a fresh search) and never read a saved one.
+  const savedRoutedField = control.routedFirstLeg === undefined
+    ? await decodeSavedRoutes(snapshot.routedField)
+    : null;
 
   const shouldStopRequested = typeof control.shouldStopRequested === "function"
     ? control.shouldStopRequested
@@ -1074,7 +1090,7 @@ export async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}
     // The course's numbers come from its routed field alone (route-field.js):
     // generation's final evaluation passes the field it routed, a reload routes
     // it again and replays the recorded energy rescues.
-    routedFirstLeg: control.routedFirstLeg ?? null,
+    routedFirstLeg: control.routedFirstLeg ?? savedRoutedField ?? null,
     replayStartEnergyRescues: startEnergyPricing
       ? getAcceptedStartEnergyRescues(snapshot.payToWinPricing)
       : [],
@@ -1308,6 +1324,7 @@ export async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}
     generationTerminationReason: savedGenerationDisposition.terminationReason,
     hydrationAcceptanceDrift,
     hydrationAcceptanceImproved,
+    hydrationUsedSavedRoutes: Boolean(savedRoutedField),
     constructionGuidancePrior: snapshot.constructionGuidancePrior ?? null,
     constructionGuidanceStages: snapshot.constructionGuidanceStages ?? null,
     guidanceLevel: snapshot.guidanceLevel ?? 0,
@@ -1374,7 +1391,8 @@ export const HYDRATION_ONLY_SCENARIO_FIELDS = [
   "hydrationReanalysisPending",
   "hydrationReanalysisStopped",
   "hydrationReanalysisFailed",
-  "hydrationStartDispositionRestored"
+  "hydrationStartDispositionRestored",
+  "hydrationUsedSavedRoutes"
 ];
 
 // Final evaluation of a finished course: save it exactly as the app would,
