@@ -83,9 +83,9 @@ export function getActFastDirectTimingMultiplier(mode, playerCount = 4) {
   return 1 - getActFastDirectTimerReduction(mode, playerCount);
 }
 export const PLAY_TIME_REFERENCE_TURN_BANDS = Object.freeze({
-  short: [0, 6.25],
-  moderate: [6.25, 9.5],
-  long: [9.5, 13.0],
+  short: [0, 4],
+  moderate: [4, 7],
+  long: [7, 13.0],
   epic: [13.0, Infinity]
 });
 
