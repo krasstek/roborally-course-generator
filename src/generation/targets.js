@@ -56,11 +56,18 @@ export function getLengthThresholds() {
 // be reported as "very long, even for Epic".
 export const WALL_CLOCK_LENGTH_FIT_POINTS_PER_TURN = 20;
 export const MIN_WALL_CLOCK_TURN_INDEX = MIN_LENGTH_RAW / WALL_CLOCK_LENGTH_FIT_POINTS_PER_TURN;
+//
+// Cut points anchored on the 13 pre-built courses of the 2023 rulebook (user
+// 2026-11-25; study in calibration-output/studies/2026-11-25-official-courses/),
+// rated for 4 players: Short (45 min or less) 2.1-3.3, Medium (46-75 min) 4.8-6.6,
+// Long (76+ min) 8.4-11.4 on this index (Treachery 6.3 the one exception);
+// Epic is longer than any official course (Cry Havoc 19). Earlier cuts
+// (6.25 / 9.5 / 13) came from community estimates and ran about a band long.
 export function getProductionLengthThresholds() {
   return {
-    short: [MIN_WALL_CLOCK_TURN_INDEX, 6.25],
-    moderate: [6.25, 9.5],
-    long: [9.5, 13],
+    short: [MIN_WALL_CLOCK_TURN_INDEX, 4],
+    moderate: [4, 7],
+    long: [7, 13],
     epic: [13, 20]
   };
 }
@@ -76,10 +83,12 @@ export const GROSS_DIFFICULTY_ABORT_BANDS = {
   brutal: { min: 90 }
 };
 
+// Length limits scaled with the 2026-11-25 band change (same ratios to the band
+// edges as before; raw = 20 x the wall-clock turn index).
 export const GROSS_LENGTH_ABORT_BANDS = {
-  short: { max: 220 },
-  moderate: { min: 70, max: 285 },
-  long: { min: 90, max: 390 },
+  short: { max: 140 },
+  moderate: { min: 45, max: 210 },
+  long: { min: 66, max: 390 },
   epic: { min: 140, max: 520 }
 };
 
