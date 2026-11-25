@@ -403,8 +403,10 @@ export async function generateScenarioForPreferences(assets, preferences, option
       trimmed = await evaluateTrimmedFinishedCourse(assets, evaluated, preferences, withReRouteWorkBudget(finalEvaluationControl));
     } catch (error) {
       if (error?.code === "ANALYSIS_STOP_REQUESTED" && shouldStopRequested()) return null;
-      // Over the re-route cap: no trim, the course stays as it was.
-      if (error?.code !== "RE_ROUTE_WORK_BUDGET_EXCEEDED") throw error;
+      // Over the re-route cap, or too few starts survive the shorter course's
+      // routing (bench 2026-11-25, 6 players, all sets): no trim, the course
+      // stays as it was.
+      if (error?.code !== "RE_ROUTE_WORK_BUDGET_EXCEEDED" && error?.code !== "CONTEXTUAL_START_CAPACITY_LOST") throw error;
       overBudget = true;
     }
     generationDiagnostics.finalEvaluations.push({

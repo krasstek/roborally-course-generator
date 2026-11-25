@@ -1560,8 +1560,11 @@ async function evaluateFinalSnapshot(assets, snapshot, candidate, preferences, r
   try {
     reduced = await evaluate(reducedSnapshot, null);
   } catch (error) {
-    // Over generation's re-route cap: the board simply stays.
-    if (error?.code === "RE_ROUTE_WORK_BUDGET_EXCEEDED") return evaluated;
+    // Over generation's re-route cap, or too few starts survive routing without
+    // the board: the board simply stays.
+    if (error?.code === "RE_ROUTE_WORK_BUDGET_EXCEEDED" || error?.code === "CONTEXTUAL_START_CAPACITY_LOST") {
+      return evaluated;
+    }
     throw error;
   }
   if (!reduced) return evaluated;
