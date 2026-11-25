@@ -259,25 +259,36 @@ export async function generateScenarioForPreferences(assets, preferences, option
       finalDifficultyTurnRE: evaluated?.metrics?.difficultyTurnRE ?? null,
       elapsedMs: Number((generationNow() - startedAt).toFixed(2))
     });
+    // Passed screening: judge it on the quality search (see applyQualityPass).
+    if (evaluated?.metrics?.acceptable) return applyQualityPass(evaluated, "acceptance");
     return evaluated;
   }
 
-  // Route search 2 (two tiers, 2026-11-24): the course to be returned is routed
-  // once more with the quality search and kept whatever its bands (user
-  // 2026-11-24); the diagnostics record how often that changes the outcome. A
-  // stop request or a failed evaluation keeps the screening version.
-  async function applyQualityPass(scenario) {
-    if (!scenario || shouldStopRequested()) return scenario;
+  // Route search 2 (two tiers; user 2026-11-25): attempts are screened with the
+  // fast search; a course that passes screening is routed once more with the
+  // quality search and judged on those numbers (acceptance and ranking), so a
+  // course the better routes move out of band does not count and the search
+  // goes on. The returned course gets the pass too if it never had one (a
+  // fallback). Trims re-route at the quality tier already. Any failure keeps the
+  // screening version (recorded).
+  const qualityRoutedScenarios = new WeakSet();
+  generationDiagnostics.qualityPasses = [];
+  async function applyQualityPass(scenario, purpose) {
+    if (!scenario || qualityRoutedScenarios.has(scenario) || shouldStopRequested()) return scenario;
     const startedAt = generationNow();
     let routed = null;
+    let error = null;
     try {
       routed = await evaluateQualityRoutedCourse(assets, scenario, preferences, finalEvaluationControl);
-    } catch (error) {
-      if (error?.code === "ANALYSIS_STOP_REQUESTED" && shouldStopRequested()) return scenario;
-      throw error;
+    } catch (caught) {
+      if (caught?.code === "ANALYSIS_STOP_REQUESTED" && shouldStopRequested()) return scenario;
+      error = String(caught?.message ?? caught).slice(0, 200);
     }
-    generationDiagnostics.qualityPass = {
+    const record = {
+      purpose,
+      attempt: scenario.attempts ?? null,
       complete: Boolean(routed),
+      error,
       elapsedMs: Number((generationNow() - startedAt).toFixed(2)),
       acceptableBefore: Boolean(scenario.metrics?.acceptable),
       acceptableAfter: Boolean(routed?.metrics?.acceptable),
@@ -286,8 +297,10 @@ export async function generateScenarioForPreferences(assets, preferences, option
       lengthBefore: scenario.metrics?.lengthWallClockTurnIndex ?? null,
       lengthAfter: routed?.metrics?.lengthWallClockTurnIndex ?? null
     };
+    generationDiagnostics.qualityPasses.push(record);
     if (!routed) return scenario;
     routed.attempts = scenario.attempts;
+    qualityRoutedScenarios.add(routed);
     return routed;
   }
 
@@ -339,6 +352,8 @@ export async function generateScenarioForPreferences(assets, preferences, option
       finalDifficultyTurnRE: trimmed?.metrics?.difficultyTurnRE ?? null,
       elapsedMs: Number((generationNow() - startedAt).toFixed(2))
     });
+    // Re-routed from scratch at the quality tier (hydration's default).
+    if (trimmed) qualityRoutedScenarios.add(trimmed);
     return trimmed?.metrics?.acceptable ? trimmed : null;
   }
 
@@ -749,7 +764,7 @@ export async function generateScenarioForPreferences(assets, preferences, option
       terminationReason = "accepted";
       generationDiagnostics.cleanMatchStop = cleanMatchStop;
       const nearBestChoice = selection.choice;
-      const selectedScenario = await applyQualityPass(selection.scenario);
+      const selectedScenario = await applyQualityPass(selection.scenario, "returned");
       generationDiagnostics.nearBestCandidateScores = nearBestChoice.pool.map((entry) => (
         Number(entry.score.toFixed(2))
       ));
@@ -824,7 +839,7 @@ export async function generateScenarioForPreferences(assets, preferences, option
   // v49er: forced Extra Docks is a hard gate. One-dock near misses remain
   // diagnostic candidates only and are never promoted to a returned course.
 
-  if (bestScenario) bestScenario = await applyQualityPass(bestScenario);
+  if (bestScenario) bestScenario = await applyQualityPass(bestScenario, "returned");
   if (bestScenario) {
     bestScenario.generationBestMatch = !Boolean(bestScenario.metrics?.acceptable);
     bestScenario.generationTerminationReason = terminationReason;

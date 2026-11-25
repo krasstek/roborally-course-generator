@@ -146,7 +146,7 @@ async function run() {
       })(),
       // Route search 2: the quality pass on the returned course (time, acceptable
       // and difficulty/length before and after).
-      qualityPass: scenario?.generationDiagnostics?.qualityPass ?? generation?.generationDiagnostics?.qualityPass ?? null,
+      qualityPasses: scenario?.generationDiagnostics?.qualityPasses ?? generation?.generationDiagnostics?.qualityPasses ?? null,
       // Trim rescues: tried, kept (acceptable), and their time.
       trims: (() => {
         const trims = (scenario?.generationDiagnostics?.finalEvaluations ?? generation?.generationDiagnostics?.finalEvaluations ?? [])
