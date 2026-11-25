@@ -2,7 +2,8 @@
 import {
   ANALYZE_BUILD_ID,
   clearAnalysisCaches,
-  getAnalysisTelemetrySnapshot
+  getAnalysisTelemetrySnapshot,
+  getCompletedRouteExpansions
 } from "../../analyze.js";
 import { buildCourseNotesHtml } from "../../course-notes.js";
 import { createRandomCandidate } from "./candidate-builder.js";
@@ -25,6 +26,9 @@ import {
   NORMAL_TRAFFIC_ALTERNATE_DEMAND_THRESHOLD,
   NORMAL_TRAFFIC_ALTERNATE_MIN_GAIN,
   OVERLAY_UPDATE_INTERVAL,
+  QUALITY_NEAR_MISS_DIFFICULTY_MARGIN,
+  QUALITY_NEAR_MISS_LENGTH_MARGIN,
+  RE_ROUTE_WORK_BUDGET,
   SOFT_CANDIDATE_RETENTION_LIMIT
 } from "./config.js";
 import { rememberDevAcceptableCandidatePool } from "./dev-replay.js";
@@ -235,6 +239,24 @@ export async function generateScenarioForPreferences(assets, preferences, option
     }
   };
 
+  // The re-route cap (config.js RE_ROUTE_WORK_BUDGET): a fresh count for each
+  // evaluation of a finished course, checked by route search every few steps.
+  function withReRouteWorkBudget(control) {
+    const baseline = getCompletedRouteExpansions();
+    return {
+      ...control,
+      contextualWorkGuard: (currentSearchExpansions) => {
+        const routeWork = getCompletedRouteExpansions() - baseline + currentSearchExpansions;
+        if (routeWork > RE_ROUTE_WORK_BUDGET) {
+          const error = new Error(`Re-route too costly: ${routeWork} expansions (budget ${RE_ROUTE_WORK_BUDGET})`);
+          error.code = "RE_ROUTE_WORK_BUDGET_EXCEEDED";
+          throw error;
+        }
+      }
+    };
+  }
+  const routeWorkSince = (baseline) => getCompletedRouteExpansions() - baseline;
+
   // Every complete candidate is evaluated from its routed field before it is
   // judged (the numbers a reload reproduces), so acceptance, ranking and the
   // fallback all use the numbers the player will see. Returns the evaluated
@@ -246,9 +268,11 @@ export async function generateScenarioForPreferences(assets, preferences, option
     const startedAt = generationNow();
     let evaluated = null;
     try {
-      evaluated = await evaluateFinishedCourse(assets, candidate, preferences, finalEvaluationControl);
+      evaluated = await evaluateFinishedCourse(assets, candidate, preferences, withReRouteWorkBudget(finalEvaluationControl));
     } catch (error) {
       if (error?.code === "ANALYSIS_STOP_REQUESTED" && shouldStopRequested()) return candidate;
+      // Over the re-route cap: keeps its generation-time numbers, as on Stop.
+      if (error?.code === "RE_ROUTE_WORK_BUDGET_EXCEEDED") return candidate;
       throw error;
     }
     generationDiagnostics.finalEvaluations.push({
@@ -259,9 +283,37 @@ export async function generateScenarioForPreferences(assets, preferences, option
       finalDifficultyTurnRE: evaluated?.metrics?.difficultyTurnRE ?? null,
       elapsedMs: Number((generationNow() - startedAt).toFixed(2))
     });
-    // Passed screening: judge it on the quality search (see applyQualityPass).
+    // Passed screening, or missed only its bands narrowly: judge it on the
+    // quality search (see applyQualityPass).
     if (evaluated?.metrics?.acceptable) return applyQualityPass(evaluated, "acceptance");
+    if (isQualityNearMiss(evaluated)) return applyQualityPass(evaluated, "near-miss");
     return evaluated;
+  }
+
+  // Fails only on its bands, each by at most its margin (config.js).
+  function isQualityNearMiss(evaluated) {
+    const metrics = evaluated?.metrics;
+    if (!metrics || metrics.acceptable) return false;
+    if ((metrics.hardFailures?.length ?? 0) > 0 || metrics.fairnessAcceptance?.ordinaryAcceptable === false) return false;
+    const outside = (value, band) => {
+      if (!band) return 0;
+      if (!Number.isFinite(value) || value <= 0) return Infinity;
+      const [low, high] = band;
+      if (Number.isFinite(low) && value < low) return Math.log(low / value);
+      if (Number.isFinite(high) && value >= high) return Math.log(value / high);
+      return 0;
+    };
+    const difficulty = Number(metrics.difficultyTurnRE);
+    const length = Number(metrics.lengthWallClockTurnIndex);
+    const difficultyOut = preferences.targetGuidanceOnlyDifficulty
+      ? 0
+      : outside(difficulty, getDifficultyThresholds()[getNearestTargetBand(preferences, "difficulty", difficulty, getDifficultyThresholds())]);
+    const lengthOut = preferences.targetGuidanceOnlyLength
+      ? 0
+      : outside(length, getProductionLengthThresholds()[getNearestTargetBand(preferences, "length", length, getProductionLengthThresholds())]);
+    return (difficultyOut > 0 || lengthOut > 0) &&
+      difficultyOut <= QUALITY_NEAR_MISS_DIFFICULTY_MARGIN &&
+      lengthOut <= QUALITY_NEAR_MISS_LENGTH_MARGIN;
   }
 
   // Route search 2 (two tiers; user 2026-11-25): attempts are screened with the
@@ -272,14 +324,18 @@ export async function generateScenarioForPreferences(assets, preferences, option
   // fallback). Trims re-route at the quality tier already. Any failure keeps the
   // screening version (recorded).
   const qualityRoutedScenarios = new WeakSet();
+  // Construction guidance learns from screening numbers, the ones every attempt
+  // has, also for a course the quality pass replaced.
+  const screeningMetricsByScenario = new WeakMap();
   generationDiagnostics.qualityPasses = [];
   async function applyQualityPass(scenario, purpose) {
     if (!scenario || qualityRoutedScenarios.has(scenario) || shouldStopRequested()) return scenario;
     const startedAt = generationNow();
+    const workBaseline = getCompletedRouteExpansions();
     let routed = null;
     let error = null;
     try {
-      routed = await evaluateQualityRoutedCourse(assets, scenario, preferences, finalEvaluationControl);
+      routed = await evaluateQualityRoutedCourse(assets, scenario, preferences, withReRouteWorkBudget(finalEvaluationControl));
     } catch (caught) {
       if (caught?.code === "ANALYSIS_STOP_REQUESTED" && shouldStopRequested()) return scenario;
       error = String(caught?.message ?? caught).slice(0, 200);
@@ -290,6 +346,7 @@ export async function generateScenarioForPreferences(assets, preferences, option
       complete: Boolean(routed),
       error,
       elapsedMs: Number((generationNow() - startedAt).toFixed(2)),
+      routeExpansions: routeWorkSince(workBaseline),
       acceptableBefore: Boolean(scenario.metrics?.acceptable),
       acceptableAfter: Boolean(routed?.metrics?.acceptable),
       difficultyBefore: scenario.metrics?.difficultyTurnRE ?? null,
@@ -301,6 +358,7 @@ export async function generateScenarioForPreferences(assets, preferences, option
     if (!routed) return scenario;
     routed.attempts = scenario.attempts;
     qualityRoutedScenarios.add(routed);
+    screeningMetricsByScenario.set(routed, screeningMetricsByScenario.get(scenario) ?? scenario.metrics);
     return routed;
   }
 
@@ -336,12 +394,16 @@ export async function generateScenarioForPreferences(assets, preferences, option
 
     onStart?.();
     const startedAt = generationNow();
+    const workBaseline = getCompletedRouteExpansions();
     let trimmed = null;
+    let overBudget = false;
     try {
-      trimmed = await evaluateTrimmedFinishedCourse(assets, evaluated, preferences, finalEvaluationControl);
+      trimmed = await evaluateTrimmedFinishedCourse(assets, evaluated, preferences, withReRouteWorkBudget(finalEvaluationControl));
     } catch (error) {
       if (error?.code === "ANALYSIS_STOP_REQUESTED" && shouldStopRequested()) return null;
-      throw error;
+      // Over the re-route cap: no trim, the course stays as it was.
+      if (error?.code !== "RE_ROUTE_WORK_BUDGET_EXCEEDED") throw error;
+      overBudget = true;
     }
     generationDiagnostics.finalEvaluations.push({
       attempt: evaluated.attempts ?? null,
@@ -350,6 +412,8 @@ export async function generateScenarioForPreferences(assets, preferences, option
       acceptable: Boolean(trimmed?.metrics?.acceptable),
       generationDifficultyTurnRE: evaluated.metrics?.difficultyTurnRE ?? null,
       finalDifficultyTurnRE: trimmed?.metrics?.difficultyTurnRE ?? null,
+      overReRouteBudget: overBudget,
+      routeExpansions: routeWorkSince(workBaseline),
       elapsedMs: Number((generationNow() - startedAt).toFixed(2))
     });
     // Re-routed from scratch at the quality tier (hydration's default).
@@ -663,7 +727,7 @@ export async function generateScenarioForPreferences(assets, preferences, option
         guidanceFeedback = updateConstructionGuidanceFeedback(
           guidanceFeedback,
           checkpointsKnownPrediction,
-          scenario.metrics,
+          screeningMetricsByScenario.get(scenario) ?? scenario.metrics,
           preferences
         );
         scenario = await evaluateTrimmedCandidate(

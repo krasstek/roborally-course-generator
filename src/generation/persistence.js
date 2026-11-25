@@ -23,7 +23,8 @@ import {
   NORMAL_FULL_COURSE_TRAFFIC_PASSES,
   NORMAL_TRAFFIC_ALTERNATE_DEMAND_THRESHOLD,
   NORMAL_TRAFFIC_ALTERNATE_MIN_GAIN,
-  QUALITY_ROUTE_AIM_WEIGHT
+  QUALITY_ROUTE_AIM_WEIGHT,
+  SCREENING_ROUTE_AIM_WEIGHT
 } from "./config.js";
 import { getGenerationModeProfile, getScenarioGenerationMode } from "./generation-modes.js";
 import {
@@ -968,6 +969,8 @@ export async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}
     // Re-routing a finished course (quality pass, trim, unused-board check,
     // reload of a save without stored routes) uses the quality search tier.
     contextualAimWeight: control.contextualAimWeight ?? QUALITY_ROUTE_AIM_WEIGHT,
+    // Generation's re-route cap (generation-loop.js); none on a reload.
+    contextualWorkGuard: control.contextualWorkGuard ?? null,
     fullCourseAnalyzer: analyzeFullCourseCooperative,
     cooperativeYield: async (progress) => {
       if (onCooperativeProgress) {
@@ -1493,7 +1496,14 @@ async function evaluateFinalSnapshot(assets, snapshot, candidate, preferences, r
     ? removeBoardsFromSnapshot(snapshot, unusedBoardIndices, assets.pieceMap)
     : null;
   if (!reducedSnapshot) return evaluated;
-  const reduced = await evaluate(reducedSnapshot, null);
+  let reduced = null;
+  try {
+    reduced = await evaluate(reducedSnapshot, null);
+  } catch (error) {
+    // Over generation's re-route cap: the board simply stays.
+    if (error?.code === "RE_ROUTE_WORK_BUDGET_EXCEEDED") return evaluated;
+    throw error;
+  }
   if (!reduced) return evaluated;
   // The dropped board may hold the only element a drawn rule acts on (oil for
   // Flaming Oil, fire pits for Lava Pits...); generation never accepts a rule
@@ -1507,6 +1517,9 @@ async function evaluateFinalSnapshot(assets, snapshot, candidate, preferences, r
   return reduced;
 }
 
+// Screening's evaluation: the candidate's own routes, so any re-route here (the
+// unused-board check) uses the screening search too, matching the numbers it is
+// compared with.
 export async function evaluateFinishedCourse(assets, candidate, preferences, control = {}) {
   return evaluateFinalSnapshot(
     assets,
@@ -1514,7 +1527,7 @@ export async function evaluateFinishedCourse(assets, candidate, preferences, con
     candidate,
     preferences,
     candidate.sequence?.firstLeg ?? null,
-    control
+    { ...control, contextualAimWeight: control.contextualAimWeight ?? SCREENING_ROUTE_AIM_WEIGHT }
   );
 }
 

@@ -58,6 +58,21 @@ export const NORMAL_FULL_COURSE_TRAFFIC_PASSES = 1;
 // 22% to 11% of legs (>1 RE 14% -> 6%) at x1.7 routing time.
 export const SCREENING_ROUTE_AIM_WEIGHT = 1;
 export const QUALITY_ROUTE_AIM_WEIGHT = 0.8;
+// Route-work cap for re-routing a finished course during generation (unused-
+// board check, quality pass, last-checkpoint trim), in search expansions for the
+// whole re-route. Screening attempts have their own budget (candidate-builder.js);
+// without this cap one pathological re-route searched for over an hour (bench
+// 2026-11-25, 6 players, all sets). Over it, the re-route is given up and the
+// course stays as it was.
+export const RE_ROUTE_WORK_BUDGET = 2000000;
+// Near misses get the quality pass too (user 2026-11-25): a screened course that
+// fails only on its bands, by at most these margins (log ratio to the nearest
+// band edge), is judged on the quality search as well. Screening and quality
+// numbers differ by about 15% in difficulty and 8% in length per course with no
+// bias, so a near miss lands in band about one time in three (bench 2026-11-25:
+// 7 of 20 within these margins; wider margins added none).
+export const QUALITY_NEAR_MISS_DIFFICULTY_MARGIN = 0.1;
+export const QUALITY_NEAR_MISS_LENGTH_MARGIN = 0.05;
 export const NORMAL_PRUNE_BATCH_SIZE = 2;
 export const NORMAL_CONTEXTUAL_FULL_FORECAST_SHARE = 0.65;
 
