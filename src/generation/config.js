@@ -63,11 +63,12 @@ export const QUALITY_ROUTE_AIM_WEIGHT = 0.8;
 // whole re-route. Screening attempts have their own budget (candidate-builder.js);
 // without this cap one pathological re-route searched for over an hour (bench
 // 2026-11-25, 6 players, all sets). Over it, the re-route is given up and the
-// course stays as it was.
-export const RE_ROUTE_WORK_BUDGET = 2000000;
+// course stays as it was. The largest quality pass in the 2026-11-25 bench used
+// 50,033 expansions; the cap is 8x that.
+export const RE_ROUTE_WORK_BUDGET = 400000;
 // Near misses get the quality pass too (user 2026-11-25): a screened course that
-// fails only on its bands, by at most these margins (log ratio to the nearest
-// band edge), is judged on the quality search as well. Screening and quality
+// is outside its bands by at most these margins (log ratio to the nearest band
+// edge) is judged on the quality search as well, whatever else it failed. Screening and quality
 // numbers differ by about 15% in difficulty and 8% in length per course with no
 // bias, so a near miss lands in band about one time in three (bench 2026-11-25:
 // 7 of 20 within these margins; wider margins added none).

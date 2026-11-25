@@ -290,11 +290,13 @@ export async function generateScenarioForPreferences(assets, preferences, option
     return evaluated;
   }
 
-  // Fails only on its bands, each by at most its margin (config.js).
+  // Outside its bands, each by at most its margin (config.js). Other failures
+  // (start fairness, start capacity) do not exclude it: the better routes change
+  // those too (bench 2026-11-25: of 18 fallback courses within the margins, 7
+  // became acceptable, most of them failing fairness or a hard check before).
   function isQualityNearMiss(evaluated) {
     const metrics = evaluated?.metrics;
     if (!metrics || metrics.acceptable) return false;
-    if ((metrics.hardFailures?.length ?? 0) > 0 || metrics.fairnessAcceptance?.ordinaryAcceptable === false) return false;
     const outside = (value, band) => {
       if (!band) return 0;
       if (!Number.isFinite(value) || value <= 0) return Infinity;
