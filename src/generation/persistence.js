@@ -201,6 +201,35 @@ export function getSavedGenerationDisposition(snapshot = {}) {
   };
 }
 
+// Saved Pay to Win pricing without the route copies in its residual-balance
+// entries: each entry spreads a whole start analysis (about 200 KB of routes),
+// taking priced-start saves to 3.5 MB against the phone's ~5 MB storage. Pricing
+// rebuilds the entries from live routes; a restored summary is read only for its
+// balance figures (classification.js, reports), never for these routes.
+const BALANCE_ENTRY_ROUTE_FIELDS = ["fullCourseRoutes", "fullCourseRoute", "routes", "selectedRoute"];
+function compactPayToWinPricingForSave(payToWin) {
+  const residual = payToWin?.residualBalance;
+  if (!residual) return payToWin;
+  const compactPhase = (phase) => (Array.isArray(phase?.balanceEntries)
+    ? {
+      ...phase,
+      balanceEntries: phase.balanceEntries.map((entry) => (
+        entry && typeof entry === "object"
+          ? Object.fromEntries(Object.entries(entry).filter(([key]) => !BALANCE_ENTRY_ROUTE_FIELDS.includes(key)))
+          : entry
+      ))
+    }
+    : phase);
+  return {
+    ...payToWin,
+    residualBalance: {
+      ...residual,
+      ...(residual.early ? { early: compactPhase(residual.early) } : {}),
+      ...(residual.late ? { late: compactPhase(residual.late) } : {})
+    }
+  };
+}
+
 export function serializeScenario(scenario) {
   return {
     savedScenarioApp: SAVED_SCENARIO_APP_ID,
@@ -279,7 +308,7 @@ export function serializeScenario(scenario) {
         ...(entry.energyDirection ? { energyDirection: entry.energyDirection } : {})
       }))
       : null,
-    payToWinPricing: (scenario.payToWin || scenario.subsidizedStarts) ? (scenario.sequence?.firstLeg?.summary?.payToWin ?? null) : null,
+    payToWinPricing: (scenario.payToWin || scenario.subsidizedStarts) ? compactPayToWinPricingForSave(scenario.sequence?.firstLeg?.summary?.payToWin ?? null) : null,
     // v49ff reload fidelity: Normal start availability is part of the accepted
     // saved course, not a fresh choice to make on every page load. Persist the
     // accepted balance summary when available so future reloads can reproduce
