@@ -418,7 +418,7 @@ const VARIANT_DEFINITION_ROWS = [
     {
       id: "spaceBridgeNetwork",
       label: "Space Bridge Network",
-      description: "Every teleporter is a space bridge, all of one colour: a robot ending a register on one may move to any other.",
+      description: "Every teleporter is a Space Bridge instead, connecting to each other.",
       featureTypes: ["teleporter"],
       reason: "Requires teleporters in the selected sets."
     },
