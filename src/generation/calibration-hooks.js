@@ -43,7 +43,7 @@ import { runProductionGeneration } from "./generation-loop.js";
 import { getGenerationModeProfile, normalizeGenerationMode } from "./generation-modes.js";
 import { buildBoardRects, countPhysicalBoards, isMiniOverlayPiece } from "./layout-geometry.js";
 import { getAvailableOverlayIds } from "./overlays.js";
-import { hydrateScenarioFromSnapshot, serializeScenario } from "./persistence.js";
+import { hydrateScenarioFromSnapshot, serializeScenario, serializeScenarioWithRoutes } from "./persistence.js";
 import {
   OVERLAY_MODES,
   OVERLAY_REBOOT_MODES,
@@ -301,6 +301,11 @@ export async function generateScenarioForTesting(assets, preferences, options = 
 
 export function serializeScenarioForTesting(scenario) {
   return serializeScenario(scenario);
+}
+
+// The save as the app stores it, routes included (saved-routes.js).
+export async function serializeScenarioWithRoutesForTesting(scenario) {
+  return serializeScenarioWithRoutes(scenario);
 }
 
 export async function hydrateScenarioForTesting(assets, snapshot) {

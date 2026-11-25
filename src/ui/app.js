@@ -26,7 +26,8 @@ import {
   SAVED_SCENARIO_SCHEMA_VERSION,
   buildSavedScenarioPresentationShell,
   hydrateScenarioFromSnapshot,
-  serializeScenario
+  serializeScenario,
+  serializeScenarioWithRoutes
 } from "../generation/persistence.js";
 import {
   formatCooperativeRouteProgressStage,
@@ -166,12 +167,25 @@ if (document.readyState === "loading") {
 
 const SAVED_SCENARIO_KEY = "roborally-course-generator:last-scenario";
 
+// The course is saved at once without its routes, then again with them once
+// they are compressed (saved-routes.js), so a reload evaluates the same routes
+// without searching. A later save supersedes a pending one.
+let scenarioSaveToken = 0;
 function saveScenarioSnapshot(scenario) {
+  const token = ++scenarioSaveToken;
   try {
     localStorage.setItem(SAVED_SCENARIO_KEY, JSON.stringify(serializeScenario(scenario)));
   } catch {
     // ignore storage failures
   }
+  serializeScenarioWithRoutes(scenario).then((saved) => {
+    if (token !== scenarioSaveToken || !saved?.routedField) return;
+    try {
+      localStorage.setItem(SAVED_SCENARIO_KEY, JSON.stringify(saved));
+    } catch {
+      // too large or storage unavailable: the save without routes stays
+    }
+  }).catch(() => {});
 }
 
 function loadScenarioSnapshot() {

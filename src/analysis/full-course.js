@@ -123,6 +123,13 @@ export const CONTEXTUAL_OPENING_ROUTES = 2;
 export const CONTEXTUAL_OPENING_EXPANSIONS = 7000;
 export const CONTEXTUAL_TEMPLATE_POOL = 6;
 export const CONTEXTUAL_TEMPLATE_CARD_DELTA_LIMIT = 14;
+// Card repair rounds per start (realizing an estimated course against the exact
+// card model). Measured 2026-11-25 on 24 courses (2,109 starts): every start that
+// was realized needed at most 8 rounds; the 7 that went past 10 never succeeded,
+// each round re-planning a little later and growing a leg past 750 registers,
+// which could run for hours (bench hang, 6 players, all sets). Past the cap the
+// start is unrealizable, as when a repair finds no alternative.
+export const CARD_REPAIR_MAX_ROUNDS = 16;
 
 // Calibration hook: when set, receives every estimated leg search's candidate
 // routes and the one chosen. Null in production.
@@ -559,6 +566,7 @@ export function* analyzeFullCourseContextualSteps(
   let cardRepairNoSuffix = 0;
   let cardRepairDownstreamRebuildFailures = 0;
   let cardRepairRepeatedCandidates = 0;
+  let cardRepairRoundCapStarts = 0;
   // v33 traffic feedback is demand-driven. Primary routing stays exact and cheap;
   // traffic may reuse cached witnesses or open a small number of new leg searches.
   let trafficEpochsExecuted = 0;
@@ -733,6 +741,7 @@ export function* analyzeFullCourseContextualSteps(
   const baseRouteOptions = {
     ...pickRouteRuleOptions(options),
     ...pickRouteEconomyOptions(options),
+    contextualAimWeight: options.contextualAimWeight ?? 1,
     contextualEstimatedCardTransitionMemoContext:
       options.contextualEstimatedCardTransitionMemoContext ?? null,
     contextualEstimatedCardTransitionMemoRuleSignature:
@@ -2475,8 +2484,14 @@ export function* analyzeFullCourseContextualSteps(
       let usedRepair = false;
       const seenCandidates = new Set();
       let realizedPartial = null;
+      let repairRounds = 0;
 
       while (estimatedLegs.length === flags.length) {
+        repairRounds += 1;
+        if (repairRounds > CARD_REPAIR_MAX_ROUNDS) {
+          cardRepairRoundCapStarts += 1;
+          break;
+        }
         const fullTransitions = estimatedLegs.flatMap(
           (leg) => leg?.transitions || []
         );
@@ -4664,6 +4679,7 @@ export function* analyzeFullCourseContextualSteps(
         cardRepairNoSuffix,
         cardRepairDownstreamRebuildFailures,
         cardRepairRepeatedCandidates,
+        cardRepairRoundCapStarts,
         estimatedEnergyGuidance: options.contextualEstimatedEnergyGuidance !== false,
         trafficEpochsExecuted,
         trafficFeedbackStopReason,

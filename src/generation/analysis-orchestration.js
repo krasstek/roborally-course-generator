@@ -918,6 +918,7 @@ export function analyzeFlagSequence(tileMap, starts, flags, playerCount, options
       maxRoutes: lateRouteCount,
       maxActions: Math.max(24, flags.length * 18 + 8),
       maxExpansions: generationProfile.fullCourseExpansions,
+      contextualAimWeight: options.contextualAimWeight ?? 1,
       fullCourseTrafficPasses: options.fullCourseTrafficPasses ?? NORMAL_FULL_COURSE_TRAFFIC_PASSES,
       flags,
       playerCount,

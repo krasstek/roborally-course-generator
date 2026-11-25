@@ -144,6 +144,9 @@ async function run() {
           ? { offered: values.length, spreadRE: Number((Math.max(...values) - Math.min(...values)).toFixed(2)) }
           : null;
       })(),
+      // Route search 2: the quality pass on the returned course (time, acceptable
+      // and difficulty/length before and after).
+      qualityPasses: scenario?.generationDiagnostics?.qualityPasses ?? generation?.generationDiagnostics?.qualityPasses ?? null,
       // Trim rescues: tried, kept (acceptable), and their time.
       trims: (() => {
         const trims = (scenario?.generationDiagnostics?.finalEvaluations ?? generation?.generationDiagnostics?.finalEvaluations ?? [])

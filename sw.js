@@ -92,6 +92,7 @@ const VERSIONED_ASSETS = [
   "./src/generation/random.js",
   "./src/generation/reboot-tokens.js",
   "./src/generation/route-field.js",
+  "./src/generation/saved-routes.js",
   "./src/generation/scheduling.js",
   "./src/generation/square-swaps.js",
   "./src/generation/start-balance.js",

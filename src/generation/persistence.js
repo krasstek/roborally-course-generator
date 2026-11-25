@@ -22,7 +22,9 @@ import {
   NORMAL_EFFECTIVE_RE_OUTLIER_Z,
   NORMAL_FULL_COURSE_TRAFFIC_PASSES,
   NORMAL_TRAFFIC_ALTERNATE_DEMAND_THRESHOLD,
-  NORMAL_TRAFFIC_ALTERNATE_MIN_GAIN
+  NORMAL_TRAFFIC_ALTERNATE_MIN_GAIN,
+  QUALITY_ROUTE_AIM_WEIGHT,
+  SCREENING_ROUTE_AIM_WEIGHT
 } from "./config.js";
 import { getGenerationModeProfile, getScenarioGenerationMode } from "./generation-modes.js";
 import {
@@ -41,6 +43,7 @@ import { collectMovingTargetReentryMarkers } from "./moving-targets.js";
 import { normalizeOverlayMode } from "./preferences.js";
 import { placeHomeRebootTokens } from "./reboot-tokens.js";
 import { getAcceptedStartEnergyRescues } from "./route-field.js";
+import { decodeSavedRoutes, encodeSavedRoutes } from "./saved-routes.js";
 import {
   GENERATION_COOPERATIVE_SEARCH_CHECK_POPS,
   GENERATION_COOPERATIVE_SEARCH_SLICE_MS,
@@ -199,6 +202,44 @@ export function getSavedGenerationDisposition(snapshot = {}) {
   };
 }
 
+// The save with the course's routes (saved-routes.js), so a reload evaluates
+// them without searching again. Without compression in this browser the save
+// has no routes and a reload searches, as before.
+export async function serializeScenarioWithRoutes(scenario) {
+  const saved = serializeScenario(scenario);
+  const routedField = await encodeSavedRoutes(scenario?.sequence?.firstLeg ?? null);
+  return routedField ? { ...saved, routedField } : saved;
+}
+
+// Saved Pay to Win pricing without the route copies in its residual-balance
+// entries: each entry spreads a whole start analysis (about 200 KB of routes),
+// taking priced-start saves to 3.5 MB against the phone's ~5 MB storage. Pricing
+// rebuilds the entries from live routes; a restored summary is read only for its
+// balance figures (classification.js, reports), never for these routes.
+const BALANCE_ENTRY_ROUTE_FIELDS = ["fullCourseRoutes", "fullCourseRoute", "routes", "selectedRoute"];
+function compactPayToWinPricingForSave(payToWin) {
+  const residual = payToWin?.residualBalance;
+  if (!residual) return payToWin;
+  const compactPhase = (phase) => (Array.isArray(phase?.balanceEntries)
+    ? {
+      ...phase,
+      balanceEntries: phase.balanceEntries.map((entry) => (
+        entry && typeof entry === "object"
+          ? Object.fromEntries(Object.entries(entry).filter(([key]) => !BALANCE_ENTRY_ROUTE_FIELDS.includes(key)))
+          : entry
+      ))
+    }
+    : phase);
+  return {
+    ...payToWin,
+    residualBalance: {
+      ...residual,
+      ...(residual.early ? { early: compactPhase(residual.early) } : {}),
+      ...(residual.late ? { late: compactPhase(residual.late) } : {})
+    }
+  };
+}
+
 export function serializeScenario(scenario) {
   return {
     savedScenarioApp: SAVED_SCENARIO_APP_ID,
@@ -277,7 +318,7 @@ export function serializeScenario(scenario) {
         ...(entry.energyDirection ? { energyDirection: entry.energyDirection } : {})
       }))
       : null,
-    payToWinPricing: (scenario.payToWin || scenario.subsidizedStarts) ? (scenario.sequence?.firstLeg?.summary?.payToWin ?? null) : null,
+    payToWinPricing: (scenario.payToWin || scenario.subsidizedStarts) ? compactPayToWinPricingForSave(scenario.sequence?.firstLeg?.summary?.payToWin ?? null) : null,
     // v49ff reload fidelity: Normal start availability is part of the accepted
     // saved course, not a fresh choice to make on every page load. Persist the
     // accepted balance summary when available so future reloads can reproduce
@@ -746,6 +787,12 @@ export async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}
   if (!snapshot?.placements?.length || !snapshot?.checkpoints?.length || !snapshot?.preferences) {
     return null;
   }
+  // A reload evaluates the routes saved with the course (saved-routes.js) when
+  // it has usable ones; generation's own evaluations pass their field (or null
+  // for a fresh search) and never read a saved one.
+  const savedRoutedField = control.routedFirstLeg === undefined
+    ? await decodeSavedRoutes(snapshot.routedField)
+    : null;
 
   const shouldStopRequested = typeof control.shouldStopRequested === "function"
     ? control.shouldStopRequested
@@ -964,6 +1011,11 @@ export async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}
     // used the current Balanced budgets, so getScenarioGenerationMode() maps
     // those legacy snapshots to Balanced rather than silently using Standard.
     generationMode: hydrationGenerationMode,
+    // Re-routing a finished course (quality pass, trim, unused-board check,
+    // reload of a save without stored routes) uses the quality search tier.
+    contextualAimWeight: control.contextualAimWeight ?? QUALITY_ROUTE_AIM_WEIGHT,
+    // Generation's re-route cap (generation-loop.js); none on a reload.
+    contextualWorkGuard: control.contextualWorkGuard ?? null,
     fullCourseAnalyzer: analyzeFullCourseCooperative,
     cooperativeYield: async (progress) => {
       if (onCooperativeProgress) {
@@ -1038,7 +1090,7 @@ export async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}
     // The course's numbers come from its routed field alone (route-field.js):
     // generation's final evaluation passes the field it routed, a reload routes
     // it again and replays the recorded energy rescues.
-    routedFirstLeg: control.routedFirstLeg ?? null,
+    routedFirstLeg: control.routedFirstLeg ?? savedRoutedField ?? null,
     replayStartEnergyRescues: startEnergyPricing
       ? getAcceptedStartEnergyRescues(snapshot.payToWinPricing)
       : [],
@@ -1272,6 +1324,7 @@ export async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}
     generationTerminationReason: savedGenerationDisposition.terminationReason,
     hydrationAcceptanceDrift,
     hydrationAcceptanceImproved,
+    hydrationUsedSavedRoutes: Boolean(savedRoutedField),
     constructionGuidancePrior: snapshot.constructionGuidancePrior ?? null,
     constructionGuidanceStages: snapshot.constructionGuidanceStages ?? null,
     guidanceLevel: snapshot.guidanceLevel ?? 0,
@@ -1338,7 +1391,8 @@ export const HYDRATION_ONLY_SCENARIO_FIELDS = [
   "hydrationReanalysisPending",
   "hydrationReanalysisStopped",
   "hydrationReanalysisFailed",
-  "hydrationStartDispositionRestored"
+  "hydrationStartDispositionRestored",
+  "hydrationUsedSavedRoutes"
 ];
 
 // Final evaluation of a finished course: save it exactly as the app would,
@@ -1489,7 +1543,14 @@ async function evaluateFinalSnapshot(assets, snapshot, candidate, preferences, r
     ? removeBoardsFromSnapshot(snapshot, unusedBoardIndices, assets.pieceMap)
     : null;
   if (!reducedSnapshot) return evaluated;
-  const reduced = await evaluate(reducedSnapshot, null);
+  let reduced = null;
+  try {
+    reduced = await evaluate(reducedSnapshot, null);
+  } catch (error) {
+    // Over generation's re-route cap: the board simply stays.
+    if (error?.code === "RE_ROUTE_WORK_BUDGET_EXCEEDED") return evaluated;
+    throw error;
+  }
   if (!reduced) return evaluated;
   // The dropped board may hold the only element a drawn rule acts on (oil for
   // Flaming Oil, fire pits for Lava Pits...); generation never accepts a rule
@@ -1503,6 +1564,9 @@ async function evaluateFinalSnapshot(assets, snapshot, candidate, preferences, r
   return reduced;
 }
 
+// Screening's evaluation: the candidate's own routes, so any re-route here (the
+// unused-board check) uses the screening search too, matching the numbers it is
+// compared with.
 export async function evaluateFinishedCourse(assets, candidate, preferences, control = {}) {
   return evaluateFinalSnapshot(
     assets,
@@ -1510,8 +1574,26 @@ export async function evaluateFinishedCourse(assets, candidate, preferences, con
     candidate,
     preferences,
     candidate.sequence?.firstLeg ?? null,
-    control
+    { ...control, contextualAimWeight: control.contextualAimWeight ?? SCREENING_ROUTE_AIM_WEIGHT }
   );
+}
+
+// Route search 2 (two tiers): the course that passed screening is routed once
+// more with the quality search (hydration's default tier, see config.js), its
+// start balance and prices rebuilt over the new routes, then evaluated the way
+// a reload does. Kept whatever its bands (user 2026-11-24); the caller records
+// how often the bands change.
+export async function evaluateQualityRoutedCourse(assets, evaluated, preferences, control = {}) {
+  const snapshot = buildFinalEvaluationSnapshot(evaluated, preferences);
+  snapshot.startDisposition = null;
+  snapshot.normalStartBalance = null;
+  snapshot.startPricing = null;
+  snapshot.payToWinPricing = null;
+  snapshot.presentationMetrics = null;
+  snapshot.courseNotesHtml = null;
+  const routed = await evaluateFinalSnapshot(assets, snapshot, evaluated, preferences, null, control);
+  if (!routed) return routed;
+  return evaluateLikeReload(assets, routed, evaluated, preferences, control);
 }
 
 // The same course without its last checkpoint, evaluated from scratch: routes,
@@ -1529,18 +1611,23 @@ export async function evaluateTrimmedFinishedCourse(assets, evaluated, preferenc
   snapshot.courseNotesHtml = null;
   const balanced = await evaluateFinalSnapshot(assets, snapshot, evaluated, preferences, null, control);
   if (!balanced) return balanced;
-  // The pass above chose the start disposition by balancing afresh; a reload
-  // instead restores that disposition and recomputes over it, which can give
-  // different numbers. Evaluate once more the way a reload does, so the saved
-  // course and its reload agree (as for every other generated course).
-  const withDisposition = withRecomputedNormalStartDisposition(balanced);
-  if (withDisposition === balanced) return balanced;
+  return evaluateLikeReload(assets, balanced, evaluated, preferences, control);
+}
+
+// A course re-routed from scratch chose its start disposition and prices
+// afresh; a reload instead restores them and recomputes over its routes, which
+// can give different numbers (priced starts: difficulty 4.38 against 4.27 on
+// reload, golden forced-pay-to-win 2026-11-25). Evaluate once more the way a
+// reload does, over the routes just found (no search), so the saved course and
+// its reload agree, as for every other generated course.
+function evaluateLikeReload(assets, fresh, evaluated, preferences, control) {
+  const withDisposition = withRecomputedNormalStartDisposition(fresh);
   return evaluateFinalSnapshot(
     assets,
     buildFinalEvaluationSnapshot(withDisposition, preferences),
     evaluated,
     preferences,
-    null,
+    withDisposition.sequence?.firstLeg ?? null,
     control
   );
 }

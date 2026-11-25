@@ -419,8 +419,15 @@ export function createContextualQueueEntry(
   return {
     ...route,
     homingMissileSearchGuidanceBonus: Number(missileGuidanceBonus.toFixed(3)),
-    estimate: route.baseCost + getLegSearchAimDistance(route.finalState, target, tileMap, options) * 5 - missileGuidanceBonus
+    estimate: route.baseCost + getLegSearchAimDistance(route.finalState, target, tileMap, options) * 5 * getLegSearchAimWeight(options) - missileGuidanceBonus
   };
+}
+
+// The aim's weight (route search tiers, generation/config.js): 1 screens
+// attempts; below 1 the search is less greedy and finds cheaper routes.
+function getLegSearchAimWeight(options) {
+  const weight = Number(options?.contextualAimWeight);
+  return Number.isFinite(weight) && weight > 0 ? weight : 1;
 }
 
 // The queue's aim: walking squares to the target around walls, buildings and

@@ -13,6 +13,10 @@
 //   leak     Generate every case in ONE process, in order, and compare.      [Check B]
 //   restore  Reload each baseline course in a fresh process (as a page reload
 //            would) and compare the reanalysis with what was generated.     [Check C]
+//            The saves carry their routes (saved-routes.js), so a reload
+//            evaluates them without searching; it must use them.
+//            With --research the routes are left out and the reload searches
+//            again, which shows whether the search still finds the same routes.
 //
 // Options:
 //   --dir PATH      Baseline directory (default golden-output/baseline)
@@ -22,6 +26,7 @@
 //   --only a,b      Run only these case names (substring match)
 //   --skip a,b      Leave out these case names (substring match)
 //   --list          Print the case list and exit
+//   --research      restore only: reload without the saved routes (search again)
 //
 // Memory safety: the run refuses to start unless the machine has room for every
 // worker at its heap limit plus headroom. Each result is written the moment it
@@ -239,7 +244,7 @@ async function generateCase(app, testCase) {
   const generation = await app.main.generateScenarioForTesting(app.assets, preferences, { seed });
   const ms = Math.round(performance.now() - startedAt);
   const saved = generation.scenario
-    ? app.main.serializeScenarioForTesting(generation.scenario)
+    ? await app.main.serializeScenarioWithRoutesForTesting(generation.scenario)
     : null;
   const snapshot = normalize({
     ok: Boolean(saved),
@@ -261,6 +266,7 @@ async function restoreCase(app, name, raw) {
     name,
     ms,
     ok: true,
+    usedSavedRoutes: Boolean(hydrated.hydrationUsedSavedRoutes),
     flags: {
       acceptanceDrift: Boolean(hydrated.hydrationAcceptanceDrift),
       acceptanceImproved: Boolean(hydrated.hydrationAcceptanceImproved),
@@ -306,7 +312,8 @@ function parseArgs(argv) {
     heapMb: 3072,
     only: null,
     skip: null,
-    list: false
+    list: false,
+    research: false
   };
   for (let index = hasCommand ? 1 : 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -317,6 +324,7 @@ function parseArgs(argv) {
     else if (arg === "--only") options.only = argv[++index].split(",").filter(Boolean);
     else if (arg === "--skip") options.skip = argv[++index].split(",").filter(Boolean);
     else if (arg === "--list") options.list = true;
+    else if (arg === "--research") options.research = true;
     else throw new Error(`Unknown option: ${arg}`);
   }
   return options;
@@ -511,7 +519,12 @@ async function main() {
     const baseline = await readBaseline(options.dir, cases);
     const items = [...baseline.values()]
       .filter((entry) => entry.raw)
-      .map((entry) => ({ name: entry.name, raw: entry.raw }));
+      .map((entry) => {
+        if (!options.research) return { name: entry.name, raw: entry.raw };
+        const { routedField, ...raw } = entry.raw;
+        return { name: entry.name, raw };
+      });
+    if (options.research) console.log("Research restore: saved routes left out, every reload searches again.\n");
     const results = await runPool("restore", items.map((item) => [item]), scratchDir, options, saveLive);
     for (const result of results.sort((a, b) => a.name.localeCompare(b.name))) {
       const expected = baseline.get(result.name);
@@ -523,6 +536,8 @@ async function main() {
       const generatedFields = Object.fromEntries(RESTORE_FIELDS.map((key) => [key, expected.snapshot.saved[key] ?? null]));
       const differences = diffPaths(generatedFields, result.fields);
       const raisedFlags = Object.entries(result.flags).filter(([, value]) => value).map(([key]) => key);
+      // A save with routes must reload from them (not in --research).
+      if (!options.research && expected.raw?.routedField && !result.usedSavedRoutes) raisedFlags.push("savedRoutesUnused");
       if (!differences.length && !raisedFlags.length) {
         console.log(`SAME  ${result.name}  ${result.ms} ms`);
         continue;
