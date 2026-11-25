@@ -754,11 +754,19 @@ export function getRegisterTimeline(route) {
       ? getRebootEndedAbsoluteActions(absoluteRegister)
       : absoluteRegister;
 
+    // Squares the robot occupies during its programmed move this register
+    // (start, then every square passed), and the move's direction (null when it
+    // only turns or stays): the conflict model below needs both.
+    const programmedPath = [before, ...(transition.traversed || [])]
+      .filter((point) => Number.isFinite(point?.x) && Number.isFinite(point?.y));
+    const lastProgrammed = programmedPath[programmedPath.length - 1] ?? before;
     return {
       absoluteRegister,
       legRegister: index + 1,
       before,
       after,
+      pathKeys: programmedPath.map((point) => `${point.x},${point.y}`),
+      moveDir: getTrafficMoveDirection(before, lastProgrammed),
       facing: after?.facing ?? before?.facing,
       rebooted: Boolean(transition?.rebooted),
       rebootRecoverySource: transition?.rebootRecoverySource ?? null,
@@ -770,6 +778,67 @@ export function getRegisterTimeline(route) {
   return timeline;
 }
 
+
+function getTrafficMoveDirection(from, to) {
+  if (!from || !to) return null;
+  const dx = Math.sign((to.x ?? 0) - (from.x ?? 0));
+  const dy = Math.sign((to.y ?? 0) - (from.y ?? 0));
+  if (!dx && !dy) return null;
+  // A path that bends (belt corner, push) keeps its dominant axis.
+  return Math.abs(to.x - from.x) >= Math.abs(to.y - from.y) ? { dx, dy: 0 } : { dx: 0, dy };
+}
+
+// Robot-robot conflict (user 2026-11-25): only crossing paths or contesting the
+// same square matter, never mere proximity. Directionality: head-on robots very
+// likely hinder each other; ramming from the rear mostly hurts the rammed, less
+// the rammer; lateral crossings hurt the rammed most and sometimes the rammer
+// (it may stop short against walls). Each value is the chance that the conflict
+// costs THIS robot control in the register; timing fuzz is applied by the caller
+// (getTemporalInteractionWeight). Hand-set, to be checked against play.
+export const TRAFFIC_CONFLICT_PROBABILITIES = Object.freeze({
+  headOn: 0.8,
+  rearRammed: 0.6,
+  rearRammer: 0.3,
+  lateralRammed: 0.7,
+  lateralRammer: 0.25,
+  stationaryRammed: 0.65,
+  stationaryRammer: 0.3
+});
+
+// Chance that robot A (at timeline point pointA) loses control to robot B (at
+// pointB) when both are in these places in the same register.
+export function getTrafficConflictProbability(pointA, pointB) {
+  const pathA = pointA?.pathKeys;
+  const pathB = pointB?.pathKeys;
+  if (!pathA?.length || !pathB?.length) return 0;
+  const p = TRAFFIC_CONFLICT_PROBABILITIES;
+  const dirA = pointA.moveDir;
+  const dirB = pointB.moveDir;
+  if (!dirA && !dirB) return 0;
+  if (!dirA) {
+    // A stands (or only turns): rammed if B's move passes through A's square.
+    return pathB.slice(1).includes(pathA[0]) ? p.stationaryRammed : 0;
+  }
+  if (!dirB) {
+    // B stands: A rams it if A's move passes through B's square.
+    return pathA.slice(1).includes(pathB[0]) ? p.stationaryRammer : 0;
+  }
+  const setB = new Set(pathB);
+  if (!pathA.some((key) => setB.has(key))) return 0;
+  const dot = dirA.dx * dirB.dx + dirA.dy * dirB.dy;
+  if (dot < 0) return p.headOn;
+  if (dot > 0) {
+    // Same direction: the one behind rams the one in front.
+    const [ax, ay] = pathA[0].split(",").map(Number);
+    const [bx, by] = pathB[0].split(",").map(Number);
+    const along = (bx - ax) * dirA.dx + (by - ay) * dirA.dy;
+    if (along > 0) return p.rearRammer;
+    if (along < 0) return p.rearRammed;
+    return (p.rearRammer + p.rearRammed) / 2;
+  }
+  // Lateral: with fuzzy timing either robot may arrive first.
+  return (p.lateralRammed + p.lateralRammer) / 2;
+}
 
 export function isSameTurnSameSpaceRebootPair(pointA, pointB) {
   if (!pointA?.rebooted || !pointB?.rebooted || !pointA?.after || !pointB?.after) {
@@ -1627,12 +1696,7 @@ export function getTrafficPairProfile(tileMap, route, otherRoute, options = {}) 
         const simultaneousRebootPileupPair =
           isSameTurnSameSpaceRebootPair(pointA, pointB);
         if (!simultaneousRebootPileupPair) {
-          const distance = heuristic(pointA.after, pointB.after);
-          const orientation = classifyTrafficOrientation(pointA, pointB);
-          const interactionProbability = getNearbyInteractionProbability(
-            orientation,
-            distance
-          );
+          const interactionProbability = getTrafficConflictProbability(pointA, pointB);
           const consequence = (
             getOrdinaryInterferenceCost() +
             (displacementProfile[timelineIndex] ?? 0)
