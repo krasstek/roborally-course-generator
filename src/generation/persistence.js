@@ -1575,16 +1575,7 @@ export async function evaluateQualityRoutedCourse(assets, evaluated, preferences
   snapshot.courseNotesHtml = null;
   const routed = await evaluateFinalSnapshot(assets, snapshot, evaluated, preferences, null, control);
   if (!routed) return routed;
-  const withDisposition = withRecomputedNormalStartDisposition(routed);
-  if (withDisposition === routed) return routed;
-  return evaluateFinalSnapshot(
-    assets,
-    buildFinalEvaluationSnapshot(withDisposition, preferences),
-    evaluated,
-    preferences,
-    withDisposition.sequence?.firstLeg ?? null,
-    control
-  );
+  return evaluateLikeReload(assets, routed, evaluated, preferences, control);
 }
 
 // The same course without its last checkpoint, evaluated from scratch: routes,
@@ -1602,18 +1593,23 @@ export async function evaluateTrimmedFinishedCourse(assets, evaluated, preferenc
   snapshot.courseNotesHtml = null;
   const balanced = await evaluateFinalSnapshot(assets, snapshot, evaluated, preferences, null, control);
   if (!balanced) return balanced;
-  // The pass above chose the start disposition by balancing afresh; a reload
-  // instead restores that disposition and recomputes over it, which can give
-  // different numbers. Evaluate once more the way a reload does, so the saved
-  // course and its reload agree (as for every other generated course).
-  const withDisposition = withRecomputedNormalStartDisposition(balanced);
-  if (withDisposition === balanced) return balanced;
+  return evaluateLikeReload(assets, balanced, evaluated, preferences, control);
+}
+
+// A course re-routed from scratch chose its start disposition and prices
+// afresh; a reload instead restores them and recomputes over its routes, which
+// can give different numbers (priced starts: difficulty 4.38 against 4.27 on
+// reload, golden forced-pay-to-win 2026-11-25). Evaluate once more the way a
+// reload does, over the routes just found (no search), so the saved course and
+// its reload agree, as for every other generated course.
+function evaluateLikeReload(assets, fresh, evaluated, preferences, control) {
+  const withDisposition = withRecomputedNormalStartDisposition(fresh);
   return evaluateFinalSnapshot(
     assets,
     buildFinalEvaluationSnapshot(withDisposition, preferences),
     evaluated,
     preferences,
-    null,
+    withDisposition.sequence?.firstLeg ?? null,
     control
   );
 }
