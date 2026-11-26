@@ -1,5 +1,5 @@
 // Robo Rally Course Randomizer - reboot token placement (board tokens and Home Reboot)
-import { analyzeFlagLeg } from "../../analyze.js";
+import { getRegisterDistanceToTarget, getWalkingDistanceToTarget } from "../analysis/goal-distance.js";
 import { rotatedDimensions } from "../../board.js";
 import { isBoundaryBlockedByWalls } from "../analysis/board-geometry.js";
 import { FACINGS } from "./config.js";
@@ -241,20 +241,23 @@ export function placeRebootTokens(boardRects, tileMap, checkpoints, playerCount,
   }
 }
 
+// Can a robot get from this square to a checkpoint at all (card limits aside)?
+// Walking distance around walls and pits answers almost every case, built once
+// per target; where it says no, the register-distance map (real movement with
+// belts and other board movement, built once per course) gets the last word.
+// Before 2026-11-26 this ran the old card-level route search per square, facing
+// and checkpoint (8,000 expansions each); with unreachable checkpoints it could
+// take minutes (bench: 160 s of a 179 s run, 6 players, all sets).
 export function canTraceRouteFromHomeRebootTile(tileMap, point, checkpoints = [], options = {}) {
-  return checkpoints.some((checkpoint) => {
-    const analysis = analyzeFlagLeg(tileMap, point, checkpoint, {
-      facings: FACINGS,
-      routesPerFacing: 1,
-      maxDistinctRoutes: 1,
-      maxExpansions: 8000,
-      playerCount: 1,
-      recoveryRule: "dynamic_archiving",
-      lessDeadlyGame: options.lessDeadlyGame
-    });
-
-    return Number.isFinite(analysis.summary.bestRouteScore);
-  });
+  const distanceOptions = { lessDeadlyGame: options.lessDeadlyGame };
+  if (checkpoints.some((checkpoint) => (
+    getWalkingDistanceToTarget(tileMap, point, checkpoint, distanceOptions) != null
+  ))) {
+    return true;
+  }
+  return checkpoints.some((checkpoint) => FACINGS.some((facing) => (
+    getRegisterDistanceToTarget(tileMap, { ...point, facing }, checkpoint, distanceOptions) != null
+  )));
 }
 
 export function placeHomeRebootTokens(dockPlacements, pieceMap, starts = [], tileMap, checkpoints = [], options = {}) {
