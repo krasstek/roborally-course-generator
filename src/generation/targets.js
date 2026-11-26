@@ -15,13 +15,15 @@ import { checkAgainstEveryPickedBand } from "./target-selection.js";
 // meaning on average. To re-check in the post-Transformers benchmark (user).
 export function getDifficultyThresholds() {
   return {
-    easy: [0, 3.6],
-    moderate: [3.6, 4.4],
-    // Brutal from 5.0 (was 5.4; user 2026-11-26): with traffic priced from path
-    // conflicts few courses reached 5.4 (bench Brutal requests: median 4.8 at
-    // 4 players). Official rulebook courses at 4 players then spread over all
-    // four levels (Brutal: Rush Hour, The Cactus Cup).
-    hard: [4.4, 5.0],
+    // Ladder moved down 0.2-0.4 (2026-11-26, user: lower the Brutal floor): with
+    // traffic priced from path conflicts few courses reached Brutal's 5.4 (bench
+    // Brutal requests: median 4.8 at 4 players). Band widths kept (0.8): a
+    // narrower Hard (4.4-5.0) dropped Hard hits 56% -> 33%, the guidance cannot
+    // aim that finely. Official rulebook courses at 4 players then spread over
+    // all four levels (Brutal: Rush Hour, The Cactus Cup).
+    easy: [0, 3.4],
+    moderate: [3.4, 4.2],
+    hard: [4.2, 5.0],
     brutal: [5.0, Infinity]
   };
 }
