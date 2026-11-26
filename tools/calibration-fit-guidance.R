@@ -43,7 +43,7 @@ num <- function(value) {
 
 # App band limits (src/generation/targets.js; length anchored on the rulebook
 # courses 2026-11-25). Used for the held-out band hit rate.
-difficulty_bands <- c(easy = 0, moderate = 3.6, hard = 4.4, brutal = 5.4)
+difficulty_bands <- c(easy = 0, moderate = 3.6, hard = 4.4, brutal = 5.0)
 length_bands <- c(short = 0, moderate = 4, long = 7, epic = 13)
 band_of <- function(value, cuts) names(cuts)[pmax(1, findInterval(value, cuts))]
 

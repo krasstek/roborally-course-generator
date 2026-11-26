@@ -17,8 +17,12 @@ export function getDifficultyThresholds() {
   return {
     easy: [0, 3.6],
     moderate: [3.6, 4.4],
-    hard: [4.4, 5.4],
-    brutal: [5.4, Infinity]
+    // Brutal from 5.0 (was 5.4; user 2026-11-26): with traffic priced from path
+    // conflicts few courses reached 5.4 (bench Brutal requests: median 4.8 at
+    // 4 players). Official rulebook courses at 4 players then spread over all
+    // four levels (Brutal: Rush Hour, The Cactus Cup).
+    hard: [4.4, 5.0],
+    brutal: [5.0, Infinity]
   };
 }
 
