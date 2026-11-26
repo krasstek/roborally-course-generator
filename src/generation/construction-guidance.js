@@ -55,8 +55,10 @@ const OUTCOMES = Object.freeze({
 //   golden courses reloaded vs main); its difficulty change (-0.378) is scaled
 //   back in the measured value itself (difficulty-metrics.js
 //   CARD_PLANNING_DIFFICULTY_INTERIM_MAP), so no correction here.
-const CARD_ALPHA_DIFFICULTY_LOG_OFFSET = -0.102;
-const CARD_PLANNING_LENGTH_LOG_OFFSET = -0.035; // -0.050 before the card table
+// Both absorbed by the interim refit of 2026-11-26 (guidance fitted on the
+// current model), so 0 now; kept as the place for any later scale correction.
+const CARD_ALPHA_DIFFICULTY_LOG_OFFSET = 0;
+const CARD_PLANNING_LENGTH_LOG_OFFSET = 0;
 
 export function getConstructionGuidanceInventoryPreset(calibration, preferences = {}, pieceMap = {}) {
   const supported = new Set(calibration?.domain?.inventoryPresets ?? []);

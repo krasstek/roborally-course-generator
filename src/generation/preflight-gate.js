@@ -7,9 +7,10 @@
 import { getDifficultyThresholds, getProductionLengthThresholds } from "./targets.js";
 import { getNearestTargetBandForLog } from "./target-selection.js";
 
-// Chance below which an attempt stops after the preflight. Fit 2026-11-09
-// (900 attempts, out-of-fold): 0.02 stops ~47% of attempts and saves ~31% of
-// attempt time for ~2.5% of acceptable attempts; 0.01: ~27% saved for ~1%.
+// Chance below which an attempt stops after the preflight. Interim refit
+// 2026-11-26 (900 attempts, out-of-fold AUC 0.94): 0.02 stops ~53% of attempts
+// and saves ~21% of attempt time for 0 of 54 acceptable attempts; 0.01: ~20%
+// saved, also none lost. (Fit 2026-11-09: 0.02 saved ~31% for ~2.5% lost.)
 // The thorough modes keep more of the borderline ones.
 export const PREFLIGHT_GATE_THRESHOLDS = {
   fastest: 0.02,
