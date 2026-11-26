@@ -58,6 +58,19 @@ export const NORMAL_FULL_COURSE_TRAFFIC_PASSES = 1;
 // 22% to 11% of legs (>1 RE 14% -> 6%) at x1.7 routing time.
 export const SCREENING_ROUTE_AIM_WEIGHT = 1;
 export const QUALITY_ROUTE_AIM_WEIGHT = 0.8;
+// Route search 2 step 3 (user 2026-11-25): in the quality tier each start keeps
+// up to this many extra complete routes within the gap (RE) of its best, one per
+// distinct register timeline, so traffic spreads over viable alternatives. The
+// traffic loop gets a larger budget there to find them. A start is still valued
+// by its best route under traffic (user 2026-11-25). Screening keeps one route.
+export const QUALITY_NEAR_BEST_EXTRA_ROUTES = 2;
+export const QUALITY_NEAR_BEST_MAX_GAP_RE = 1.5;
+export const QUALITY_TRAFFIC_ROUTING_OVERRIDES = Object.freeze({
+  trafficEpochs: 3,
+  trafficAlternateMaxNewSearchesPerEpoch: 8,
+  trafficAlternateMaxNewSearchesTotal: 16,
+  trafficAlternateLegsPerStart: 2
+});
 // Route-work cap for re-routing a finished course during generation (unused-
 // board check, quality pass, last-checkpoint trim), in search expansions for the
 // whole re-route. Screening attempts have their own budget (candidate-builder.js);

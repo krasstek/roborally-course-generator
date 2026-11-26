@@ -1,12 +1,10 @@
 // Robo Rally Course Randomizer - fixed-route board ablation: what each board contributes to the chosen routes
 import { tileKey } from "./board-geometry.js";
-import { heuristic } from "./movement.js";
 import {
-  classifyTrafficOrientation,
   getClosestTimelineIndexByAbsoluteRegister,
   getDisplacementControlSeverity,
-  getNearbyInteractionProbability,
   getRegisterTimeline,
+  getTrafficConflictProbability,
   getRobotRangedPressure,
   getTemporalInteractionWeight
 } from "./traffic.js";
@@ -153,12 +151,7 @@ export function summarizeFixedRouteBoardAblation(
           temporalMass += temporal;
           strongestTemporal = Math.max(strongestTemporal, temporal);
 
-          const distance = heuristic(pointA.after, pointB.after);
-          const orientation = classifyTrafficOrientation(pointA, pointB);
-          const interactionProbability = getNearbyInteractionProbability(
-            orientation,
-            distance
-          );
+          const interactionProbability = getTrafficConflictProbability(pointA, pointB);
           nearbyOriginalWeighted += (
             interactionProbability *
             (originalControlProfiles[targetIndex][timelineIndex] ?? 1) *

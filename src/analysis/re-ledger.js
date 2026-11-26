@@ -620,12 +620,14 @@ export function getRegisterEquivalentLedgerPlanningEventsForTransition(
       ? tileMap.get(tileKey(transition.to.x, transition.to.y))
       : null;
     for (const feature of endTile?.features || []) {
-      if (!["pusher", "flamethrower", "crusher"].includes(feature.type)) continue;
+      // Push panels are "push" in the board data ("pusher" kept for older pieces).
+      if (!["push", "pusher", "flamethrower", "crusher"].includes(feature.type)) continue;
       if (!hasExplicitTiming(feature) || new Set(feature.timing).size >= REGISTER_COUNT) continue;
-      const id = `__timed:${feature.type}|${transition.to.x},${transition.to.y}|${feature.dir ?? ""}`;
+      const timedType = feature.type === "push" ? "pusher" : feature.type;
+      const id = `__timed:${timedType}|${transition.to.x},${transition.to.y}|${feature.dir ?? ""}`;
       if (timedTurnIds?.has(id)) continue;
       timedTurnIds?.add(id);
-      add(`timed-element:${feature.type}`);
+      add(`timed-element:${timedType}`);
     }
   }
 

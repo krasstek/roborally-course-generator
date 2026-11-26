@@ -55,8 +55,10 @@ const OUTCOMES = Object.freeze({
 //   golden courses reloaded vs main); its difficulty change (-0.378) is scaled
 //   back in the measured value itself (difficulty-metrics.js
 //   CARD_PLANNING_DIFFICULTY_INTERIM_MAP), so no correction here.
-const CARD_ALPHA_DIFFICULTY_LOG_OFFSET = -0.102;
-const CARD_PLANNING_LENGTH_LOG_OFFSET = -0.035; // -0.050 before the card table
+// Both absorbed by the interim refit of 2026-11-26 (guidance fitted on the
+// current model), so 0 now; kept as the place for any later scale correction.
+const CARD_ALPHA_DIFFICULTY_LOG_OFFSET = 0;
+const CARD_PLANNING_LENGTH_LOG_OFFSET = 0;
 
 export function getConstructionGuidanceInventoryPreset(calibration, preferences = {}, pieceMap = {}) {
   const supported = new Set(calibration?.domain?.inventoryPresets ?? []);
@@ -621,21 +623,16 @@ export function getCalibratedConstructionPlan(
   }
   if (!candidates.length) return null;
 
-  // More flags correlate with longer courses in the samples; do not turn that into
-  // an instruction to add flags for Long. Target fit is averaged over flag counts
-  // per board count, so it steers board scale; flag count follows work and
-  // structural success.
-  const targetByBoardCount = new Map();
-  for (const boardCount of boardCounts) {
-    const group = candidates.filter((candidate) => candidate.boardCount === boardCount);
-    if (group.length) {
-      targetByBoardCount.set(boardCount, group.reduce((sum, candidate) => sum + candidate.targetDesirability, 0) / group.length);
-    }
-  }
+  // The guidance decides board count and checkpoint count together (user
+  // 2026-11-26: calibration should guide the number and placement of checkpoints
+  // and boards): each combination is ranked by its own predicted fit to the
+  // requested bands, besides work and structural success. (Until 2026-11-26 the
+  // target fit was averaged over checkpoint counts per board count, so checkpoint
+  // count did not follow the target; Short requests then came out too long.)
   const selected = sampleConstructionGuidanceRankedCandidate(
     candidates.map((candidate) => ({
       ...candidate,
-      rankingTargetDesirability: targetByBoardCount.get(candidate.boardCount) ?? candidate.targetDesirability
+      rankingTargetDesirability: candidate.targetDesirability
     })),
     preferences,
     { predictionKey: "prediction" }

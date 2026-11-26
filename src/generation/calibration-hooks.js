@@ -461,6 +461,9 @@ export async function generateCalibrationObservation(assets, options = {}) {
   const legChoices = createLegChoiceCollector();
   setCalibrationLegCandidateSink(legChoices.sink);
   try {
+    // A stop hook as production passes one: it makes the analysis cooperative,
+    // which is where the route-work budget is checked, so a pathological search
+    // is dropped as in the app instead of running into the runner's timeout.
     result = await withGenerationRandomSeed(seed, () => createRandomCandidate(
       assets,
       preferences,
@@ -468,7 +471,8 @@ export async function generateCalibrationObservation(assets, options = {}) {
       1,
       null,
       null,
-      null
+      null,
+      () => false
     ));
   } catch (error) {
     setCalibrationLegCandidateSink(null);

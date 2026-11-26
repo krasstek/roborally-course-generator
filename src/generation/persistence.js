@@ -23,7 +23,10 @@ import {
   NORMAL_FULL_COURSE_TRAFFIC_PASSES,
   NORMAL_TRAFFIC_ALTERNATE_DEMAND_THRESHOLD,
   NORMAL_TRAFFIC_ALTERNATE_MIN_GAIN,
+  QUALITY_NEAR_BEST_EXTRA_ROUTES,
+  QUALITY_NEAR_BEST_MAX_GAP_RE,
   QUALITY_ROUTE_AIM_WEIGHT,
+  QUALITY_TRAFFIC_ROUTING_OVERRIDES,
   SCREENING_ROUTE_AIM_WEIGHT
 } from "./config.js";
 import { getGenerationModeProfile, getScenarioGenerationMode } from "./generation-modes.js";
@@ -941,6 +944,13 @@ export async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}
     generationMode: hydrationGenerationMode
   });
   const hydrationTrafficEnabled = Boolean(hydrationGenerationProfile.trafficEnabled);
+  const hydrationNearBestExtraRoutes = Math.max(
+    0,
+    Number(control.contextualNearBestExtraRoutes ?? QUALITY_NEAR_BEST_EXTRA_ROUTES) || 0
+  );
+  const hydrationTrafficProfile = hydrationNearBestExtraRoutes > 0
+    ? { ...hydrationGenerationProfile, ...QUALITY_TRAFFIC_ROUTING_OVERRIDES }
+    : hydrationGenerationProfile;
   const hydrationTrafficFeedbackEnabled = Boolean(
     hydrationTrafficEnabled && hydrationGenerationProfile.trafficEpochs > 0
   );
@@ -1042,21 +1052,24 @@ export async function hydrateScenarioFromSnapshot(assets, snapshot, control = {}
     contextualTrafficFeedbackEnabled: hydrationTrafficFeedbackEnabled,
     contextualTrafficDrivenAlternates: hydrationTrafficFeedbackEnabled,
     contextualTrafficEpochs: hydrationTrafficFeedbackEnabled
-      ? hydrationGenerationProfile.trafficEpochs
+      ? hydrationTrafficProfile.trafficEpochs
       : 0,
+    // Near-best pools (config.js): on in the quality tier, off for screening.
+    contextualNearBestExtraRoutes: hydrationNearBestExtraRoutes,
+    contextualNearBestMaxGapRE: QUALITY_NEAR_BEST_MAX_GAP_RE,
     contextualTrafficAlternateDemandThreshold: NORMAL_TRAFFIC_ALTERNATE_DEMAND_THRESHOLD,
     contextualTrafficAlternateMinGain: NORMAL_TRAFFIC_ALTERNATE_MIN_GAIN,
     contextualTrafficAlternateMaxNewSearchesPerEpoch:
-      hydrationGenerationProfile.trafficAlternateMaxNewSearchesPerEpoch,
+      hydrationTrafficProfile.trafficAlternateMaxNewSearchesPerEpoch,
     contextualTrafficAlternateMaxNewSearchesTotal:
-      hydrationGenerationProfile.trafficAlternateMaxNewSearchesTotal,
+      hydrationTrafficProfile.trafficAlternateMaxNewSearchesTotal,
     contextualTrafficAlternateExpansions: hydrationGenerationProfile.trafficAlternateExpansions,
     contextualTrafficAlternateMaxActions: hydrationGenerationProfile.trafficAlternateMaxActions,
     contextualTrafficAlternateCachedProbeMargin:
       hydrationGenerationProfile.trafficAlternateCachedProbeMargin,
     contextualTrafficAlternateCachedProbeMaxSimilarity:
       hydrationGenerationProfile.trafficAlternateCachedProbeMaxSimilarity,
-    contextualTrafficAlternateLegsPerStart: hydrationGenerationProfile.trafficAlternateLegsPerStart,
+    contextualTrafficAlternateLegsPerStart: hydrationTrafficProfile.trafficAlternateLegsPerStart,
     contextualTrafficExplorationUncertaintyShare:
       hydrationGenerationProfile.trafficExplorationUncertaintyShare,
     contextualTrafficExplorationConfidenceFloor:
@@ -1547,8 +1560,11 @@ async function evaluateFinalSnapshot(assets, snapshot, candidate, preferences, r
   try {
     reduced = await evaluate(reducedSnapshot, null);
   } catch (error) {
-    // Over generation's re-route cap: the board simply stays.
-    if (error?.code === "RE_ROUTE_WORK_BUDGET_EXCEEDED") return evaluated;
+    // Over generation's re-route cap, or too few starts survive routing without
+    // the board: the board simply stays.
+    if (error?.code === "RE_ROUTE_WORK_BUDGET_EXCEEDED" || error?.code === "CONTEXTUAL_START_CAPACITY_LOST") {
+      return evaluated;
+    }
     throw error;
   }
   if (!reduced) return evaluated;
@@ -1574,7 +1590,11 @@ export async function evaluateFinishedCourse(assets, candidate, preferences, con
     candidate,
     preferences,
     candidate.sequence?.firstLeg ?? null,
-    { ...control, contextualAimWeight: control.contextualAimWeight ?? SCREENING_ROUTE_AIM_WEIGHT }
+    {
+      ...control,
+      contextualAimWeight: control.contextualAimWeight ?? SCREENING_ROUTE_AIM_WEIGHT,
+      contextualNearBestExtraRoutes: control.contextualNearBestExtraRoutes ?? 0
+    }
   );
 }
 

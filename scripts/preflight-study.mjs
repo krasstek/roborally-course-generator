@@ -107,8 +107,12 @@ async function runAttempt(request) {
   // preflight (the one the attempt's outcome belongs to).
   const preferences = { ...request.preferences, studyPreflightSink: (summary) => { sunkPreflight = summary; } };
   try {
+    // A stop hook as production passes one: it makes the analysis cooperative,
+    // which is where the route-work budget is checked. Without it a pathological
+    // search widened to exhaustion without limit (2026-11-26: one attempt ran
+    // past 25 minutes at 3 GB).
     result = await withGenerationRandomSeed(request.attemptSeed, () => createRandomCandidate(
-      assets, preferences, 1, 1, null, onStage, null
+      assets, preferences, 1, 1, null, onStage, null, () => false
     ));
   } catch (caught) {
     error = caught?.code ?? caught?.message ?? String(caught);

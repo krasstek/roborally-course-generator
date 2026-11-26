@@ -15,8 +15,8 @@ input <- if (length(args) >= 1) args[[1]] else "calibration-output/preflight-stu
 output <- if (length(args) >= 2) args[[2]] else NA_character_
 
 # App band limits (src/generation/targets.js).
-difficulty_bands <- list(easy = c(0, 3.6), moderate = c(3.6, 4.4), hard = c(4.4, 5.4), brutal = c(5.4, Inf))
-length_bands <- list(short = c(0, 6.25), moderate = c(6.25, 9.5), long = c(9.5, 13), epic = c(13, 20))
+difficulty_bands <- list(easy = c(0, 3.4), moderate = c(3.4, 4.2), hard = c(4.2, 5.0), brutal = c(5.0, Inf))
+length_bands <- list(short = c(0, 4), moderate = c(4, 7), long = c(7, 13), epic = c(13, 20))
 
 lines <- readLines(input, warn = FALSE)
 rows <- lapply(lines[nzchar(lines)], fromJSON, simplifyVector = FALSE)

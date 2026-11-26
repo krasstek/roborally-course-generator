@@ -111,6 +111,7 @@ import {
   getTrafficAlternateHardPressureStrength,
   getTrafficAlternateSearchEnvelope,
   getTrafficForecastElapsedRegisters,
+  getTrafficRouteFamilyKey,
   getTrafficRouteMixtureForAnalysis,
   restoreRENativeTrafficAlternateEffortForDamagePressure,
   routeSimilarity,
@@ -577,6 +578,7 @@ export function* analyzeFullCourseContextualSteps(
   let trafficAlternateExactChecks = 0;
   let trafficAlternateExactRejects = 0;
   let trafficAlternateCandidatesAdded = 0;
+  let trafficAlternateNearBestAdded = 0;
   let trafficAlternateBeneficialCandidates = 0;
   let trafficAlternateBestGain = 0;
   let trafficAlternateCachedProbeStops = 0;
@@ -2780,6 +2782,15 @@ export function* analyzeFullCourseContextualSteps(
         1,
         Math.floor(Number(options.contextualTrafficAlternateLegsPerStart) || 1)
       );
+      // Near-best pool size and gap (generation/config.js; 0 = off, screening).
+      const nearBestExtraRoutes = Math.max(
+        0,
+        Math.floor(Number(options.contextualNearBestExtraRoutes) || 0)
+      );
+      const nearBestMaxGapRE = Math.max(
+        0,
+        Number(options.contextualNearBestMaxGapRE) || 0
+      );
       const trafficMaxNewSearchesPerEpoch = Math.max(
         0,
         Math.floor(Number(options.contextualTrafficAlternateMaxNewSearchesPerEpoch) || 0)
@@ -3652,6 +3663,9 @@ export function* analyzeFullCourseContextualSteps(
           let bestCandidateLegIndex = -1;
           let bestCandidateFromEvidence = false;
           let bestGain = -Infinity;
+          // Near-best pool (Route search 2 step 3): every realized alternate with
+          // its gain, so routes close to the start's best can join its pool.
+          const nearBestCandidates = [];
           const evidenceGainByLeg = new Map();
           const evidenceReplacementIdsByLeg = new Map();
 
@@ -3732,6 +3746,7 @@ export function* analyzeFullCourseContextualSteps(
                 evidenceGainByLeg.set(evidence.legIndex, gains);
               }
               gains.push(gain);
+              nearBestCandidates.push({ realized: evidence.realized, gain, legIndex: evidence.legIndex, fromEvidence: true });
               let replacementIds = evidenceReplacementIdsByLeg.get(evidence.legIndex);
               if (!replacementIds) {
                 replacementIds = new Set();
@@ -3821,6 +3836,7 @@ export function* analyzeFullCourseContextualSteps(
                 });
               }
               if (gain < trafficMinimumGain) trafficAlternateLowGainRejects += 1;
+              nearBestCandidates.push({ realized, gain, legIndex, fromEvidence: false });
               if (gain > bestGain) {
                 bestGain = gain;
                 bestCandidate = realized;
@@ -4025,6 +4041,43 @@ export function* analyzeFullCourseContextualSteps(
             );
             epochBestGain = Math.max(epochBestGain, bestGain);
             epochCandidatesAdded += 1;
+          }
+          // Near-best pool (Route search 2 step 3, user 2026-11-25): traffic should
+          // spread robots over viable alternatives, diluting the expected traffic per
+          // route at the cost of some longer routes. Alternates within the gap of the
+          // start's route (in completed effective RE under the current field) join
+          // the pool too, one per distinct register timeline, up to the extra-route
+          // cap; selection still values the start by its best route.
+          if (nearBestExtraRoutes > 0 && nearBestCandidates.length) {
+            const poolFamilies = new Set(
+              startEntry.partials
+                .map((partial) => stitchContextualLegs(partial.legs, flags))
+                .filter(Boolean)
+                .map(getTrafficRouteFamilyKey)
+            );
+            const poolIds = new Set(
+              startEntry.partials
+                .map((partial) => stitchContextualLegs(partial.legs, flags))
+                .filter(Boolean)
+                .map(getTrafficFullRouteIdentity)
+            );
+            const poolLimit = 1 + nearBestExtraRoutes;
+            for (const candidate of [...nearBestCandidates].sort((left, right) => right.gain - left.gain)) {
+              if (startEntry.partials.length >= poolLimit) break;
+              if (!(candidate.gain >= -nearBestMaxGapRE)) continue;
+              const route = candidate.realized?.route;
+              if (!route || !candidate.realized.partial) continue;
+              const identity = getTrafficFullRouteIdentity(route);
+              const family = getTrafficRouteFamilyKey(route);
+              if (!identity || poolIds.has(identity) || poolFamilies.has(family)) continue;
+              startEntry.partials.push(candidate.realized.partial);
+              poolIds.add(identity);
+              poolFamilies.add(family);
+              trafficAlternateNearBestAdded += 1;
+              trafficAlternateCandidatesAdded += 1;
+              if (candidate.fromEvidence) trafficAlternateEvidenceCandidatesPromoted += 1;
+              epochCandidatesAdded += 1;
+            }
           }
           yield { phase: "traffic-start", startIndex: analysis.index, epoch };
         }
@@ -4693,6 +4746,7 @@ export function* analyzeFullCourseContextualSteps(
         trafficAlternateExactChecks,
         trafficAlternateExactRejects,
         trafficAlternateCandidatesAdded,
+        trafficAlternateNearBestAdded,
         trafficAlternateBeneficialCandidates,
         trafficAlternateBestGain: Number(trafficAlternateBestGain.toFixed(2)),
         trafficAlternateCachedProbeStops,

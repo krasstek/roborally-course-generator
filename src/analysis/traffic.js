@@ -754,11 +754,19 @@ export function getRegisterTimeline(route) {
       ? getRebootEndedAbsoluteActions(absoluteRegister)
       : absoluteRegister;
 
+    // Squares the robot occupies during its programmed move this register
+    // (start, then every square passed), and the move's direction (null when it
+    // only turns or stays): the conflict model below needs both.
+    const programmedPath = [before, ...(transition.traversed || [])]
+      .filter((point) => Number.isFinite(point?.x) && Number.isFinite(point?.y));
+    const lastProgrammed = programmedPath[programmedPath.length - 1] ?? before;
     return {
       absoluteRegister,
       legRegister: index + 1,
       before,
       after,
+      pathKeys: programmedPath.map((point) => `${point.x},${point.y}`),
+      moveDir: getTrafficMoveDirection(before, lastProgrammed),
       facing: after?.facing ?? before?.facing,
       rebooted: Boolean(transition?.rebooted),
       rebootRecoverySource: transition?.rebootRecoverySource ?? null,
@@ -770,6 +778,91 @@ export function getRegisterTimeline(route) {
   return timeline;
 }
 
+
+function getTrafficMoveDirection(from, to) {
+  if (!from || !to) return null;
+  const dx = Math.sign((to.x ?? 0) - (from.x ?? 0));
+  const dy = Math.sign((to.y ?? 0) - (from.y ?? 0));
+  if (!dx && !dy) return null;
+  // A path that bends (belt corner, push) keeps its dominant axis.
+  return Math.abs(to.x - from.x) >= Math.abs(to.y - from.y) ? { dx, dy: 0 } : { dx: 0, dy };
+}
+
+// Robot-robot conflict (user 2026-11-25): only crossing paths or contesting the
+// same square matter, never mere proximity. Directionality: head-on robots very
+// likely both end up off-track; ramming from the rear or the side mostly hurts
+// the rammed. The rammer usually planned it, so its share is small (it may still
+// stop short). Each value is the chance that the conflict costs THIS robot
+// control in the register; timing fuzz is applied by the caller
+// (getTemporalInteractionWeight), and the position of the push (what lies in
+// that direction, or a wall containing it) by the pair profile. Hand-set, to be
+// checked against play.
+export const TRAFFIC_CONFLICT_PROBABILITIES = Object.freeze({
+  headOn: 0.75,
+  rearRammed: 0.6,
+  rearRammer: 0.12,
+  lateralRammed: 0.7,
+  lateralRammer: 0.1,
+  stationaryRammed: 0.65,
+  stationaryRammer: 0.12
+});
+// A push stopped by a wall leaves the rammed robot where it is.
+export const TRAFFIC_CONTAINED_PUSH_FACTOR = 0.3;
+
+function getDirectionKey(vector) {
+  if (!vector) return null;
+  for (const [key, delta] of Object.entries(DIRS)) {
+    if (delta.dx === vector.dx && delta.dy === vector.dy) return key;
+  }
+  return null;
+}
+
+// How robot A (at timeline point pointA) is affected by robot B (at pointB) when
+// both are in these places in the same register: { probability, pushDir },
+// pushDir being the direction A is pushed when it is the rammed one (null when
+// A is the rammer or nothing happens).
+const NO_CONFLICT = Object.freeze({ probability: 0, pushDir: null });
+export function getTrafficConflict(pointA, pointB) {
+  const pathA = pointA?.pathKeys;
+  const pathB = pointB?.pathKeys;
+  if (!pathA?.length || !pathB?.length) return NO_CONFLICT;
+  const p = TRAFFIC_CONFLICT_PROBABILITIES;
+  const dirA = pointA.moveDir;
+  const dirB = pointB.moveDir;
+  if (!dirA && !dirB) return NO_CONFLICT;
+  if (!dirA) {
+    // A stands (or only turns): rammed if B's move passes through A's square.
+    return pathB.slice(1).includes(pathA[0])
+      ? { probability: p.stationaryRammed, pushDir: getDirectionKey(dirB) }
+      : NO_CONFLICT;
+  }
+  if (!dirB) {
+    // B stands: A rams it if A's move passes through B's square.
+    return pathA.slice(1).includes(pathB[0])
+      ? { probability: p.stationaryRammer, pushDir: null }
+      : NO_CONFLICT;
+  }
+  const setB = new Set(pathB);
+  if (!pathA.some((key) => setB.has(key))) return NO_CONFLICT;
+  const dot = dirA.dx * dirB.dx + dirA.dy * dirB.dy;
+  if (dot < 0) return { probability: p.headOn, pushDir: getDirectionKey(dirB) };
+  if (dot > 0) {
+    // Same direction: the one behind rams the one in front.
+    const [ax, ay] = pathA[0].split(",").map(Number);
+    const [bx, by] = pathB[0].split(",").map(Number);
+    const along = (bx - ax) * dirA.dx + (by - ay) * dirA.dy;
+    if (along > 0) return { probability: p.rearRammer, pushDir: null };
+    return { probability: p.rearRammed, pushDir: getDirectionKey(dirB) };
+  }
+  // Lateral: with fuzzy timing either robot may arrive first. As the rammed
+  // one, A is pushed in B's direction.
+  return { probability: (p.lateralRammed + p.lateralRammer) / 2, pushDir: getDirectionKey(dirB) };
+}
+
+// Chance only (board ablation and diagnostics).
+export function getTrafficConflictProbability(pointA, pointB) {
+  return getTrafficConflict(pointA, pointB).probability;
+}
 
 export function isSameTurnSameSpaceRebootPair(pointA, pointB) {
   if (!pointA?.rebooted || !pointB?.rebooted || !pointA?.after || !pointB?.after) {
@@ -1175,7 +1268,8 @@ export function getDisplacementConsequenceScore(
         }
       }
 
-      if (features.some((feature) => feature.type === "conveyor")) {
+      // Belts are "belt" in the board data ("conveyor" kept for older pieces).
+      if (features.some((feature) => feature.type === "conveyor" || feature.type === "belt")) {
         consequence += damageUnit * 0.32;
       }
       if (features.some((feature) => feature.type === "water")) {
@@ -1240,10 +1334,30 @@ export function getDisplacementControlSeverity(
   options = {}
 ) {
   if (!point) return 1;
-
   let worst = 1;
+  for (const dir of Object.keys(DIRS)) {
+    const entry = getDirectionalDisplacementControlSeverity(
+      tileMap, point, dir, timeline, timelineIndex, options
+    );
+    if (!entry.contained) worst = Math.max(worst, entry.severity);
+  }
+  return Number(worst.toFixed(3));
+}
 
-  for (const [dir, delta] of Object.entries(DIRS)) {
+// Severity of being pushed one square in one direction from this point: what
+// lies there (pit or edge 2.5, crusher/trapdoor 2.1, laser 1.6, ...), or
+// contained when a wall stops the push.
+export function getDirectionalDisplacementControlSeverity(
+  tileMap,
+  point,
+  dir,
+  timeline,
+  timelineIndex,
+  options = {}
+) {
+  const delta = DIRS[dir];
+  if (!point || !delta) return { contained: false, severity: 1 };
+  {
     const destination = {
       x: point.x + delta.dx,
       y: point.y + delta.dy
@@ -1255,14 +1369,13 @@ export function getDisplacementControlSeverity(
     });
 
     if (!tile) {
-      if (moveCheck.crash) {
-        worst = Math.max(worst, 2.5);
-      }
-      continue;
+      return moveCheck.crash
+        ? { contained: false, severity: 2.5 }
+        : { contained: true, severity: 1 };
     }
 
     if (!moveCheck.ok && !moveCheck.crash && !moveCheck.repulsor) {
-      continue;
+      return { contained: true, severity: 1 };
     }
 
     let severity = 1;
@@ -1291,6 +1404,7 @@ export function getDisplacementControlSeverity(
       }
       if (features.some((feature) => (
         feature.type === "conveyor" ||
+        feature.type === "belt" ||
         feature.type === "water"
       ))) {
         severity = Math.max(severity, 1.15);
@@ -1308,10 +1422,23 @@ export function getDisplacementControlSeverity(
       );
     }
 
-    worst = Math.max(worst, severity);
+    return { contained: false, severity: Number(severity.toFixed(3)) };
   }
+}
 
-  return Number(worst.toFixed(3));
+// Per register, the severity of being pushed in each direction (see above).
+const TRAFFIC_DIRECTIONAL_SEVERITY_CACHE = new WeakMap();
+export function getTrafficDirectionalSeverityProfile(tileMap, route, timeline, options = {}) {
+  const cached = TRAFFIC_DIRECTIONAL_SEVERITY_CACHE.get(route);
+  if (cached) return cached;
+  const profile = timeline.map((point, timelineIndex) => Object.fromEntries(
+    Object.keys(DIRS).map((dir) => [
+      dir,
+      getDirectionalDisplacementControlSeverity(tileMap, point.after, dir, timeline, timelineIndex, options)
+    ])
+  ));
+  TRAFFIC_DIRECTIONAL_SEVERITY_CACHE.set(route, profile);
+  return profile;
 }
 
 export function getTrafficControlSeverityProfile(tileMap, route, timeline, options = {}) {
@@ -1553,7 +1680,7 @@ export function getTrafficPairProfile(tileMap, route, otherRoute, options = {}) 
     timelineA,
     options
   );
-  const controlSeverityProfile = getTrafficControlSeverityProfile(
+  const directionalSeverityProfile = getTrafficDirectionalSeverityProfile(
     tileMap,
     route,
     timelineA,
@@ -1627,12 +1754,18 @@ export function getTrafficPairProfile(tileMap, route, otherRoute, options = {}) 
         const simultaneousRebootPileupPair =
           isSameTurnSameSpaceRebootPair(pointA, pointB);
         if (!simultaneousRebootPileupPair) {
-          const distance = heuristic(pointA.after, pointB.after);
-          const orientation = classifyTrafficOrientation(pointA, pointB);
-          const interactionProbability = getNearbyInteractionProbability(
-            orientation,
-            distance
-          );
+          const conflict = getTrafficConflict(pointA, pointB);
+          // Where the push goes decides its weight: a wall containing it leaves
+          // the robot in place; otherwise the square it lands on sets the
+          // severity. The rammer (no push direction) only loses a little control.
+          const pushEntry = conflict.pushDir
+            ? directionalSeverityProfile[timelineIndex]?.[conflict.pushDir]
+            : null;
+          const interactionProbability = conflict.probability *
+            (pushEntry?.contained ? TRAFFIC_CONTAINED_PUSH_FACTOR : 1);
+          const conflictSeverity = pushEntry && !pushEntry.contained
+            ? pushEntry.severity
+            : 1;
           const consequence = (
             getOrdinaryInterferenceCost() +
             (displacementProfile[timelineIndex] ?? 0)
@@ -1657,7 +1790,7 @@ export function getTrafficPairProfile(tileMap, route, otherRoute, options = {}) 
           );
           nearbyControlLoadWeighted += (
             interactionProbability *
-            (controlSeverityProfile[timelineIndex] ?? 1) *
+            conflictSeverity *
             temporal *
             physicalScale
           );
