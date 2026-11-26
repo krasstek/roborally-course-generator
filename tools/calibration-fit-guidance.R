@@ -41,8 +41,10 @@ num <- function(value) {
   if (!length(result) || !is.finite(result)) NA_real_ else result
 }
 
-difficulty_bands <- c(easy = 0, moderate = 4.0, hard = 4.8, brutal = 5.8)
-length_bands <- c(short = 0, moderate = 6.25, long = 9.5, epic = 13)
+# App band limits (src/generation/targets.js; length anchored on the rulebook
+# courses 2026-11-25). Used for the held-out band hit rate.
+difficulty_bands <- c(easy = 0, moderate = 3.6, hard = 4.4, brutal = 5.4)
+length_bands <- c(short = 0, moderate = 4, long = 7, epic = 13)
 band_of <- function(value, cuts) names(cuts)[pmax(1, findInterval(value, cuts))]
 
 # ---- Read ---------------------------------------------------------------------

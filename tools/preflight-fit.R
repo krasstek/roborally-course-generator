@@ -16,7 +16,7 @@ output <- if (length(args) >= 2) args[[2]] else NA_character_
 
 # App band limits (src/generation/targets.js).
 difficulty_bands <- list(easy = c(0, 3.6), moderate = c(3.6, 4.4), hard = c(4.4, 5.4), brutal = c(5.4, Inf))
-length_bands <- list(short = c(0, 6.25), moderate = c(6.25, 9.5), long = c(9.5, 13), epic = c(13, 20))
+length_bands <- list(short = c(0, 4), moderate = c(4, 7), long = c(7, 13), epic = c(13, 20))
 
 lines <- readLines(input, warn = FALSE)
 rows <- lapply(lines[nzchar(lines)], fromJSON, simplifyVector = FALSE)
